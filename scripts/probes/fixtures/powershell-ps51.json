@@ -1,0 +1,6 @@
+{
+  "Id": 4242,
+  "StartTime": { "value": "\/Date(1767607200000)\/", "DisplayHint": 2, "DateTime": "Monday, January 5, 2026 10:00:00 AM" },
+  "WorkingSet64": 20971520,
+  "TotalProcessorTime": { "Ticks": 30000000, "TotalSeconds": 3.0 }
+}

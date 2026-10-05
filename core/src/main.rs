@@ -1,3 +1,4 @@
+use cockpit_core::presentation::{RenderOptions, View, render};
 use cockpit_core::{ScanOptions, rules, scan_paths, store};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode};
@@ -11,14 +12,11 @@ fn main() -> ExitCode {
         }
     }
 }
-fn emit(value: Value, machine: bool) {
+fn emit(value: Value, machine: bool, view: View) {
     if machine {
         println!("{value}");
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&value).expect("serializable result")
-        );
+        print!("{}", render(view, &value, &RenderOptions::default()));
     }
 }
 fn run(mut arguments: Vec<String>) -> Result<(), String> {
@@ -47,6 +45,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
             emit(
                 json!({"schema_version":1,"system":cockpit_core::system_status(),"snapshots":{"capability":"unavailable","reason":"snapshot provider pending"},"purgeable_bytes":null}),
                 machine,
+                View::Status,
             );
         }
         "scan" => {
@@ -125,12 +124,12 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
             } else {
                 None
             };
-            emit(json!({"snapshot":snapshot,"saved_to":saved_to}), machine);
+            emit(json!({"snapshot":snapshot,"saved_to":saved_to}), machine, View::Scan);
         }
         "findings" => {
             let rule = take_option(&mut arguments, "--rule")?;
             require_empty(&arguments)?;
-            let history = store::history(&directory()?).map_err(|e| e.to_string())?;
+            let history = load_history(&directory()?)?;
             let findings: Vec<_> = history
                 .last()
                 .map(|s| {
@@ -150,6 +149,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
             emit(
                 json!({"snapshot_id":history.last().map(|s| &s.id),"findings":findings,"explanations":explanations,"mode":"report_only"}),
                 machine,
+                View::Findings,
             );
         }
         "explain" => {
@@ -157,9 +157,9 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
                 return Err("explain requires one finding or rule ID".into());
             }
             if let Some(rule) = pack.rules.iter().find(|r| r.id == arguments[0]) {
-                emit(json!(rule), machine);
+                emit(json!(rule), machine, View::Explain);
             } else {
-                let history = store::history(&directory()?).map_err(|e| e.to_string())?;
+                let history = load_history(&directory()?)?;
                 let finding = history
                     .iter()
                     .rev()
@@ -167,17 +167,17 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
                     .find(|f| f.id == arguments[0])
                     .ok_or("finding not present in local history")?;
                 let rule = pack.rules.iter().find(|r| r.id == finding.rule_id);
-                emit(json!({"finding":finding,"rule":rule}), machine);
+                emit(json!({"finding":finding,"rule":rule}), machine, View::Explain);
             }
         }
         "history" => {
             require_empty(&arguments)?;
-            let history = store::history(&directory()?).map_err(|e| e.to_string())?;
+            let history = load_history(&directory()?)?;
             let rows: Vec<_> = history.iter().enumerate().map(|(index, snapshot)| {
                 let comparison = index.checked_sub(1).map(|previous| cockpit_core::history::compare(&history[previous], snapshot));
                 json!({"id":snapshot.id,"created_at":snapshot.created_at,"roots":snapshot.report.roots,"accounting":snapshot.report.accounting,"attributed_growth_bytes":comparison.as_ref().and_then(|c| c.attributed_growth_bytes),"comparison":comparison,"findings_count":snapshot.findings.len()})
             }).collect();
-            emit(json!({"history":rows}), machine);
+            emit(json!({"history":rows}), machine, View::History);
         }
         "procs" => {
             let sort = take_option(&mut arguments, "--sort")?.unwrap_or_else(|| "ram".into());
@@ -192,6 +192,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
             emit(
                 json!({"processes":procs,"grouping":"individual_processes","gpu":{"capability":"unavailable"},"actions_enabled":false}),
                 machine,
+                View::Procs,
             );
         }
         "usage" => {
@@ -199,6 +200,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
             emit(
                 json!({"claude":{"value":null,"state":"unavailable","source":null,"observed_at":null},"codex":{"value":null,"state":"unavailable","source":null,"observed_at":null},"reason":"pill usage-reader integration pending; credentials are not inspected by CLI"}),
                 machine,
+                View::Usage,
             );
         }
         "plan" | "apply" | "quit" | "force-quit" | "uninstall-plan" => {
@@ -242,4 +244,13 @@ fn require_empty(args: &[String]) -> Result<(), String> {
     } else {
         Err(format!("unexpected arguments: {}", args.join(" ")))
     }
+}
+
+fn load_history(directory: &std::path::Path) -> Result<Vec<store::Snapshot>, String> {
+    let report = store::history_report(directory).map_err(|e| e.to_string())?;
+    // Keep stdout JSON compatible; skipped files must still be observable.
+    for skipped in report.skipped {
+        eprintln!("{}", json!({"event":"snapshot_skipped","file":skipped.file,"reason":skipped.reason}));
+    }
+    Ok(report.snapshots)
 }

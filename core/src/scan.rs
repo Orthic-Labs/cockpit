@@ -5,19 +5,28 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "macos")]
-use std::os::macos::fs::MetadataExt as MacMetadataExt;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as WindowsMetadataExt;
+use crate::platform;
+
+/// Hard per-directory enumeration budget. A directory is never read past
+/// `min(remaining global entries, this)` entries; the rest is reported as
+/// truncation. Selection among the entries actually read is sorted, but when
+/// truncated it is NOT a lexicographic prefix of the directory: the OS
+/// decides which entries were read first.
+pub const DIRECTORY_ENUMERATION_BUDGET: usize = 50_000;
 
 /// Filesystem boundary used by the scanner. Implementations must inspect
 /// directory entries without opening file contents and must report symlinks as
 /// symlinks. The scanner never calls a method that can hydrate a placeholder.
 pub trait FilesystemProvider {
     fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError>;
+    /// Like `inspect`, plus a reason for each field that is unavailable.
+    /// The default carries no reasons; the scanner then derives generic ones.
+    fn inspect_detailed(&self, path: &Path) -> Result<(FileMetadata, Vec<String>), FsError> {
+        self.inspect(path).map(|metadata| (metadata, Vec::new()))
+    }
     fn children(&self, path: &Path) -> Result<Vec<PathBuf>, FsError>;
+    /// Default implementation must read everything via `children`; real
+    /// providers should override it to stop reading after `limit` entries.
     fn children_bounded(&self, path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
         let mut children = self.children(path)?;
         children.sort();
@@ -30,18 +39,24 @@ pub trait FilesystemProvider {
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError>;
 }
 
+fn map_io(e: std::io::Error) -> FsError {
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        FsError::permission_denied(e.to_string())
+    } else {
+        FsError::new(e.to_string())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StdFilesystemProvider;
 
 impl FilesystemProvider for StdFilesystemProvider {
     fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError> {
-        let metadata = fs::symlink_metadata(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                FsError::permission_denied(e.to_string())
-            } else {
-                FsError::new(e.to_string())
-            }
-        })?;
+        self.inspect_detailed(path).map(|(metadata, _)| metadata)
+    }
+
+    fn inspect_detailed(&self, path: &Path) -> Result<(FileMetadata, Vec<String>), FsError> {
+        let metadata = fs::symlink_metadata(path).map_err(map_io)?;
         let kind = if metadata.file_type().is_symlink() {
             EntryKind::Symlink
         } else if metadata.is_dir() {
@@ -51,89 +66,68 @@ impl FilesystemProvider for StdFilesystemProvider {
         } else {
             EntryKind::Other
         };
-        let volume = VolumeIdentity::new(volume_id(&metadata, path));
-        let (logical_size, allocation_size, file_id) = if kind == EntryKind::File {
-            let logical = Some(metadata.len());
-            #[cfg(unix)]
-            let allocation = Some(metadata.blocks().saturating_mul(512));
-            #[cfg(not(unix))]
-            let allocation = None;
-            #[cfg(unix)]
-            let identity = Some(FileIdentity {
-                volume: volume.clone(),
-                id: format!("{}:{}", metadata.dev(), metadata.ino()),
-            });
-            #[cfg(not(unix))]
-            let identity = None;
-            (logical, allocation, identity)
-        } else {
-            (Some(0), Some(0), None)
+        let native = platform::inspect(path, &metadata);
+        let mut reasons = Vec::new();
+        let (logical_size, allocation_size, file_id) = match kind {
+            EntryKind::File => {
+                let logical = if native.is_placeholder {
+                    reasons.push("logical size is not local for a placeholder".to_owned());
+                    None
+                } else {
+                    Some(metadata.len())
+                };
+                (logical, native.allocation_size, native.file_id.clone())
+            }
+            // Directory own-size is never attributed; the identity is kept
+            // for loop detection.
+            EntryKind::Directory => (Some(0), Some(0), native.file_id.clone()),
+            EntryKind::Symlink | EntryKind::Other => (Some(0), Some(0), None),
         };
-        let is_placeholder = dataless_or_placeholder(&metadata);
-        let metadata_complete =
-            kind != EntryKind::File || (allocation_size.is_some() && file_id.is_some());
-        Ok(FileMetadata {
-            kind,
-            volume,
-            logical_size,
-            allocation_size,
-            file_id,
-            clone_id: None,
-            is_placeholder,
-            metadata_complete,
-        })
+        let needs_native = matches!(kind, EntryKind::File | EntryKind::Directory);
+        let metadata_complete = !needs_native
+            || (allocation_size.is_some()
+                && logical_size.is_some()
+                && file_id.is_some()
+                && native.volume_stable);
+        if !metadata_complete {
+            reasons.extend(native.unavailable.iter().cloned());
+        }
+        Ok((
+            FileMetadata {
+                kind,
+                volume: native.volume,
+                logical_size,
+                allocation_size,
+                file_id,
+                clone_id: None,
+                is_placeholder: native.is_placeholder,
+                metadata_complete,
+            },
+            reasons,
+        ))
     }
 
     fn children(&self, path: &Path) -> Result<Vec<PathBuf>, FsError> {
         let mut children = Vec::new();
-        let entries = fs::read_dir(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                FsError::permission_denied(e.to_string())
-            } else {
-                FsError::new(e.to_string())
-            }
-        })?;
-        for entry in entries {
-            match entry {
-                Ok(entry) => children.push(entry.path()),
-                Err(e) => {
-                    return Err(if e.kind() == std::io::ErrorKind::PermissionDenied {
-                        FsError::permission_denied(e.to_string())
-                    } else {
-                        FsError::new(e.to_string())
-                    });
-                }
-            }
+        for entry in fs::read_dir(path).map_err(map_io)? {
+            children.push(entry.map_err(map_io)?.path());
         }
         children.sort();
         Ok(children)
     }
 
+    /// Reads at most `limit` entries plus one probe entry, then stops; the
+    /// directory is never enumerated in full to choose a sorted prefix.
     fn children_bounded(&self, path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
         let mut children = Vec::new();
         let mut truncated = false;
-        let entries = fs::read_dir(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                FsError::permission_denied(e.to_string())
-            } else {
-                FsError::new(e.to_string())
+        for entry in fs::read_dir(path).map_err(map_io)? {
+            let entry = entry.map_err(map_io)?;
+            if children.len() >= limit {
+                truncated = true;
+                break;
             }
-        })?;
-        for entry in entries {
-            match entry {
-                Ok(entry) if children.len() < limit => children.push(entry.path()),
-                Ok(_) => {
-                    truncated = true;
-                    break;
-                }
-                Err(e) => {
-                    return Err(if e.kind() == std::io::ErrorKind::PermissionDenied {
-                        FsError::permission_denied(e.to_string())
-                    } else {
-                        FsError::new(e.to_string())
-                    });
-                }
-            }
+            children.push(entry.path());
         }
         children.sort();
         Ok((children, truncated))
@@ -148,11 +142,10 @@ impl FilesystemProvider for StdFilesystemProvider {
             use std::os::unix::ffi::OsStrExt;
             for disk in sysinfo::Disks::new_with_refreshed_list().list() {
                 let mount = disk.mount_point();
-                let Ok(metadata) = fs::symlink_metadata(mount) else {
-                    continue;
-                };
-                if metadata.dev().to_string() != volume.id {
-                    continue;
+                // Same identity function as inspection, so UUID ids match.
+                match platform::volume_identity_for_path(mount) {
+                    Some((mount_volume, _)) if mount_volume.id == volume.id => {}
+                    _ => continue,
                 }
                 let Ok(path) = CString::new(mount.as_os_str().as_bytes()) else {
                     continue;
@@ -187,45 +180,6 @@ impl FilesystemProvider for StdFilesystemProvider {
             snapshots: SnapshotState::Unknown,
         })
     }
-}
-
-#[cfg(unix)]
-fn volume_id(metadata: &fs::Metadata, _path: &Path) -> String {
-    metadata.dev().to_string()
-}
-
-#[cfg(not(unix))]
-fn volume_id(_metadata: &fs::Metadata, path: &Path) -> String {
-    path.components()
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn dataless_or_placeholder(metadata: &fs::Metadata) -> bool {
-    // UF_DATAlESS. Reading stat flags does not hydrate an item.
-    metadata.st_flags() & 0x4000_0000 != 0
-}
-
-#[cfg(windows)]
-fn dataless_or_placeholder(metadata: &fs::Metadata) -> bool {
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
-    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x40000;
-    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x400000;
-    let attributes = metadata.file_attributes();
-    attributes
-        & (FILE_ATTRIBUTE_REPARSE_POINT
-            | FILE_ATTRIBUTE_OFFLINE
-            | FILE_ATTRIBUTE_RECALL_ON_OPEN
-            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
-        != 0
-}
-
-#[cfg(not(any(target_os = "macos", windows)))]
-fn dataless_or_placeholder(_metadata: &fs::Metadata) -> bool {
-    false
 }
 
 /// Scan roots in lexical order. Roots are inspected through the provider,
@@ -413,7 +367,7 @@ fn walk<P: FilesystemProvider>(
         }
         return;
     }
-    let mut metadata = match provider.inspect(&path) {
+    let (mut metadata, provider_reasons) = match provider.inspect_detailed(&path) {
         Ok(value) => value,
         Err(error) => {
             report.inspection_errors.push(InspectionError {
@@ -459,6 +413,23 @@ fn walk<P: FilesystemProvider>(
         report
             .incomplete_reasons
             .push(format!("incomplete metadata: {}", path.display()));
+        let mut reasons = provider_reasons;
+        {
+            if metadata.kind != EntryKind::Directory && metadata.logical_size.is_none() {
+                reasons.push("logical size unavailable".into());
+            }
+            if metadata.kind == EntryKind::File && metadata.allocation_size.is_none() {
+                reasons.push("allocation size unavailable".into());
+            }
+            if metadata.file_id.is_none() {
+                reasons.push("file id unavailable".into());
+            }
+        }
+        for reason in reasons {
+            report
+                .incomplete_reasons
+                .push(format!("metadata unavailable: {}: {reason}", path.display()));
+        }
     }
     let volume = metadata.volume.clone();
     volumes.insert(volume.clone());
@@ -497,7 +468,12 @@ fn walk<P: FilesystemProvider>(
             reasons.push("hard-link identity already attributed".into());
         } else {
             logical = metadata.logical_size.unwrap_or(0);
-            attributed = metadata.allocation_size.unwrap_or(0);
+            if metadata.file_id.is_some() {
+                attributed = metadata.allocation_size.unwrap_or(0);
+            } else {
+                candidate_upper = None;
+                reasons.push("file identity unavailable; unique allocation not attributed".into());
+            }
             if let Some(id) = metadata.file_id.clone() {
                 seen_files.insert(id, path.clone());
                 owner = Some(path.clone());
@@ -571,7 +547,13 @@ fn walk<P: FilesystemProvider>(
         return;
     }
     let remaining = options.max_entries.saturating_sub(seen_paths.len());
-    let (children, truncated) = match provider.children_bounded(&path, remaining) {
+    let budget = remaining.min(DIRECTORY_ENUMERATION_BUDGET);
+    // Recheck this directory immediately before & after listing. Changes discard
+    // the listing; pathname checks are conservative observations, not a sandbox.
+    if !directory_unchanged(provider, &path, &metadata, report) {
+        return;
+    }
+    let (children, truncated) = match provider.children_bounded(&path, budget) {
         Ok(children) => children,
         Err(error) => {
             report.inspection_errors.push(InspectionError {
@@ -582,7 +564,16 @@ fn walk<P: FilesystemProvider>(
             return;
         }
     };
-    if truncated {
+    if !directory_unchanged(provider, &path, &metadata, report) {
+        return;
+    }
+    if truncated && budget < remaining {
+        report.incomplete_reasons.push(format!(
+            "directory enumeration budget {} reached, remaining entries unread below {}",
+            DIRECTORY_ENUMERATION_BUDGET,
+            path.display()
+        ));
+    } else if truncated {
         report.incomplete_reasons.push(format!(
             "entry limit {} reached below {}",
             options.max_entries,
@@ -638,4 +629,23 @@ fn symlink_ancestor<P: FilesystemProvider>(
         }
     }
     None
+}
+
+fn directory_unchanged<P: FilesystemProvider>(provider: &P, path: &Path, expected: &FileMetadata, report: &mut ScanReport) -> bool {
+    match provider.inspect(path) {
+        Ok(current) if current.kind == EntryKind::Directory
+            && !current.is_placeholder && current.volume == expected.volume
+            && current.file_id == expected.file_id => true,
+        Ok(current) => {
+            if current.kind == EntryKind::Symlink || current.is_placeholder {
+                report.skipped_links.push(SkippedLink { path: path.into(), reason: "directory changed to link or placeholder during enumeration".into() });
+            }
+            report.incomplete_reasons.push(format!("directory changed during enumeration: {}", path.display()));
+            false
+        }
+        Err(error) => {
+            report.inspection_errors.push(InspectionError { path: path.into(), operation: "recheck_directory".into(), message: error.to_string() });
+            false
+        }
+    }
 }

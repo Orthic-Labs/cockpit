@@ -1,10 +1,10 @@
-//! Geometry/style cases for pill auto-hide. Included from main.rs as
-//! `#[cfg(all(test, windows))] mod visibility_cases;` (parent has `use windows::...::*`).
-//! Pure functions only: `is_fullscreen_geometry`, `is_borderless_style`, `monitor_id`.
-//! The overlap pre-filter inside `enum_visible_window` is inline and is mirrored by
-//! `overlaps` below so its documented intent is exercised.
+//! Geometry/style cases for pill auto-hide. Wired from main.rs as
+//! `#[cfg(test)] mod visibility_cases;`. Every case calls the production helpers in
+//! `crate::visibility` (the same ones `enum_visible_window` uses) plus `monitor_id`;
+//! there is no test-local copy of any rule.
 
 use super::*;
+use crate::visibility::*;
 
 fn r(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
     RECT {
@@ -167,10 +167,62 @@ fn caption_alone_or_thickframe_alone_blocks_hiding() {
     ));
 }
 #[test]
-fn plain_border_bit_counts_as_captioned() {
-    // WS_CAPTION = WS_BORDER | WS_DLGFRAME, so a WS_BORDER-only window is treated as captioned.
-    assert!(!is_borderless_style(WS_BORDER.0));
-    assert!(!is_borderless_style(WS_DLGFRAME.0));
+fn lone_border_or_dlgframe_bit_is_not_a_caption() {
+    // WS_CAPTION = WS_BORDER | WS_DLGFRAME; only the full pair is a title bar.
+    assert!(is_borderless_style(WS_BORDER.0));
+    assert!(is_borderless_style(WS_DLGFRAME.0));
+    assert!(!is_borderless_style(WS_BORDER.0 | WS_DLGFRAME.0));
+}
+#[test]
+fn resize_frame_blocks_even_without_caption() {
+    assert!(!is_borderless_style(WS_THICKFRAME.0 | WS_BORDER.0));
+    assert!(!is_borderless_style(WS_POPUP.0 | WS_THICKFRAME.0));
+}
+
+// ---- production classification (overlap + geometry + style) ----
+#[test]
+fn classify_outside_partial_and_covers() {
+    let popup = WS_POPUP.0 | WS_VISIBLE.0;
+    assert_eq!(classify_window(PRIMARY, RIGHT_MON, popup), Occupancy::Outside);
+    assert_eq!(classify_window(r(0, 0, 960, 1080), PRIMARY, popup), Occupancy::Partial);
+    assert_eq!(classify_window(PRIMARY, PRIMARY, popup), Occupancy::Covers);
+}
+#[test]
+fn classify_captioned_maximized_is_partial_not_covers() {
+    let style = WS_OVERLAPPEDWINDOW.0 | WS_MAXIMIZE.0;
+    assert_eq!(classify_window(r(-8, -8, 1928, 1088), PRIMARY, style), Occupancy::Partial);
+}
+#[test]
+fn classify_minimized_offscreen_window_is_outside() {
+    assert_eq!(
+        classify_window(r(-32000, -32000, -31840, -31972), PRIMARY, WS_POPUP.0),
+        Occupancy::Outside
+    );
+}
+#[test]
+fn classify_spanning_window_per_monitor() {
+    let span = r(0, 0, 3840, 1080);
+    let popup = WS_POPUP.0;
+    assert_eq!(classify_window(span, PRIMARY, popup), Occupancy::Covers);
+    assert_eq!(classify_window(span, RIGHT_MON, popup), Occupancy::Covers);
+    assert_eq!(classify_window(span, LEFT_MON, popup), Occupancy::Outside);
+}
+
+// ---- shell and tool-window exclusions ----
+#[test]
+fn shell_class_names_are_excluded() {
+    for name in ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+        assert!(is_shell_class_name(name), "{name}");
+    }
+    assert!(!is_shell_class_name("Chrome_WidgetWin_1"));
+    assert!(!is_shell_class_name("progman"));
+    assert!(!is_shell_class_name(""));
+}
+#[test]
+fn tool_window_ex_style_is_excluded() {
+    assert!(is_tool_window_ex_style(WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0));
+    assert!(!is_tool_window_ex_style(WS_EX_TOPMOST.0 | WS_EX_LAYERED.0));
+    assert!(!is_tool_window_ex_style(0));
 }
 
 // ---- borderless fullscreen ----

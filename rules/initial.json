@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "rule_pack_version": 1,
+  "rule_pack_version": 2,
   "rules": [
     {
       "schema_version": 1,
@@ -55,13 +55,13 @@
     },
     {
       "schema_version": 1,
-      "rule_version": 1,
+      "rule_version": 2,
       "id": "stale-graph-index",
       "name": "Stale graph and index files",
       "path_patterns": ["/Volumes/*/**/.graph/**", "/Volumes/*/**/.index/**", "/Volumes/*/**/graph*.json", "/Volumes/*/**/index*.db"],
       "volumes": ["any_mounted_local"],
       "ownership": "owner_tool_state",
-      "liveness": ["generator_stopped", "liveness_not_in_use"],
+      "liveness": ["owner_state_complete", "generator_stopped", "liveness_not_in_use"],
       "eligibility": ["replacement_newer"],
       "age_threshold_days": 30,
       "measurement": "attributed_allocation",
@@ -89,13 +89,13 @@
     },
     {
       "schema_version": 1,
-      "rule_version": 1,
+      "rule_version": 2,
       "id": "workspace-trash",
       "name": "Workspace trash folders",
       "path_patterns": ["/Volumes/*/.workspace-trash/**"],
       "volumes": ["external_volume"],
       "ownership": "exact_path",
-      "liveness": ["liveness_not_in_use"],
+      "liveness": ["active_residents_stopped", "liveness_not_in_use"],
       "eligibility": [],
       "age_threshold_days": 30,
       "measurement": "attributed_allocation",
@@ -157,7 +157,7 @@
     },
     {
       "schema_version": 1,
-      "rule_version": 1,
+      "rule_version": 2,
       "id": "swap-explanation",
       "name": "Swap usage explanation",
       "path_patterns": [],
@@ -168,13 +168,13 @@
       "age_threshold_days": null,
       "measurement": "explanation_only",
       "route": "none",
-      "risk": "review",
+      "risk": "explanation",
       "report_only": true,
       "explanation": "Swap is a memory-pressure signal; it is not a cleanup target."
     },
     {
       "schema_version": 1,
-      "rule_version": 1,
+      "rule_version": 2,
       "id": "snapshots-explanation",
       "name": "Local snapshot explanation",
       "path_patterns": [],
@@ -185,13 +185,13 @@
       "age_threshold_days": null,
       "measurement": "explanation_only",
       "route": "none",
-      "risk": "review",
+      "risk": "explanation",
       "report_only": true,
       "explanation": "Snapshots can retain deleted data; retention is unknown until snapshot state is measured."
     },
     {
       "schema_version": 1,
-      "rule_version": 1,
+      "rule_version": 2,
       "id": "whatsapp-explanation",
       "name": "WhatsApp media explanation",
       "path_patterns": [],
@@ -202,7 +202,7 @@
       "age_threshold_days": null,
       "measurement": "explanation_only",
       "route": "none",
-      "risk": "review",
+      "risk": "explanation",
       "report_only": true,
       "explanation": "Use WhatsApp managed storage controls; never delete its databases or containers generically."
     }

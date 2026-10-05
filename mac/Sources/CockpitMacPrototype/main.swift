@@ -18,24 +18,38 @@ private struct SystemReading: Equatable {
     let cpu: Double?
     let memory: Double?
     let disks: [DiskReading]
+    /// Counter names that failed to sample this tick (unavailable, rendered as "--").
+    var failures: Set<String> = []
+}
+
+/// Mach host calls: every mach_host_self() call returns a send right that must be released.
+private func withHostPort<T>(_ body: (mach_port_t) -> T) -> T {
+    let host = mach_host_self()
+    defer { mach_port_deallocate(mach_task_self_, host) }
+    return body(host)
+}
+
+/// Process-wide event sink: one JSON object per line on stderr.
+private func emit(_ event: String, level: String = "info", _ fields: [String: String] = [:]) {
+    let line = StructuredEvent(event: event, level: level, ts: StructuredEvent.timestamp(Date()), fields: fields).jsonLine()
+    FileHandle.standardError.write(Data((line + "\n").utf8))
 }
 
 private final class SystemReader {
-    private var previousCPU: host_cpu_load_info_data_t?
+    private var previousCPU: CPUTicks?
 
     func read() -> SystemReading {
-        let cpu = readCPU()
-        let memory = readMemory()
-        let disks = FileManager.default.mountedVolumeURLs(
-            includingResourceValuesForKeys: [
-                .volumeUUIDStringKey, .volumeNameKey, .volumeTotalCapacityKey,
-                .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey
-            ], options: [.skipHiddenVolumes]
-        )?.compactMap { url -> DiskReading? in
-            guard let values = try? url.resourceValues(forKeys: [
-                .volumeUUIDStringKey, .volumeNameKey, .volumeTotalCapacityKey,
-                .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey
-            ]), values.volumeIsLocal == true,
+        var failures = Set<String>()
+        let cpu = readCPU(&failures)
+        let memory = readMemory(&failures)
+        let keys: [URLResourceKey] = [
+            .volumeUUIDStringKey, .volumeNameKey, .volumeTotalCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey
+        ]
+        let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes])
+        if urls == nil { failures.insert("disks") }
+        let disks = (urls ?? []).compactMap { url -> DiskReading? in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.volumeIsLocal == true,
                   let id = values.volumeUUIDString, !id.isEmpty,
                   let total = values.volumeTotalCapacity, total > 0,
                   let available = values.volumeAvailableCapacityForImportantUsage else { return nil }
@@ -44,40 +58,44 @@ private final class SystemReader {
                 name: values.volumeName?.isEmpty == false ? values.volumeName! : url.path,
                 free: min(max(Double(available) / Double(total), 0), 1)
             )
-        }.sorted { $0.id < $1.id } ?? []
-        return SystemReading(cpu: cpu, memory: memory, disks: disks)
+        }.sorted { $0.id < $1.id }
+        return SystemReading(cpu: cpu, memory: memory, disks: disks, failures: failures)
     }
 
-    private func readCPU() -> Double? {
+    private func readCPU(_ failures: inout Set<String>) -> Double? {
+        // host_statistics returns by value: no host_processor_info arrays to vm_deallocate here.
+        // If per-core sampling is added, its returned array must be released with vm_deallocate.
         var info = host_cpu_load_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size)
-        let result = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+        let result = withHostPort { host in
+            withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    host_statistics(host, HOST_CPU_LOAD_INFO, $0, &count)
+                }
             }
         }
-        guard result == KERN_SUCCESS else { return nil }
-        defer { previousCPU = info }
-        guard let previousCPU else { return nil }
-        let previous = previousCPU.cpu_ticks
-        let current = info.cpu_ticks
-        let user = current.0 &- previous.0
-        let system = current.1 &- previous.1
-        let nice = current.2 &- previous.2
-        let idle = current.3 &- previous.3
-        let total = user &+ system &+ nice &+ idle
-        return total == 0 ? 0 : Double(user &+ system &+ nice) / Double(total)
+        guard result == KERN_SUCCESS else {
+            previousCPU = nil
+            failures.insert("cpu")
+            return nil
+        }
+        let ticks = info.cpu_ticks
+        let current = CPUTicks(user: ticks.0, system: ticks.1, nice: ticks.3, idle: ticks.2)
+        defer { previousCPU = current }
+        return CPUMath.utilization(previous: previousCPU, current: current)
     }
 
-    private func readMemory() -> Double? {
+    private func readMemory(_ failures: inout Set<String>) -> Double? {
         var vm = vm_statistics64()
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
-        let result = withUnsafeMutablePointer(to: &vm) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+        let result = withHostPort { host in
+            withUnsafeMutablePointer(to: &vm) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    host_statistics64(host, HOST_VM_INFO64, $0, &count)
+                }
             }
         }
-        guard result == KERN_SUCCESS else { return nil }
+        guard result == KERN_SUCCESS else { failures.insert("memory"); return nil }
         let page = Double(vm_page_size)
         let used = (Double(vm.active_count) + Double(vm.wire_count) + Double(vm.compressor_page_count)) * page
         return min(max(used / Double(ProcessInfo.processInfo.physicalMemory), 0), 1)
@@ -85,7 +103,20 @@ private final class SystemReader {
 }
 
 private final class RingView: NSView {
-    var reading = SystemReading(cpu: nil, memory: nil, disks: []) { didSet { needsDisplay = true } }
+    private var gate = RedrawGate()
+    private(set) var reading = SystemReading(cpu: nil, memory: nil, disks: [])
+
+    private static func rows(_ r: SystemReading) -> [(name: String, fraction: Double?)] {
+        [("CPU", r.cpu), ("RAM", r.memory)] + r.disks.map { (String($0.name.prefix(10)), Optional(1 - $0.free)) }
+    }
+
+    /// Redraws only when the rendered text changes (ring arcs derive from the same values at
+    /// whole-percent resolution; sub-percent changes are intentionally not redrawn).
+    func update(_ new: SystemReading) {
+        reading = new
+        if gate.shouldRedraw(PillFormat.signature(Self.rows(new))) { needsDisplay = true }
+    }
+
 
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
@@ -93,7 +124,7 @@ private final class RingView: NSView {
         dirtyRect.fill()
         let values: [(String, Double?, NSColor)] = [
             ("CPU", reading.cpu, NSColor.systemBlue),
-            ("MEM", reading.memory, NSColor.systemOrange)
+            ("RAM", reading.memory, NSColor.systemOrange)
         ] + reading.disks.map { (String($0.name.prefix(10)), Optional(1 - $0.free), NSColor.systemGreen) }
         let diameter: CGFloat = 30
         let x: CGFloat = 8
@@ -105,16 +136,16 @@ private final class RingView: NSView {
             backgroundRing.lineWidth = 3
             backgroundRing.stroke()
             let text: String
-            if let fraction = value.1 {
+            if let fraction = PillFormat.displayedFraction(value.1) {
                 value.2.setStroke()
                 let path = NSBezierPath()
                 path.lineWidth = 3
                 path.appendArc(withCenter: NSPoint(x: rect.midX, y: rect.midY), radius: diameter / 2,
                                startAngle: 90, endAngle: 90 - CGFloat(fraction * 360), clockwise: true)
                 path.stroke()
-                text = "\(value.0) \(Int(fraction * 100))%"
+                text = PillFormat.label(value.0, fraction: value.1)
             } else {
-                text = "\(value.0) --"
+                text = PillFormat.label(value.0, fraction: nil)
             }
             NSString(string: text).draw(at: NSPoint(x: x + diameter + 8, y: y + 8),
                                         withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
@@ -130,16 +161,11 @@ private final class PillPanel: NSPanel {
     let monitorID: String
     let ringView: RingView
 
-    init(screen: NSScreen, monitorID: String) {
+    init(screen: NSScreen, monitorID: String, diskCount: Int) {
         self.monitorID = monitorID
         self.ringView = RingView(frame: .zero)
-        let rows = max(2, SystemReader().read().disks.count) + 2
-        let height = CGFloat(rows * 34 + 26)
-        let width: CGFloat = 132
-        let visible = screen.visibleFrame
-        let rect = NSRect(x: visible.maxX - width - 8, y: visible.midY - height / 2,
-                          width: width, height: height)
-        super.init(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false, screen: screen)
+        let rect = PillPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount)
+        super.init(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false, screen: screen)
         level = .statusBar
         collectionBehavior = [.canJoinAllSpaces, .fullScreenNone]
         isOpaque = false
@@ -147,9 +173,17 @@ private final class PillPanel: NSPanel {
         hasShadow = true
         ignoresMouseEvents = true
         hidesOnDeactivate = false
+        // Panels are owned by the delegate's dictionary; AppKit must not release them on close.
+        isReleasedWhenClosed = false
         ringView.autoresizingMask = [.width, .height]
         contentView = ringView
         orderFrontRegardless()
+    }
+
+    /// Re-place on the screen's current visible frame; no-op when unchanged.
+    func place(on screen: NSScreen, diskCount: Int) {
+        let rect = PillPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount)
+        if frame != rect { setFrame(rect, display: true) }
     }
 
     override var canBecomeKey: Bool { false }
@@ -227,58 +261,130 @@ private final class FullscreenDetector {
     }
 }
 
+private func displayNumber(_ screen: NSScreen) -> CGDirectDisplayID {
+    screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
+}
+
+private func monitorID(for screen: NSScreen) -> String {
+    let number = displayNumber(screen)
+    if let uuid = CGDisplayCreateUUIDFromDisplayID(number)?.takeRetainedValue(), let string = CFUUIDCreateString(nil, uuid) {
+        return string as String
+    }
+    return "display-\(number)"
+}
+
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let reader = SystemReader()
     private let detector = FullscreenDetector()
     private var panels: [String: PillPanel] = [:]
+    /// The single sampling owner. Only schedule(after:) creates or invalidates it.
     private var timer: Timer?
-    private var hidden = false
+    private var failures = FailureTracker()
+    private var diskCount = 0
+    private var screenObserver: NSObjectProtocol?
+    private var signalSources: [DispatchSourceSignal] = []
+    private var shuttingDown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        rebuildPanels()
-        schedule(after: 0)
+        emit("startup", [
+            "pid": String(ProcessInfo.processInfo.processIdentifier),
+            "accessibility": AXIsProcessTrusted() ? "trusted" : "denied"
+        ])
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, !self.shuttingDown else { return }
+            emit("screen_parameters_changed", ["screens": String(NSScreen.screens.count)])
+            self.sample()
+        }
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { NSApp.terminate(nil) }
+            source.resume()
+            signalSources.append(source)
+        }
+        sample()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        shutdown(reason: "terminate")
+    }
+
+    private func shutdown(reason: String) {
+        guard !shuttingDown else { return }
+        shuttingDown = true
+        timer?.invalidate()
+        timer = nil
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
+        signalSources.forEach { $0.cancel() }
+        signalSources.removeAll()
+        panels.values.forEach { $0.orderOut(nil); $0.close() }
+        panels.removeAll()
+        emit("shutdown", ["reason": reason])
+    }
+
+    /// Reconcile panels with current screens by display key: add new, drop gone, re-place kept.
     private func rebuildPanels() {
-        let wanted = Set(NSScreen.screens.map { monitorID(for: $0) })
-        for (id, panel) in panels where !wanted.contains(id) { panel.orderOut(nil); panels.removeValue(forKey: id) }
+        var byID: [String: NSScreen] = [:]
+        var order: [String] = []
         for screen in NSScreen.screens {
             let id = monitorID(for: screen)
-            if panels[id] == nil { panels[id] = PillPanel(screen: screen, monitorID: id) }
+            if byID[id] == nil { order.append(id) }
+            byID[id] = screen
+        }
+        let diff = DisplayKeyDiff.diff(existing: Set(panels.keys), wanted: order)
+        for id in diff.removed {
+            panels[id]?.orderOut(nil)
+            panels[id]?.close()
+            panels.removeValue(forKey: id)
+            emit("monitor_removed", ["display": id])
+        }
+        for id in diff.added {
+            guard let screen = byID[id] else { continue }
+            panels[id] = PillPanel(screen: screen, monitorID: id, diskCount: diskCount)
+            emit("monitor_added", ["display": id])
+        }
+        for id in diff.kept {
+            if let screen = byID[id] { panels[id]?.place(on: screen, diskCount: diskCount) }
         }
     }
 
-    private func refresh() {
-        rebuildPanels()
+    /// One sample per tick, shared by all monitors. Visibility is decided per monitor, so a
+    /// fullscreen monitor never stops sampling for the visible ones.
+    private func sample() {
+        guard !shuttingDown else { return }
         let reading = reader.read()
-        hidden = !NSScreen.screens.isEmpty
+        diskCount = reading.disks.count
+        let change = failures.update(failing: reading.failures)
+        for name in change.failed { emit("sampling_failed", level: "error", ["counter": name]) }
+        for name in change.recovered { emit("sampling_recovered", ["counter": name]) }
+        rebuildPanels()
+        var allHidden = !panels.isEmpty
         for screen in NSScreen.screens {
-            let id = monitorID(for: screen)
-            guard let panel = panels[id] else { continue }
-            let hide = detector.shouldHide(on: screen)
-            hidden = hidden && hide
-            panel.ringView.reading = reading
-            if hide { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+            guard let panel = panels[monitorID(for: screen)] else { continue }
+            panel.ringView.update(reading)
+            if detector.shouldHide(on: screen) {
+                panel.orderOut(nil)
+            } else {
+                allHidden = false
+                panel.orderFrontRegardless()
+            }
         }
-        schedule(after: hidden ? 10 : 2)
+        schedule(after: allHidden ? 10 : 2)
     }
 
     private func schedule(after interval: TimeInterval) {
         timer?.invalidate()
-        if interval == 0 { refresh(); return }
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in self?.refresh() }
-    }
-
-    private func monitorID(for screen: NSScreen) -> String {
-        let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
-        if let uuid = CGDisplayCreateUUIDFromDisplayID(number)?.takeRetainedValue(), let string = CFUUIDCreateString(nil, uuid) {
-            return string as String
-        }
-        return "display-\(number)"
+        timer = nil
+        guard !shuttingDown else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in self?.sample() }
     }
 }
 
+emit("process_start")
 let app = NSApplication.shared
 private let delegate = AppDelegate()
 app.delegate = delegate

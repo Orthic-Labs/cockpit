@@ -16,6 +16,7 @@ struct Mock {
     enumerated: RefCell<Vec<PathBuf>>,
     inspected: RefCell<Vec<PathBuf>>,
     swapped_parent: Option<PathBuf>,
+    swap_before_listing: bool,
 }
 
 fn p(s: &str) -> PathBuf {
@@ -69,7 +70,8 @@ impl FilesystemProvider for Mock {
     fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError> {
         self.inspected.borrow_mut().push(path.to_path_buf());
         if self.swapped_parent.as_deref() == Some(path)
-            && self.enumerated.borrow().contains(&path.to_path_buf())
+            && (self.enumerated.borrow().contains(&path.to_path_buf())
+                || (self.swap_before_listing && self.inspected.borrow().iter().filter(|p| p.as_path() == path).count() > 1))
         {
             let mut changed = dir("a");
             changed.kind = EntryKind::Symlink;
@@ -397,4 +399,30 @@ fn parent_swapped_after_listing_blocks_child_inspection() {
     assert!(report.accounting.incomplete);
     assert_eq!(report.accounting.attributed_allocation_bytes, 0);
     assert!(report.skipped_links.iter().any(|link| link.path == p("/r")));
+}
+
+#[test]
+fn directory_swapped_before_listing_is_not_enumerated() {
+    let mut m = Mock::default();
+    m.add("/", dir("a"));
+    m.add("/r", dir("a"));
+    m.kids("/r", &["/r/secret"]);
+    m.swapped_parent = Some(p("/r"));
+    m.swap_before_listing = true;
+    let report = scan_with_provider(&m, &[p("/r")], &ScanOptions::default());
+    assert!(m.enumerated.borrow().is_empty());
+    assert!(report.accounting.incomplete);
+}
+
+#[test]
+fn unidentified_files_never_claim_unique_allocation() {
+    let mut m = Mock::default();
+    m.add("/", dir("a"));
+    let mut f = file("a", "1", 100);
+    f.file_id = None;
+    m.add("/f", f);
+    let report = scan_with_provider(&m, &[p("/f")], &ScanOptions::default());
+    assert_eq!(report.accounting.attributed_allocation_bytes, 0);
+    assert_eq!(report.entries[0].reclaim.as_ref().unwrap().upper_bytes, None);
+    assert!(report.accounting.incomplete);
 }

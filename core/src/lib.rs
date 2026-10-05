@@ -2,6 +2,8 @@
 
 pub mod history;
 pub mod model;
+pub mod platform;
+pub mod presentation;
 pub mod rules;
 pub mod scan;
 pub mod store;

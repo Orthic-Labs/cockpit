@@ -241,6 +241,14 @@ pub struct Finding {
     pub route: CleanupRoute,
     pub eligible: bool,
     pub reasons: Vec<String>,
+    /// Names of evidence signals that were unavailable (None) for this row.
+    /// Non-empty means the finding is report-only because of missing data.
+    #[serde(default)]
+    pub unknown_signals: Vec<String>,
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default)]
+    pub route_detail: Option<String>,
     pub logical_bytes: Option<u64>,
     pub attributed_bytes: Option<u64>,
     pub unique_bytes: Option<u64>,
@@ -249,21 +257,99 @@ pub struct Finding {
     pub deletion_estimate_upper: Option<u64>,
 }
 
+impl RulePack {
+    /// Static consistency check of a rule pack.  Returns human-readable
+    /// problems; an empty list means the pack is structurally safe.
+    pub fn validate(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        if self.schema_version != RULE_SCHEMA_VERSION {
+            problems.push(format!("pack schema_version {}", self.schema_version));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for rule in &self.rules {
+            if !seen.insert(rule.id.clone()) {
+                problems.push(format!("{}: duplicate rule id", rule.id));
+            }
+            problems.extend(rule.validate());
+        }
+        problems
+    }
+}
+
 impl Rule {
+    /// A rule can only ever make a row cleanup-eligible when it has a route,
+    /// a measurement and review-class risk.
+    pub fn is_actionable(&self) -> bool {
+        self.route != CleanupRoute::None
+            && self.measurement != Measurement::ExplanationOnly
+            && self.risk != Risk::Explanation
+    }
+
+    pub fn validate(&self) -> Vec<String> {
+        let mut p = Vec::new();
+        let id = &self.id;
+        if self.schema_version != RULE_SCHEMA_VERSION {
+            p.push(format!("{id}: schema_version {}", self.schema_version));
+        }
+        if !self.report_only {
+            p.push(format!("{id}: report_only must stay true"));
+        }
+        if self.is_actionable() {
+            if self.path_patterns.is_empty() {
+                p.push(format!("{id}: actionable rule has no path patterns"));
+            }
+            for pattern in &self.path_patterns {
+                let norm = normalize_path(pattern);
+                let first = norm.split('/').next().unwrap_or("");
+                if !pattern.starts_with('/') || first.is_empty() || first.contains(['*', '?']) {
+                    p.push(format!("{id}: pattern must be absolute with literal root: {pattern}"));
+                }
+                if normalize_path(pattern).split('/').any(|s| s == "..") {
+                    p.push(format!("{id}: pattern contains ..: {pattern}"));
+                }
+            }
+            if self.ownership == OwnershipCheck::ExplanationOnly {
+                p.push(format!("{id}: actionable rule needs an ownership check"));
+            }
+            if !self.liveness.contains(&EvidenceKey::LivenessNotInUse) {
+                p.push(format!("{id}: liveness must include liveness_not_in_use"));
+            }
+            if self.age_threshold_days.is_none() {
+                p.push(format!("{id}: actionable rule needs age_threshold_days"));
+            }
+            if self.risk != Risk::Review {
+                p.push(format!("{id}: actionable risk must be review"));
+            }
+        } else {
+            if self.risk != Risk::Explanation {
+                p.push(format!("{id}: non-actionable rule must have risk explanation"));
+            }
+            if self.route != CleanupRoute::None || self.measurement != Measurement::ExplanationOnly {
+                p.push(format!("{id}: explanation rule needs route none and explanation_only"));
+            }
+            if !self.path_patterns.is_empty() {
+                p.push(format!("{id}: explanation rule must not match paths"));
+            }
+            if self.explanation.as_deref().is_none_or(|t| t.trim().is_empty()) {
+                p.push(format!("{id}: explanation text missing"));
+            }
+        }
+        p
+    }
+
     /// Return a finding only when path patterns and known volume scope match.
-    /// Unknown volume identity is retained as a finding but cannot be eligible.
+    /// Anything unknown, contradictory, in use, incomplete, placeholder or
+    /// protected stays report-only with a specific reason.
     pub fn evaluate(&self, scan: &ScanMetadata) -> Option<Finding> {
         // Explanation rules describe non-file resources (swap, snapshots,
-        // app-managed media).  They are shown by their rule metadata and do
-        // not attach themselves to every filesystem row.
+        // app-managed media) and never attach to filesystem rows.
         if self.path_patterns.is_empty() {
             return None;
         }
-        if !self.path_patterns.is_empty()
-            && !self
-                .path_patterns
-                .iter()
-                .any(|pattern| path_matches(pattern, &scan.path))
+        if !self
+            .path_patterns
+            .iter()
+            .any(|pattern| path_matches(pattern, &scan.path))
         {
             return None;
         }
@@ -272,92 +358,108 @@ impl Rule {
         }
 
         let liveness = effective_liveness(scan);
-        let mut reasons = Vec::new();
-        let mut eligible = self.route != CleanupRoute::None
-            && self.measurement != Measurement::ExplanationOnly
-            && self.risk != Risk::Explanation;
+        let mut out = Outcome::default();
 
-        for requirement in self.liveness.iter().chain(self.eligibility.iter()) {
-            match evidence(*requirement, self, scan, liveness) {
-                Some(true) => {}
-                Some(false) => {
-                    eligible = false;
-                    reasons.push(format!("evidence_failed:{}", evidence_name(*requirement)));
-                }
-                None => {
-                    eligible = false;
-                    reasons.push(format!("evidence_unknown:{}", evidence_name(*requirement)));
-                }
+        if !self.is_actionable() {
+            out.note("not_actionable:explanation_only".to_string());
+        } else {
+            // Rule-declared requirements first, then the unconditional
+            // baseline; every signal is judged so all unknowns are listed.
+            for key in self.liveness.iter().chain(self.eligibility.iter()) {
+                out.judge(*key, self, scan, liveness);
             }
-        }
-
-        // These protections are unconditional for actionable rules.  They
-        // prevent broad path patterns from ever selecting source/user data.
-        for (key, value) in [
-            (EvidenceKey::VolumeMounted, scan.volume_mounted),
-            (
+            for key in [
+                EvidenceKey::VolumeMounted,
                 EvidenceKey::PathPresent,
-                Some(scan.path_state == PathState::Present),
-            ),
-            (
                 EvidenceKey::InspectionComplete,
-                scan.evidence.inspection_complete,
-            ),
-            (
                 EvidenceKey::OwnershipConfirmed,
-                scan.evidence.ownership_confirmed,
-            ),
-            (
                 EvidenceKey::NoProtectedDescendant,
-                scan.evidence.protected_descendant.map(|v| !v),
-            ),
-            (
                 EvidenceKey::NoSourceRepository,
-                scan.evidence.source_repository.map(|v| !v),
-            ),
-            (EvidenceKey::NoUserData, scan.evidence.user_data.map(|v| !v)),
-            (
+                EvidenceKey::NoUserData,
                 EvidenceKey::NoCloudPlaceholder,
-                scan.evidence.cloud_placeholder.map(|v| !v),
-            ),
-        ] {
-            if eligible && self.route != CleanupRoute::None {
-                match value {
-                    Some(true) => {}
-                    Some(false) => {
-                        eligible = false;
-                        reasons.push(format!("protected:{}", evidence_name(key)));
-                    }
-                    None => {
-                        eligible = false;
-                        reasons.push(format!("evidence_unknown:{}", evidence_name(key)));
-                    }
-                }
+                EvidenceKey::LivenessNotInUse,
+            ] {
+                out.judge(key, self, scan, liveness);
             }
-        }
+            if self.age_threshold_days.is_some() {
+                out.judge(EvidenceKey::AgeThresholdMet, self, scan, liveness);
+            }
 
-        if let Some(threshold) = self.age_threshold_days {
-            match scan.age_days {
-                Some(days) if days >= threshold => {}
-                Some(_) => {
-                    eligible = false;
-                    reasons.push("age_below_threshold".to_string());
-                }
+            // Volume scope and identity.
+            match scope_state(&self.volumes, scan) {
+                Some(true) => {}
+                Some(false) => out.note("evidence_failed:volume_scope".to_string()),
                 None => {
-                    eligible = false;
-                    reasons.push("evidence_unknown:age_threshold_met".to_string());
+                    out.unknown.push("volume_scope".to_string());
+                    out.note(format!("evidence_unknown:volume_scope:{}", scope_unknowns(&self.volumes, scan)));
                 }
+            }
+            if scan.is_startup_volume == Some(true) && scan.is_external_volume == Some(true) {
+                out.note("evidence_conflict:volume_startup_and_external".to_string());
+            }
+            if scan.volume_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+                out.unknown.push("volume_id".to_string());
+                out.note("evidence_unknown:volume_id".to_string());
+            }
+
+            // Path shape: relative or traversing paths are never actionable.
+            if let Some(problem) = path_problem(&scan.path) {
+                out.note(format!("path_not_canonical:{problem}"));
+            }
+
+            // Contradictions between the scanner's liveness and its signals.
+            if scan.liveness == Liveness::NotInUse {
+                let e = &scan.evidence;
+                for (name, value) in [
+                    ("chrome_family_running", e.chrome_family_running),
+                    ("active_residents", e.active_residents),
+                    ("generating_tool_running", e.generating_tool_running),
+                    ("app_process_running", e.app_process_running),
+                    ("simulator_in_use", e.simulator_in_use),
+                    ("owner_lease_active", e.owner_lease_active),
+                ] {
+                    if value == Some(true) {
+                        out.note(format!("evidence_conflict:not_in_use_but_{name}"));
+                    }
+                }
+            }
+            if scan.evidence.replacement_newer == Some(true)
+                && scan.evidence.app_installed == Some(false)
+            {
+                out.note("evidence_conflict:replacement_newer_but_app_not_installed".to_string());
+            }
+
+            // The size the rule measures must be known.
+            let (size, name) = match self.measurement {
+                Measurement::CloneAwareUniqueBytes => (scan.unique_bytes, "unique_bytes"),
+                Measurement::AttributedAllocation => (scan.attributed_bytes, "attributed_bytes"),
+                Measurement::LogicalBytes => (scan.logical_bytes, "logical_bytes"),
+                Measurement::ExplanationOnly => (None, "explanation_only"),
+            };
+            if size.is_none() {
+                out.unknown.push(name.to_string());
+                out.note(format!("size_unknown:{name}"));
             }
         }
 
-        if eligible && liveness != Liveness::NotInUse {
-            eligible = false;
-            reasons.push(format!("liveness:{:?}", liveness).to_lowercase());
+        // Inverted reclaim bounds are reported as unknown, never shown.
+        let (mut lower, mut upper) = (scan.deletion_estimate_lower, scan.deletion_estimate_upper);
+        if let (Some(l), Some(u)) = (lower, upper)
+            && l > u
+        {
+            lower = None;
+            upper = None;
+            out.note("estimate_inconsistent:lower_exceeds_upper".to_string());
         }
 
+        let eligible = out.ok && self.is_actionable();
+        let mut reasons = out.reasons;
         if !eligible && reasons.is_empty() {
             reasons.push("report_only".to_string());
         }
+        let mut unknown_signals = out.unknown;
+        unknown_signals.sort();
+        unknown_signals.dedup();
 
         Some(Finding {
             id: stable_finding_id(&self.id, &scan.path),
@@ -370,12 +472,104 @@ impl Rule {
             route: self.route,
             eligible,
             reasons,
+            unknown_signals,
+            explanation: self.explanation.clone(),
+            route_detail: self.route_detail.clone(),
             logical_bytes: scan.logical_bytes,
             attributed_bytes: scan.attributed_bytes,
             unique_bytes: scan.unique_bytes,
-            deletion_estimate_lower: scan.deletion_estimate_lower,
-            deletion_estimate_upper: scan.deletion_estimate_upper,
+            deletion_estimate_lower: lower,
+            deletion_estimate_upper: upper,
         })
+    }
+}
+
+struct Outcome {
+    ok: bool,
+    reasons: Vec<String>,
+    unknown: Vec<String>,
+    evaluated: Vec<EvidenceKey>,
+}
+
+impl Default for Outcome {
+    fn default() -> Self {
+        Self {
+            ok: true,
+            reasons: Vec::new(),
+            unknown: Vec::new(),
+            evaluated: Vec::new(),
+        }
+    }
+}
+
+impl Outcome {
+    fn note(&mut self, reason: String) {
+        self.ok = false;
+        if !self.reasons.contains(&reason) {
+            self.reasons.push(reason);
+        }
+    }
+
+    fn judge(&mut self, key: EvidenceKey, rule: &Rule, scan: &ScanMetadata, liveness: Liveness) {
+        if self.evaluated.contains(&key) {
+            return;
+        }
+        self.evaluated.push(key);
+        let name = evidence_name(key);
+        if key == EvidenceKey::AgeThresholdMet && rule.age_threshold_days.is_none() {
+            self.note("rule_invalid:age_threshold_missing".to_string());
+            return;
+        }
+        match evidence(key, rule, scan, liveness) {
+            Some(true) => {}
+            Some(false) => {
+                if key == EvidenceKey::AgeThresholdMet {
+                    self.note(format!(
+                        "age_below_threshold:{}<{}",
+                        scan.age_days.unwrap_or(0),
+                        rule.age_threshold_days.unwrap_or(0)
+                    ));
+                } else if name.starts_with("no_") {
+                    self.note(format!("protected:{name}"));
+                } else {
+                    self.note(format!("evidence_failed:{name}"));
+                }
+            }
+            None => {
+                self.unknown.push(name.to_string());
+                self.note(format!("evidence_unknown:{name}{}", unknown_cause(key, scan)));
+            }
+        }
+    }
+}
+
+fn unknown_cause(key: EvidenceKey, scan: &ScanMetadata) -> String {
+    match key {
+        EvidenceKey::PathPresent if scan.path_state == PathState::Inaccessible => {
+            ":path_inaccessible".into()
+        }
+        EvidenceKey::PathPresent => ":path_state_unknown".into(),
+        EvidenceKey::LivenessNotInUse => format!(":{}", liveness_cause(scan)),
+        EvidenceKey::AgeThresholdMet => ":age_days".into(),
+        _ => String::new(),
+    }
+}
+
+fn liveness_cause(scan: &ScanMetadata) -> &'static str {
+    if scan.volume_mounted == Some(false) {
+        "volume_not_mounted"
+    } else if scan.volume_mounted.is_none() {
+        "volume_mounted_unknown"
+    } else if scan.path_state == PathState::Inaccessible {
+        "path_inaccessible"
+    } else if scan.path_state == PathState::Absent {
+        "path_absent"
+    } else if scan.path_state == PathState::Unknown {
+        "path_state_unknown"
+    } else if scan.evidence.inspection_complete != Some(true) {
+        "inspection_incomplete_or_unknown"
+    } else {
+        "scanner_liveness_not_reported"
     }
 }
 
@@ -395,28 +589,66 @@ pub fn evaluate_scan(rules: &[Rule], scan: &ScanReport, evidence: &Evidence) -> 
     detect(rules, &row)
 }
 
-/// Evaluate a batch of explicitly supplied scan rows.  No filesystem or
-/// process inspection happens here, and no finding is mutated or approved.
+/// Evaluate a batch of explicitly supplied scan rows.  Output is sorted by
+/// finding id and is independent of input order.  Rows that produce the same
+/// id but differ in content are merged conservatively into one ineligible
+/// finding.  No filesystem or process inspection happens here.
 pub fn evaluate_all(rules: &[Rule], scans: &[ScanMetadata]) -> Vec<Finding> {
-    scans.iter().flat_map(|scan| detect(rules, scan)).collect()
+    let mut groups: std::collections::BTreeMap<String, Vec<(bool, String, Finding)>> =
+        std::collections::BTreeMap::new();
+    for finding in scans.iter().flat_map(|scan| detect(rules, scan)) {
+        let json = serde_json::to_string(&finding).unwrap_or_default();
+        groups
+            .entry(finding.id.clone())
+            .or_default()
+            .push((finding.eligible, json, finding));
+    }
+    groups
+        .into_values()
+        .map(|mut group| {
+            group.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+            let differs = group.iter().any(|g| g.1 != group[0].1);
+            let mut pick = group.swap_remove(0).2;
+            if differs {
+                pick.eligible = false;
+                let reason = "evidence_conflict:duplicate_scan_rows".to_string();
+                if !pick.reasons.contains(&reason) {
+                    pick.reasons.push(reason);
+                }
+            }
+            pick
+        })
+        .collect()
 }
 
 /// Stable across runs and independent of process order.  FNV-1a is used only
 /// as a compact identifier; it is not a security or content-integrity hash.
+/// Separators and `.`/empty segments are normalised; case is preserved and a
+/// leading separator is kept so absolute and relative paths differ.
 pub fn stable_finding_id(rule_id: &str, path: &str) -> String {
-    let key = format!("{}\0{}", rule_id, normalize_path(path));
+    let lead = if path.starts_with('/') || path.starts_with('\\') {
+        "/"
+    } else {
+        ""
+    };
+    let key = format!("{}\0{}{}", rule_id, lead, normalize_path(path));
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in key.as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    format!("finding:{}:{hash:016x}", rule_id)
+    format!("finding:{rule_id}:{hash:016x}")
 }
 
 fn effective_liveness(scan: &ScanMetadata) -> Liveness {
+    // An observed in-use state is never discarded.
+    if scan.liveness == Liveness::InUse {
+        return Liveness::InUse;
+    }
     if scan.volume_mounted != Some(true)
         || scan.path_state == PathState::Inaccessible
         || scan.path_state == PathState::Unknown
+        || scan.path_state == PathState::Absent
         || scan.evidence.inspection_complete != Some(true)
     {
         Liveness::Unknown
@@ -425,15 +657,62 @@ fn effective_liveness(scan: &ScanMetadata) -> Liveness {
     }
 }
 
+/// A row is in scope unless a scope flag is known to exclude it.
 fn volume_matches(scopes: &[VolumeScope], scan: &ScanMetadata) -> bool {
-    if scopes.is_empty() {
-        return true;
+    scopes.is_empty() || scopes.iter().any(|s| scope_flag(*s, scan) != Some(false))
+}
+
+fn scope_flag(scope: VolumeScope, scan: &ScanMetadata) -> Option<bool> {
+    match scope {
+        VolumeScope::AnyMountedLocal => Some(true),
+        VolumeScope::StartupVolume => scan.is_startup_volume,
+        VolumeScope::ExternalVolume => scan.is_external_volume,
     }
-    scopes.iter().any(|scope| match scope {
-        VolumeScope::AnyMountedLocal => true,
-        VolumeScope::StartupVolume => scan.is_startup_volume != Some(false),
-        VolumeScope::ExternalVolume => scan.is_external_volume != Some(false),
-    })
+}
+
+/// Some(true) only when a declared scope is positively confirmed.
+fn scope_state(scopes: &[VolumeScope], scan: &ScanMetadata) -> Option<bool> {
+    if scopes.is_empty() {
+        return Some(true);
+    }
+    let flags: Vec<Option<bool>> = scopes.iter().map(|s| scope_flag(*s, scan)).collect();
+    if flags.contains(&Some(true)) {
+        Some(true)
+    } else if flags.contains(&None) {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+fn scope_unknowns(scopes: &[VolumeScope], scan: &ScanMetadata) -> String {
+    let mut names: Vec<&str> = scopes
+        .iter()
+        .filter(|s| scope_flag(**s, scan).is_none())
+        .map(|s| match s {
+            VolumeScope::StartupVolume => "is_startup_volume",
+            VolumeScope::ExternalVolume => "is_external_volume",
+            VolumeScope::AnyMountedLocal => "any_mounted_local",
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names.join(",")
+}
+
+fn path_problem(path: &str) -> Option<&'static str> {
+    let bytes = path.as_bytes();
+    let absolute = matches!(bytes.first(), Some(b'/') | Some(b'\\'))
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':');
+    if path.trim().is_empty() {
+        Some("empty")
+    } else if !absolute {
+        Some("relative")
+    } else if path.replace('\\', "/").split('/').any(|p| p == "..") {
+        Some("parent_traversal")
+    } else {
+        None
+    }
 }
 
 fn evidence(
@@ -444,14 +723,22 @@ fn evidence(
 ) -> Option<bool> {
     Some(match key {
         EvidenceKey::VolumeMounted => scan.volume_mounted?,
-        EvidenceKey::PathPresent => scan.path_state == PathState::Present,
+        EvidenceKey::PathPresent => match scan.path_state {
+            PathState::Present => true,
+            PathState::Absent => false,
+            PathState::Inaccessible | PathState::Unknown => return None,
+        },
         EvidenceKey::InspectionComplete => scan.evidence.inspection_complete?,
         EvidenceKey::OwnershipConfirmed => scan.evidence.ownership_confirmed?,
         EvidenceKey::NoProtectedDescendant => !scan.evidence.protected_descendant?,
         EvidenceKey::NoSourceRepository => !scan.evidence.source_repository?,
         EvidenceKey::NoUserData => !scan.evidence.user_data?,
         EvidenceKey::NoCloudPlaceholder => !scan.evidence.cloud_placeholder?,
-        EvidenceKey::LivenessNotInUse => liveness == Liveness::NotInUse,
+        EvidenceKey::LivenessNotInUse => match liveness {
+            Liveness::NotInUse => true,
+            Liveness::InUse => false,
+            Liveness::Unknown => return None,
+        },
         EvidenceKey::AgeThresholdMet => scan.age_days? >= rule.age_threshold_days?,
         EvidenceKey::ChromeFamilyStopped => !scan.evidence.chrome_family_running?,
         EvidenceKey::ActiveResidentsStopped => !scan.evidence.active_residents?,
@@ -503,9 +790,17 @@ fn normalize_path(path: &str) -> String {
         .join("/")
 }
 
+/// Segment-wise, case-insensitive glob match (macOS and Windows volumes are
+/// case-insensitive by default; over-matching only produces a gated report
+/// row).  `*`/`?` never cross a separator, so `/a/b*` does not match
+/// `/a/bc/d`, and a trailing `**` requires at least one more segment so the
+/// rule root itself is never selected.
 fn path_matches(pattern: &str, path: &str) -> bool {
-    let pattern = normalize_path(pattern);
-    let path = normalize_path(path);
+    let pattern = normalize_path(pattern).to_lowercase();
+    let path = normalize_path(path).to_lowercase();
+    if pattern.is_empty() || path.is_empty() {
+        return false;
+    }
     let pattern_parts: Vec<&str> = pattern.split('/').collect();
     let path_parts: Vec<&str> = path.split('/').collect();
     match_parts(&pattern_parts, &path_parts)
@@ -514,6 +809,7 @@ fn path_matches(pattern: &str, path: &str) -> bool {
 fn match_parts(pattern: &[&str], path: &[&str]) -> bool {
     match (pattern.first(), path.first()) {
         (None, None) => true,
+        (Some(&"**"), _) if pattern.len() == 1 => !path.is_empty(),
         (Some(&"**"), _) => {
             match_parts(&pattern[1..], path)
                 || (!path.is_empty() && match_parts(pattern, &path[1..]))
@@ -570,7 +866,7 @@ mod tests {
                 EvidenceKey::LivenessNotInUse,
             ],
             eligibility: vec![],
-            age_threshold_days: None,
+            age_threshold_days: Some(1),
             measurement: Measurement::CloneAwareUniqueBytes,
             route: CleanupRoute::Trash,
             route_detail: None,
@@ -587,6 +883,10 @@ mod tests {
             volume_mounted: Some(true),
             path_state: PathState::Present,
             liveness: Liveness::NotInUse,
+            age_days: Some(100),
+            unique_bytes: Some(1),
+            attributed_bytes: Some(1),
+            logical_bytes: Some(1),
             evidence: ScanEvidence {
                 inspection_complete: Some(true),
                 ownership_confirmed: Some(true),
@@ -634,7 +934,7 @@ mod tests {
                 EvidenceKey::LivenessNotInUse,
             ],
             eligibility: vec![EvidenceKey::ReplacementNewer],
-            age_threshold_days: None,
+            age_threshold_days: Some(1),
             measurement: Measurement::AttributedAllocation,
             route: CleanupRoute::Trash,
             route_detail: None,

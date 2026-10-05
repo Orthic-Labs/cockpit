@@ -2,10 +2,59 @@
 use crate::{ScanReport, rules::Finding};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+/// Current (and only writable) snapshot schema version.
+pub const SCHEMA_VERSION: u32 = 1;
+/// Largest snapshot file that will be written or read.
+pub const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+/// Largest number of snapshot candidates `history` will examine.
+pub const MAX_SNAPSHOTS: usize = 1000;
+/// Longest accepted snapshot ID.
+pub const MAX_ID_LEN: usize = 64;
+const ID_PREFIX: &str = "scan-";
+
+/// A snapshot file that `history_report` declined to load, with the reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkippedSnapshot {
+    pub file: String,
+    pub reason: String,
+}
+
+/// Loaded snapshots (ordered by `created_at`, then `id`) plus explicit skips.
+#[derive(Clone, Debug, Default)]
+pub struct HistoryReport {
+    pub snapshots: Vec<Snapshot>,
+    pub skipped: Vec<SkippedSnapshot>,
+}
+
+/// An ID is never a path: `scan-` prefix, then ASCII alphanumerics, `-` or `_`,
+/// at most `MAX_ID_LEN` bytes in total.
+pub fn validate_id(id: &str) -> Result<(), String> {
+    if id.len() > MAX_ID_LEN {
+        return Err(format!("snapshot id longer than {MAX_ID_LEN} bytes"));
+    }
+    let rest = id
+        .strip_prefix(ID_PREFIX)
+        .ok_or_else(|| format!("snapshot id lacks `{ID_PREFIX}` prefix"))?;
+    if rest.is_empty()
+        || !rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err("snapshot id has characters outside [A-Za-z0-9_-]".into());
+    }
+    Ok(())
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -21,7 +70,7 @@ impl Snapshot {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
         Self {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             id: format!("scan-{}", time.as_nanos()),
             created_at: time.as_secs(),
             report,
@@ -55,27 +104,39 @@ pub fn default_directory() -> io::Result<PathBuf> {
         )
     })
 }
+fn is_link(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_REPARSE_POINT
+        if meta.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Refuse the state directory or any existing ancestor that is a symlink or
+/// reparse point, and refuse a state path that exists but is not a directory.
 fn reject_links(path: &Path) -> io::Result<()> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
-            Ok(meta) if meta.file_type().is_symlink() => {
+            Ok(meta) if is_link(&meta) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "metadata directory contains symlink",
+                    "metadata directory contains symlink or reparse point",
                 ));
             }
             Ok(meta) => {
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    if meta.file_attributes() & 0x400 != 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "metadata directory contains reparse point",
-                        ));
-                    }
+                if ancestor == path && !meta.is_dir() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "metadata path is not a directory",
+                    ));
                 }
-                let _ = meta;
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => (),
             Err(e) => return Err(e),
@@ -83,21 +144,66 @@ fn reject_links(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-pub fn save(directory: &Path, snapshot: &Snapshot) -> io::Result<PathBuf> {
-    reject_links(directory)?;
-    let directory_existed = directory.exists();
-    fs::create_dir_all(directory)?;
+
+fn create_directory(directory: &Path) -> io::Result<()> {
+    // Existing directories are left untouched (including permissions); only
+    // directories created here get owner-only mode on unix.
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        if !directory_existed {
-            fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-        }
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
-    #[cfg(not(unix))]
-    let _ = directory_existed;
+    builder.create(directory)
+}
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write `snapshot` as `<id>.json`. Never overwrites an existing snapshot or
+/// unrelated file (`AlreadyExists`). The write goes to an exclusively created
+/// `.<id>.<unique>.tmp` file, is synced, then published atomically. Leftover
+/// temp files from interrupted writes are ignored by `history`.
+pub fn save(directory: &Path, snapshot: &Snapshot) -> io::Result<PathBuf> {
+    validate_id(&snapshot.id).map_err(|m| io::Error::new(io::ErrorKind::InvalidInput, m))?;
+    if snapshot.schema_version != SCHEMA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to write unsupported snapshot schema version",
+        ));
+    }
+    let bytes = serde_json::to_vec(snapshot).map_err(io::Error::other)?;
+    if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "snapshot exceeds size cap",
+        ));
+    }
+    reject_links(directory)?;
+    create_directory(directory)?;
+    reject_links(directory)?;
     let destination = directory.join(format!("{}.json", snapshot.id));
-    let temporary = directory.join(format!(".{}.tmp", snapshot.id));
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "snapshot already exists",
+            ));
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e),
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = directory.join(format!(
+        ".{}.{}-{}-{}.tmp",
+        snapshot.id,
+        std::process::id(),
+        nanos,
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -107,9 +213,10 @@ pub fn save(directory: &Path, snapshot: &Snapshot) -> io::Result<PathBuf> {
     }
     let mut file = options.open(&temporary)?;
     let result = (|| {
-        serde_json::to_writer(&mut file, snapshot).map_err(io::Error::other)?;
+        file.write_all(&bytes)?;
         file.sync_all()?;
-        fs::rename(&temporary, &destination)?;
+        drop(file);
+        publish(&temporary, &destination)?;
         Ok(destination.clone())
     })();
     if result.is_err() {
@@ -117,63 +224,128 @@ pub fn save(directory: &Path, snapshot: &Snapshot) -> io::Result<PathBuf> {
     }
     result
 }
-pub fn history(directory: &Path) -> io::Result<Vec<Snapshot>> {
+
+fn publish(temporary: &Path, destination: &Path) -> io::Result<()> {
+    // Hard-link creation is atomic & refuses an existing destination on both
+    // APFS & NTFS. Unsupported filesystems fail instead of risking replacement.
+    fs::hard_link(temporary, destination)?;
+    fs::remove_file(temporary)
+}
+
+#[derive(Deserialize)]
+struct Header {
+    schema_version: u64,
+}
+
+fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Inspect the opened reparse point itself; never follow a raced link.
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let file = options.open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || is_link(&meta) {
+        return Err(invalid("not a regular file"));
+    }
+    if meta.len() > MAX_SNAPSHOT_BYTES {
+        return Err(invalid("snapshot exceeds size cap"));
+    }
+    let mut bytes = Vec::new();
+    // Read one extra byte so a file that grew after the check is still caught.
+    file.take(MAX_SNAPSHOT_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return Err(invalid("snapshot exceeds size cap"));
+    }
+    Ok(bytes)
+}
+
+fn load(path: &Path, stem: &str) -> Result<Snapshot, String> {
+    let bytes = read_bounded(path).map_err(|e| e.to_string())?;
+    let header: Header =
+        serde_json::from_slice(&bytes).map_err(|e| format!("malformed snapshot: {e}"))?;
+    if header.schema_version != u64::from(SCHEMA_VERSION) {
+        return Err(format!(
+            "unsupported schema version {} (supported: {SCHEMA_VERSION})",
+            header.schema_version
+        ));
+    }
+    let snapshot: Snapshot =
+        serde_json::from_slice(&bytes).map_err(|e| format!("malformed snapshot: {e}"))?;
+    validate_id(&snapshot.id)?;
+    if snapshot.id != stem {
+        return Err("snapshot id does not match file name".into());
+    }
+    Ok(snapshot)
+}
+
+/// Load all snapshots, skipping (with a reason) any individual bad file:
+/// malformed, oversized, unknown schema version, bad or mismatched id,
+/// symlink or non-regular entries named like snapshots. Non-snapshot names,
+/// including dot-prefixed temp files from interrupted writes, are ignored
+/// without being opened. Errors are reserved for the directory itself
+/// (link/reparse point, unreadable) or more than `MAX_SNAPSHOTS` candidates.
+pub fn history_report(directory: &Path) -> io::Result<HistoryReport> {
     reject_links(directory)?;
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HistoryReport::default()),
         Err(e) => return Err(e),
     };
-    let mut snapshots = Vec::new();
+    let mut names = Vec::new();
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || !entry.file_name().to_string_lossy().starts_with("scan-")
-            || entry.path().extension().and_then(|s| s.to_str()) != Some("json")
-        {
-            continue;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(ID_PREFIX) && name.ends_with(".json") {
+            if names.len() == MAX_SNAPSHOTS {
+                return Err(invalid("history exceeds snapshot count cap"));
+            }
+            names.push((name, entry));
         }
-        if entry.metadata()?.len() > 64 * 1024 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "snapshot exceeds 64 MiB",
-            ));
-        }
-        if snapshots.len() >= 1000 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "history exceeds 1000 snapshots",
-            ));
-        }
-        let snapshot: Snapshot =
-            serde_json::from_reader(fs::File::open(entry.path())?).map_err(io::Error::other)?;
-        if snapshot.schema_version != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unsupported snapshot schema",
-            ));
-        }
-        snapshots.push(snapshot);
     }
-    snapshots.sort_by_key(|s| (s.created_at, s.id.clone()));
-    Ok(snapshots)
+    if names.len() > MAX_SNAPSHOTS {
+        return Err(invalid("history exceeds snapshot count cap"));
+    }
+    names.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut report = HistoryReport::default();
+    for (name, entry) in names {
+        let skip = |reason: String| SkippedSnapshot {
+            file: name.clone(),
+            reason,
+        };
+        match entry.file_type() {
+            Ok(t) if t.is_file() => (),
+            Ok(_) => {
+                report.skipped.push(skip("not a regular file".into()));
+                continue;
+            }
+            Err(e) => {
+                report.skipped.push(skip(e.to_string()));
+                continue;
+            }
+        }
+        let stem = &name[..name.len() - ".json".len()];
+        match validate_id(stem).and_then(|()| load(&entry.path(), stem)) {
+            Ok(snapshot) => report.snapshots.push(snapshot),
+            Err(reason) => report.skipped.push(skip(reason)),
+        }
+    }
+    report
+        .snapshots
+        .sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+    Ok(report)
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    #[cfg(unix)]
-    #[test]
-    fn refuses_linked_state_directory() {
-        use std::os::unix::fs::symlink;
-        let path = fs::canonicalize(std::env::temp_dir())
-            .unwrap()
-            .join(format!("cockpit-store-link-{}", std::process::id()));
-        fs::create_dir_all(&path).unwrap();
-        let link = path.join("link");
-        symlink(&path, &link).unwrap();
-        assert!(history(&link).is_err());
-        fs::remove_file(link).unwrap();
-        fs::remove_dir(path).unwrap();
-    }
+/// Valid snapshots only, deterministically ordered. Bad files are skipped; use
+/// `history_report` to see why.
+pub fn history(directory: &Path) -> io::Result<Vec<Snapshot>> {
+    history_report(directory).map(|r| r.snapshots)
 }
