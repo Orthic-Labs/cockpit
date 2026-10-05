@@ -285,6 +285,13 @@ fn timeout(limits: &Limits) -> Duration {
     limits.transport_wait.max(Duration::from_millis(1))
 }
 
+/// Retain the typed OS error while identifying the failing transport step.
+fn io_at(step: &str, error: &io::Error) -> IpcError {
+    let mut mapped = IpcError::from_io(error);
+    mapped.message = format!("{step}: {}", mapped.message);
+    mapped
+}
+
 /// Wall-clock remaining until `deadline`; a trickling peer cannot extend it.
 fn remaining(deadline: Instant) -> Result<Duration, IpcError> {
     deadline
@@ -305,7 +312,7 @@ fn read_exact_deadline(
     while filled < buf.len() {
         stream
             .set_read_timeout(Some(remaining(deadline)?))
-            .map_err(|e| IpcError::from_io(&e))?;
+            .map_err(|e| io_at("set read timeout", &e))?;
         match stream.read(&mut buf[filled..]) {
             Ok(0) => {
                 return Err(IpcError::new(
@@ -315,7 +322,7 @@ fn read_exact_deadline(
             }
             Ok(n) => filled += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(IpcError::from_io(&e)),
+            Err(e) => return Err(io_at("read frame", &e)),
         }
     }
     Ok(())
@@ -330,7 +337,7 @@ fn write_all_deadline(
     while written < buf.len() {
         stream
             .set_write_timeout(Some(remaining(deadline)?))
-            .map_err(|e| IpcError::from_io(&e))?;
+            .map_err(|e| io_at("set write timeout", &e))?;
         match stream.write(&buf[written..]) {
             Ok(0) => {
                 return Err(IpcError::new(
@@ -340,7 +347,7 @@ fn write_all_deadline(
             }
             Ok(n) => written += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(IpcError::from_io(&e)),
+            Err(e) => return Err(io_at("write frame", &e)),
         }
     }
     stream.flush().map_err(|e| IpcError::from_io(&e))
@@ -485,7 +492,7 @@ pub fn request(endpoint: &Path, body: &[u8], limits: &Limits) -> Result<Vec<u8>,
 fn connect_bounded(endpoint: &Path, wait: Duration) -> Result<UnixStream, IpcError> {
     match connect_nb(endpoint, wait)? {
         ConnectOutcome::Connected(stream) => Ok(stream),
-        ConnectOutcome::Refused(e) => Err(IpcError::from_io(&e)),
+        ConnectOutcome::Refused(e) => Err(io_at("connect", &e)),
     }
 }
 
@@ -558,7 +565,7 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
     // SAFETY: plain socket creation; failure returns -1 with errno set.
     let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     if raw < 0 {
-        return Err(IpcError::from_io(&io::Error::last_os_error()));
+        return Err(io_at("socket", &io::Error::last_os_error()));
     }
     let fd = OwnedFd(raw);
     let deadline = Instant::now() + wait;
@@ -566,11 +573,11 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
     unsafe {
         let flags = libc::fcntl(fd.0, libc::F_GETFD);
         if flags < 0 || libc::fcntl(fd.0, libc::F_SETFD, flags | libc::FD_CLOEXEC) < 0 {
-            return Err(IpcError::from_io(&io::Error::last_os_error()));
+            return Err(io_at("close-on-exec flags", &io::Error::last_os_error()));
         }
         let flags = libc::fcntl(fd.0, libc::F_GETFL);
         if flags < 0 || libc::fcntl(fd.0, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-            return Err(IpcError::from_io(&io::Error::last_os_error()));
+            return Err(io_at("nonblocking flags", &io::Error::last_os_error()));
         }
         if libc::connect(
             fd.0,
@@ -599,7 +606,7 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
                     if e.kind() == io::ErrorKind::Interrupted {
                         continue;
                     }
-                    return Err(IpcError::from_io(&e));
+                    return Err(io_at("connect poll", &e));
                 }
                 if prc == 0 {
                     continue; // `remaining` maps the expired deadline to Timeout.
@@ -614,7 +621,7 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
                     &mut opt_len,
                 ) != 0
                 {
-                    return Err(IpcError::from_io(&io::Error::last_os_error()));
+                    return Err(io_at("connect SO_ERROR", &io::Error::last_os_error()));
                 }
                 if so_error != 0 {
                     if connect_pending(so_error) {
@@ -624,7 +631,9 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
                         }
                         continue;
                     }
-                    return Ok(ConnectOutcome::Refused(io::Error::from_raw_os_error(so_error)));
+                    return Ok(ConnectOutcome::Refused(io::Error::from_raw_os_error(
+                        so_error,
+                    )));
                 }
                 // SO_ERROR == 0 is not sufficient on every Unix: Linux can
                 // report a saturated backlog with a clear SO_ERROR while the
@@ -671,7 +680,7 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
         // SO_SNDTIMEO against a blocking fd.
         let flags = libc::fcntl(fd.0, libc::F_GETFL);
         if flags < 0 || libc::fcntl(fd.0, libc::F_SETFL, flags & !libc::O_NONBLOCK) < 0 {
-            return Err(IpcError::from_io(&io::Error::last_os_error()));
+            return Err(io_at("restore blocking flags", &io::Error::last_os_error()));
         }
     }
     // SAFETY: `fd.0` is a connected SOCK_STREAM AF_UNIX socket owned solely

@@ -848,7 +848,12 @@ impl ipc::Handler for Worker {
             }
         };
         if self.execution_poisoned {
-            self.emit(Some(&request.id), Some(&request.op), Phase::Failed, Some(ErrorCode::Internal));
+            self.emit(
+                Some(&request.id),
+                Some(&request.op),
+                Phase::Failed,
+                Some(ErrorCode::Internal),
+            );
             return self.error_bytes(Some(request.id), internal("child termination previously unconfirmed; restart worker before more operations".into()));
         }
         let id = request.id.clone();
