@@ -15,9 +15,7 @@
 //!   connection is closed with no frame. `max_response_bytes` below the
 //!   minimal error frame is rejected by `validate_limits`.
 
-use super::{
-    ErrorCode, Handler, IpcError, Limits, ServeExit, error_response,
-};
+use super::{ErrorCode, Handler, IpcError, Limits, ServeExit, error_response};
 use ::windows::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND,
     ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
@@ -217,7 +215,10 @@ fn sid_to_string(sid: PSID) -> Result<String, IpcError> {
 /// `\\.\pipe\cockpit-worker-<current user SID string>`.
 pub fn default_endpoint() -> Result<String, IpcError> {
     let sid = own_user_sid()?;
-    Ok(format!("{PIPE_PREFIX}cockpit-worker-{}", sid_to_string(sid.sid())?))
+    Ok(format!(
+        "{PIPE_PREFIX}cockpit-worker-{}",
+        sid_to_string(sid.sid())?
+    ))
 }
 
 fn unsafe_endpoint(reason: &str) -> IpcError {
@@ -307,8 +308,7 @@ fn drain(pipe: HANDLE, ctx: &IoCtx, failure: Option<::windows::core::Error>) -> 
             let mut bytes = 0u32;
             // SAFETY: the event is signalled, so the kernel has released
             // ctx; a non-waiting GetOverlappedResult just reads status.
-            let outcome =
-                unsafe { GetOverlappedResult(pipe, &ctx.overlapped, &mut bytes, false) };
+            let outcome = unsafe { GetOverlappedResult(pipe, &ctx.overlapped, &mut bytes, false) };
             return match (outcome.map(|()| bytes), failure) {
                 (_, Some(e)) => Completion::Failed(e),
                 (Ok(done), None) => Completion::Done(done),
@@ -331,8 +331,7 @@ fn complete(pipe: HANDLE, ctx: &mut IoCtx, mut keep_going: impl FnMut() -> bool)
         if wait == WAIT_OBJECT_0 {
             let mut bytes = 0u32;
             // SAFETY: operation signalled complete; ctx may be reused/freed.
-            return match unsafe { GetOverlappedResult(pipe, &ctx.overlapped, &mut bytes, false) }
-            {
+            return match unsafe { GetOverlappedResult(pipe, &ctx.overlapped, &mut bytes, false) } {
                 Ok(()) => Completion::Done(bytes),
                 Err(e) => Completion::Failed(e),
             };
@@ -349,11 +348,7 @@ fn complete(pipe: HANDLE, ctx: &mut IoCtx, mut keep_going: impl FnMut() -> bool)
     }
 }
 
-fn read_exact(
-    pipe: &Handle,
-    buffer: &mut [u8],
-    deadline: Instant,
-) -> Result<(), TransportFailure> {
+fn read_exact(pipe: &Handle, buffer: &mut [u8], deadline: Instant) -> Result<(), TransportFailure> {
     let mut offset = 0;
     while offset < buffer.len() {
         let chunk = CHUNK.min(buffer.len() - offset);
@@ -402,11 +397,7 @@ fn read_exact(
     Ok(())
 }
 
-fn write_all(
-    pipe: &Handle,
-    buffer: &[u8],
-    deadline: Instant,
-) -> Result<(), TransportFailure> {
+fn write_all(pipe: &Handle, buffer: &[u8], deadline: Instant) -> Result<(), TransportFailure> {
     let mut offset = 0;
     while offset < buffer.len() {
         let end = (offset + CHUNK).min(buffer.len());
@@ -463,13 +454,12 @@ fn send_frame(
             format!("frame of {} bytes outside 1..={max}", body.len()),
         )));
     }
-    let length = u32::try_from(body.len())
-        .map_err(|_| {
-            TransportFailure::Error(IpcError::new(
-                ErrorCode::OversizedFrame,
-                "frame exceeds u32",
-            ))
-        })?;
+    let length = u32::try_from(body.len()).map_err(|_| {
+        TransportFailure::Error(IpcError::new(
+            ErrorCode::OversizedFrame,
+            "frame exceeds u32",
+        ))
+    })?;
     let deadline = Instant::now() + wait;
     write_all(pipe, &length.to_be_bytes(), deadline)?;
     write_all(pipe, body, deadline)
@@ -484,11 +474,7 @@ enum TransportFailure {
 
 /// Reads a frame; refuses the body when the declared length is zero or
 /// above `max`.
-fn receive_frame(
-    pipe: &Handle,
-    max: usize,
-    wait: Duration,
-) -> Result<Vec<u8>, TransportFailure> {
+fn receive_frame(pipe: &Handle, max: usize, wait: Duration) -> Result<Vec<u8>, TransportFailure> {
     let deadline = Instant::now() + wait;
     let mut header = [0u8; 4];
     read_exact(pipe, &mut header, deadline)?;
@@ -536,11 +522,13 @@ fn create_pipe(wide_name: &[u16], descriptor: &SecurityDescriptor) -> Result<Han
     if pipe.is_invalid() {
         // Read the last error immediately, before any other call.
         let error = ::windows::core::Error::from_win32();
-        return Err(if is(&error, ERROR_ACCESS_DENIED) || is(&error, ERROR_PIPE_BUSY) {
-            IpcError::new(ErrorCode::EndpointInUse, "pipe instance already exists")
-        } else {
-            IpcError::new(ErrorCode::Io, format!("CreateNamedPipeW: {error}"))
-        });
+        return Err(
+            if is(&error, ERROR_ACCESS_DENIED) || is(&error, ERROR_PIPE_BUSY) {
+                IpcError::new(ErrorCode::EndpointInUse, "pipe instance already exists")
+            } else {
+                IpcError::new(ErrorCode::Io, format!("CreateNamedPipeW: {error}"))
+            },
+        );
     }
     Ok(Handle(pipe))
 }
@@ -554,12 +542,7 @@ enum Accept {
     Orphaned,
 }
 
-fn accept(
-    pipe: &Handle,
-    shutdown: &AtomicBool,
-    idle_exit: Duration,
-    since: Instant,
-) -> Accept {
+fn accept(pipe: &Handle, shutdown: &AtomicBool, idle_exit: Duration, since: Instant) -> Accept {
     let Ok(mut ctx) = new_io_ctx(0) else {
         return Accept::Failed;
     };
@@ -593,13 +576,15 @@ fn verify_client(pipe: &Handle, own: &UserSid) -> Result<(), IpcError> {
     let mut pid = 0u32;
     // SAFETY: valid connected server pipe handle.
     let queried = unsafe { GetNamedPipeClientProcessId(pipe.0, &mut pid) };
-    queried
-        .map_err(|e| IpcError::new(ErrorCode::UnauthenticatedPeer, e.to_string()))?;
+    queried.map_err(|e| IpcError::new(ErrorCode::UnauthenticatedPeer, e.to_string()))?;
     let peer = process_user_sid(pid)?;
     if same_sid(own, &peer) {
         Ok(())
     } else {
-        Err(IpcError::new(ErrorCode::UnauthenticatedPeer, "peer user differs"))
+        Err(IpcError::new(
+            ErrorCode::UnauthenticatedPeer,
+            "peer user differs",
+        ))
     }
 }
 
@@ -685,7 +670,7 @@ fn serve_connection(
             return Err(orphaned_error());
         }
         Err(TransportFailure::Error(error)) if error.code == ErrorCode::TransportClosed => {
-            return Ok(())
+            return Ok(());
         }
         Err(TransportFailure::Error(error)) => {
             error_frame_within(error.code, &error.message, limits.max_response_bytes)
@@ -695,7 +680,12 @@ fn serve_connection(
     // were replaced by a minimal error, and `None` means even that could
     // not be sent, so the connection is closed without a frame.
     let Some(reply) = reply else { return Ok(()) };
-    match send_frame(pipe, &reply, limits.max_response_bytes, limits.transport_wait) {
+    match send_frame(
+        pipe,
+        &reply,
+        limits.max_response_bytes,
+        limits.transport_wait,
+    ) {
         Ok(()) => {}
         Err(TransportFailure::Orphaned) => {
             connection.abandon();
@@ -736,8 +726,7 @@ pub fn serve(
             None,
         )
     };
-    converted
-        .map_err(|e| IpcError::new(ErrorCode::Io, e.to_string()))?;
+    converted.map_err(|e| IpcError::new(ErrorCode::Io, e.to_string()))?;
     let descriptor = SecurityDescriptor(raw);
 
     let pipe = create_pipe(&wide_name, &descriptor)?;
@@ -820,14 +809,16 @@ fn verify_server(pipe: &Handle) -> Result<(), IpcError> {
     let mut pid = 0u32;
     // SAFETY: valid client pipe handle.
     let queried = unsafe { GetNamedPipeServerProcessId(pipe.0, &mut pid) };
-    queried
-        .map_err(|e| IpcError::new(ErrorCode::UnauthenticatedPeer, e.to_string()))?;
+    queried.map_err(|e| IpcError::new(ErrorCode::UnauthenticatedPeer, e.to_string()))?;
     let own = own_user_sid()?;
     let server = process_user_sid(pid)?;
     if same_sid(&own, &server) {
         Ok(())
     } else {
-        Err(IpcError::new(ErrorCode::UnauthenticatedPeer, "server user differs"))
+        Err(IpcError::new(
+            ErrorCode::UnauthenticatedPeer,
+            "server user differs",
+        ))
     }
 }
 
@@ -853,11 +844,12 @@ pub fn request(endpoint: &str, body: &[u8], limits: &Limits) -> Result<Vec<u8>, 
         // one fallback. Other write failures are terminal; waiting for a
         // second full transport interval would exceed request's useful bound.
         Err(TransportFailure::Error(error)) if error.code == ErrorCode::TransportClosed => {
-            return receive_frame(&pipe, limits.max_response_bytes, limits.transport_wait)
-                .map_err(|failure| match failure {
+            return receive_frame(&pipe, limits.max_response_bytes, limits.transport_wait).map_err(
+                |failure| match failure {
                     TransportFailure::Orphaned => orphaned_error(),
                     TransportFailure::Error(_) => error,
-                });
+                },
+            );
         }
         Err(TransportFailure::Error(error)) => return Err(error),
     }

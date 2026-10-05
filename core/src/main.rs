@@ -259,11 +259,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 value["process_groups"] = json!(cockpit_core::processes::group(&procs));
                 value["procs_schema"] = json!(2);
             }
-            emit(
-                value,
-                machine,
-                View::Procs,
-            );
+            emit(value, machine, View::Procs);
         }
         "usage" => {
             require_empty(&arguments)?;
@@ -505,8 +501,11 @@ fn worker(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
         // Not listed in help; documented as internal in docs/runtime.md.
         s if s == cockpit_core::worker::EXEC_OP_SUBCOMMAND => {
             let mut limits = Limits::default();
-            limits.max_request_bytes =
-                take_number(&mut arguments, "--max-request-bytes", limits.max_request_bytes)?;
+            limits.max_request_bytes = take_number(
+                &mut arguments,
+                "--max-request-bytes",
+                limits.max_request_bytes,
+            )?;
             limits.max_response_bytes = take_number(
                 &mut arguments,
                 "--max-response-bytes",

@@ -205,7 +205,11 @@ fn interrupted_temp_files_are_reported_never_parsed() {
     let files: Vec<_> = report.skipped.iter().map(|s| s.file.as_str()).collect();
     assert_eq!(
         files,
-        [".scan-old.tmp", ".scan-partial.1-2-3.tmp", "scan-half.json.tmp"]
+        [
+            ".scan-old.tmp",
+            ".scan-partial.1-2-3.tmp",
+            "scan-half.json.tmp"
+        ]
     );
     assert!(
         report
@@ -223,7 +227,10 @@ fn size_cap_boundary_exact_vs_plus_one() {
     let d = t.state();
     fs::create_dir_all(&d).unwrap();
     let set = |name: &str, len: u64| {
-        fs::File::create(d.join(name)).unwrap().set_len(len).unwrap();
+        fs::File::create(d.join(name))
+            .unwrap()
+            .set_len(len)
+            .unwrap();
     };
     set("scan-exact.json", store::MAX_SNAPSHOT_BYTES);
     set("scan-over.json", store::MAX_SNAPSHOT_BYTES + 1);
@@ -352,9 +359,11 @@ fn dangling_symlink_destination_is_not_written_through() {
     assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
     assert!(!target.exists());
     assert!(
-        fs::read_dir(&d)
+        fs::read_dir(&d).unwrap().all(|e| !e
             .unwrap()
-            .all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp"))
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp"))
     );
 }
 
@@ -487,7 +496,10 @@ fn windows_real_directory_replacement_keeps_operations_inside_owned_dirs() {
         if dir.is_dir() {
             for entry in fs::read_dir(dir).unwrap() {
                 let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-                assert!(name.starts_with("scan-win-") || name.ends_with(".tmp"), "{name}");
+                assert!(
+                    name.starts_with("scan-win-") || name.ends_with(".tmp"),
+                    "{name}"
+                );
             }
         }
     }
@@ -495,11 +507,17 @@ fn windows_real_directory_replacement_keeps_operations_inside_owned_dirs() {
     // names; every decoy sentinel must survive somewhere, unchanged.
     for i in 0..300 {
         let name = format!("scan-win-{i}.json");
-        assert!([&state, &held, &replacement].iter().any(|dir| {
-            fs::read(dir.join(&name)).is_ok_and(|bytes| bytes == b"sentinel")
-        }), "lost or replaced sentinel {name}");
+        assert!(
+            [&state, &held, &replacement]
+                .iter()
+                .any(|dir| { fs::read(dir.join(&name)).is_ok_and(|bytes| bytes == b"sentinel") }),
+            "lost or replaced sentinel {name}"
+        );
     }
-    assert!(saved > 0, "expected at least one save during directory replacement");
+    assert!(
+        saved > 0,
+        "expected at least one save during directory replacement"
+    );
 }
 
 #[cfg(unix)]
@@ -552,7 +570,11 @@ fn parent_replacement_never_redirects_pinned_writes_or_reads() {
     stop.store(true, Ordering::Relaxed);
     swapper.join().unwrap();
     // Restore `state` as a real directory if the swapper left it a link.
-    if fs::symlink_metadata(&real).unwrap().file_type().is_symlink() {
+    if fs::symlink_metadata(&real)
+        .unwrap()
+        .file_type()
+        .is_symlink()
+    {
         fs::remove_file(&real).unwrap();
         let _ = fs::rename(&hold, &real);
     }

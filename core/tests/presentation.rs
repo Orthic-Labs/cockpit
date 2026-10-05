@@ -247,7 +247,10 @@ fn growth_extremes_render_full_range() {
     let positive = line(json!(u64::MAX));
     assert!(positive.contains("+16777216.0 TiB"), "{positive}");
     let positive_string = line(json!(max.to_string()));
-    assert!(positive_string.contains("+16777216.0 TiB"), "{positive_string}");
+    assert!(
+        positive_string.contains("+16777216.0 TiB"),
+        "{positive_string}"
+    );
     let negative = line(json!((-max).to_string()));
     assert!(negative.contains("-16777216.0 TiB"), "{negative}");
     assert!(negative.contains("growth since previous: -"), "{negative}");

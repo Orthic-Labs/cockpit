@@ -21,7 +21,10 @@ fn unique(tag: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!(r"\\.\pipe\cockpit-test-{}-{tag}-{nanos}", std::process::id())
+    format!(
+        r"\\.\pipe\cockpit-test-{}-{tag}-{nanos}",
+        std::process::id()
+    )
 }
 
 fn limits() -> Limits {
@@ -49,14 +52,19 @@ fn round_trip_and_shutdown_flag() {
     assert_eq!(request(&endpoint, b"two", &limits()).unwrap(), b"echo:two");
     let started = Instant::now();
     flag.store(true, Ordering::Release);
-    assert_eq!(server.join().unwrap().unwrap(), ServeExit::ShutdownRequested);
+    assert_eq!(
+        server.join().unwrap().unwrap(),
+        ServeExit::ShutdownRequested
+    );
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
 #[test]
 fn default_endpoint_is_a_safe_pipe_name() {
     let endpoint = default_endpoint().unwrap();
-    let name = endpoint.strip_prefix(r"\\.\pipe\cockpit-worker-S-1-").unwrap();
+    let name = endpoint
+        .strip_prefix(r"\\.\pipe\cockpit-worker-S-1-")
+        .unwrap();
     assert!(!name.contains('\\'));
 }
 
@@ -113,7 +121,9 @@ fn bad_endpoint_names_are_unsafe() {
     ] {
         let flag = AtomicBool::new(false);
         assert_eq!(
-            serve(endpoint, &limits(), &mut Echo, &flag).unwrap_err().code,
+            serve(endpoint, &limits(), &mut Echo, &flag)
+                .unwrap_err()
+                .code,
             ErrorCode::EndpointUnsafe,
             "{endpoint}"
         );

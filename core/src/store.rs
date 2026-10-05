@@ -216,8 +216,7 @@ mod pinned {
     use super::{denied, invalid_input};
     use std::{
         ffi::{CStr, CString},
-        fs,
-        io,
+        fs, io,
         os::unix::ffi::OsStrExt,
         os::unix::fs::MetadataExt,
         os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
@@ -262,30 +261,30 @@ mod pinned {
             self.0.as_raw_fd()
         }
 
-    fn open_dir_at(base: RawFd, name: &CStr) -> io::Result<fs::File> {
-        let fd = unsafe {
-            libc::openat(
-                base,
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ELOOP) {
-                return Err(invalid_input(
-                    "metadata directory contains symlink or reparse point",
-                ));
+        fn open_dir_at(base: RawFd, name: &CStr) -> io::Result<fs::File> {
+            let fd = unsafe {
+                libc::openat(
+                    base,
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ELOOP) {
+                    return Err(invalid_input(
+                        "metadata directory contains symlink or reparse point",
+                    ));
+                }
+                return Err(error);
             }
-            return Err(error);
+            Ok(unsafe { fs::File::from_raw_fd(fd) })
         }
-        Ok(unsafe { fs::File::from_raw_fd(fd) })
-    }
 
-    /// Open every path component relative to the descriptor acquired for its
-    /// predecessor. This prevents a concurrent ancestor rename/symlink swap
-    /// from redirecting the final descriptor; final identity is compared with
-    /// an lstat taken before the walk.
+        /// Open every path component relative to the descriptor acquired for its
+        /// predecessor. This prevents a concurrent ancestor rename/symlink swap
+        /// from redirecting the final descriptor; final identity is compared with
+        /// an lstat taken before the walk.
         pub fn pin(path: &Path) -> io::Result<Self> {
             let before = fs::symlink_metadata(path)?;
             if before.file_type().is_symlink() {
@@ -367,9 +366,8 @@ mod pinned {
                 match Self::open_dir_at(current.as_raw_fd(), &name) {
                     Ok(next) => current = next,
                     Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
-                        let made = unsafe {
-                            libc::mkdirat(current.as_raw_fd(), name.as_ptr(), 0o700)
-                        };
+                        let made =
+                            unsafe { libc::mkdirat(current.as_raw_fd(), name.as_ptr(), 0o700) };
                         if made != 0 {
                             let mkdir_error = io::Error::last_os_error();
                             if mkdir_error.raw_os_error() != Some(libc::EEXIST) {
@@ -458,9 +456,7 @@ mod pinned {
                 }
                 return Err(io::Error::new(
                     e.kind(),
-                    format!(
-                        "atomic no-replace publication unavailable (hard link failed): {e}"
-                    ),
+                    format!("atomic no-replace publication unavailable (hard link failed): {e}"),
                 ));
             }
             let _ = self.unlink(from);
@@ -543,8 +539,7 @@ mod pinned {
     use super::invalid_input;
     use std::{
         ffi::OsStr,
-        fs,
-        io,
+        fs, io,
         iter::once,
         os::windows::ffi::OsStrExt,
         os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle},
@@ -664,9 +659,7 @@ mod pinned {
             // the close responsibility.
             let raw = h.raw();
             std::mem::forget(h);
-            unsafe {
-                fs::File::from(OwnedHandle::from_raw_handle(raw.0 as RawHandle))
-            }
+            unsafe { fs::File::from(OwnedHandle::from_raw_handle(raw.0 as RawHandle)) }
         }
     }
 
@@ -678,10 +671,11 @@ mod pinned {
 
     fn reject_attrs(i: &BY_HANDLE_FILE_INFORMATION) -> io::Result<()> {
         let attrs = i.dwFileAttributes;
-        if attrs & (FILE_ATTRIBUTE_REPARSE_POINT.0
-            | FILE_ATTRIBUTE_OFFLINE
-            | FILE_ATTRIBUTE_RECALL_ON_OPEN
-            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+        if attrs
+            & (FILE_ATTRIBUTE_REPARSE_POINT.0
+                | FILE_ATTRIBUTE_OFFLINE
+                | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
             != 0
         {
             return Err(invalid_input(
@@ -856,7 +850,11 @@ mod pinned {
             while let Some(component) = components.next() {
                 let name = match component {
                     std::path::Component::Normal(name) => name,
-                    _ => return Err(invalid_input("parent or current path component unsupported")),
+                    _ => {
+                        return Err(invalid_input(
+                            "parent or current path component unsupported",
+                        ));
+                    }
                 };
                 let final_component = components.peek().is_none();
                 let access = if final_component {
@@ -966,7 +964,7 @@ mod pinned {
                 FILE_CREATE,
                 FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             )
-                .map(|v| v.file)
+            .map(|v| v.file)
         }
 
         /// Atomic no-replace publication through `FileLinkInformation`.
@@ -982,10 +980,8 @@ mod pinned {
             let name = relative_name(to)?;
             let bytes = name.len() * 2;
             let header = std::mem::offset_of!(NtFileLinkInformation, file_name);
-            let storage_len = std::cmp::max(
-                std::mem::size_of::<NtFileLinkInformation>(),
-                header + bytes,
-            );
+            let storage_len =
+                std::cmp::max(std::mem::size_of::<NtFileLinkInformation>(), header + bytes);
             // `NtFileLinkInformation` contains a HANDLE and must be aligned;
             // retain byte length separately while backing it with u64 storage.
             let mut storage = vec![0u64; storage_len.div_ceil(std::mem::size_of::<u64>())];
@@ -1016,7 +1012,10 @@ mod pinned {
                     error.raw_os_error().map(|c| c as u32),
                     Some(ALREADY_EXISTS) | Some(FILE_EXISTS)
                 ) {
-                    Err(io::Error::new(io::ErrorKind::AlreadyExists, error.to_string()))
+                    Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        error.to_string(),
+                    ))
                 } else {
                     Err(error)
                 };
@@ -1040,8 +1039,7 @@ mod pinned {
                 NtSetInformationFile(
                     HANDLE(v.file.as_raw_handle() as *mut core::ffi::c_void),
                     &mut status_block,
-                    &disposition as *const NtFileDispositionInformation
-                        as *const core::ffi::c_void,
+                    &disposition as *const NtFileDispositionInformation as *const core::ffi::c_void,
                     std::mem::size_of::<NtFileDispositionInformation>() as u32,
                     FILE_DISPOSITION_INFORMATION_CLASS,
                 )
@@ -1079,8 +1077,10 @@ mod pinned {
                 }
                 let mut offset = 0usize;
                 loop {
-                    let next_offset_at = std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, NextEntryOffset);
-                    let name_length_at = std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, FileNameLength);
+                    let next_offset_at =
+                        std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, NextEntryOffset);
+                    let name_length_at =
+                        std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, FileNameLength);
                     let attributes_at = std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, FileAttributes);
                     let name_at = std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
                     let read_u32 = |at: usize| -> io::Result<u32> {
@@ -1098,10 +1098,16 @@ mod pinned {
                     let next = read_u32(next_offset_at)? as usize;
                     let name_bytes = read_u32(name_length_at)? as usize;
                     let attributes = read_u32(attributes_at)?;
-                    let record_len = if next == 0 { buf.len().saturating_sub(offset) } else { next };
+                    let record_len = if next == 0 {
+                        buf.len().saturating_sub(offset)
+                    } else {
+                        next
+                    };
                     if offset > buf.len()
                         || record_len < name_at
-                        || offset.checked_add(record_len).is_none_or(|end| end > buf.len())
+                        || offset
+                            .checked_add(record_len)
+                            .is_none_or(|end| end > buf.len())
                         || name_bytes % 2 != 0
                         || name_bytes > record_len - name_at
                         || (next != 0 && (next < name_at || next & 7 != 0))
@@ -1129,7 +1135,6 @@ mod pinned {
             }
         }
     }
-
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1256,11 +1261,7 @@ fn read_file(file: fs::File, meta_len: u64, remaining: &mut u64) -> Result<Vec<u
 }
 
 #[cfg(unix)]
-fn read_bounded(
-    dir: &pinned::PinnedDir,
-    name: &str,
-    remaining: &mut u64,
-) -> Result<Vec<u8>, Fail> {
+fn read_bounded(dir: &pinned::PinnedDir, name: &str, remaining: &mut u64) -> Result<Vec<u8>, Fail> {
     let file = dir.open_read(name)?;
     let meta = file.metadata()?;
     if !meta.is_file() {
@@ -1270,11 +1271,7 @@ fn read_bounded(
 }
 
 #[cfg(windows)]
-fn read_bounded(
-    dir: &pinned::PinnedDir,
-    name: &str,
-    remaining: &mut u64,
-) -> Result<Vec<u8>, Fail> {
+fn read_bounded(dir: &pinned::PinnedDir, name: &str, remaining: &mut u64) -> Result<Vec<u8>, Fail> {
     let file = dir.open_read(name)?;
     let meta = file.metadata()?;
     if !meta.is_file() || is_link(&meta) {

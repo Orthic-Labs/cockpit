@@ -93,7 +93,9 @@ pub fn group(processes: &[ProcessInfo]) -> ProcessGroups {
         if candidates.len() != 1 {
             notes.insert(format!(
                 "pid {}: parent pid {} is ambiguous ({} snapshot rows); rooting own group",
-                p.identity.pid, parent_pid, candidates.len()
+                p.identity.pid,
+                parent_pid,
+                candidates.len()
             ));
             return Parent::Root;
         }
@@ -125,19 +127,23 @@ pub fn group(processes: &[ProcessInfo]) -> ProcessGroups {
 
     let mut members_of: BTreeMap<(u32, u64), Vec<&ProcessInfo>> = BTreeMap::new();
     let mut ambiguous_roots = BTreeSet::new();
-    for (&key, &p) in &by_id {
+    for &p in by_id.values() {
         let mut path: Vec<ProcessIdentity> = vec![p.identity.clone()];
         let mut current = p;
         let root = loop {
             match verified_parent(current, &mut notes) {
                 Parent::Root => break id_key(&current.identity),
                 Parent::Verified(next) => {
-                    if let Some(pos) =
-                        path.iter().position(|x| x.pid == next.pid && x.start_time == next.start_time)
+                    if let Some(pos) = path
+                        .iter()
+                        .position(|x| x.pid == next.pid && x.start_time == next.start_time)
                     {
                         // Deterministic break point inside the cycle.
-                        let root_key =
-                            path[pos..].iter().map(id_key).min().unwrap_or(id_key(&next));
+                        let root_key = path[pos..]
+                            .iter()
+                            .map(id_key)
+                            .min()
+                            .unwrap_or(id_key(&next));
                         ambiguous_roots.insert(root_key);
                         let involved: Vec<String> = path[pos..]
                             .iter()
@@ -183,7 +189,8 @@ pub fn group(processes: &[ProcessInfo]) -> ProcessGroups {
                         "working-set sum; private bytes unavailable"
                     } else {
                         "resident memory (RSS) sum; physical footprint unavailable"
-                    }.into(),
+                    }
+                    .into(),
                 }
             } else {
                 Metric {

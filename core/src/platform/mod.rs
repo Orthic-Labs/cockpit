@@ -100,7 +100,9 @@ pub fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, limit);
-        Err(FsError::new("directory listing unsupported on this platform"))
+        Err(FsError::new(
+            "directory listing unsupported on this platform",
+        ))
     }
 }
 
@@ -119,7 +121,10 @@ pub fn volume_usage(volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {
     }
     #[cfg(not(any(unix, windows)))]
     {
-        Err(FsError::new(format!("volume usage unsupported: {}", volume.id)))
+        Err(FsError::new(format!(
+            "volume usage unsupported: {}",
+            volume.id
+        )))
     }
 }
 

@@ -2,16 +2,16 @@
 
 use cockpit_core::ipc::unix::{request, serve};
 use cockpit_core::ipc::{
-    read_frame, write_frame, ErrorCode, Handler, IpcError, Limits, Outcome, Response, ServeExit,
+    ErrorCode, Handler, IpcError, Limits, Outcome, Response, ServeExit, read_frame, write_frame,
 };
 use std::fs::{self, DirBuilder};
+use std::os::fd::RawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::os::fd::RawFd;
-use std::os::unix::ffi::OsStrExt;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -98,10 +98,19 @@ fn round_trip_and_cleanup() {
 fn invalid_limits_are_refused_before_creating_endpoint() {
     let dir = private_dir("invalid-limits");
     let endpoint = dir.join("missing/worker.sock");
-    let l = Limits { max_response_bytes: 1, ..limits(60_000) };
+    let l = Limits {
+        max_response_bytes: 1,
+        ..limits(60_000)
+    };
     let shutdown = AtomicBool::new(false);
-    assert_eq!(serve(&endpoint, &l, &mut Echo, &shutdown).unwrap_err().code, ErrorCode::InvalidArguments);
-    assert_eq!(request(&endpoint, b"hello", &l).unwrap_err().code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        serve(&endpoint, &l, &mut Echo, &shutdown).unwrap_err().code,
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(
+        request(&endpoint, b"hello", &l).unwrap_err().code,
+        ErrorCode::InvalidArguments
+    );
     assert!(!dir.join("missing").exists());
     fs::remove_dir_all(dir).unwrap();
 }
@@ -114,7 +123,12 @@ fn symlinked_ancestor_cannot_create_endpoint_parent() {
     std::os::unix::fs::symlink(&target, dir.join("alias")).unwrap();
     let endpoint = dir.join("alias/missing/worker.sock");
     let shutdown = AtomicBool::new(false);
-    assert_eq!(serve(&endpoint, &limits(60_000), &mut Echo, &shutdown).unwrap_err().code, ErrorCode::EndpointUnsafe);
+    assert_eq!(
+        serve(&endpoint, &limits(60_000), &mut Echo, &shutdown)
+            .unwrap_err()
+            .code,
+        ErrorCode::EndpointUnsafe
+    );
     assert!(!target.join("missing").exists());
     fs::remove_dir_all(dir).unwrap();
 }
@@ -212,7 +226,10 @@ fn slowly_arriving_request_cannot_extend_frame_deadline() {
         response.unwrap().outcome,
         Outcome::Error { error } if error.code == ErrorCode::Timeout
     ));
-    assert!(elapsed < Duration::from_secs(2), "deadline took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "deadline took {elapsed:?}"
+    );
 }
 
 #[test]
@@ -223,7 +240,13 @@ fn symlinked_parent_is_refused() {
     let link = dir.join("link");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let shutdown = AtomicBool::new(true);
-    let err = serve(&link.join("worker.sock"), &limits(100), &mut Echo, &shutdown).unwrap_err();
+    let err = serve(
+        &link.join("worker.sock"),
+        &limits(100),
+        &mut Echo,
+        &shutdown,
+    )
+    .unwrap_err();
     assert_eq!(err.code, ErrorCode::EndpointUnsafe);
     assert!(!real.join("worker.sock").exists());
     fs::remove_dir_all(&dir).unwrap();
@@ -236,10 +259,22 @@ fn world_writable_parent_is_refused() {
     DirBuilder::new().mode(0o700).create(&open).unwrap();
     fs::set_permissions(&open, fs::Permissions::from_mode(0o770)).unwrap();
     let shutdown = AtomicBool::new(true);
-    let err = serve(&open.join("worker.sock"), &limits(100), &mut Echo, &shutdown).unwrap_err();
+    let err = serve(
+        &open.join("worker.sock"),
+        &limits(100),
+        &mut Echo,
+        &shutdown,
+    )
+    .unwrap_err();
     assert_eq!(err.code, ErrorCode::EndpointUnsafe);
     fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
-    let err = serve(&open.join("worker.sock"), &limits(100), &mut Echo, &shutdown).unwrap_err();
+    let err = serve(
+        &open.join("worker.sock"),
+        &limits(100),
+        &mut Echo,
+        &shutdown,
+    )
+    .unwrap_err();
     assert_eq!(err.code, ErrorCode::EndpointUnsafe);
     assert!(!open.join("worker.sock").exists());
     fs::remove_dir_all(&dir).unwrap();
@@ -354,8 +389,8 @@ fn raw_listener(path: &Path, backlog: i32) -> RawFd {
             bytes.len(),
         );
     }
-    let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1)
-        as libc::socklen_t;
+    let len =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
     // SAFETY: plain syscalls; `addr` is a valid sockaddr_un for `len` bytes.
     unsafe {
         let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
@@ -385,8 +420,8 @@ fn raw_connect_pending(path: &Path) -> Option<RawFd> {
             bytes.len(),
         );
     }
-    let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1)
-        as libc::socklen_t;
+    let len =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
     unsafe {
         let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
         assert!(fd >= 0);
@@ -500,7 +535,10 @@ fn stale_socket_fails_fast() {
         err.code,
         ErrorCode::TransportClosed | ErrorCode::Io | ErrorCode::Timeout
     ));
-    assert!(elapsed < Duration::from_secs(5), "stale probe took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "stale probe took {elapsed:?}"
+    );
 }
 
 /// An endpoint path too long for `sun_path` is refused instead of

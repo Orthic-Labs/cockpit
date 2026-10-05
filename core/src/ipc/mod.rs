@@ -93,9 +93,17 @@ pub fn minimal_response_bytes() -> usize {
         ErrorCode::Io,
         ErrorCode::Internal,
     ];
-    codes.into_iter().map(|code| {
-        error_response(Some("x".repeat(MAX_REQUEST_ID_LEN)), IpcError::new(code, "")).len()
-    }).max().unwrap_or(0)
+    codes
+        .into_iter()
+        .map(|code| {
+            error_response(
+                Some("x".repeat(MAX_REQUEST_ID_LEN)),
+                IpcError::new(code, ""),
+            )
+            .len()
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Request envelope. `op` stays a string so unknown operations produce a

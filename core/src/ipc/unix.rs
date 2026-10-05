@@ -18,17 +18,15 @@
 //! Every connection authenticates the peer uid (`getpeereid` on macOS/BSD,
 //! `SO_PEERCRED` on Linux) before any request byte is read.
 
-use super::{
-    error_response, ErrorCode, Handler, IpcError, Limits, ServeExit,
-};
-use std::fs::{File, Metadata};
+use super::{ErrorCode, Handler, IpcError, Limits, ServeExit, error_response};
 use std::ffi::CString;
+use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -47,8 +45,15 @@ fn unsafe_endpoint(message: impl Into<String>) -> IpcError {
 
 fn pin_directory(path: &Path, create: bool) -> Result<File, IpcError> {
     let absolute = std::path::absolute(path).map_err(|e| IpcError::from_io(&e))?;
-    let fd = unsafe { libc::open(c"/".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
-    if fd < 0 { return Err(IpcError::from_io(&io::Error::last_os_error())); }
+    let fd = unsafe {
+        libc::open(
+            c"/".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(IpcError::from_io(&io::Error::last_os_error()));
+    }
     // SAFETY: each successful open transfers one fresh descriptor to File.
     let mut current = unsafe { File::from_raw_fd(fd) };
     for component in absolute.components() {
@@ -56,7 +61,11 @@ fn pin_directory(path: &Path, create: bool) -> Result<File, IpcError> {
             std::path::Component::RootDir | std::path::Component::CurDir => continue,
             std::path::Component::Normal(name) => CString::new(name.as_bytes())
                 .map_err(|_| unsafe_endpoint("directory component contains NUL"))?,
-            _ => return Err(unsafe_endpoint("endpoint directory contains unsupported traversal")),
+            _ => {
+                return Err(unsafe_endpoint(
+                    "endpoint directory contains unsupported traversal",
+                ));
+            }
         };
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         let mut next = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
@@ -68,7 +77,10 @@ fn pin_directory(path: &Path, create: bool) -> Result<File, IpcError> {
             next = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
         }
         if next < 0 {
-            return Err(unsafe_endpoint(format!("cannot pin endpoint directory: {}", io::Error::last_os_error())));
+            return Err(unsafe_endpoint(format!(
+                "cannot pin endpoint directory: {}",
+                io::Error::last_os_error()
+            )));
         }
         current = unsafe { File::from_raw_fd(next) };
     }
@@ -146,7 +158,10 @@ fn revalidate_parent(endpoint: &Path, pinned: &File) -> Result<(), IpcError> {
 
 fn validate_limits(limits: &Limits) -> Result<(), IpcError> {
     if !limits.viable() {
-        return Err(IpcError::new(ErrorCode::InvalidArguments, "IPC limits cannot carry a correlated error response"));
+        return Err(IpcError::new(
+            ErrorCode::InvalidArguments,
+            "IPC limits cannot carry a correlated error response",
+        ));
     }
     Ok(())
 }
@@ -159,15 +174,15 @@ fn check_existing(endpoint: &Path, wait: Duration) -> Result<(), IpcError> {
             // Connected, or the connect could not finish because the live
             // listener's backlog is saturated / never drained: the endpoint
             // is in use either way, never "stale".
-            Ok(ConnectOutcome::Connected(_)) | Err(IpcError { code: ErrorCode::Timeout, .. }) => {
-                Err(IpcError::new(
-                    ErrorCode::EndpointInUse,
-                    "another listener is serving this endpoint",
-                ))
-            }
-            Ok(ConnectOutcome::Refused(e))
-                if matches!(e.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK) =>
-            {
+            Ok(ConnectOutcome::Connected(_))
+            | Err(IpcError {
+                code: ErrorCode::Timeout,
+                ..
+            }) => Err(IpcError::new(
+                ErrorCode::EndpointInUse,
+                "another listener is serving this endpoint",
+            )),
+            Ok(ConnectOutcome::Refused(e)) if matches!(e.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK) => {
                 Err(IpcError::new(
                     ErrorCode::EndpointInUse,
                     "another listener is serving this endpoint",
@@ -199,10 +214,21 @@ struct BoundSocket {
 impl Drop for BoundSocket {
     fn drop(&mut self) {
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        if unsafe { libc::fstatat(self.directory.as_raw_fd(), self.name.as_ptr(), stat.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } == 0 {
+        if unsafe {
+            libc::fstatat(
+                self.directory.as_raw_fd(),
+                self.name.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } == 0
+        {
             let stat = unsafe { stat.assume_init() };
-            if stat.st_mode & libc::S_IFMT == libc::S_IFSOCK && (stat.st_dev as u64, stat.st_ino) == self.id {
-                let _ = unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) };
+            if stat.st_mode & libc::S_IFMT == libc::S_IFSOCK
+                && (stat.st_dev as u64, stat.st_ino) == self.id
+            {
+                let _ =
+                    unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) };
             }
         }
     }
@@ -226,7 +252,8 @@ pub fn serve(
     let meta = std::fs::symlink_metadata(endpoint).map_err(|e| IpcError::from_io(&e))?;
     let _guard = BoundSocket {
         directory: parent,
-        name: CString::new(endpoint.file_name().unwrap().as_bytes()).map_err(|_| unsafe_endpoint("endpoint name contains NUL"))?,
+        name: CString::new(endpoint.file_name().unwrap().as_bytes())
+            .map_err(|_| unsafe_endpoint("endpoint name contains NUL"))?,
         id: identity(&meta),
     };
     revalidate_parent(endpoint, &_guard.directory)?;
@@ -253,7 +280,6 @@ pub fn serve(
         }
     }
 }
-
 
 fn timeout(limits: &Limits) -> Duration {
     limits.transport_wait.max(Duration::from_millis(1))
@@ -285,7 +311,7 @@ fn read_exact_deadline(
                 return Err(IpcError::new(
                     ErrorCode::TransportClosed,
                     "peer closed connection mid-frame",
-                ))
+                ));
             }
             Ok(n) => filled += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -310,16 +336,14 @@ fn write_all_deadline(
                 return Err(IpcError::new(
                     ErrorCode::TransportClosed,
                     "peer closed connection mid-frame",
-                ))
+                ));
             }
             Ok(n) => written += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(IpcError::from_io(&e)),
         }
     }
-    stream
-        .flush()
-        .map_err(|e| IpcError::from_io(&e))
+    stream.flush().map_err(|e| IpcError::from_io(&e))
 }
 
 /// `read_frame` under an absolute deadline (see `read_exact_deadline`).
@@ -407,10 +431,7 @@ fn handle_connection(mut stream: UnixStream, limits: &Limits, handler: &mut dyn 
     };
     let response = match catch_unwind(AssertUnwindSafe(|| handler.handle(&request))) {
         Ok(body) => body,
-        Err(_) => error_response(
-            None,
-            IpcError::new(ErrorCode::Internal, "handler panicked"),
-        ),
+        Err(_) => error_response(None, IpcError::new(ErrorCode::Internal, "handler panicked")),
     };
     let write_deadline = Instant::now() + timeout(limits);
     if let Err(e) = write_frame_deadline(
@@ -505,8 +526,8 @@ fn socket_addr(endpoint: &Path) -> Result<(libc::sockaddr_un, libc::socklen_t), 
         )));
     }
     addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
-    let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1)
-        as libc::socklen_t;
+    let len =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
     #[cfg(any(
         target_vendor = "apple",
         target_os = "freebsd",

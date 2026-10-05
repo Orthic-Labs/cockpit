@@ -227,10 +227,7 @@ fn pin_directory(path: &Path, before: &libc::stat) -> Result<Fd, FsError> {
 /// that held descriptor, so an ancestor swap after pinning cannot redirect
 /// the listing. Placeholders are refused before any entry is read. At most
 /// `limit` entries plus one probe are read.
-pub(super) fn children_bounded(
-    path: &Path,
-    limit: usize,
-) -> Result<(Vec<PathBuf>, bool), FsError> {
+pub(super) fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
     let c_path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| FsError::new("path contains NUL; directory not listed"))?;
     let mut before = std::mem::MaybeUninit::<libc::stat>::uninit();

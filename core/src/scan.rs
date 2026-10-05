@@ -150,9 +150,7 @@ fn inspect_with(
         // st_blocks is meaningless for device/FIFO/socket/other entries:
         // allocation is unknown, never a confident zero.
         EntryKind::Other => {
-            reasons.push(
-                "allocation is not meaningful for a non-regular entry".to_owned(),
-            );
+            reasons.push("allocation is not meaningful for a non-regular entry".to_owned());
             (Some(0), None, None)
         }
     };
@@ -919,6 +917,10 @@ mod tests {
         let result = provider.children_bounded(&target, 10);
         let _ = fs::remove_dir_all(&root);
         let error = result.expect_err("swapped directory must not be listed");
-        assert!(error.message.contains("identity changed"), "{}", error.message);
+        assert!(
+            error.message.contains("identity changed"),
+            "{}",
+            error.message
+        );
     }
 }

@@ -319,13 +319,15 @@ fn list_with_class(
             {
                 return Err(ListFailure::Unsupported);
             }
-            return Err(ListFailure::Failed(fs_error("directory listing failed", &error)));
+            return Err(ListFailure::Failed(fs_error(
+                "directory listing failed",
+                &error,
+            )));
         }
         first = false;
         // SAFETY: storage is a live u64 allocation of LIST_BUFFER_BYTES bytes.
-        let buffer = unsafe {
-            std::slice::from_raw_parts(storage.as_ptr().cast::<u8>(), LIST_BUFFER_BYTES)
-        };
+        let buffer =
+            unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<u8>(), LIST_BUFFER_BYTES) };
         let mut offset = 0usize;
         loop {
             let malformed =
@@ -404,17 +406,16 @@ fn ancestor_identity_snapshot(path: &Path) -> Result<Vec<FILE_ID_INFO>, FsError>
 /// handle is opened; enumeration itself is relative to that held handle
 /// (GetFileInformationByHandleEx), so a swapped ancestor cannot redirect the
 /// listing once the handle is pinned.
-pub(super) fn children_bounded(
-    path: &Path,
-    limit: usize,
-) -> Result<(Vec<PathBuf>, bool), FsError> {
+pub(super) fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
     let ancestors_before = ancestor_identity_snapshot(path)?;
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| FsError::new(format!("listing refused: metadata failed: {error}")))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(FsError::new("listing refused: not a plain directory"));
     }
-    if placeholder_attributes(std::os::windows::fs::MetadataExt::file_attributes(&metadata)) {
+    if placeholder_attributes(std::os::windows::fs::MetadataExt::file_attributes(
+        &metadata,
+    )) {
         return Err(FsError::new(
             "listing refused: reparse, offline or recall attributes set",
         ));
@@ -522,7 +523,10 @@ pub(super) fn volume_usage(volume: &VolumeIdentity) -> Result<VolumeUsage, FsErr
     let _find = VolumeFind(find);
     let mut skipped = 0usize;
     loop {
-        let end = name.iter().position(|unit| *unit == 0).unwrap_or(name.len() - 1);
+        let end = name
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(name.len() - 1);
         let volume_name: Vec<u16> = name[..end].iter().copied().chain(Some(0)).collect();
         let serial = open_no_follow(&volume_name, ACCESS_READ_ATTRIBUTES)
             .and_then(|root| handle_id(&root))

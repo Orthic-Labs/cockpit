@@ -7,7 +7,7 @@
 
 use crate::ScanOptions;
 use crate::ipc::{
-    self, ErrorCode, Event, IpcError, Limits, Outcome, PROTOCOL_VERSION, Phase, Request, Response,
+    self, ErrorCode, Event, Handler, IpcError, Limits, Outcome, PROTOCOL_VERSION, Phase, Request, Response,
 };
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
@@ -80,11 +80,7 @@ impl Worker {
     /// Deadline expiry or oversize output triggers termination. Reap is
     /// bounded separately; unconfirmed termination is a typed failure &
     /// prevents this worker from launching further operations.
-    pub fn bounded(
-        limits: Limits,
-        sink: Box<dyn FnMut(&Event) + Send>,
-        exe: PathBuf,
-    ) -> Self {
+    pub fn bounded(limits: Limits, sink: Box<dyn FnMut(&Event) + Send>, exe: PathBuf) -> Self {
         let mut worker = Self::new(limits);
         worker.sink = Some(sink);
         worker.execution = Execution::Subprocess { exe };
@@ -238,7 +234,9 @@ impl Worker {
         let args: ipc::ScanArgs = serde_json::from_value(request.args.clone())
             .map_err(|e| invalid(format!("scan arguments: {e}")))?;
         if args.roots.is_empty() || args.roots.len() > MAX_SCAN_ROOTS {
-            return Err(invalid(format!("roots must contain 1..={MAX_SCAN_ROOTS} paths")));
+            return Err(invalid(format!(
+                "roots must contain 1..={MAX_SCAN_ROOTS} paths"
+            )));
         }
         if let Some(bad) = args.roots.iter().find(|r| !r.is_absolute()) {
             return Err(invalid(format!("root {} is not absolute", bad.display())));
@@ -247,7 +245,9 @@ impl Worker {
             return Err(invalid(format!("max_depth exceeds {MAX_SCAN_DEPTH}")));
         }
         if args.max_entries == 0 || args.max_entries > MAX_SCAN_ENTRIES {
-            return Err(invalid(format!("max_entries must be 1..={MAX_SCAN_ENTRIES}")));
+            return Err(invalid(format!(
+                "max_entries must be 1..={MAX_SCAN_ENTRIES}"
+            )));
         }
         let mut report = crate::scan_paths(
             &args.roots,
@@ -270,7 +270,9 @@ impl Worker {
                 let note = format!(
                     "output truncated to fit max_response_bytes: {omitted} of {total} scanned entries omitted"
                 );
-                report.incomplete_reasons.retain(|r| !r.starts_with("output truncated"));
+                report
+                    .incomplete_reasons
+                    .retain(|r| !r.starts_with("output truncated"));
                 report.incomplete_reasons.push(note);
             }
             let data = json!({
@@ -338,7 +340,8 @@ impl Worker {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        let mut child = command.args(["worker", EXEC_OP_SUBCOMMAND])
+        let mut child = command
+            .args(["worker", EXEC_OP_SUBCOMMAND])
             .arg("--max-request-bytes")
             .arg(self.limits.max_request_bytes.to_string())
             .arg("--max-response-bytes")
@@ -360,9 +363,7 @@ impl Worker {
         // echo before trusting the body.
         let valid = serde_json::from_slice::<Response>(&bytes)
             .ok()
-            .is_some_and(|r| {
-                r.version == PROTOCOL_VERSION && r.id.as_deref() == Some(request_id)
-            });
+            .is_some_and(|r| r.version == PROTOCOL_VERSION && r.id.as_deref() == Some(request_id));
         if valid {
             Ok(bytes)
         } else {
@@ -436,7 +437,10 @@ fn drive_child(
     let mut stdin = child.stdin.take();
     let Some(stdout) = child.stdout.take() else {
         let reap = kill_and_reap(child);
-        return Err(internal(format!("exec-op stdout unavailable; {}", reap.note())));
+        return Err(internal(format!(
+            "exec-op stdout unavailable; {}",
+            reap.note()
+        )));
     };
     let nonblocking = |fd: libc::c_int| -> Result<(), IpcError> {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -448,12 +452,18 @@ fn drive_child(
     if let Some(pipe) = &stdin {
         if let Err(e) = nonblocking(pipe.as_raw_fd()) {
             let reap = kill_and_reap(child);
-            return Err(internal(format!("exec-op stdin setup failed: {e}; {}", reap.note())));
+            return Err(internal(format!(
+                "exec-op stdin setup failed: {e}; {}",
+                reap.note()
+            )));
         }
     }
     if let Err(e) = nonblocking(stdout.as_raw_fd()) {
         let reap = kill_and_reap(child);
-        return Err(internal(format!("exec-op stdout setup failed: {e}; {}", reap.note())));
+        return Err(internal(format!(
+            "exec-op stdout setup failed: {e}; {}",
+            reap.note()
+        )));
     }
     let out_fd = stdout.as_raw_fd();
     let mut written = 0usize;
@@ -567,7 +577,10 @@ fn drive_child(
                 continue;
             }
             let reap = kill_and_reap(child);
-            return Err(internal(format!("exec-op poll failed: {e}; {}", reap.note())));
+            return Err(internal(format!(
+                "exec-op poll failed: {e}; {}",
+                reap.note()
+            )));
         }
         for fd in &fds {
             if fd.revents == 0 {
@@ -577,7 +590,11 @@ fn drive_child(
                 let mut chunk = [0u8; 8192];
                 loop {
                     let n = unsafe {
-                        libc::read(out_fd, chunk.as_mut_ptr().cast::<libc::c_void>(), chunk.len())
+                        libc::read(
+                            out_fd,
+                            chunk.as_mut_ptr().cast::<libc::c_void>(),
+                            chunk.len(),
+                        )
                     };
                     if n > 0 {
                         let n = n as usize;
@@ -592,9 +609,7 @@ fn drive_child(
                     } else {
                         let e = std::io::Error::last_os_error();
                         match e.raw_os_error() {
-                            Some(code)
-                                if code == libc::EAGAIN || code == libc::EWOULDBLOCK =>
-                            {
+                            Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK => {
                                 break;
                             }
                             Some(code) if code == libc::EINTR => continue,
@@ -634,8 +649,7 @@ fn drive_child(
             }
         }
     }
-    let status = exited
-        .expect("loop only exits after the child reports an exit status");
+    let status = exited.expect("loop only exits after the child reports an exit status");
     if !status.success() {
         return Err(internal(format!("exec-op child exited {status}")));
     }
@@ -657,7 +671,10 @@ fn drive_child(
 ) -> Result<Vec<u8>, IpcError> {
     let Some(stdout) = child.stdout.take() else {
         let reap = kill_and_reap(child);
-        return Err(internal(format!("exec-op stdout unavailable; {}", reap.note())));
+        return Err(internal(format!(
+            "exec-op stdout unavailable; {}",
+            reap.note()
+        )));
     };
     let writer = child.stdin.take().map(|mut pipe| {
         let owned = body.to_vec();
@@ -685,11 +702,18 @@ fn drive_child(
     let mut failure = None;
     let status = loop {
         if reader.as_ref().is_some_and(|task| task.is_finished()) {
-            output = Some(reader.take().expect("reader exists").join().unwrap_or(Err(())));
+            output = Some(
+                reader
+                    .take()
+                    .expect("reader exists")
+                    .join()
+                    .unwrap_or(Err(())),
+            );
             if matches!(output, Some(Err(()))) {
                 let reap = kill_and_reap(child);
                 failure = Some(internal(format!(
-                    "exec-op response exceeded max_response_bytes or read failed; {}", reap.note()
+                    "exec-op response exceeded max_response_bytes or read failed; {}",
+                    reap.note()
                 )));
                 break None;
             }
@@ -698,17 +722,23 @@ fn drive_child(
             Ok(Some(status)) => break Some(status),
             Ok(None) if Instant::now() >= deadline => {
                 let reap = kill_and_reap(child);
-                let code = if matches!(reap, Reap::Reaped) { ErrorCode::Timeout } else { ErrorCode::Internal };
-                failure = Some(IpcError::new(code, format!(
-                    "operation exceeded exec-op deadline; {}", reap.note()
-                )));
+                let code = if matches!(reap, Reap::Reaped) {
+                    ErrorCode::Timeout
+                } else {
+                    ErrorCode::Internal
+                };
+                failure = Some(IpcError::new(
+                    code,
+                    format!("operation exceeded exec-op deadline; {}", reap.note()),
+                ));
                 break None;
             }
             Ok(None) => std::thread::sleep(CHILD_IO_TICK),
             Err(e) => {
                 let reap = kill_and_reap(child);
                 failure = Some(internal(format!(
-                    "exec-op status check failed: {e}; {}", reap.note()
+                    "exec-op status check failed: {e}; {}",
+                    reap.note()
                 )));
                 break None;
             }
@@ -737,8 +767,9 @@ fn drive_child(
     if !write_ok {
         return Err(internal("exec-op request write failed".into()));
     }
-    let output = output.unwrap_or(Err(()))
-        .map_err(|()| internal("exec-op response exceeded max_response_bytes or read failed".into()))?;
+    let output = output.unwrap_or(Err(())).map_err(|()| {
+        internal("exec-op response exceeded max_response_bytes or read failed".into())
+    })?;
     let status = status.expect("no failure implies child exited");
     if !status.success() {
         return Err(internal(format!("exec-op child exited {status}")));
@@ -771,13 +802,20 @@ pub fn exec_op_stdio(limits: Limits) -> u8 {
     let out = if oversized {
         worker.error_bytes(
             None,
-            IpcError::new(ErrorCode::OversizedFrame, "request exceeds max_request_bytes"),
+            IpcError::new(
+                ErrorCode::OversizedFrame,
+                "request exceeds max_request_bytes",
+            ),
         )
     } else {
         worker.handle(&input)
     };
     let mut stdout = std::io::stdout();
-    if stdout.write_all(&out).and_then(|()| stdout.flush()).is_err() {
+    if stdout
+        .write_all(&out)
+        .and_then(|()| stdout.flush())
+        .is_err()
+    {
         return 2;
     }
     0
@@ -820,10 +858,7 @@ impl ipc::Handler for Worker {
         // failed on version still consumed its id, so a retry with the
         // same id is a conflict, not a silent replay.
         if !self.remember(&id) {
-            let error = IpcError::new(
-                ErrorCode::ConflictingRequestId,
-                "request id already used",
-            );
+            let error = IpcError::new(ErrorCode::ConflictingRequestId, "request id already used");
             self.emit(Some(&id), Some(&op), Phase::Failed, Some(error.code));
             return self.error_bytes(Some(id), error);
         }

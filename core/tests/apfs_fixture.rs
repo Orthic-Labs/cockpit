@@ -96,7 +96,12 @@ fn apfs_fixture_accounting_is_conservative() {
     for dir in [&nested, &inner, &deep] {
         let (logical, attributed) = files_under(dir);
         let f = folder(dir);
-        assert_eq!(f.attributed_allocation_bytes, attributed, "{}", dir.display());
+        assert_eq!(
+            f.attributed_allocation_bytes,
+            attributed,
+            "{}",
+            dir.display()
+        );
         assert_eq!(f.logical_bytes, logical, "{}", dir.display());
     }
     let direct = |dir: &Path| -> u64 {
@@ -177,9 +182,10 @@ fn apfs_fixture_accounting_is_conservative() {
         "incomplete report must not offer a full-selection upper bound"
     );
     let locked = root.join("locked");
-    let identity_failure = report.inspection_errors.iter().any(|e| {
-        e.path == locked && !e.operation.is_empty() && !e.message.trim().is_empty()
-    });
+    let identity_failure = report
+        .inspection_errors
+        .iter()
+        .any(|e| e.path == locked && !e.operation.is_empty() && !e.message.trim().is_empty());
     assert!(
         identity_failure,
         "locked dir must yield an explicit inspection error with a reason: {:?}",

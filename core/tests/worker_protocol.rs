@@ -46,8 +46,11 @@ impl TempTree {
         let root = base.join(format!("cockpit-worker-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         for i in 0..files {
-            std::fs::write(root.join(format!("file-with-a-long-name-{i:04}.bin")), b"data")
-                .unwrap();
+            std::fs::write(
+                root.join(format!("file-with-a-long-name-{i:04}.bin")),
+                b"data",
+            )
+            .unwrap();
         }
         Self(root)
     }
@@ -87,7 +90,10 @@ fn malformed_requests_have_typed_errors_and_unreadable_ids_are_none() {
     assert_eq!(response.id, None);
 
     // Readable id is echoed when only another field is wrong.
-    let response = call(&mut worker, json!({"version": "one", "id": "m-4", "op": "status"}));
+    let response = call(
+        &mut worker,
+        json!({"version": "one", "id": "m-4", "op": "status"}),
+    );
     assert_eq!(code(&response), ErrorCode::MalformedRequest);
     assert_eq!(response.id.as_deref(), Some("m-4"));
 }
@@ -147,7 +153,11 @@ fn invalid_arguments_are_rejected() {
         req("a-6", "scan", json!({"roots": too_many})),
         req("a-7", "scan", json!({"roots": [root], "max_depth": 129})),
         req("a-8", "scan", json!({"roots": [root], "max_entries": 0})),
-        req("a-9", "scan", json!({"roots": [root], "max_entries": 1_000_001})),
+        req(
+            "a-9",
+            "scan",
+            json!({"roots": [root], "max_entries": 1_000_001}),
+        ),
         req("a-10", "scan", json!({"roots": [root], "extra": 1})),
     ];
     for case in cases {
@@ -182,10 +192,19 @@ fn scan_entry_limit_is_reported_not_hidden() {
     let mut worker = Worker::new(Limits::default());
     let response = call(
         &mut worker,
-        req("scan-2", "scan", json!({"roots": [tree.0], "max_entries": 3})),
+        req(
+            "scan-2",
+            "scan",
+            json!({"roots": [tree.0], "max_entries": 3}),
+        ),
     );
     let (data, _) = ok(&response);
-    assert!(!data["report"]["incomplete_reasons"].as_array().unwrap().is_empty());
+    assert!(
+        !data["report"]["incomplete_reasons"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -193,7 +212,8 @@ fn oversized_scan_response_is_truncated_and_marked_incomplete() {
     let tree = TempTree::new(60);
     let args = json!({"roots": [tree.0], "max_entries": 1000});
     let mut full_worker = Worker::new(Limits::default());
-    let full = full_worker.handle(&serde_json::to_vec(&req("full-1", "scan", args.clone())).unwrap());
+    let full =
+        full_worker.handle(&serde_json::to_vec(&req("full-1", "scan", args.clone())).unwrap());
     let full_total = {
         let response: Response = serde_json::from_slice(&full).unwrap();
         let (data, truncated) = ok(&response);
@@ -250,7 +270,10 @@ fn tiny_but_viable_error_limit_uses_minimal_error() {
     let mut worker = Worker::new(limits);
     let bytes = worker.handle(&serde_json::to_vec(&req("min-1", "bogus", Value::Null)).unwrap());
     assert!(bytes.len() <= limits.max_response_bytes);
-    assert_eq!(code(&serde_json::from_slice(&bytes).unwrap()), ErrorCode::UnsupportedOperation);
+    assert_eq!(
+        code(&serde_json::from_slice(&bytes).unwrap()),
+        ErrorCode::UnsupportedOperation
+    );
 }
 
 #[test]
@@ -261,7 +284,8 @@ fn maximal_request_id_retains_correlation_at_error_budget_floor() {
     };
     let id = "x".repeat(cockpit_core::ipc::MAX_REQUEST_ID_LEN);
     let mut worker = Worker::new(limits);
-    let bytes = worker.handle(&serde_json::to_vec(&req(&id, &"unsupported".repeat(50), Value::Null)).unwrap());
+    let bytes = worker
+        .handle(&serde_json::to_vec(&req(&id, &"unsupported".repeat(50), Value::Null)).unwrap());
     assert!(bytes.len() <= limits.max_response_bytes);
     let response: Response = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(response.id.as_deref(), Some(id.as_str()));
@@ -324,8 +348,7 @@ fn hanging_exe() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir()
-        .join(format!("cockpit-hang-{}-{nanos}.sh", std::process::id()));
+    let path = std::env::temp_dir().join(format!("cockpit-hang-{}-{nanos}.sh", std::process::id()));
     std::fs::write(&path, "#!/bin/sh\nexec sleep 600\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -340,8 +363,8 @@ fn flooding_exe() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir()
-        .join(format!("cockpit-flood-{}-{nanos}.sh", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("cockpit-flood-{}-{nanos}.sh", std::process::id()));
     std::fs::write(&path, "#!/bin/sh\nwhile :; do printf 'stdout-flood-01234567890123456789\\n'; printf 'stderr-flood-01234567890123456789\\n' >&2; done\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -419,7 +442,10 @@ fn status_and_processes_use_core_data() {
     assert_eq!(data["schema_version"], 1);
     assert!(data["system"].is_object());
 
-    let response = call(&mut worker, req("pr-1", "processes", json!({"grouped": true})));
+    let response = call(
+        &mut worker,
+        req("pr-1", "processes", json!({"grouped": true})),
+    );
     let (data, truncated) = ok(&response);
     assert_eq!(data["schema_version"], 1);
     assert!(data["processes"].is_array());

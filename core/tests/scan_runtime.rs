@@ -75,20 +75,35 @@ fn per_scan_cache_is_reset_and_results_are_consistent() {
     let options = ScanOptions::default();
     let first = scan_with_provider(&provider, std::slice::from_ref(&temp.0), &options);
     let second = scan_with_provider(&provider, std::slice::from_ref(&temp.0), &options);
-    assert_eq!(provider.begins.get(), 2, "state must be reset once per scan");
+    assert_eq!(
+        provider.begins.get(),
+        2,
+        "state must be reset once per scan"
+    );
     assert_eq!(first.entries.len(), 4);
     assert_eq!(first.entries.len(), second.entries.len());
     let volumes = |report: &cockpit_core::ScanReport| {
         report
             .entries
             .iter()
-            .map(|e| (e.path.clone(), e.metadata.volume.clone(), e.metadata.file_id.clone()))
+            .map(|e| {
+                (
+                    e.path.clone(),
+                    e.metadata.volume.clone(),
+                    e.metadata.file_id.clone(),
+                )
+            })
             .collect::<Vec<_>>()
     };
     assert_eq!(volumes(&first), volumes(&second));
     // One volume for the whole tree, and every entry agrees on it.
     let root_volume = &first.entries[0].metadata.volume;
-    assert!(first.entries.iter().all(|e| &e.metadata.volume == root_volume));
+    assert!(
+        first
+            .entries
+            .iter()
+            .all(|e| &e.metadata.volume == root_volume)
+    );
     // The public entry point builds a fresh caching provider per call.
     let a = scan_paths(std::slice::from_ref(&temp.0), &options);
     let b = scan_paths(std::slice::from_ref(&temp.0), &options);
@@ -132,7 +147,11 @@ fn listing_does_not_follow_symlinked_directory() {
     assert!(provider.children_bounded(&link, 10).is_err());
     assert!(provider.children_bounded(&real, 10).is_ok());
 
-    let report = scan_with_provider(&provider, std::slice::from_ref(&link), &ScanOptions::default());
+    let report = scan_with_provider(
+        &provider,
+        std::slice::from_ref(&link),
+        &ScanOptions::default(),
+    );
     assert!(report.entries.is_empty());
     assert_eq!(report.skipped_links.len(), 1);
     assert_eq!(report.skipped_links[0].path, link);
@@ -227,8 +246,15 @@ fn removed_between_listing_and_inspection_is_rejected() {
         victim: victim.clone(),
         removed: Cell::new(false),
     };
-    let report = scan_with_provider(&provider, std::slice::from_ref(&temp.0), &ScanOptions::default());
-    assert!(provider.removed.get(), "fixture must have removed the child");
+    let report = scan_with_provider(
+        &provider,
+        std::slice::from_ref(&temp.0),
+        &ScanOptions::default(),
+    );
+    assert!(
+        provider.removed.get(),
+        "fixture must have removed the child"
+    );
     assert!(
         report.entries.iter().all(|e| e.path != victim),
         "a removed entry must never contribute to totals"

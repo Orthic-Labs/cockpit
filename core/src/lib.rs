@@ -143,7 +143,8 @@ pub fn procs() -> Vec<ProcessInfo> {
                     "working set; private bytes unavailable"
                 } else {
                     "resident memory (RSS); physical footprint unavailable"
-                }.into(),
+                }
+                .into(),
             },
             gpu_usage_percent: Metric {
                 value: None,

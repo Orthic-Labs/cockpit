@@ -1,17 +1,24 @@
-use cockpit_core::processes::{group, GroupEvidence, ProcessGroups};
+use cockpit_core::processes::{GroupEvidence, ProcessGroups, group};
 use cockpit_core::{Capability, Metric, ProcessIdentity, ProcessInfo};
 
 fn mem(v: Option<u64>) -> Metric<u64> {
     Metric {
         value: v,
-        capability: if v.is_some() { Capability::Available } else { Capability::Unavailable },
+        capability: if v.is_some() {
+            Capability::Available
+        } else {
+            Capability::Unavailable
+        },
         label: "resident memory (RSS)".into(),
     }
 }
 
 fn p(pid: u32, start: u64, parent: Option<u32>, cpu: f32, m: Option<u64>) -> ProcessInfo {
     ProcessInfo {
-        identity: ProcessIdentity { pid, start_time: start },
+        identity: ProcessIdentity {
+            pid,
+            start_time: start,
+        },
         name: "same-name".into(),
         parent_pid: parent,
         cpu_usage_percent: cpu,
@@ -47,19 +54,28 @@ fn table_of_group_shapes() {
         ),
         (
             "reused parent",
-            vec![p(20, 100, Some(1), 0.0, Some(1)), p(21, 50, Some(20), 0.0, Some(1))],
+            vec![
+                p(20, 100, Some(1), 0.0, Some(1)),
+                p(21, 50, Some(20), 0.0, Some(1)),
+            ],
             vec![(20, vec![20]), (21, vec![21])],
             true,
         ),
         (
             "missing parent",
-            vec![p(30, 5, Some(999), 0.0, Some(1)), p(31, 6, Some(30), 0.0, Some(1))],
+            vec![
+                p(30, 5, Some(999), 0.0, Some(1)),
+                p(31, 6, Some(30), 0.0, Some(1)),
+            ],
             vec![(30, vec![30, 31])],
             true,
         ),
         (
             "cycle",
-            vec![p(40, 5, Some(41), 0.0, Some(1)), p(41, 5, Some(40), 0.0, Some(1))],
+            vec![
+                p(40, 5, Some(41), 0.0, Some(1)),
+                p(41, 5, Some(40), 0.0, Some(1)),
+            ],
             vec![(40, vec![40, 41])],
             true,
         ),
@@ -84,7 +100,12 @@ fn table_of_group_shapes() {
     for (name, procs, expected, has_notes) in cases {
         let g = group(&procs);
         assert_eq!(shape(&g), expected, "{name}");
-        assert_eq!(!g.notes.is_empty(), has_notes, "{name}: notes {:?}", g.notes);
+        assert_eq!(
+            !g.notes.is_empty(),
+            has_notes,
+            "{name}: notes {:?}",
+            g.notes
+        );
     }
 }
 
@@ -106,7 +127,11 @@ fn duplicate_pid_both_incarnations_retained() {
         .collect();
     assert!(idents.contains(&(5, 100)));
     assert!(idents.contains(&(5, 200)));
-    assert!(g.notes.iter().any(|n| n.contains("pid 5") && n.contains("incarnations")));
+    assert!(
+        g.notes
+            .iter()
+            .any(|n| n.contains("pid 5") && n.contains("incarnations"))
+    );
 }
 
 #[test]
@@ -119,7 +144,11 @@ fn ambiguous_parent_is_not_attached() {
         p(30, 300, Some(7), 0.0, Some(1)),
     ]);
     for grp in &g.groups {
-        assert!(!grp.members.iter().any(|m| m.pid == 30 && grp.root.pid != 30));
+        assert!(
+            !grp.members
+                .iter()
+                .any(|m| m.pid == 30 && grp.root.pid != 30)
+        );
     }
     assert_eq!(g.groups.len(), 3);
     assert!(g.notes.iter().any(|n| n.contains("ambiguous")));
@@ -141,7 +170,11 @@ fn duplicate_parent_pid_remains_ambiguous_when_one_started_later() {
     assert_eq!(grp.members.len(), 1);
     assert!(matches!(grp.evidence, GroupEvidence::SingleProcess));
     // Later incarnation still exists as its own group.
-    assert!(g.groups.iter().any(|x| x.root.pid == 8 && x.root.start_time == 500));
+    assert!(
+        g.groups
+            .iter()
+            .any(|x| x.root.pid == 8 && x.root.start_time == 500)
+    );
 }
 
 #[test]
@@ -150,11 +183,16 @@ fn cycle_reports_identities_as_evidence() {
         p(60, 5, Some(61), 0.0, Some(1)),
         p(61, 5, Some(60), 0.0, Some(1)),
     ]);
-    assert!(g
-        .notes
-        .iter()
-        .any(|n| n.contains("cycle") && n.contains("60@5") && n.contains("61@5")));
-    assert!(g.groups.iter().all(|row| matches!(row.evidence, GroupEvidence::AmbiguousParentChain)));
+    assert!(
+        g.notes
+            .iter()
+            .any(|n| n.contains("cycle") && n.contains("60@5") && n.contains("61@5"))
+    );
+    assert!(
+        g.groups
+            .iter()
+            .all(|row| matches!(row.evidence, GroupEvidence::AmbiguousParentChain))
+    );
 }
 
 #[test]
@@ -173,7 +211,10 @@ fn cpu_sums_and_memory_sums_when_complete() {
 
 #[test]
 fn partial_memory_is_unavailable_not_fabricated() {
-    let g = group(&[p(10, 1, Some(1), 1.0, Some(100)), p(11, 2, Some(10), 1.0, None)]);
+    let g = group(&[
+        p(10, 1, Some(1), 1.0, Some(100)),
+        p(11, 2, Some(10), 1.0, None),
+    ]);
     let grp = &g.groups[0];
     assert!(grp.memory.value.is_none());
     assert!(matches!(grp.memory.capability, Capability::Unavailable));
@@ -182,9 +223,16 @@ fn partial_memory_is_unavailable_not_fabricated() {
 
 #[test]
 fn single_process_evidence_and_name_never_groups() {
-    let g = group(&[p(70, 1, Some(1), 0.0, Some(1)), p(71, 2, Some(1), 0.0, Some(1))]);
+    let g = group(&[
+        p(70, 1, Some(1), 0.0, Some(1)),
+        p(71, 2, Some(1), 0.0, Some(1)),
+    ]);
     assert_eq!(g.groups.len(), 2);
-    assert!(g.groups.iter().all(|x| matches!(x.evidence, GroupEvidence::SingleProcess)));
+    assert!(
+        g.groups
+            .iter()
+            .all(|x| matches!(x.evidence, GroupEvidence::SingleProcess))
+    );
 }
 
 #[test]

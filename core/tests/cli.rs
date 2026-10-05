@@ -145,7 +145,11 @@ fn save_then_history_findings_explain_round_trip() {
             .arg(&state)
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let history = run_json(&["history"], &state);
@@ -197,7 +201,10 @@ fn assert_cli_error(args: &[&str], needle: &str) {
 
 #[test]
 fn option_validation_errors_are_typed_and_exit_two() {
-    assert_cli_error(&["scan", "/tmp", "--max-depth", "abc"], "invalid --max-depth");
+    assert_cli_error(
+        &["scan", "/tmp", "--max-depth", "abc"],
+        "invalid --max-depth",
+    );
     assert_cli_error(&["scan", "/tmp", "--max-depth", "999"], "scan limits");
     assert_cli_error(&["scan", "/tmp", "--max-entries", "0"], "scan limits");
     assert_cli_error(&["scan", "/tmp", "--bogus"], "unknown scan option");
@@ -206,9 +213,18 @@ fn option_validation_errors_are_typed_and_exit_two() {
         "duplicate --max-depth",
     );
     assert_cli_error(&["status", "--bogus"], "unexpected arguments");
-    assert_cli_error(&["worker", "serve", "--idle-seconds", "0"], "--idle-seconds");
-    assert_cli_error(&["worker", "serve", "--idle-seconds", "601"], "--idle-seconds");
-    assert_cli_error(&["worker", "serve", "--idle-seconds", "x"], "--idle-seconds");
+    assert_cli_error(
+        &["worker", "serve", "--idle-seconds", "0"],
+        "--idle-seconds",
+    );
+    assert_cli_error(
+        &["worker", "serve", "--idle-seconds", "601"],
+        "--idle-seconds",
+    );
+    assert_cli_error(
+        &["worker", "serve", "--idle-seconds", "x"],
+        "--idle-seconds",
+    );
     assert_cli_error(&["worker", "bogus"], "unknown worker command");
     assert_cli_error(&["nonsense"], "unknown command");
 }
@@ -265,7 +281,11 @@ fn worker_serves_status_then_exits_after_idle() {
         .arg(&socket)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let response: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(response["status"], "ok");
     assert!(response["id"].as_str().unwrap().starts_with("cli-"));
@@ -320,12 +340,7 @@ fn exec_op(args: &[&str], input: &[u8]) -> std::process::Output {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input)
-        .unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
     child.wait_with_output().unwrap()
 }
 
@@ -383,10 +398,7 @@ fn exec_op_rejects_bad_or_nonviable_limits() {
     assert_eq!(out.status.code(), Some(2));
     let error: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert!(error["error"].is_string() && error["code"].is_string());
-    assert_cli_error(
-        &["worker", "exec-op", "--bogus"],
-        "unexpected arguments",
-    );
+    assert_cli_error(&["worker", "exec-op", "--bogus"], "unexpected arguments");
 }
 
 #[test]
