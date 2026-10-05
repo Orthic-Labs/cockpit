@@ -536,6 +536,10 @@ fn parent_replacement_never_redirects_pinned_writes_or_reads() {
     let evil = t.0.join("evil");
     fs::create_dir_all(&real).unwrap();
     fs::create_dir_all(&evil).unwrap();
+    // Establish a real publication before racing. Every raced operation may
+    // safely refuse a changing path; thread scheduling cannot guarantee one
+    // sees a stable directory. This snapshot must survive all replacements.
+    store::save(&real, &snap("scan-before", 0)).unwrap();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let swapper = {
         let real = real.clone();
@@ -578,7 +582,6 @@ fn parent_replacement_never_redirects_pinned_writes_or_reads() {
         fs::remove_file(&real).unwrap();
         let _ = fs::rename(&hold, &real);
     }
-    assert!(saved > 0, "expected at least one pinned save to succeed");
     // The decoy directory was never written through.
     assert!(fs::read_dir(&evil).unwrap().next().is_none());
     // Everything published is still readable through a real directory and
@@ -589,7 +592,19 @@ fn parent_replacement_never_redirects_pinned_writes_or_reads() {
             found += store::history_report(dir).unwrap().snapshots.len();
         }
     }
-    assert_eq!(found, saved);
+    assert_eq!(found, saved + 1);
+    assert!(
+        [&real, &hold].iter().any(|dir| {
+            store::history_report(dir).is_ok_and(|history| {
+                history.snapshots.iter().any(|snapshot| snapshot.id == "scan-before")
+            })
+        }),
+        "pre-race publication lost during parent replacement"
+    );
+    // Stable access must recover after the race, even if all raced saves
+    // refused. This checks write & read behavior through production storage.
+    store::save(&real, &snap("scan-after-race", 301)).unwrap();
+    assert!(store::history(&real).unwrap().iter().any(|snapshot| snapshot.id == "scan-after-race"));
     // Reads through a swapped-in symlink are refused, never redirected.
     fs::remove_dir_all(&real).unwrap();
     symlink(&evil, &real).unwrap();
