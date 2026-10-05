@@ -68,7 +68,9 @@ impl Mock {
 impl FilesystemProvider for Mock {
     fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError> {
         self.inspected.borrow_mut().push(path.to_path_buf());
-        if self.swapped_parent.as_deref() == Some(path) && self.enumerated.borrow().contains(&path.to_path_buf()) {
+        if self.swapped_parent.as_deref() == Some(path)
+            && self.enumerated.borrow().contains(&path.to_path_buf())
+        {
             let mut changed = dir("a");
             changed.kind = EntryKind::Symlink;
             return Ok(changed);
