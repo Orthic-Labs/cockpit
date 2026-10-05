@@ -447,9 +447,10 @@ fn system_sid() -> winsec::PSID {
 }
 
 /// SDDL for the restrictive DACL: protected DACL, allow GENERIC_ALL to `user_sid`
-/// and to `SY` (SYSTEM). No owner/group entries; nothing else is granted.
+/// and to `SY` (SYSTEM), with explicit user ownership. A token's default
+/// owner may be a group; creation must match our current-user owner check.
 pub fn restrictive_sddl(user_sid: &str) -> String {
-    format!("D:P(A;;GA;;;{user_sid})(A;;GA;;;SY)")
+    format!("O:{user_sid}D:P(A;;GA;;;{user_sid})(A;;GA;;;SY)")
 }
 
 /// Owns the LocalAlloc'd self-relative security descriptor behind `attributes()`.
@@ -985,7 +986,7 @@ mod tests {
     fn restrictive_sddl_grants_only_user_and_system() {
         assert_eq!(
             restrictive_sddl("S-1-5-21-9-9-9-500"),
-            "D:P(A;;GA;;;S-1-5-21-9-9-9-500)(A;;GA;;;SY)"
+            "O:S-1-5-21-9-9-9-500D:P(A;;GA;;;S-1-5-21-9-9-9-500)(A;;GA;;;SY)"
         );
     }
 

@@ -7,7 +7,8 @@
 
 use crate::ScanOptions;
 use crate::ipc::{
-    self, ErrorCode, Event, Handler, IpcError, Limits, Outcome, PROTOCOL_VERSION, Phase, Request, Response,
+    self, ErrorCode, Event, Handler, IpcError, Limits, Outcome, PROTOCOL_VERSION, Phase, Request,
+    Response,
 };
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};

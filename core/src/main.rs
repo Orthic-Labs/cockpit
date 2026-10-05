@@ -272,7 +272,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         "plan" | "apply" | "quit" | "force-quit" | "uninstall-plan" => {
             return Err("mutation is disabled until feasibility & safety gates pass".into());
         }
-        _ => return Err(format!("unknown command: {command}")),
+        _ => return Err(format!("unknown command: {command}").into()),
     }
     Ok(())
 }
