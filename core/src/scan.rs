@@ -206,6 +206,7 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     let mut report = ScanReport {
         roots: roots.clone(),
         entries: Vec::new(),
+        folders: Vec::new(),
         accounting: Accounting {
             reclaim: ReclaimEstimateSummary {
                 upper_bytes: Some(0),
@@ -288,6 +289,24 @@ pub fn scan_with_provider<P: FilesystemProvider>(
             .reasons
             .push("inspection incomplete; full-selection upper bound unavailable".into());
     }
+    let mut folders: BTreeMap<PathBuf, FolderAccounting> = report.entries.iter()
+        .filter(|entry| entry.metadata.kind == EntryKind::Directory)
+        .map(|entry| (entry.path.clone(), FolderAccounting {
+            path: entry.path.clone(), volume: entry.metadata.volume.clone(), logical_bytes: 0,
+            attributed_allocation_bytes: 0, incomplete: report.accounting.incomplete,
+        })).collect();
+    for entry in report.entries.iter().filter(|entry| entry.metadata.kind == EntryKind::File) {
+        for ancestor in entry.path.ancestors().skip(1) {
+            if let Some(folder) = folders.get_mut(ancestor)
+                && folder.volume == entry.metadata.volume
+            {
+                    folder.logical_bytes = folder.logical_bytes.saturating_add(entry.logical_bytes);
+                    folder.attributed_allocation_bytes = folder.attributed_allocation_bytes.saturating_add(entry.attributed_allocation_bytes);
+            }
+        }
+    }
+    report.folders = folders.into_values().collect();
+    report.folders.sort_by(|a,b| b.attributed_allocation_bytes.cmp(&a.attributed_allocation_bytes).then_with(|| a.path.cmp(&b.path)));
     report
 }
 
@@ -357,14 +376,14 @@ fn walk<P: FilesystemProvider>(
             .incomplete_reasons
             .push(format!("incomplete metadata: {}", path.display()));
     }
-    if let Some(parent_volume) = expected_volume.as_ref() {
-        if &metadata.volume != parent_volume {
+    if let Some(parent_volume) = expected_volume.as_ref()
+        && &metadata.volume != parent_volume
+    {
             report.incomplete_reasons.push(format!(
                 "cross-volume descendant rejected: {}",
                 path.display()
             ));
-            return;
-        }
+        return;
     }
     let volume = metadata.volume.clone();
     volumes.insert(volume.clone());
@@ -453,10 +472,10 @@ fn walk<P: FilesystemProvider>(
         ));
         return;
     }
-    if let Some(id) = metadata.file_id.clone() {
-        if !seen_dirs.insert(id) {
-            return;
-        }
+    if let Some(id) = metadata.file_id.clone()
+        && !seen_dirs.insert(id)
+    {
+        return;
     }
     let remaining = options.max_entries.saturating_sub(seen_paths.len());
     let (children, truncated) = match provider.children_bounded(&path, remaining) {

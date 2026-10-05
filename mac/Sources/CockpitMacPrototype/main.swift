@@ -79,7 +79,7 @@ private final class SystemReader {
         }
         guard result == KERN_SUCCESS else { return nil }
         let page = Double(vm_page_size)
-        let used = (Double(vm.active_count) + Double(vm.wire_count) + Double(vm.compressed_count)) * page
+        let used = (Double(vm.active_count) + Double(vm.wire_count) + Double(vm.compressor_page_count)) * page
         return min(max(used / Double(ProcessInfo.processInfo.physicalMemory), 0), 1)
     }
 }

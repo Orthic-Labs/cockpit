@@ -196,9 +196,20 @@ impl Default for ScanOptions {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FolderAccounting {
+    pub path: PathBuf,
+    pub volume: VolumeIdentity,
+    pub logical_bytes: u64,
+    pub attributed_allocation_bytes: u64,
+    pub incomplete: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanReport {
     pub roots: Vec<PathBuf>,
     pub entries: Vec<ScannedEntry>,
+    #[serde(default)]
+    pub folders: Vec<FolderAccounting>,
     pub accounting: Accounting,
     pub volume_usage: Vec<VolumeUsage>,
     pub volume_deltas: Vec<VolumeDelta>,

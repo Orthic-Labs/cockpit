@@ -81,6 +81,7 @@ fn hardlinks_are_attributed_once_in_lexical_order() {
     assert_eq!(report.accounting.logical_bytes, 40);
     assert_eq!(report.accounting.attributed_allocation_bytes, 40);
     assert_eq!(report.accounting.reclaim.upper_bytes, Some(40));
+    assert_eq!(report.folders[0].attributed_allocation_bytes,40);
     assert_eq!(
         report.entries[1].accounting_owner,
         Some(PathBuf::from("root/a"))
