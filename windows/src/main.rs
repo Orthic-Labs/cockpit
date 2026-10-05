@@ -162,11 +162,11 @@ fn read_system() -> Reading {
         let ok = unsafe { GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)).is_ok() };
         if !ok { return Reading { cpu: None, memory: read_memory(), disk: read_disk() }; }
         let current = (filetime(idle), filetime(kernel), filetime(user));
-        let cpu = app.previous_times.map(|(pi, pk, pu)| {
+        let cpu = app.previous_times.and_then(|(pi, pk, pu)| {
             let total = (current.1 - pk).saturating_add(current.2 - pu);
             let busy = total.saturating_sub(current.0 - pi);
             if total == 0 { None } else { Some(busy as f32 / total as f32) }
-        }).flatten();
+        });
         app.previous_times = Some(current);
         cpu
     };
@@ -215,7 +215,9 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
     let mut rect = RECT::default();
     if GetWindowRect(hwnd, &mut rect).is_err() { return true.into(); }
-    if is_fullscreen_geometry(rect, state.1) && is_borderless_style(style) { state.0 = true; return false.into(); }
+    if rect.right <= state.1.left || rect.left >= state.1.right || rect.bottom <= state.1.top || rect.top >= state.1.bottom { return true.into(); }
+    state.0 = is_fullscreen_geometry(rect, state.1) && is_borderless_style(style);
+    return false.into();
     true.into()
     }
 }

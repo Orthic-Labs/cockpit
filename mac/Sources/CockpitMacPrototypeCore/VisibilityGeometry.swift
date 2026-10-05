@@ -20,9 +20,8 @@ public enum VisibilityGeometry {
         monitor: CGRect
     ) -> Bool {
         guard accessibilityTrusted else { return false }
-        if let axFullscreen {
-            if axFullscreen { return focusedWindow.map { $0.intersects(monitor) } ?? true }
-            return false
+        if let focusedWindow, focusedWindow.intersects(monitor), let axFullscreen {
+            return axFullscreen
         }
         return geometryFallback
     }

@@ -211,11 +211,11 @@ private final class FullscreenDetector {
                   let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
                   let bounds = window[kCGWindowBounds as String] as? CFDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds),
-                  VisibilityGeometry.covers(rect, monitor: monitor) else { continue }
+                  rect.intersects(monitor) else { continue }
             // Borderless windows generally have no window title. Requiring it keeps the
             // fallback conservative around ordinary maximized AppKit windows.
             let title = window[kCGWindowName as String] as? String ?? ""
-            if VisibilityGeometry.isLikelyBorderless(title, window: rect, monitor: monitor) { return true }
+            return VisibilityGeometry.isLikelyBorderless(title, window: rect, monitor: monitor)
         }
         return false
     }

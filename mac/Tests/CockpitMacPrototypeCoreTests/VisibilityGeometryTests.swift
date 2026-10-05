@@ -30,4 +30,11 @@ final class VisibilityGeometryTests: XCTestCase {
         XCTAssertTrue(VisibilityGeometry.shouldHide(accessibilityTrusted: true, axFullscreen: nil,
             focusedWindow: nil, geometryFallback: true, monitor: monitor))
     }
+    func testOtherMonitorAXFalseDoesNotOverrideFullscreenOccupancy() {
+        let other = CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+        XCTAssertTrue(VisibilityGeometry.shouldHide(accessibilityTrusted: true, axFullscreen: false,
+            focusedWindow: other, geometryFallback: true, monitor: monitor))
+        XCTAssertFalse(VisibilityGeometry.shouldHide(accessibilityTrusted: true, axFullscreen: true,
+            focusedWindow: other, geometryFallback: false, monitor: monitor))
+    }
 }
