@@ -1,0 +1,70 @@
+{
+  "expected_exit_code": 1,
+  "lock": {
+    "donors": [
+      {
+        "id": "slow",
+        "repository": "https://example.invalid/slow.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "big",
+        "repository": "https://example.invalid/big.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "gone",
+        "repository": "https://example.invalid/gone.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "junk",
+        "repository": "https://example.invalid/junk.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "fail",
+        "repository": "https://example.invalid/fail.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "good",
+        "repository": "https://example.invalid/good.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      }
+    ]
+  },
+  "polls": {
+    "slow": {
+      "throw": {
+        "code": "ETIMEDOUT"
+      }
+    },
+    "big": {
+      "throw": {
+        "code": "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+      }
+    },
+    "gone": {
+      "stdout": ""
+    },
+    "junk": {
+      "stdout": "garbage\n"
+    },
+    "fail": {
+      "throw": {
+        "status": 128
+      }
+    },
+    "good": {
+      "stdout": "1111111111111111111111111111111111111111\trefs/heads/main\n"
+    }
+  },
+  "checked_at": "2026-01-01T00:00:00.000Z"
+}

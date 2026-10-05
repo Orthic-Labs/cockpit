@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "checked_at": "2026-01-01T00:00:00.000Z",
+  "read_only": true,
+  "lock_path": "upstream.lock.json",
+  "ok": false,
+  "partial": true,
+  "changed": false,
+  "summary": {
+    "total": 5,
+    "pinned": 1,
+    "changed": 0,
+    "error": 0,
+    "invalid": 4
+  },
+  "donors": [
+    {
+      "id": "dup",
+      "repository": "https://example.invalid/dup.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "invalid",
+      "error_code": "duplicate_id",
+      "error": "duplicate_id"
+    },
+    {
+      "id": "dup",
+      "repository": "https://example.invalid/dup.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "invalid",
+      "error_code": "duplicate_id",
+      "error": "duplicate_id"
+    },
+    {
+      "id": "nopin",
+      "repository": "https://example.invalid/nopin.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": null,
+      "observed_head": null,
+      "changed": null,
+      "status": "invalid",
+      "error_code": "missing_pin",
+      "error": "missing_pin"
+    },
+    {
+      "id": "badref",
+      "repository": "https://example.invalid/badref.git",
+      "poll_ref": "refs/heads/../x",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "invalid",
+      "error_code": "invalid_poll_ref",
+      "error": "invalid_poll_ref"
+    },
+    {
+      "id": "good",
+      "repository": "https://example.invalid/good.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": "1111111111111111111111111111111111111111",
+      "changed": false,
+      "status": "pinned"
+    }
+  ]
+}

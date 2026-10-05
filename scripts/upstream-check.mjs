@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+// Read-only upstream poller. Parsing and report building live in upstream-report.mjs.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildLockReadFailure, buildReport, exitCodeFor } from "./upstream-report.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const lockPath = resolve(root, "upstream.lock.json");
@@ -21,70 +23,30 @@ function poll(donor) {
   const args = [
     "-c", "credential.helper=",
     "-c", "core.askPass=",
-    "ls-remote", "--refs", donor.repository, donor.poll_ref
+    "ls-remote", "--refs", "--", donor.repository, donor.poll_ref
   ];
-  const raw = execFileSync("git", args, {
+  return execFileSync("git", args, {
     cwd: root,
     env,
     encoding: "utf8",
+    shell: false,
+    stdio: ["ignore", "pipe", "ignore"],
     timeout: 15_000,
+    killSignal: "SIGKILL",
     maxBuffer: 64 * 1024
   });
-  const line = raw.trim().split("\n").find(Boolean);
-  const [commit, ref] = line ? line.trim().split(/\s+/, 2) : [];
-  if (!/^[0-9a-f]{40}$/.test(commit ?? "") || ref !== donor.poll_ref) {
-    throw new Error("upstream returned no matching ref");
-  }
-  return commit;
 }
 
+let report;
 let lock;
 try {
   lock = JSON.parse(readFileSync(lockPath, "utf8"));
 } catch (error) {
-  console.log(JSON.stringify({
-    schema: 1,
-    checked_at: checkedAt,
-    read_only: true,
-    error: "lock_read_failed",
+  report = buildLockReadFailure({
+    checkedAt,
     detail: error instanceof Error ? error.message : String(error)
-  }, null, 2));
-  process.exitCode = 2;
-}
-
-if (lock) {
-  const donors = Array.isArray(lock.donors) ? lock.donors : [];
-  const results = donors.map((donor) => {
-    try {
-      const head = poll(donor);
-      return {
-        id: donor.id,
-        repository: donor.repository,
-        poll_ref: donor.poll_ref,
-        pinned_commit: donor.pin_commit,
-        observed_head: head,
-        changed: head !== donor.pin_commit,
-        status: head === donor.pin_commit ? "pinned" : "changed"
-      };
-    } catch (error) {
-      return {
-        id: donor.id,
-        repository: donor.repository,
-        poll_ref: donor.poll_ref,
-        pinned_commit: donor.pin_commit,
-        observed_head: null,
-        changed: null,
-        status: "error",
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
   });
-  console.log(JSON.stringify({
-    schema: 1,
-    checked_at: checkedAt,
-    read_only: true,
-    lock_path: "upstream.lock.json",
-    changed: results.some((result) => result.changed === true),
-    donors: results
-  }, null, 2));
 }
+report ??= buildReport({ checkedAt, lock, poll });
+console.log(JSON.stringify(report, null, 2));
+process.exitCode = exitCodeFor(report);

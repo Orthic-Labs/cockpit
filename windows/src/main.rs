@@ -233,7 +233,7 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
     let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
     let mut rect = RECT::default();
     if GetWindowRect(hwnd, &mut rect).is_err() { return true.into(); }
-    if rect.right <= state.1.left || rect.left >= state.1.right || rect.bottom <= state.1.top || rect.top >= state.1.bottom { return true.into(); }
+    if !windows_overlap(rect, state.1) { return true.into(); }
     state.0 = is_fullscreen_geometry(rect, state.1) && is_borderless_style(style);
     false.into()
     }
@@ -244,6 +244,10 @@ fn is_shell_desktop_window(hwnd: HWND) -> bool {
     let length = unsafe { GetClassNameW(hwnd, &mut class) };
     let name = String::from_utf16_lossy(&class[..length.max(0) as usize]);
     matches!(name.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+}
+
+fn windows_overlap(window: RECT, monitor: RECT) -> bool {
+    window.right > monitor.left && window.left < monitor.right && window.bottom > monitor.top && window.top < monitor.bottom
 }
 
 fn is_fullscreen_geometry(window: RECT, monitor: RECT) -> bool {
@@ -292,3 +296,6 @@ mod tests {
     #[test] fn inset_window_is_not_fullscreen() { assert!(!is_fullscreen_geometry(RECT{left:1,top:0,right:100,bottom:100}, RECT{left:0,top:0,right:100,bottom:100})); }
     #[test] fn captioned_window_is_not_borderless() { assert!(!is_borderless_style(WS_CAPTION.0)); }
 }
+
+#[cfg(all(test, windows))]
+mod visibility_cases;

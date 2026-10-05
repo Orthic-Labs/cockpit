@@ -1,0 +1,28 @@
+{
+  "expected_exit_code": 0,
+  "lock": {
+    "donors": [
+      {
+        "id": "a",
+        "repository": "https://example.invalid/a.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "b",
+        "repository": "https://example.invalid/b.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "2222222222222222222222222222222222222222"
+      }
+    ]
+  },
+  "polls": {
+    "a": {
+      "stdout": "1111111111111111111111111111111111111111\trefs/heads/main\n"
+    },
+    "b": {
+      "stdout": "3333333333333333333333333333333333333333\trefs/heads/main\n"
+    }
+  },
+  "checked_at": "2026-01-01T00:00:00.000Z"
+}

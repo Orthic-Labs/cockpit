@@ -173,13 +173,9 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
         "history" => {
             require_empty(&arguments)?;
             let history = store::history(&directory()?).map_err(|e| e.to_string())?;
-            let mut previous = None;
-            let rows: Vec<_> = history.iter().map(|s| {
-                let bytes = s.report.accounting.attributed_allocation_bytes;
-                let scope = serde_json::to_string(&(&s.report.roots, s.report.volume_usage.iter().map(|v| &v.volume).collect::<Vec<_>>())).unwrap_or_default();
-                let change = previous.as_ref().and_then(|(old_scope, old_bytes)| if old_scope == &scope { Some(i128::from(bytes)-i128::from(*old_bytes)) } else { None });
-                previous = Some((scope,bytes));
-                json!({"id":s.id,"created_at":s.created_at,"roots":s.report.roots,"accounting":s.report.accounting,"attributed_growth_bytes":change,"findings_count":s.findings.len()})
+            let rows: Vec<_> = history.iter().enumerate().map(|(index, snapshot)| {
+                let comparison = index.checked_sub(1).map(|previous| cockpit_core::history::compare(&history[previous], snapshot));
+                json!({"id":snapshot.id,"created_at":snapshot.created_at,"roots":snapshot.report.roots,"accounting":snapshot.report.accounting,"attributed_growth_bytes":comparison.as_ref().and_then(|c| c.attributed_growth_bytes),"comparison":comparison,"findings_count":snapshot.findings.len()})
             }).collect();
             emit(json!({"history":rows}), machine);
         }

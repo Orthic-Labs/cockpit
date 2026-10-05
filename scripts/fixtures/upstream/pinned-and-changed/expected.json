@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "checked_at": "2026-01-01T00:00:00.000Z",
+  "read_only": true,
+  "lock_path": "upstream.lock.json",
+  "ok": true,
+  "partial": false,
+  "changed": true,
+  "summary": {
+    "total": 2,
+    "pinned": 1,
+    "changed": 1,
+    "error": 0,
+    "invalid": 0
+  },
+  "donors": [
+    {
+      "id": "a",
+      "repository": "https://example.invalid/a.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": "1111111111111111111111111111111111111111",
+      "changed": false,
+      "status": "pinned"
+    },
+    {
+      "id": "b",
+      "repository": "https://example.invalid/b.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "2222222222222222222222222222222222222222",
+      "observed_head": "3333333333333333333333333333333333333333",
+      "changed": true,
+      "status": "changed"
+    }
+  ]
+}

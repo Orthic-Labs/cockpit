@@ -22,6 +22,7 @@ emit_generated() {
   fi
 }
 trap emit_generated EXIT
+node --test scripts/upstream-report.test.mjs
 cargo fmt --all
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings

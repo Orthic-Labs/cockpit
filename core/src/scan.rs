@@ -398,14 +398,22 @@ fn walk<P: FilesystemProvider>(
     if !seen_paths.insert(path.clone()) {
         return;
     }
-    if let Some(ancestor) = symlink_ancestor(provider, &path, report) {
-        report.skipped_links.push(SkippedLink {
-            path: ancestor,
-            reason: "symlink or placeholder ancestor traversal disabled".into(),
-        });
+    // Recheck ancestors before each inspection: a previously visited parent may change.
+    if let Some((ancestor, uninspectable)) = symlink_ancestor(provider, &path, report) {
+        if uninspectable {
+            report.incomplete_reasons.push(format!(
+                "ancestor not inspectable, root skipped: {}",
+                path.display()
+            ));
+        } else {
+            report.skipped_links.push(SkippedLink {
+                path: ancestor,
+                reason: "symlink or placeholder ancestor traversal disabled".into(),
+            });
+        }
         return;
     }
-    let metadata = match provider.inspect(&path) {
+    let mut metadata = match provider.inspect(&path) {
         Ok(value) => value,
         Err(error) => {
             report.inspection_errors.push(InspectionError {
@@ -429,11 +437,6 @@ fn walk<P: FilesystemProvider>(
             .push(format!("placeholder rejected: {}", path.display()));
         return;
     }
-    if !metadata.metadata_complete {
-        report
-            .incomplete_reasons
-            .push(format!("incomplete metadata: {}", path.display()));
-    }
     if let Some(parent_volume) = expected_volume.as_ref()
         && &metadata.volume != parent_volume
     {
@@ -442,6 +445,20 @@ fn walk<P: FilesystemProvider>(
             path.display()
         ));
         return;
+    }
+    // Do not trust a provider's completeness flag when required file fields
+    // are absent: missing metadata is explicit, never silently zero.
+    if metadata.kind == EntryKind::File
+        && (metadata.logical_size.is_none()
+            || metadata.allocation_size.is_none()
+            || metadata.file_id.is_none())
+    {
+        metadata.metadata_complete = false;
+    }
+    if !metadata.metadata_complete {
+        report
+            .incomplete_reasons
+            .push(format!("incomplete metadata: {}", path.display()));
     }
     let volume = metadata.volume.clone();
     volumes.insert(volume.clone());
@@ -455,6 +472,12 @@ fn walk<P: FilesystemProvider>(
         let mut reasons = Vec::new();
         if metadata.allocation_size.is_none() {
             reasons.push("allocation metadata unavailable".into());
+        }
+        if !metadata.metadata_complete {
+            reasons.push("metadata incomplete".into());
+        }
+        if metadata.is_placeholder {
+            reasons.push("placeholder content is not local".into());
         }
         reasons.push(
             if metadata.clone_id.is_some() {
@@ -530,9 +553,21 @@ fn walk<P: FilesystemProvider>(
         ));
         return;
     }
+    if metadata.is_placeholder {
+        // Enumerating a placeholder directory can hydrate it.
+        report.incomplete_reasons.push(format!(
+            "placeholder directory not enumerated: {}",
+            path.display()
+        ));
+        return;
+    }
     if let Some(id) = metadata.file_id.clone()
         && !seen_dirs.insert(id)
     {
+        report.incomplete_reasons.push(format!(
+            "directory identity already visited: {}",
+            path.display()
+        ));
         return;
     }
     let remaining = options.max_entries.saturating_sub(seen_paths.len());
@@ -556,6 +591,7 @@ fn walk<P: FilesystemProvider>(
     }
     let mut children = children;
     children.sort();
+    children.dedup();
     for child in children {
         if seen_paths.len() >= options.max_entries {
             break;
@@ -579,7 +615,7 @@ fn symlink_ancestor<P: FilesystemProvider>(
     provider: &P,
     path: &Path,
     report: &mut ScanReport,
-) -> Option<PathBuf> {
+) -> Option<(PathBuf, bool)> {
     let ancestors: Vec<_> = path
         .ancestors()
         .skip(1)
@@ -588,7 +624,7 @@ fn symlink_ancestor<P: FilesystemProvider>(
     for candidate in ancestors.into_iter().rev() {
         match provider.inspect(candidate) {
             Ok(metadata) if metadata.kind == EntryKind::Symlink || metadata.is_placeholder => {
-                return Some(candidate.to_path_buf());
+                return Some((candidate.to_path_buf(), false));
             }
             Ok(_) => {}
             Err(error) => {
@@ -597,7 +633,7 @@ fn symlink_ancestor<P: FilesystemProvider>(
                     operation: "inspect ancestor".into(),
                     message: error.to_string(),
                 });
-                return Some(candidate.to_path_buf());
+                return Some((candidate.to_path_buf(), true));
             }
         }
     }

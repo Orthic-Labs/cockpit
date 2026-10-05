@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "checked_at": "2026-01-01T00:00:00.000Z",
+  "read_only": true,
+  "ok": false,
+  "error": "lock_invalid",
+  "detail": "lock must be an object with a donors array"
+}

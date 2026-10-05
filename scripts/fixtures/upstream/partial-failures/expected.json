@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "checked_at": "2026-01-01T00:00:00.000Z",
+  "read_only": true,
+  "lock_path": "upstream.lock.json",
+  "ok": false,
+  "partial": true,
+  "changed": false,
+  "summary": {
+    "total": 6,
+    "pinned": 1,
+    "changed": 0,
+    "error": 5,
+    "invalid": 0
+  },
+  "donors": [
+    {
+      "id": "slow",
+      "repository": "https://example.invalid/slow.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "error",
+      "error_code": "timeout",
+      "error": "git ls-remote exceeded time limit"
+    },
+    {
+      "id": "big",
+      "repository": "https://example.invalid/big.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "error",
+      "error_code": "output_too_large",
+      "error": "git ls-remote output exceeded buffer limit"
+    },
+    {
+      "id": "gone",
+      "repository": "https://example.invalid/gone.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "error",
+      "error_code": "ref_not_found",
+      "error": "upstream returned no matching ref"
+    },
+    {
+      "id": "junk",
+      "repository": "https://example.invalid/junk.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "error",
+      "error_code": "malformed_output",
+      "error": "unparseable ls-remote line"
+    },
+    {
+      "id": "fail",
+      "repository": "https://example.invalid/fail.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": null,
+      "changed": null,
+      "status": "error",
+      "error_code": "git_failed",
+      "error": "git exited with status 128"
+    },
+    {
+      "id": "good",
+      "repository": "https://example.invalid/good.git",
+      "poll_ref": "refs/heads/main",
+      "pinned_commit": "1111111111111111111111111111111111111111",
+      "observed_head": "1111111111111111111111111111111111111111",
+      "changed": false,
+      "status": "pinned"
+    }
+  ]
+}

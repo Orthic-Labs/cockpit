@@ -1,0 +1,42 @@
+{
+  "expected_exit_code": 1,
+  "lock": {
+    "donors": [
+      {
+        "id": "dup",
+        "repository": "https://example.invalid/dup.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "dup",
+        "repository": "https://example.invalid/dup.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "nopin",
+        "repository": "https://example.invalid/nopin.git",
+        "poll_ref": "refs/heads/main"
+      },
+      {
+        "id": "badref",
+        "repository": "https://example.invalid/badref.git",
+        "poll_ref": "refs/heads/../x",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      },
+      {
+        "id": "good",
+        "repository": "https://example.invalid/good.git",
+        "poll_ref": "refs/heads/main",
+        "pin_commit": "1111111111111111111111111111111111111111"
+      }
+    ]
+  },
+  "polls": {
+    "good": {
+      "stdout": "1111111111111111111111111111111111111111\trefs/heads/main\n"
+    }
+  },
+  "checked_at": "2026-01-01T00:00:00.000Z"
+}

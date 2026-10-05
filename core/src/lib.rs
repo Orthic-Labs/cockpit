@@ -1,5 +1,6 @@
 //! Cockpit's conservative, read-only shared core.
 
+pub mod history;
 pub mod model;
 pub mod rules;
 pub mod scan;
