@@ -300,9 +300,41 @@ fn remaining(deadline: Instant) -> Result<Duration, IpcError> {
         .ok_or_else(|| IpcError::new(ErrorCode::Timeout, "transport deadline exceeded"))
 }
 
-/// `read_exact` whose TOTAL time is bounded by `deadline`: the socket timeout
-/// is recomputed from the remaining wall clock before every blocking read, so
-/// a peer sending one byte at a time cannot keep the connection forever.
+/// Wait for I/O readiness against one absolute deadline. Hangup is also
+/// readiness: a read must consume buffered bytes before reporting EOF.
+fn wait_ready(stream: &UnixStream, events: libc::c_short, deadline: Instant) -> Result<(), IpcError> {
+    loop {
+        let left = remaining(deadline)?;
+        let mut pfd = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events,
+            revents: 0,
+        };
+        let ms = left.as_millis().clamp(1, libc::c_int::MAX as u128) as libc::c_int;
+        // SAFETY: pfd is a valid single element; stream owns its live fd.
+        let result = unsafe { libc::poll(&mut pfd, 1, ms) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(io_at("frame poll", &error));
+        }
+        if result == 0 {
+            continue;
+        }
+        if pfd.revents & libc::POLLNVAL != 0 {
+            return Err(IpcError::new(ErrorCode::TransportClosed, "invalid frame socket"));
+        }
+        if pfd.revents & (events | libc::POLLHUP | libc::POLLERR) != 0 {
+            return Ok(());
+        }
+    }
+}
+
+/// Nonblocking reads share one deadline, including every partial read & wait.
+/// No setsockopt is performed after peer shutdown; Darwin rejects that even
+/// when a complete response remains buffered for reading.
 fn read_exact_deadline(
     stream: &mut UnixStream,
     buf: &mut [u8],
@@ -310,9 +342,7 @@ fn read_exact_deadline(
 ) -> Result<(), IpcError> {
     let mut filled = 0;
     while filled < buf.len() {
-        stream
-            .set_read_timeout(Some(remaining(deadline)?))
-            .map_err(|e| io_at("set read timeout", &e))?;
+        remaining(deadline)?;
         match stream.read(&mut buf[filled..]) {
             Ok(0) => {
                 return Err(IpcError::new(
@@ -322,6 +352,9 @@ fn read_exact_deadline(
             }
             Ok(n) => filled += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                wait_ready(stream, libc::POLLIN, deadline)?;
+            }
             Err(e) => return Err(io_at("read frame", &e)),
         }
     }
@@ -335,9 +368,7 @@ fn write_all_deadline(
 ) -> Result<(), IpcError> {
     let mut written = 0;
     while written < buf.len() {
-        stream
-            .set_write_timeout(Some(remaining(deadline)?))
-            .map_err(|e| io_at("set write timeout", &e))?;
+        remaining(deadline)?;
         match stream.write(&buf[written..]) {
             Ok(0) => {
                 return Err(IpcError::new(
@@ -347,10 +378,13 @@ fn write_all_deadline(
             }
             Ok(n) => written += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                wait_ready(stream, libc::POLLOUT, deadline)?;
+            }
             Err(e) => return Err(io_at("write frame", &e)),
         }
     }
-    stream.flush().map_err(|e| IpcError::from_io(&e))
+    stream.flush().map_err(|e| io_at("flush frame", &e))
 }
 
 /// `read_frame` under an absolute deadline (see `read_exact_deadline`).
@@ -406,12 +440,11 @@ fn send_error(stream: &mut UnixStream, limits: &Limits, error: IpcError) {
 }
 
 fn handle_connection(mut stream: UnixStream, limits: &Limits, handler: &mut dyn Handler) {
-    // Accepted sockets may inherit O_NONBLOCK from the listener (BSD/macOS).
-    if stream.set_nonblocking(false).is_err() {
+    // Deadline helpers require nonblocking I/O on every platform.
+    if stream.set_nonblocking(true).is_err() {
         return;
     }
-    // One absolute deadline bounds the request read end to end; timeouts are
-    // recomputed per blocking call, so a slowly-trickling peer still hits it.
+    // One absolute deadline bounds all partial reads & readiness waits.
     let read_deadline = Instant::now() + timeout(limits);
     // Authenticate BEFORE reading any request byte.
     match peer_uid(&stream) {
@@ -676,12 +709,7 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
                 }
             }
         }
-        // Restore blocking mode; the frame helpers rely on SO_RCVTIMEO /
-        // SO_SNDTIMEO against a blocking fd.
-        let flags = libc::fcntl(fd.0, libc::F_GETFL);
-        if flags < 0 || libc::fcntl(fd.0, libc::F_SETFL, flags & !libc::O_NONBLOCK) < 0 {
-            return Err(io_at("restore blocking flags", &io::Error::last_os_error()));
-        }
+        // Keep O_NONBLOCK: frame helpers wait with poll against a deadline.
     }
     // SAFETY: `fd.0` is a connected SOCK_STREAM AF_UNIX socket owned solely
     // by this guard; ownership moves into the UnixStream exactly once.
@@ -752,4 +780,40 @@ fn peer_uid(_stream: &UnixStream) -> Result<u32, IpcError> {
         ErrorCode::UnauthenticatedPeer,
         "peer credentials are unsupported on this platform",
     ))
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn buffered_response_survives_peer_shutdown() {
+        let (mut sender, mut receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        write_frame_deadline(&mut sender, b"complete response", 1024, deadline).unwrap();
+        sender.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(sender);
+        assert_eq!(
+            read_frame_deadline(&mut receiver, 1024, deadline).unwrap(),
+            b"complete response"
+        );
+    }
+
+    #[test]
+    fn peer_shutdown_mid_body_is_transport_closed() {
+        let (mut sender, mut receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        write_all_deadline(&mut sender, &8u32.to_be_bytes(), deadline).unwrap();
+        write_all_deadline(&mut sender, b"part", deadline).unwrap();
+        sender.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(sender);
+        assert_eq!(
+            read_frame_deadline(&mut receiver, 1024, deadline).unwrap_err().code,
+            ErrorCode::TransportClosed
+        );
+    }
 }
