@@ -319,10 +319,16 @@ fn unrelated_files_and_stale_sockets_are_not_removed() {
     assert_eq!(fs::read(&endpoint).unwrap(), b"precious");
     fs::remove_file(&endpoint).unwrap();
 
-    // A stale socket (bound, then abandoned) is refused and left for the user.
+    // Darwin's refusal also means a full live backlog; it cannot establish
+    // staleness. Both classifications preserve this abandoned socket.
     drop(std::os::unix::net::UnixListener::bind(&endpoint).unwrap());
     let err = serve(&endpoint, &limits(100), &mut Echo, &shutdown).unwrap_err();
-    assert_eq!(err.code, ErrorCode::EndpointUnsafe);
+    let expected = if cfg!(target_vendor = "apple") {
+        ErrorCode::EndpointInUse
+    } else {
+        ErrorCode::EndpointUnsafe
+    };
+    assert_eq!(err.code, expected, "{err:?}");
     assert!(fs::symlink_metadata(&endpoint).is_ok());
     fs::remove_dir_all(&dir).unwrap();
 }
@@ -475,7 +481,7 @@ fn saturated_backlog_is_in_use_not_stale() {
     assert!(meta.file_type().is_socket());
     unsafe { libc::close(listener) };
     fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(err.code, ErrorCode::EndpointInUse);
+    assert_eq!(err.code, ErrorCode::EndpointInUse, "{err:?}");
 }
 
 /// connect_bounded (via `request`) must fail fast against a saturated

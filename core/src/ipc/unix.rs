@@ -8,9 +8,10 @@
 //! are `endpoint_unsafe`.
 //!
 //! Existing endpoint path: a socket that accepts a connection is
-//! `endpoint_in_use`. Any other existing entry (stale socket, regular file,
-//! symlink, ...) is `endpoint_unsafe` and is never replaced or removed: this
-//! module cannot prove it created a stale socket, so **a stale socket must be
+//! `endpoint_in_use`. Darwin also uses connection refusal for a full backlog,
+//! so a refused existing socket is conservatively in use with unknown liveness.
+//! Other existing entries are `endpoint_unsafe`; none is replaced or removed.
+//! This module cannot prove it created a stale socket, so **a stale socket must be
 //! removed by the user**. After a successful bind the socket's (dev, ino) is
 //! recorded and the path is unlinked on exit only if it still is that same
 //! socket.
@@ -188,6 +189,17 @@ fn check_existing(endpoint: &Path, wait: Duration) -> Result<(), IpcError> {
                     "another listener is serving this endpoint",
                 ))
             }
+            // Darwin reports ECONNREFUSED both for abandoned sockets & a
+            // live listener whose queue is full. Refusal cannot prove stale.
+            Ok(ConnectOutcome::Refused(e))
+                if cfg!(target_vendor = "apple")
+                    && e.raw_os_error() == Some(libc::ECONNREFUSED) =>
+            {
+                Err(IpcError::new(
+                    ErrorCode::EndpointInUse,
+                    "existing socket refused connection; listener liveness is unknown, endpoint preserved",
+                ))
+            }
             Ok(ConnectOutcome::Refused(_)) => Err(unsafe_endpoint(
                 "a socket exists at the endpoint that is not accepting connections; \
                  it is not replaced automatically, remove a stale socket manually",
@@ -242,6 +254,7 @@ pub fn serve(
     shutdown: &AtomicBool,
 ) -> Result<ServeExit, IpcError> {
     validate_limits(limits)?;
+    socket_addr(endpoint)?;
     let parent = check_parent(endpoint)?;
     check_existing(endpoint, timeout(limits))?;
     revalidate_parent(endpoint, &parent)?;
@@ -302,7 +315,11 @@ fn remaining(deadline: Instant) -> Result<Duration, IpcError> {
 
 /// Wait for I/O readiness against one absolute deadline. Hangup is also
 /// readiness: a read must consume buffered bytes before reporting EOF.
-fn wait_ready(stream: &UnixStream, events: libc::c_short, deadline: Instant) -> Result<(), IpcError> {
+fn wait_ready(
+    stream: &UnixStream,
+    events: libc::c_short,
+    deadline: Instant,
+) -> Result<(), IpcError> {
     loop {
         let left = remaining(deadline)?;
         let mut pfd = libc::pollfd {
@@ -324,7 +341,10 @@ fn wait_ready(stream: &UnixStream, events: libc::c_short, deadline: Instant) -> 
             continue;
         }
         if pfd.revents & libc::POLLNVAL != 0 {
-            return Err(IpcError::new(ErrorCode::TransportClosed, "invalid frame socket"));
+            return Err(IpcError::new(
+                ErrorCode::TransportClosed,
+                "invalid frame socket",
+            ));
         }
         if pfd.revents & (events | libc::POLLHUP | libc::POLLERR) != 0 {
             return Ok(());
@@ -812,7 +832,9 @@ mod deadline_tests {
         sender.shutdown(std::net::Shutdown::Both).unwrap();
         drop(sender);
         assert_eq!(
-            read_frame_deadline(&mut receiver, 1024, deadline).unwrap_err().code,
+            read_frame_deadline(&mut receiver, 1024, deadline)
+                .unwrap_err()
+                .code,
             ErrorCode::TransportClosed
         );
     }
