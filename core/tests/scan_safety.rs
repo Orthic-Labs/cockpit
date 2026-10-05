@@ -59,7 +59,8 @@ impl Mock {
         self.meta.insert(p(path), Ok(meta));
     }
     fn kids(&mut self, path: &str, kids: &[&str]) {
-        self.kids.insert(p(path), kids.iter().map(|k| p(k)).collect());
+        self.kids
+            .insert(p(path), kids.iter().map(|k| p(k)).collect());
     }
 }
 
@@ -317,7 +318,11 @@ fn missing_metadata_is_incomplete_even_if_provider_claims_complete() {
     assert!(has(&r.incomplete_reasons, "incomplete metadata: /r/g"));
     assert!(r.accounting.incomplete);
     assert_eq!(r.accounting.reclaim.upper_bytes, None);
-    for e in r.entries.iter().filter(|e| e.metadata.kind == EntryKind::File) {
+    for e in r
+        .entries
+        .iter()
+        .filter(|e| e.metadata.kind == EntryKind::File)
+    {
         assert!(!e.metadata.metadata_complete);
         let rc = e.reclaim.as_ref().unwrap();
         assert_eq!(rc.lower_bytes, 0);
@@ -350,7 +355,10 @@ fn revisited_directory_identity_is_explicit() {
     m.add("/r/y", d);
     m.kids("/r", &["/r/x", "/r/y"]);
     let r = scan_with_provider(&m, &[p("/r")], &ScanOptions::default());
-    assert!(has(&r.incomplete_reasons, "directory identity already visited"));
+    assert!(has(
+        &r.incomplete_reasons,
+        "directory identity already visited"
+    ));
     assert!(r.accounting.incomplete);
 }
 

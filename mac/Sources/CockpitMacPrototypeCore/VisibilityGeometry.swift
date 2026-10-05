@@ -8,7 +8,7 @@ public enum VisibilityGeometry {
         guard !rect.isNull, !rect.isInfinite else { return nil }
         let r = rect.standardized
         guard r.width > 0, r.height > 0, r.minX.isFinite, r.minY.isFinite,
-              r.width.isFinite, r.height.isFinite else { return nil }
+              r.width.isFinite, r.height.isFinite, r.maxX.isFinite, r.maxY.isFinite else { return nil }
         return r
     }
 

@@ -70,8 +70,12 @@ pub fn compare(previous: &Snapshot, current: &Snapshot) -> Comparison {
         if previous_volumes != current_volumes {
             reasons.push("observed volume identities differ".to_string());
         }
-        if previous_volumes.iter().chain(&current_volumes).any(|id| id.trim().is_empty() || id.eq_ignore_ascii_case("unknown")) {
-            reasons.push("empty or unknown volume identity".to_string());
+        if previous_volumes
+            .iter()
+            .chain(&current_volumes)
+            .any(|id| id.trim().is_empty() || id.eq_ignore_ascii_case("unknown"))
+        {
+            reasons.push("empty volume identity or unknown identity".to_string());
         }
     }
 

@@ -130,12 +130,7 @@ fn incomplete_accounting_is_not_comparable() {
     let current = snapshot(&current_report);
     let comparison = compare(&previous, &current);
     assert!(!comparison.comparable);
-    assert!(
-        comparison
-            .reasons
-            .iter()
-            .any(|r| r.contains("incomplete"))
-    );
+    assert!(comparison.reasons.iter().any(|r| r.contains("incomplete")));
 }
 
 #[test]
