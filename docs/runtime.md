@@ -9,7 +9,7 @@ Target architecture retains native always-on pills. No background webview or alw
 | Shared dashboard | Resources/Storage/Cleanup/Uninstall/Settings presentation | Sends settings requests to pill & jobs to worker |
 | CLI | Same core & versioned output | Read-only bootstrap; explicit `scan --save` writes private metadata only |
 
-Implemented bootstrap storage is versioned JSON snapshots, with private files & atomic rename. CLI findings read last stored snapshot. No destructive jobs, plan database, worker endpoint, pill settings channel or shared usage-reader owner is enabled yet.
+Implemented bootstrap storage is versioned JSON snapshots, with owner-only Unix files & atomic no-replace publication. Newly created Unix state directories use private modes; existing directory permissions are preserved. Windows private ACL creation remains pending. Snapshot IDs are validated, files are size-bounded & skipped corrupt history is reported through structured stderr events. CLI findings read last stored snapshot. No destructive jobs, plan database, worker endpoint, pill settings channel or shared usage-reader owner is enabled yet.
 
 Local IPC design: Unix-domain socket (Mac) / per-user named pipe (Windows), peer identity checked before requests; no TCP listener. Envelope carries schema version, request ID, operation & bounded payload. Each surface obtains its own per-user instance lock; later launches forward activation then exit. Worker job lifecycle emits started/progress/completed/failed events with job ID, inspected target identity & per-item outcome. Unknown or lost state cannot become completed.
 
