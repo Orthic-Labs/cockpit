@@ -166,7 +166,7 @@ fn links_are_reported_and_overlapping_roots_are_deduplicated() {
         report
             .entries
             .iter()
-            .filter(|entry| entry.path == PathBuf::from("root/a"))
+            .filter(|entry| entry.path == Path::new("root/a"))
             .count(),
         1
     );
@@ -197,4 +197,17 @@ fn missing_allocation_metadata_has_no_guessed_upper_bound() {
     let report = scan_with_provider(&fixture, &[PathBuf::from("root")], &ScanOptions::default());
     assert!(report.accounting.incomplete);
     assert_eq!(report.accounting.reclaim.upper_bytes, None);
+}
+
+#[test]
+fn placeholder_ancestor_stops_before_descendant_inspection() {
+    let volume = VolumeIdentity::new("fixture-volume");
+    let mut fixture = Fixture::default();
+    let mut placeholder = dir(&volume);
+    placeholder.is_placeholder = true;
+    fixture.metadata.insert("root".into(),placeholder);
+    let report = scan_with_provider(&fixture,&[PathBuf::from("root/child")],&ScanOptions::default());
+    assert!(report.entries.is_empty());
+    assert!(report.inspection_errors.is_empty()); // Missing child fixture proves no child inspection.
+    assert_eq!(report.skipped_links[0].path,Path::new("root"));
 }

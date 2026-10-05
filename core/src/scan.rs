@@ -279,7 +279,7 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     }
     report.volume_usage = usage_by_volume.into_values().collect();
     report.accounting.incomplete =
-        !report.incomplete_reasons.is_empty() || !report.inspection_errors.is_empty();
+        !report.incomplete_reasons.is_empty() || !report.inspection_errors.is_empty() || !report.skipped_links.is_empty();
     if report.accounting.incomplete {
         report.accounting.reclaim.upper_bytes = None;
         report
@@ -324,7 +324,7 @@ fn walk<P: FilesystemProvider>(
     if let Some(ancestor) = symlink_ancestor(provider, &path, report) {
         report.skipped_links.push(SkippedLink {
             path: ancestor,
-            reason: "symlink ancestor traversal disabled".into(),
+            reason: "symlink or placeholder ancestor traversal disabled".into(),
         });
         return;
     }
@@ -503,13 +503,10 @@ fn symlink_ancestor<P: FilesystemProvider>(
     path: &Path,
     report: &mut ScanReport,
 ) -> Option<PathBuf> {
-    let mut ancestor = path.parent();
-    while let Some(candidate) = ancestor {
-        if candidate.as_os_str().is_empty() {
-            break;
-        }
+    let ancestors: Vec<_> = path.ancestors().skip(1).filter(|p| !p.as_os_str().is_empty()).collect();
+    for candidate in ancestors.into_iter().rev() {
         match provider.inspect(candidate) {
-            Ok(metadata) if metadata.kind == EntryKind::Symlink => {
+            Ok(metadata) if metadata.kind == EntryKind::Symlink || metadata.is_placeholder => {
                 return Some(candidate.to_path_buf());
             }
             Ok(_) => {}
@@ -522,10 +519,6 @@ fn symlink_ancestor<P: FilesystemProvider>(
                 return Some(candidate.to_path_buf());
             }
         }
-        if candidate.parent() == Some(candidate) {
-            break;
-        }
-        ancestor = candidate.parent();
     }
     None
 }

@@ -217,8 +217,7 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
     if GetWindowRect(hwnd, &mut rect).is_err() { return true.into(); }
     if rect.right <= state.1.left || rect.left >= state.1.right || rect.bottom <= state.1.top || rect.top >= state.1.bottom { return true.into(); }
     state.0 = is_fullscreen_geometry(rect, state.1) && is_borderless_style(style);
-    return false.into();
-    true.into()
+    false.into()
     }
 }
 

@@ -159,7 +159,7 @@ pub fn history(directory: &Path) -> io::Result<Vec<Snapshot>> {
     Ok(snapshots)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[cfg(unix)]
