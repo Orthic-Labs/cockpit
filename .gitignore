@@ -1,0 +1,8 @@
+/target/
+/.build/
+/node_modules/
+/dashboard/node_modules/
+/dashboard/dist/
+.DS_Store
+*.xcuserstate
+/local/

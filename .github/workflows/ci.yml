@@ -1,0 +1,96 @@
+# Managed by right-git — do not hand-edit. Run `right-git sync` to update.
+# Template: profiles/rust-hybrid/ci.yml | Template version: 1.8.0
+name: cockpit-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  private-repo-guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse private repository
+        if: ${{ github.event.repository.private }}
+        run: exit 1
+  ci:
+    needs: [private-repo-guard]
+    strategy:
+      fail-fast: false
+      matrix:
+        # Full validation stays on one declared runner; prefer configured
+        # Windows when available, otherwise preserve first configured OS.
+        os: ["macos-15"]
+        node: ["26.8.1"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect Rust-affecting changes
+        id: rust-changes
+        shell: bash
+        env:
+          RIGHT_GIT_DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          changed=true
+          base="$RIGHT_GIT_DIFF_BASE"
+          if [[ "$base" =~ ^[0-9a-fA-F]{40}$ ]] && [[ ! "$base" =~ ^0{40}$ ]] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            if changed_paths="$(git diff --name-only --diff-filter=ACDMRTUXB "$base" "$GITHUB_SHA")"; then
+              changed=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.rs|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|build.rs|*/build.rs|rust-toolchain|*/rust-toolchain|rust-toolchain.toml|*/rust-toolchain.toml|.cargo/*|*/.cargo/*|.rightgit.json|.github/workflows/*.yml|.github/workflows/*.yaml|scripts/gate.sh)
+                    changed=true
+                    break
+                    ;;
+                esac
+              done <<< "$changed_paths"
+            fi
+          fi
+          printf 'changed=%s\n' "$changed" >> "$GITHUB_OUTPUT"
+          required="$changed"
+          if [[ "true" == "true" ]]; then
+            required=true
+          fi
+          printf 'required=%s\n' "$required" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.24.0
+      - uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0
+        if: steps.rust-changes.outputs.required == 'true'
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.rust-changes.outputs.required == 'true'
+        with:
+          workspaces: |
+            . -> target
+            windows -> target
+          shared-key: cockpit-rust
+          add-job-id-key: false
+          cache-workspace-crates: false
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        if: steps.rust-changes.outputs.required == 'true'
+        with:
+          version: "v0.16.0"
+      - run: bash ./scripts/gate.sh
+        env:
+          RIGHT_GIT_RUST_CHANGED: ${{ steps.rust-changes.outputs.changed }}
+          RIGHT_GIT_RUST_REQUIRED: ${{ steps.rust-changes.outputs.required }}
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: ${{ steps.rust-changes.outputs.required == 'true' && 'sccache' || '' }}
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"

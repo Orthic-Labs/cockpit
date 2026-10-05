@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checked_at": "2026-10-05",
+  "policy": {
+    "poll": "git ls-remote over public HTTPS",
+    "writes": false,
+    "authentication": false,
+    "imports": false
+  },
+  "donors": [
+    {
+      "id": "vorssaint",
+      "repository": "https://github.com/vorssaint/vorssaint-utils.git",
+      "pin_ref": "refs/tags/v3.4.0",
+      "pin_commit": "c9cfa0d1014c885119bf35bbac850d670267a723",
+      "tag_object": "6204c75d048c95570c0a14c37eafb9685bf2670f",
+      "poll_ref": "refs/heads/main",
+      "observed_head": "1c5bcb59130c97a482d8481850424ec82838886c"
+    },
+    {
+      "id": "codenotch",
+      "repository": "https://github.com/vinzdg/codenotch.git",
+      "pin_ref": "refs/heads/main",
+      "pin_commit": "72fb2169ef316834ad632f85de27a415cd0d2298",
+      "poll_ref": "refs/heads/main",
+      "observed_head": "72fb2169ef316834ad632f85de27a415cd0d2298"
+    },
+    {
+      "id": "tinycast",
+      "repository": "https://github.com/abue-ammar/tinycast.git",
+      "pin_ref": "refs/heads/main",
+      "pin_commit": "46beb10a7d23d9dcfa1e977f1144c99e47804c44",
+      "poll_ref": "refs/heads/main",
+      "observed_head": "46beb10a7d23d9dcfa1e977f1144c99e47804c44"
+    },
+    {
+      "id": "petal",
+      "repository": "https://github.com/henrydennis/petal.git",
+      "pin_ref": "refs/heads/main",
+      "pin_commit": "f5e5b00e42a841304fc437f87b5d4cfee4377d2e",
+      "poll_ref": "refs/heads/main",
+      "observed_head": "f5e5b00e42a841304fc437f87b5d4cfee4377d2e"
+    }
+  ]
+}

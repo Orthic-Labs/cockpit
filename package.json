@@ -1,0 +1,14 @@
+{
+  "name": "cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": "26.8.x"
+  },
+  "scripts": {
+    "check": "bash scripts/gate.sh",
+    "upstream:check": "node scripts/upstream-check.mjs"
+  }
+}
