@@ -81,7 +81,7 @@ fn hardlinks_are_attributed_once_in_lexical_order() {
     assert_eq!(report.accounting.logical_bytes, 40);
     assert_eq!(report.accounting.attributed_allocation_bytes, 40);
     assert_eq!(report.accounting.reclaim.upper_bytes, Some(40));
-    assert_eq!(report.folders[0].attributed_allocation_bytes,40);
+    assert_eq!(report.folders[0].attributed_allocation_bytes, 40);
     assert_eq!(
         report.entries[1].accounting_owner,
         Some(PathBuf::from("root/a"))
@@ -206,9 +206,13 @@ fn placeholder_ancestor_stops_before_descendant_inspection() {
     let mut fixture = Fixture::default();
     let mut placeholder = dir(&volume);
     placeholder.is_placeholder = true;
-    fixture.metadata.insert("root".into(),placeholder);
-    let report = scan_with_provider(&fixture,&[PathBuf::from("root/child")],&ScanOptions::default());
+    fixture.metadata.insert("root".into(), placeholder);
+    let report = scan_with_provider(
+        &fixture,
+        &[PathBuf::from("root/child")],
+        &ScanOptions::default(),
+    );
     assert!(report.entries.is_empty());
     assert!(report.inspection_errors.is_empty()); // Missing child fixture proves no child inspection.
-    assert_eq!(report.skipped_links[0].path,Path::new("root"));
+    assert_eq!(report.skipped_links[0].path, Path::new("root"));
 }

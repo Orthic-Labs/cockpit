@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Pure M0 rules. AppKit/Accessibility integration supplies the observations.
 public enum VisibilityGeometry {
@@ -8,7 +9,7 @@ public enum VisibilityGeometry {
     }
 
     public static func isLikelyBorderless(_ title: String, window: CGRect, monitor: CGRect) -> Bool {
-        title.isEmpty && covers(window, monitor) &&
+        title.isEmpty && covers(window, monitor: monitor) &&
             window.width >= monitor.width * 0.95 && window.height >= monitor.height * 0.95
     }
 

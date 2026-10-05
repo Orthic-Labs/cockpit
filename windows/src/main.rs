@@ -26,6 +26,7 @@ struct Reading { cpu: Option<f32>, memory: Option<f32>, disk: Option<f32> }
 #[derive(Default)]
 struct AppState {
     windows: Vec<isize>,
+    timer_owner: Option<isize>,
     previous_times: Option<(u64, u64, u64)>,
     reading: Option<Reading>,
     hidden: bool,
@@ -55,7 +56,7 @@ fn main() -> windows::core::Result<()> {
         ..Default::default()
     };
     unsafe { RegisterClassW(&class); }
-    unsafe { EnumDisplayMonitors(None, None, Some(enum_monitor), LPARAM(0)); }
+    reconcile_monitors();
     update_reading_and_visibility();
     unsafe {
         let mut message = MSG::default();
@@ -84,13 +85,32 @@ unsafe extern "system" fn enum_monitor(monitor: HMONITOR, _: HDC, _: *mut RECT, 
             x, y, width, height, None, None, Some(GetModuleHandleW(None).unwrap().into()), None);
         if let Ok(hwnd) = hwnd {
             SetLayeredWindowAttributes(hwnd, COLORREF(0), 238, LWA_ALPHA).ok();
-            state().lock().unwrap().windows.push(hwnd_key(hwnd));
-            SetTimer(Some(hwnd), TIMER_ID, 2_000, None);
+            let key = hwnd_key(hwnd);
+            let start_timer = {
+                let mut app = state().lock().unwrap();
+                app.windows.push(key);
+                if app.timer_owner.is_none() {
+                    app.timer_owner = Some(key);
+                    true
+                } else { false }
+            };
+            if start_timer { SetTimer(Some(hwnd), TIMER_ID, 2_000, None); }
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
     }
     true.into()
     }
+}
+
+fn reconcile_monitors() {
+    let old = {
+        let mut app = state().lock().unwrap();
+        app.timer_owner = None;
+        app.hidden = false;
+        std::mem::take(&mut app.windows)
+    };
+    for key in old { unsafe { DestroyWindow(hwnd_from_key(key)); } }
+    unsafe { EnumDisplayMonitors(None, None, Some(enum_monitor), LPARAM(0)); }
 }
 
 fn monitor_id(info: &MONITORINFOEXW) -> String {
@@ -113,7 +133,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 EndPaint(hwnd, &paint);
                 return LRESULT(0);
             }
-            WM_DISPLAYCHANGE => { update_reading_and_visibility(); return LRESULT(0); }
+            WM_DISPLAYCHANGE => { reconcile_monitors(); update_reading_and_visibility(); return LRESULT(0); }
             WM_NCHITTEST => return LRESULT(HTTRANSPARENT as isize),
             _ => {}
         }
@@ -147,11 +167,8 @@ fn update_reading_and_visibility() {
     }
     // One owner timer per pane; hidden panes slow to 10 seconds. This is a sampling gate,
     // not a blocking sleep, so all monitor occupancy checks continue independently.
-    for key in app.windows.iter().copied() {
-        let hwnd = hwnd_from_key(key);
-        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-        let pane_hidden = unsafe { monitor_has_fullscreen_occupancy(monitor, &app.windows) };
-        unsafe { SetTimer(Some(hwnd), TIMER_ID, if pane_hidden { 10_000 } else { 2_000 }, None); }
+    if let Some(owner) = app.timer_owner {
+        unsafe { SetTimer(Some(hwnd_from_key(owner)), TIMER_ID, if any_hidden { 10_000 } else { 2_000 }, None); }
     }
 }
 
@@ -206,6 +223,7 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
     unsafe {
     let state = &mut *(data.0 as *mut (bool, RECT, *const isize, usize));
     if state.0 || !IsWindowVisible(hwnd).as_bool() || state.2.is_null() { return if state.0 { false.into() } else { true.into() }; }
+    if is_shell_desktop_window(hwnd) { return true.into(); }
     let owned = GetWindow(hwnd, GW_OWNER).map(|owner| !owner.0.is_null()).unwrap_or(false);
     if (0..state.3).any(|i| *state.2.add(i) == hwnd_key(hwnd)) || owned { return true.into(); }
     let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
@@ -219,6 +237,13 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
     state.0 = is_fullscreen_geometry(rect, state.1) && is_borderless_style(style);
     false.into()
     }
+}
+
+fn is_shell_desktop_window(hwnd: HWND) -> bool {
+    let mut class = [0u16; 256];
+    let length = unsafe { GetClassNameW(hwnd, &mut class) };
+    let name = String::from_utf16_lossy(&class[..length.max(0) as usize]);
+    matches!(name.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Windows.UI.Core.CoreWindow")
 }
 
 fn is_fullscreen_geometry(window: RECT, monitor: RECT) -> bool {

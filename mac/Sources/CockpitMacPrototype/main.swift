@@ -101,8 +101,9 @@ private final class RingView: NSView {
             let y = CGFloat(index) * 34 + 8
             let rect = NSRect(x: x, y: y, width: diameter, height: diameter)
             NSColor(calibratedWhite: 0.28, alpha: 1).setStroke()
-            NSBezierPath(ovalIn: rect).lineWidth = 3
-            NSBezierPath(ovalIn: rect).stroke()
+            let backgroundRing = NSBezierPath(ovalIn: rect)
+            backgroundRing.lineWidth = 3
+            backgroundRing.stroke()
             let text: String
             if let fraction = value.1 {
                 value.2.setStroke()

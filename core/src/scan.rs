@@ -279,8 +279,9 @@ pub fn scan_with_provider<P: FilesystemProvider>(
         }
     }
     report.volume_usage = usage_by_volume.into_values().collect();
-    report.accounting.incomplete =
-        !report.incomplete_reasons.is_empty() || !report.inspection_errors.is_empty() || !report.skipped_links.is_empty();
+    report.accounting.incomplete = !report.incomplete_reasons.is_empty()
+        || !report.inspection_errors.is_empty()
+        || !report.skipped_links.is_empty();
     if report.accounting.incomplete {
         report.accounting.reclaim.upper_bytes = None;
         report
@@ -289,24 +290,45 @@ pub fn scan_with_provider<P: FilesystemProvider>(
             .reasons
             .push("inspection incomplete; full-selection upper bound unavailable".into());
     }
-    let mut folders: BTreeMap<PathBuf, FolderAccounting> = report.entries.iter()
+    let mut folders: BTreeMap<PathBuf, FolderAccounting> = report
+        .entries
+        .iter()
         .filter(|entry| entry.metadata.kind == EntryKind::Directory)
-        .map(|entry| (entry.path.clone(), FolderAccounting {
-            path: entry.path.clone(), volume: entry.metadata.volume.clone(), logical_bytes: 0,
-            attributed_allocation_bytes: 0, incomplete: report.accounting.incomplete,
-        })).collect();
-    for entry in report.entries.iter().filter(|entry| entry.metadata.kind == EntryKind::File) {
+        .map(|entry| {
+            (
+                entry.path.clone(),
+                FolderAccounting {
+                    path: entry.path.clone(),
+                    volume: entry.metadata.volume.clone(),
+                    logical_bytes: 0,
+                    attributed_allocation_bytes: 0,
+                    incomplete: report.accounting.incomplete,
+                },
+            )
+        })
+        .collect();
+    for entry in report
+        .entries
+        .iter()
+        .filter(|entry| entry.metadata.kind == EntryKind::File)
+    {
         for ancestor in entry.path.ancestors().skip(1) {
             if let Some(folder) = folders.get_mut(ancestor)
                 && folder.volume == entry.metadata.volume
             {
-                    folder.logical_bytes = folder.logical_bytes.saturating_add(entry.logical_bytes);
-                    folder.attributed_allocation_bytes = folder.attributed_allocation_bytes.saturating_add(entry.attributed_allocation_bytes);
+                folder.logical_bytes = folder.logical_bytes.saturating_add(entry.logical_bytes);
+                folder.attributed_allocation_bytes = folder
+                    .attributed_allocation_bytes
+                    .saturating_add(entry.attributed_allocation_bytes);
             }
         }
     }
     report.folders = folders.into_values().collect();
-    report.folders.sort_by(|a,b| b.attributed_allocation_bytes.cmp(&a.attributed_allocation_bytes).then_with(|| a.path.cmp(&b.path)));
+    report.folders.sort_by(|a, b| {
+        b.attributed_allocation_bytes
+            .cmp(&a.attributed_allocation_bytes)
+            .then_with(|| a.path.cmp(&b.path))
+    });
     report
 }
 
@@ -379,10 +401,10 @@ fn walk<P: FilesystemProvider>(
     if let Some(parent_volume) = expected_volume.as_ref()
         && &metadata.volume != parent_volume
     {
-            report.incomplete_reasons.push(format!(
-                "cross-volume descendant rejected: {}",
-                path.display()
-            ));
+        report.incomplete_reasons.push(format!(
+            "cross-volume descendant rejected: {}",
+            path.display()
+        ));
         return;
     }
     let volume = metadata.volume.clone();
@@ -522,7 +544,11 @@ fn symlink_ancestor<P: FilesystemProvider>(
     path: &Path,
     report: &mut ScanReport,
 ) -> Option<PathBuf> {
-    let ancestors: Vec<_> = path.ancestors().skip(1).filter(|p| !p.as_os_str().is_empty()).collect();
+    let ancestors: Vec<_> = path
+        .ancestors()
+        .skip(1)
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect();
     for candidate in ancestors.into_iter().rev() {
         match provider.inspect(candidate) {
             Ok(metadata) if metadata.kind == EntryKind::Symlink || metadata.is_placeholder => {
