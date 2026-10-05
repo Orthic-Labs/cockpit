@@ -4,6 +4,7 @@ use crate::model::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::platform;
 
@@ -37,6 +38,9 @@ pub trait FilesystemProvider {
         Ok((children, truncated))
     }
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError>;
+    /// Called once at the start of each scan so providers can reset per-scan
+    /// caches. The default does nothing.
+    fn begin_scan(&self) {}
 }
 
 fn map_io(e: std::io::Error) -> FsError {
@@ -47,6 +51,159 @@ fn map_io(e: std::io::Error) -> FsError {
     }
 }
 
+/// Mount identity observed with `statfs`, used to validate a cached volume.
+/// Includes opaque mount fsid bytes without accessing libc's private fields.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MountKey {
+    dev: u64,
+    mount: Vec<u8>,
+    fsid: [u8; std::mem::size_of::<libc::fsid_t>()],
+}
+
+#[cfg(target_os = "macos")]
+fn mount_key(path: &Path, metadata: &fs::Metadata) -> Option<MountKey> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    // Query the parent for a symlink so statfs never follows its target.
+    let query = if metadata.file_type().is_symlink() {
+        path.parent()?
+    } else {
+        path
+    };
+    let c_path = std::ffi::CString::new(query.as_os_str().as_bytes()).ok()?;
+    let mut statistics = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+    if unsafe { libc::statfs(c_path.as_ptr(), statistics.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let statistics = unsafe { statistics.assume_init() };
+    let mount = unsafe { std::ffi::CStr::from_ptr(statistics.f_mntonname.as_ptr()) };
+    Some(MountKey {
+        dev: metadata.dev(),
+        mount: mount.to_bytes().to_vec(),
+        // SAFETY: Apple fsid_t is a C struct containing two i32 values,
+        // with no padding. A successful statfs initializes this mount ID.
+        fsid: unsafe { std::mem::transmute(statistics.f_fsid) },
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct CachedVolume {
+    volume: VolumeIdentity,
+    key: MountKey,
+}
+
+/// State owned by one `CachingStdProvider`; never shared or process-global.
+#[derive(Debug)]
+struct ScanState {
+    /// st_dev -> stable volume identity (macOS UUID lookups only).
+    #[cfg(target_os = "macos")]
+    volumes: BTreeMap<u64, CachedVolume>,
+    /// Directory (st_dev, st_ino) recorded at inspection time.
+    #[cfg(unix)]
+    directories: BTreeMap<PathBuf, (u64, u64)>,
+}
+
+impl ScanState {
+    const fn new() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            volumes: BTreeMap::new(),
+            #[cfg(unix)]
+            directories: BTreeMap::new(),
+        }
+    }
+}
+
+/// Shared inspection; `native` supplies the platform facts for the entry.
+fn inspect_with(
+    path: &Path,
+    native: impl FnOnce(&Path, &fs::Metadata, EntryKind) -> platform::NativeInfo,
+) -> Result<(FileMetadata, Vec<String>), FsError> {
+    let metadata = fs::symlink_metadata(path).map_err(map_io)?;
+    let kind = if metadata.file_type().is_symlink() {
+        EntryKind::Symlink
+    } else if metadata.is_dir() {
+        EntryKind::Directory
+    } else if metadata.is_file() {
+        EntryKind::File
+    } else {
+        EntryKind::Other
+    };
+    let native = native(path, &metadata, kind);
+    let mut reasons = Vec::new();
+    let (logical_size, allocation_size, file_id) = match kind {
+        EntryKind::File => {
+            let logical = if native.is_placeholder {
+                reasons.push("logical size is not local for a placeholder".to_owned());
+                None
+            } else {
+                Some(metadata.len())
+            };
+            (logical, native.allocation_size, native.file_id.clone())
+        }
+        // Directory own-size is never attributed; the identity is kept
+        // for loop detection.
+        EntryKind::Directory => (Some(0), Some(0), native.file_id.clone()),
+        EntryKind::Symlink => (Some(0), Some(0), None),
+        // st_blocks is meaningless for device/FIFO/socket/other entries:
+        // allocation is unknown, never a confident zero.
+        EntryKind::Other => {
+            reasons.push(
+                "allocation is not meaningful for a non-regular entry".to_owned(),
+            );
+            (Some(0), None, None)
+        }
+    };
+    let needs_native = matches!(kind, EntryKind::File | EntryKind::Directory);
+    let metadata_complete = kind != EntryKind::Other
+        && (!needs_native
+            || (allocation_size.is_some()
+                && logical_size.is_some()
+                && file_id.is_some()
+                && native.volume_stable));
+    if !metadata_complete {
+        reasons.extend(native.unavailable.iter().cloned());
+    }
+    // Identity recheck: reject an entry that was replaced while it was being
+    // inspected, so a stale observation never reaches the report. On unix the
+    // (st_dev, st_ino) pair is authoritative; elsewhere the file type is the
+    // conservative proxy. This cannot detect a swap between enumeration and
+    // the first lstat — the provider seam does not return enumeration-time
+    // identity — so it is a conservative post-check only.
+    let after = fs::symlink_metadata(path).map_err(map_io)?;
+    #[cfg(unix)]
+    let same_identity = {
+        use std::os::unix::fs::MetadataExt;
+        after.dev() == metadata.dev()
+            && after.ino() == metadata.ino()
+            && after.file_type() == metadata.file_type()
+    };
+    #[cfg(not(unix))]
+    let same_identity = after.file_type() == metadata.file_type();
+    if !same_identity {
+        return Err(FsError::new(format!(
+            "entry identity changed during inspection: {}",
+            path.display()
+        )));
+    }
+    Ok((
+        FileMetadata {
+            kind,
+            volume: native.volume,
+            logical_size,
+            allocation_size,
+            file_id,
+            clone_id: None,
+            is_placeholder: native.is_placeholder,
+            metadata_complete,
+        },
+        reasons,
+    ))
+}
+
+/// Stateless real-filesystem provider: no cache, no recorded identities.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StdFilesystemProvider;
 
@@ -56,129 +213,190 @@ impl FilesystemProvider for StdFilesystemProvider {
     }
 
     fn inspect_detailed(&self, path: &Path) -> Result<(FileMetadata, Vec<String>), FsError> {
-        let metadata = fs::symlink_metadata(path).map_err(map_io)?;
-        let kind = if metadata.file_type().is_symlink() {
-            EntryKind::Symlink
-        } else if metadata.is_dir() {
-            EntryKind::Directory
-        } else if metadata.is_file() {
-            EntryKind::File
-        } else {
-            EntryKind::Other
-        };
-        let native = platform::inspect(path, &metadata);
-        let mut reasons = Vec::new();
-        let (logical_size, allocation_size, file_id) = match kind {
-            EntryKind::File => {
-                let logical = if native.is_placeholder {
-                    reasons.push("logical size is not local for a placeholder".to_owned());
-                    None
-                } else {
-                    Some(metadata.len())
-                };
-                (logical, native.allocation_size, native.file_id.clone())
-            }
-            // Directory own-size is never attributed; the identity is kept
-            // for loop detection.
-            EntryKind::Directory => (Some(0), Some(0), native.file_id.clone()),
-            EntryKind::Symlink | EntryKind::Other => (Some(0), Some(0), None),
-        };
-        let needs_native = matches!(kind, EntryKind::File | EntryKind::Directory);
-        let metadata_complete = !needs_native
-            || (allocation_size.is_some()
-                && logical_size.is_some()
-                && file_id.is_some()
-                && native.volume_stable);
-        if !metadata_complete {
-            reasons.extend(native.unavailable.iter().cloned());
-        }
-        Ok((
-            FileMetadata {
-                kind,
-                volume: native.volume,
-                logical_size,
-                allocation_size,
-                file_id,
-                clone_id: None,
-                is_placeholder: native.is_placeholder,
-                metadata_complete,
-            },
-            reasons,
-        ))
+        inspect_with(path, |path, metadata, _| platform::inspect(path, metadata))
     }
 
     fn children(&self, path: &Path) -> Result<Vec<PathBuf>, FsError> {
-        let mut children = Vec::new();
-        for entry in fs::read_dir(path).map_err(map_io)? {
-            children.push(entry.map_err(map_io)?.path());
-        }
-        children.sort();
-        Ok(children)
+        std_children(path)
     }
 
-    /// Reads at most `limit` entries plus one probe entry, then stops; the
-    /// directory is never enumerated in full to choose a sorted prefix.
+    /// Descriptor-based, no-follow, bounded listing (see the platform adapter).
     fn children_bounded(&self, path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
-        let mut children = Vec::new();
-        let mut truncated = false;
-        for entry in fs::read_dir(path).map_err(map_io)? {
-            let entry = entry.map_err(map_io)?;
-            if children.len() >= limit {
-                truncated = true;
-                break;
-            }
-            children.push(entry.path());
-        }
-        children.sort();
-        Ok((children, truncated))
+        platform::children_bounded(path, limit)
     }
 
-    // statvfs field widths vary across Unix ABIs.
-    #[allow(clippy::unnecessary_cast)]
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {
+        platform::volume_usage(volume)
+    }
+}
+
+fn std_children(path: &Path) -> Result<Vec<PathBuf>, FsError> {
+    let mut children = Vec::new();
+    for entry in fs::read_dir(path).map_err(map_io)? {
+        children.push(entry.map_err(map_io)?.path());
+    }
+    children.sort();
+    Ok(children)
+}
+
+/// Real-filesystem provider with per-scan state: a validated volume-UUID cache
+/// (macOS) and the identities of directories inspected in this scan. Create
+/// one per scan; `begin_scan` also resets it.
+#[derive(Debug)]
+pub(crate) struct CachingStdProvider {
+    state: Mutex<ScanState>,
+}
+
+impl CachingStdProvider {
+    pub(crate) const fn new() -> Self {
+        Self {
+            state: Mutex::new(ScanState::new()),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ScanState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn native_info(
+        &self,
+        path: &Path,
+        metadata: &fs::Metadata,
+        kind: EntryKind,
+    ) -> platform::NativeInfo {
+        use std::os::unix::fs::MetadataExt;
+        // Symlinks and special files always take the full uncached lookup.
+        if !matches!(kind, EntryKind::File | EntryKind::Directory) {
+            return platform::inspect(path, metadata);
+        }
+        let dev = metadata.dev();
+        let key = mount_key(path, metadata);
+        if let Some(key) = key.as_ref() {
+            let mut state = self.lock();
+            let hit = match state.volumes.get(&dev) {
+                Some(cached) if &cached.key == key => Some(cached.volume.clone()),
+                _ => None,
+            };
+            if let Some(volume) = hit {
+                drop(state);
+                return cached_native_info(path, metadata, volume);
+            }
+            // Absent or the mount changed behind this st_dev: drop the binding.
+            state.volumes.remove(&dev);
+        }
+        let native = platform::inspect(path, metadata);
+        // Only a stable UUID is cached, and only if the mount did not change
+        // while it was being resolved.
+        if native.volume_stable
+            && let Some(before) = key
+            && mount_key(path, metadata).as_ref() == Some(&before)
+        {
+            self.lock().volumes.insert(
+                dev,
+                CachedVolume {
+                    volume: native.volume.clone(),
+                    key: before,
+                },
+            );
+        }
+        native
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn native_info(
+        &self,
+        path: &Path,
+        metadata: &fs::Metadata,
+        _kind: EntryKind,
+    ) -> platform::NativeInfo {
+        platform::inspect(path, metadata)
+    }
+}
+
+/// Same facts as the unix adapter, with a cached (validated) volume.
+#[cfg(target_os = "macos")]
+fn cached_native_info(
+    path: &Path,
+    metadata: &fs::Metadata,
+    volume: VolumeIdentity,
+) -> platform::NativeInfo {
+    use std::os::macos::fs::MetadataExt as MacMetadataExt;
+    use std::os::unix::fs::MetadataExt;
+    let is_placeholder = metadata.st_flags() & 0x4000_0000 != 0;
+    let mut unavailable = Vec::new();
+    let allocation_size = if is_placeholder {
+        unavailable.push(format!(
+            "allocation unavailable: {} is a dataless placeholder",
+            path.display()
+        ));
+        None
+    } else {
+        Some(metadata.blocks().saturating_mul(512))
+    };
+    platform::NativeInfo {
+        file_id: Some(FileIdentity {
+            volume: volume.clone(),
+            id: format!("{}:{}", metadata.dev(), metadata.ino()),
+        }),
+        volume,
+        volume_stable: true,
+        allocation_size,
+        is_placeholder,
+        unavailable,
+    }
+}
+
+impl FilesystemProvider for CachingStdProvider {
+    fn begin_scan(&self) {
+        *self.lock() = ScanState::new();
+    }
+
+    fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError> {
+        self.inspect_detailed(path).map(|(metadata, _)| metadata)
+    }
+
+    fn inspect_detailed(&self, path: &Path) -> Result<(FileMetadata, Vec<String>), FsError> {
+        inspect_with(path, |path, metadata, kind| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if kind == EntryKind::Directory {
+                    self.lock()
+                        .directories
+                        .insert(path.to_path_buf(), (metadata.dev(), metadata.ino()));
+                }
+            }
+            self.native_info(path, metadata, kind)
+        })
+    }
+
+    fn children(&self, path: &Path) -> Result<Vec<PathBuf>, FsError> {
+        std_children(path)
+    }
+
+    /// If the directory was inspected earlier in this scan, its identity must
+    /// still match before the descriptor-based listing is opened.
+    fn children_bounded(&self, path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
         #[cfg(unix)]
         {
-            use std::ffi::CString;
-            use std::os::unix::ffi::OsStrExt;
-            for disk in sysinfo::Disks::new_with_refreshed_list().list() {
-                let mount = disk.mount_point();
-                // Same identity function as inspection, so UUID ids match.
-                match platform::volume_identity_for_path(mount) {
-                    Some((mount_volume, _)) if mount_volume.id == volume.id => {}
-                    _ => continue,
+            use std::os::unix::fs::MetadataExt;
+            let expected = self.lock().directories.get(path).copied();
+            if let Some(expected) = expected {
+                let current = fs::symlink_metadata(path).map_err(map_io)?;
+                if (current.dev(), current.ino()) != expected {
+                    return Err(FsError::new(format!(
+                        "directory identity changed since inspection: {}",
+                        path.display()
+                    )));
                 }
-                let Ok(path) = CString::new(mount.as_os_str().as_bytes()) else {
-                    continue;
-                };
-                let mut statistics = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-                // statvfs reads mount accounting only, never file contents.
-                if unsafe { libc::statvfs(path.as_ptr(), statistics.as_mut_ptr()) } != 0 {
-                    continue;
-                }
-                let statistics = unsafe { statistics.assume_init() };
-                let unit = statistics.f_frsize as u64;
-                let total = (statistics.f_blocks as u64).saturating_mul(unit);
-                let free = (statistics.f_bfree as u64).saturating_mul(unit);
-                let available = (statistics.f_bavail as u64).saturating_mul(unit);
-                return Ok(VolumeUsage {
-                    volume: volume.clone(),
-                    total_bytes: Some(total),
-                    used_bytes: Some(total.saturating_sub(free)),
-                    available_bytes: Some(available),
-                    purgeable_bytes: None,
-                    snapshots: SnapshotState::Unknown,
-                });
             }
         }
-        // Unsupported or inaccessible mount accounting stays explicitly unknown.
-        Ok(VolumeUsage {
-            volume: volume.clone(),
-            total_bytes: None,
-            used_bytes: None,
-            available_bytes: None,
-            purgeable_bytes: None,
-            snapshots: SnapshotState::Unknown,
-        })
+        platform::children_bounded(path, limit)
+    }
+
+    fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {
+        platform::volume_usage(volume)
     }
 }
 
@@ -190,6 +408,7 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     paths: &[PathBuf],
     options: &ScanOptions,
 ) -> ScanReport {
+    provider.begin_scan();
     let mut roots = paths.to_vec();
     roots.sort();
     roots.dedup();
@@ -323,7 +542,8 @@ pub fn scan_with_provider<P: FilesystemProvider>(
 }
 
 pub fn scan(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {
-    scan_with_provider(&StdFilesystemProvider, paths, options)
+    // Fresh per-scan cache for every call.
+    scan_with_provider(&CachingStdProvider::new(), paths, options)
 }
 
 pub fn scan_paths(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {
@@ -668,5 +888,37 @@ fn directory_unchanged<P: FilesystemProvider>(
             });
             false
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swapped_directory_is_refused_before_listing() {
+        let base = fs::canonicalize(std::env::temp_dir()).expect("canonical temp dir");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = base.join(format!(
+            "cockpit-scan-identity-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        let provider = CachingStdProvider::new();
+        provider.begin_scan();
+        let inspected = provider.inspect(&target).expect("inspect");
+        assert_eq!(inspected.kind, EntryKind::Directory);
+        fs::rename(&target, root.join("moved")).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("impostor.txt"), b"y").unwrap();
+        let result = provider.children_bounded(&target, 10);
+        let _ = fs::remove_dir_all(&root);
+        let error = result.expect_err("swapped directory must not be listed");
+        assert!(error.message.contains("identity changed"), "{}", error.message);
     }
 }

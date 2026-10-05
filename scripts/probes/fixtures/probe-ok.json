@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"cockpit.probe.sample","status":"ok","pid":4242,"start_time":{"sec":1767607200,"usec":42},"physical_footprint_bytes":31457280,"resident_bytes":41943040,"user_cpu_ns":1000000000,"system_cpu_ns":500000000,"mach_ports":{"available":false,"reason":"task_for_pid_not_allowed"}}

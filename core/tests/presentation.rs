@@ -232,3 +232,84 @@ fn scan_uses_provider_subtree_folder_totals() {
     assert!(out.contains("1.0 MiB  logical"), "{out}");
     assert!(out.contains("(2 total)"), "{out}");
 }
+
+#[test]
+fn growth_extremes_render_full_range() {
+    let line = |g: Value| {
+        render(
+            View::History,
+            &json!({"history":[{"id":"b","created_at":2,"roots":[],"accounting":{},"attributed_growth_bytes":g,"comparison":{"comparable":true},"findings_count":0}]}),
+            &opts(5),
+        )
+    };
+    let max = i128::from(u64::MAX);
+    // 2^64 bytes is 16777216 TiB; 2^63 bytes is 8388608 TiB.
+    let positive = line(json!(u64::MAX));
+    assert!(positive.contains("+16777216.0 TiB"), "{positive}");
+    let positive_string = line(json!(max.to_string()));
+    assert!(positive_string.contains("+16777216.0 TiB"), "{positive_string}");
+    let negative = line(json!((-max).to_string()));
+    assert!(negative.contains("-16777216.0 TiB"), "{negative}");
+    assert!(negative.contains("growth since previous: -"), "{negative}");
+    assert!(line(json!(i64::MIN)).contains("-8388608.0 TiB"));
+    assert!(line(json!(-2048)).contains("-2.0 KiB"));
+    assert!(line(json!(0)).contains("+0 B"));
+    for g in [json!(u64::MAX), json!((-max).to_string())] {
+        assert!(!line(g).contains("not comparable"));
+    }
+}
+
+#[test]
+fn evidence_sufficiency_is_not_actions_enabled() {
+    let finding = json!({
+        "id": "f1", "rule_id": "r1", "path": "/x", "liveness": "dead", "risk": "low",
+        "route": "native_tool", "eligible": true, "reasons": [],
+        "logical_bytes": 1, "attributed_bytes": 1
+    });
+    let out = render(
+        View::Findings,
+        &json!({"snapshot_id": "s", "findings": [finding], "explanations": [], "mode": "report_only"}),
+        &opts(5),
+    );
+    assert!(out.contains("evidence sufficient true"), "{out}");
+    assert!(
+        out.contains("actions: disabled until feasibility gates pass"),
+        "{out}"
+    );
+    assert!(!out.contains("eligible true"));
+}
+
+#[test]
+fn capability_notes_render_bounded_and_escaped() {
+    let out = render(
+        View::History,
+        &json!({"history": [], "history_diagnostics": [],
+                "capability_notes": ["windows: ACL\u{1b} inherited", "second note", "third note"]}),
+        &opts(2),
+    );
+    assert!(out.contains("Store capability notes (3)"), "{out}");
+    assert!(out.contains("windows: ACL\\x1b inherited"), "{out}");
+    assert!(out.contains("… 1 more not shown"), "{out}");
+    // No notes and no diagnostics: nothing is emitted.
+    let quiet = render(View::History, &json!({"history": []}), &opts(5));
+    assert!(!quiet.contains("capability"), "{quiet}");
+    assert!(!quiet.contains("skipped"), "{quiet}");
+}
+
+#[test]
+fn worker_response_shows_truncation_and_errors() {
+    let ok = render(
+        View::Worker,
+        &json!({"version":1,"id":"cli-1","status":"ok","truncated":true,
+                "data":{"processes":[],"omitted_processes":7}}),
+        &opts(5),
+    );
+    assert!(ok.contains("truncated: yes"), "{ok}");
+    assert!(ok.contains("omitted 7"), "{ok}");
+    let err = render(
+        View::Worker,
+        &json!({"version":1,"id":null,"status":"error","error":{"code":"timeout","message":"slow\u{1b}"}}),
+        &opts(5),
+    );
+    assert!(err.contains("status: error") && err.contains("timeout") && err.contains("\\x1b"));
+}

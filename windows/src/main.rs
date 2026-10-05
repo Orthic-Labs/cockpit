@@ -12,17 +12,21 @@
 mod diag;
 mod lifecycle;
 mod raii;
+mod runtime;
+mod settings;
 mod visibility;
 
 use diag::{FailureLatch, Transition};
-use lifecycle::{
-    Bounds, MonitorSpec, PanelAction, ReconcileGate, VISIBLE_INTERVAL_MS, cpu_fraction,
-    pill_bounds, plan_panels, sampling_interval_ms,
-};
+use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate, cpu_fraction};
 use raii::{
     ClassGuard, GdiObject, OwnedWindow, PaintScope, SelectScope, TimerGuard, hwnd_from_key,
     hwnd_key,
 };
+use runtime::{
+    InstanceError, InstanceLock, Placed, Placement, Retry, RetryReport, anchor_bounds,
+    desired_hidden, interval_ms, plan_placements,
+};
+use settings::{Anchor, PillSettings};
 use std::mem::size_of;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,8 +63,11 @@ struct Reading {
 
 struct Panel {
     id: String,
-    bounds: Bounds, // monitor bounds this panel was placed for
-    hidden: bool,   // created hidden; refresh_panels shows it once occupancy is known
+    bounds: Bounds, // monitor bounds this panel was placed for (updated only after a move succeeds)
+    anchor: Anchor, // anchor this panel was placed with (updated only after a move succeeds)
+    // Last successfully applied hidden state. Created hidden; a failed show/hide leaves it
+    // unchanged so the next refresh retries while the panel keeps owning its HWND.
+    visibility: Retry<bool>,
     window: OwnedWindow,
 }
 
@@ -71,6 +78,11 @@ struct AppState {
     shutting_down: bool,
     reconcile_retry: bool,
     gate: ReconcileGate,
+    settings: PillSettings,
+    /// Last settings known to be on disk (or defaults when nothing was loaded).
+    settings_baseline: PillSettings,
+    /// False when the stored file was unusable: never overwrite it.
+    settings_writable: bool,
 }
 
 impl AppState {
@@ -82,6 +94,9 @@ impl AppState {
             shutting_down: false,
             reconcile_retry: false,
             gate: ReconcileGate::new(),
+            settings: PillSettings::new(),
+            settings_baseline: PillSettings::new(),
+            settings_writable: true,
         }
     }
 }
@@ -133,6 +148,93 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), Error> {
+    // Declared first, so it is released last (after windows, timer, classes and the final
+    // settings write). Held for the lifetime of the process.
+    let _instance = match InstanceLock::acquire() {
+        Ok(lock) => lock,
+        Err(InstanceError::AlreadyRunning) => {
+            diag::info(
+                "instance_already_running",
+                &[("mutex", "Local\\Cockpit.Pill.v1.<user-sid>")],
+            );
+            return Ok(());
+        }
+        Err(InstanceError::Failed(error)) => {
+            diag::win32_error("CreateMutexW", &error, "single_instance");
+            return Err(error);
+        }
+    };
+    load_settings();
+    let result = run_pill();
+    // run_pill has returned: timer killed, panels destroyed, classes unregistered.
+    persist_settings();
+    result
+}
+
+fn load_settings() {
+    let paths = match settings::settings_paths() {
+        Ok(paths) => paths,
+        Err(error) => {
+            diag::info(
+                "settings_unavailable",
+                &[
+                    ("reason", error.describe().as_str()),
+                    ("action", "defaults_no_write"),
+                ],
+            );
+            lock_state().settings_writable = false;
+            return;
+        }
+    };
+    let outcome = settings::load(&paths);
+    match &outcome.problem {
+        Some(problem) => diag::info(
+            "settings_defaulted",
+            &[
+                ("reason", problem.as_str()),
+                ("action", "defaults_never_overwrite"),
+            ],
+        ),
+        None if outcome.file_found => diag::info("settings_loaded", &[]),
+        None => diag::info("settings_absent", &[("action", "defaults")]),
+    }
+    let mut app = lock_state();
+    app.settings_baseline = outcome.settings.clone();
+    app.settings = outcome.settings;
+    app.settings_writable = outcome.writable;
+}
+
+/// Writes only when settings differ from what is on disk and the stored file was usable.
+fn persist_settings() {
+    let (current, writable, changed) = {
+        let app = lock_state();
+        (
+            app.settings.clone(),
+            app.settings_writable,
+            app.settings != app.settings_baseline,
+        )
+    };
+    if !changed {
+        return;
+    }
+    if !writable {
+        diag::info("settings_persist_skipped", &[("reason", "unusable_or_unavailable")]);
+        return;
+    }
+    let result = settings::settings_paths().and_then(|paths| settings::save(&paths, &current));
+    match result {
+        Ok(()) => {
+            lock_state().settings_baseline = current;
+            diag::info("settings_saved", &[]);
+        }
+        Err(error) => diag::info(
+            "settings_save_failed",
+            &[("reason", error.describe().as_str())],
+        ),
+    }
+}
+
+fn run_pill() -> Result<(), Error> {
     configure_dpi_awareness();
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }?.into();
 
@@ -150,7 +252,7 @@ fn run() -> Result<(), Error> {
         instance,
     )?;
     let _timer = TimerGuard::new(controller.hwnd(), TIMER_ID);
-    if !arm_timer(controller.hwnd(), VISIBLE_INTERVAL_MS) {
+    if !arm_timer(controller.hwnd(), HIDDEN_INTERVAL_MS) {
         return Err(Error::from_win32());
     }
 
@@ -416,7 +518,7 @@ fn reconcile_panels() {
     }
     loop {
         let ok = match enumerate_monitors() {
-            Some(desired) => apply_monitor_set(&desired),
+            Some(found) => apply_monitor_set(&desired_placements(&found)),
             None => false,
         };
         let again = {
@@ -430,22 +532,40 @@ fn reconcile_panels() {
     }
 }
 
-fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
-    let existing: Vec<MonitorSpec> = lock_state()
+/// Enabled monitors with their stored anchors (defaults for monitors not in settings).
+fn desired_placements(found: &[MonitorSpec]) -> Vec<Placed> {
+    let settings = lock_state().settings.clone();
+    found
+        .iter()
+        .filter_map(|spec| {
+            let setting = settings.monitor(&spec.id);
+            setting.enabled.then(|| Placed {
+                spec: spec.clone(),
+                anchor: setting.anchor,
+            })
+        })
+        .collect()
+}
+
+fn apply_monitor_set(desired: &[Placed]) -> bool {
+    let existing: Vec<Placed> = lock_state()
         .panels
         .iter()
-        .map(|p| MonitorSpec {
-            id: p.id.clone(),
-            bounds: p.bounds,
+        .map(|p| Placed {
+            spec: MonitorSpec {
+                id: p.id.clone(),
+                bounds: p.bounds,
+            },
+            anchor: p.anchor,
         })
         .collect();
     let mut all_ok = true;
-    for action in plan_panels(&existing, desired) {
+    for action in plan_placements(&existing, desired) {
         if lock_state().shutting_down {
             return true;
         }
         match action {
-            PanelAction::Destroy(id) => {
+            Placement::Destroy(id) => {
                 let removed = {
                     let mut app = lock_state();
                     app.panels
@@ -462,14 +582,14 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
                     }
                 }
             }
-            PanelAction::Move(spec) => {
+            Placement::Move(placed) => {
                 let key = lock_state()
                     .panels
                     .iter()
-                    .find(|p| p.id == spec.id)
+                    .find(|p| p.id == placed.spec.id)
                     .map(|p| p.window.key());
                 if let Some(key) = key {
-                    let target = pill_bounds(spec.bounds);
+                    let target = anchor_bounds(placed.spec.bounds, placed.anchor);
                     let moved = unsafe {
                         SetWindowPos(
                             hwnd_from_key(key),
@@ -483,27 +603,35 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
                     };
                     match moved {
                         Ok(()) => {
-                            if let Some(p) =
-                                lock_state().panels.iter_mut().find(|p| p.id == spec.id)
+                            if let Some(p) = lock_state()
+                                .panels
+                                .iter_mut()
+                                .find(|p| p.id == placed.spec.id)
                             {
-                                p.bounds = spec.bounds;
+                                p.bounds = placed.spec.bounds;
+                                p.anchor = placed.anchor;
                             }
                         }
                         Err(error) => {
+                            // Recorded placement stays old: the next reconcile plans the move again.
                             diag::win32_error(
                                 "SetWindowPos",
                                 &error,
-                                &format!("move monitor={}", spec.id),
+                                &format!("move monitor={}", placed.spec.id),
                             );
                             all_ok = false;
                         }
                     }
                 }
             }
-            PanelAction::Create(spec) => match create_panel(&spec) {
+            Placement::Create(placed) => match create_panel(&placed) {
                 Ok(panel) => lock_state().panels.push(panel),
                 Err(error) => {
-                    diag::win32_error("CreatePanel", &error, &format!("monitor={}", spec.id));
+                    diag::win32_error(
+                        "CreatePanel",
+                        &error,
+                        &format!("monitor={}", placed.spec.id),
+                    );
                     all_ok = false;
                 }
             },
@@ -512,9 +640,10 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
     all_ok
 }
 
-fn create_panel(spec: &MonitorSpec) -> Result<Panel, Error> {
+fn create_panel(placed: &Placed) -> Result<Panel, Error> {
+    let spec = &placed.spec;
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }?.into();
-    let target = pill_bounds(spec.bounds);
+    let target = anchor_bounds(spec.bounds, placed.anchor);
     let window = OwnedWindow::create(
         WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         PANEL_CLASS,
@@ -529,7 +658,8 @@ fn create_panel(spec: &MonitorSpec) -> Result<Panel, Error> {
     Ok(Panel {
         id: spec.id.clone(),
         bounds: spec.bounds,
-        hidden: true,
+        anchor: placed.anchor,
+        visibility: Retry::new(true),
         window,
     })
 }
@@ -557,7 +687,7 @@ fn monitor_id(info: &MONITORINFOEXW) -> String {
 /// Re-evaluate occupancy for every panel, show/hide on transitions, invalidate when the
 /// reading or visibility changed. Returns the cadence the timer should use.
 fn refresh_panels(new_reading: Option<Reading>) -> u32 {
-    let (targets, own, reading_changed) = {
+    let (targets, own, reading_changed, settings_visible, cadence) = {
         let mut app = lock_state();
         let changed = match new_reading {
             Some(reading) => {
@@ -567,58 +697,91 @@ fn refresh_panels(new_reading: Option<Reading>) -> u32 {
             }
             None => false,
         };
-        let targets: Vec<(isize, Bounds, bool)> = app
+        let targets: Vec<(isize, Bounds, Retry<bool>)> = app
             .panels
             .iter()
-            .map(|p| (p.window.key(), p.bounds, p.hidden))
+            .map(|p| (p.window.key(), p.bounds, p.visibility))
             .collect();
         let own: Vec<isize> = targets.iter().map(|t| t.0).collect();
-        (targets, own, changed)
+        (
+            targets,
+            own,
+            changed,
+            app.settings.visible,
+            app.settings.cadence_seconds,
+        )
     };
 
     let mut outcomes = Vec::with_capacity(targets.len());
-    for (key, bounds, was_hidden) in targets {
+    for (key, bounds, mut visibility) in targets {
         let hwnd = hwnd_from_key(key);
-        let mut hidden = monitor_has_fullscreen_occupancy(bounds, &own);
-        unsafe {
-            if hidden != was_hidden {
-                if hidden {
-                    let _ = ShowWindow(hwnd, SW_HIDE);
-                } else {
-                    if let Err(error) = SetWindowPos(
-                        hwnd,
-                        Some(HWND_TOPMOST),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                    ) {
-                        diag::win32_error("SetWindowPos", &error, "show");
-                        hidden = was_hidden; // retry showing on the next refresh
+        // Occupancy is only scanned when the pill could be shown at all.
+        let suppressed = settings_visible && monitor_has_fullscreen_occupancy(bounds, &own);
+        let hidden = desired_hidden(settings_visible, suppressed);
+        if visibility.needs(hidden) {
+            let result = unsafe { set_panel_hidden(hwnd, hidden) };
+            let ok = result.is_ok();
+            match visibility.record(hidden, ok) {
+                RetryReport::Failed => {
+                    if let Err(error) = &result {
+                        diag::win32_error(
+                            "SetWindowPos",
+                            error,
+                            if hidden { "hide" } else { "show" },
+                        );
                     }
+                }
+                RetryReport::Recovered(count) => diag::info(
+                    "panel_transition_recovered",
+                    &[
+                        ("op", if hidden { "hide" } else { "show" }),
+                        ("failures", count.to_string().as_str()),
+                    ],
+                ),
+                RetryReport::Applied | RetryReport::StillFailing(_) => {}
+            }
+            if ok && !hidden {
+                unsafe {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-            } else if reading_changed && !hidden {
+            }
+        } else if reading_changed && !visibility.applied() {
+            unsafe {
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
         }
-        outcomes.push((key, hidden));
+        outcomes.push((key, visibility));
     }
 
     let (total, hidden_count) = {
         let mut app = lock_state();
-        for (key, hidden) in outcomes {
+        for (key, visibility) in outcomes {
             if let Some(panel) = app.panels.iter_mut().find(|p| p.window.key() == key) {
-                panel.hidden = hidden;
+                panel.visibility = visibility;
             }
         }
         (
             app.panels.len(),
-            app.panels.iter().filter(|p| p.hidden).count(),
+            app.panels
+                .iter()
+                .filter(|p| p.visibility.applied())
+                .count(),
         )
     };
-    sampling_interval_ms(total, hidden_count)
+    interval_ms(cadence, total, hidden_count)
+}
+
+/// Show (topmost, no activation) or hide a panel through SetWindowPos so failures are
+/// observable (ShowWindow only reports prior visibility, never failure).
+unsafe fn set_panel_hidden(hwnd: HWND, hidden: bool) -> Result<(), Error> {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    unsafe {
+        if hidden {
+            SetWindowPos(hwnd, None, 0, 0, 0, 0, flags | SWP_NOZORDER | SWP_HIDEWINDOW)
+        } else {
+            SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags | SWP_SHOWWINDOW)
+        }
+    }
 }
 
 struct ScanContext<'a> {
@@ -662,12 +825,26 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
         if !IsWindowVisible(hwnd).as_bool() || ctx.own.contains(&hwnd_key(hwnd)) {
             return true.into();
         }
-        if is_shell_desktop_window(hwnd) {
+        // Suppression needs reliable evidence: any query that fails for a window that could
+        // be the topmost cover decides "unknown" (pill stays visible), never "covered".
+        let Some(is_shell) = is_shell_desktop_window(hwnd) else {
+            ctx.decided = true;
+            return false.into();
+        };
+        if is_shell {
             return true.into();
         }
-        let owned = GetWindow(hwnd, GW_OWNER)
-            .map(|owner| !owner.0.is_null())
-            .unwrap_or(false);
+        SetLastError(ERROR_SUCCESS);
+        let owned = match GetWindow(hwnd, GW_OWNER) {
+            Ok(owner) => !owner.0.is_null(),
+            // GetWindow returns null both for "no owner" and for failure; only a non-zero
+            // last error is a failure.
+            Err(_) if GetLastError() == ERROR_SUCCESS => false,
+            Err(_) => {
+                ctx.decided = true;
+                return false.into();
+            }
+        };
         let Some(ex_style) = query_window_style(hwnd, GWL_EXSTYLE) else {
             ctx.decided = true;
             return false.into();
@@ -692,7 +869,8 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
         }
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
-            return true.into(); // window vanished mid-scan
+            ctx.decided = true; // no coordinate evidence: do not suppress
+            return false.into();
         }
         let Some(style) = query_window_style(hwnd, GWL_STYLE) else {
             ctx.decided = true;
@@ -724,11 +902,15 @@ fn query_window_style(hwnd: HWND, index: WINDOW_LONG_PTR_INDEX) -> Option<u32> {
     }
 }
 
-fn is_shell_desktop_window(hwnd: HWND) -> bool {
+/// None when the class name cannot be read (zero length is the API's failure result).
+fn is_shell_desktop_window(hwnd: HWND) -> Option<bool> {
     let mut class = [0u16; 256];
     let length = unsafe { GetClassNameW(hwnd, &mut class) };
-    let name = String::from_utf16_lossy(&class[..length.max(0) as usize]);
-    is_shell_class_name(&name)
+    if length <= 0 {
+        return None;
+    }
+    let name = String::from_utf16_lossy(&class[..length as usize]);
+    Some(is_shell_class_name(&name))
 }
 
 // ---------------------------------------------------------------- window procedures
@@ -866,6 +1048,7 @@ fn paint_panel(hdc: HDC, hwnd: HWND, reading: Option<Reading>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::{HIDDEN_INTERVAL_MS, VISIBLE_INTERVAL_MS};
     use crate::visibility::{is_borderless_style, is_fullscreen_geometry};
 
     fn square() -> RECT {
@@ -900,7 +1083,8 @@ mod tests {
     }
     #[test]
     fn production_sampling_cadence_matches_helper() {
-        assert_eq!(sampling_interval_ms(1, 1), lifecycle::HIDDEN_INTERVAL_MS);
+        assert_eq!(interval_ms(2, 1, 1), HIDDEN_INTERVAL_MS);
+        assert_eq!(interval_ms(2, 1, 0), VISIBLE_INTERVAL_MS);
     }
 }
 

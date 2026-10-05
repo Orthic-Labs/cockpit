@@ -19,6 +19,8 @@ pub enum View {
     History,
     Procs,
     Usage,
+    /// A read-only worker IPC `Response` serialized as JSON.
+    Worker,
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +45,7 @@ pub fn render(view: View, value: &Value, options: &RenderOptions) -> String {
         View::History => history(&mut out, value, options),
         View::Procs => procs(&mut out, value, options),
         View::Usage => usage(&mut out, value),
+        View::Worker => worker(&mut out, value, options),
     }
     if !out.ends_with('\n') {
         out.push('\n');
@@ -97,11 +100,33 @@ fn bytes(n: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-fn signed_bytes(n: i64) -> String {
-    if n < 0 {
-        format!("-{}", bytes(n.unsigned_abs()))
+/// Parse a possibly-wide integer: JSON number (i64/u64) or decimal string.
+fn as_i128(v: &Value) -> Option<i128> {
+    if let Some(n) = v.as_i64() {
+        return Some(i128::from(n));
+    }
+    if let Some(n) = v.as_u64() {
+        return Some(i128::from(n));
+    }
+    match v {
+        Value::String(s) => s.trim().parse::<i128>().ok(),
+        Value::Number(n) => n.to_string().parse::<i128>().ok(),
+        _ => None,
+    }
+}
+
+fn signed_bytes(n: i128) -> String {
+    let magnitude = n.unsigned_abs();
+    let clamped = u64::try_from(magnitude).unwrap_or(u64::MAX);
+    let shown = if magnitude > u128::from(u64::MAX) {
+        format!("over {}", bytes(clamped))
     } else {
-        format!("+{}", bytes(n as u64))
+        bytes(clamped)
+    };
+    if n < 0 {
+        format!("-{shown}")
+    } else {
+        format!("+{shown}")
     }
 }
 
@@ -178,6 +203,23 @@ fn bounded<T>(out: &mut String, rows: &[T], max: usize, mut row: impl FnMut(&mut
     }
     if rows.len() > max {
         let _ = writeln!(out, "  … {} more not shown", rows.len() - max);
+    }
+}
+
+fn diagnostics(out: &mut String, v: &Value, o: &RenderOptions) {
+    let skipped = items(&v["history_diagnostics"]);
+    if !skipped.is_empty() {
+        let _ = writeln!(out, "History files skipped ({})", skipped.len());
+        bounded(out, skipped, o.max_rows, |out, d| {
+            let _ = writeln!(out, "  {}: {}", text(&d["file"]), text(&d["reason"]));
+        });
+    }
+    let notes = items(&v["capability_notes"]);
+    if !notes.is_empty() {
+        let _ = writeln!(out, "Store capability notes ({})", notes.len());
+        bounded(out, notes, o.max_rows, |out, n| {
+            let _ = writeln!(out, "  {}", text(n));
+        });
     }
 }
 
@@ -272,7 +314,7 @@ fn finding_line(out: &mut String, f: &Value) {
     );
     let _ = writeln!(
         out,
-        "      liveness {}  risk {}  route {}  eligible {}",
+        "      liveness {}  risk {}  route {}  evidence sufficient {}",
         text(&f["liveness"]),
         text(&f["risk"]),
         text(&f["route"]),
@@ -299,6 +341,7 @@ fn finding_line(out: &mut String, f: &Value) {
         (None, _) => "unknown (no estimate)".into(),
     };
     let _ = writeln!(out, "      reclaim {reclaim}");
+    out.push_str("      actions: disabled until feasibility gates pass\n");
     for reason in strings(&f["reasons"]) {
         let _ = writeln!(out, "      - {reason}");
     }
@@ -468,6 +511,7 @@ fn findings(out: &mut String, v: &Value, o: &RenderOptions) {
     bounded(out, ex, o.max_rows, |out, r| {
         let _ = writeln!(out, "  {}  {}", text(&r["id"]), text(&r["name"]));
     });
+    diagnostics(out, v, o);
 }
 
 fn rule_block(out: &mut String, r: &Value) {
@@ -512,7 +556,7 @@ fn rule_block(out: &mut String, r: &Value) {
     }
 }
 
-fn explain(out: &mut String, v: &Value, _o: &RenderOptions) {
+fn explain(out: &mut String, v: &Value, o: &RenderOptions) {
     if v.get("finding").is_some() {
         out.push_str("Finding\n");
         finding_line(out, &v["finding"]);
@@ -524,6 +568,7 @@ fn explain(out: &mut String, v: &Value, _o: &RenderOptions) {
     } else {
         rule_block(out, v);
     }
+    diagnostics(out, v, o);
 }
 
 fn history(out: &mut String, v: &Value, o: &RenderOptions) {
@@ -562,7 +607,7 @@ fn history(out: &mut String, v: &Value, o: &RenderOptions) {
             },
             text(&r["findings_count"]),
         );
-        let growth = match r["attributed_growth_bytes"].as_i64() {
+        let growth = match as_i128(&r["attributed_growth_bytes"]) {
             Some(g) => signed_bytes(g),
             None => {
                 let why = strings(&r["comparison"]["reasons"]);
@@ -577,6 +622,7 @@ fn history(out: &mut String, v: &Value, o: &RenderOptions) {
         };
         let _ = writeln!(out, "      attributed growth since previous: {growth}");
     });
+    diagnostics(out, v, o);
 }
 
 fn procs(out: &mut String, v: &Value, o: &RenderOptions) {
@@ -621,6 +667,16 @@ fn procs(out: &mut String, v: &Value, o: &RenderOptions) {
             );
         }
     });
+    let groups = items(&v["process_groups"]["groups"]);
+    if v["process_groups"].is_object() {
+        let _ = writeln!(out, "Process groups ({})", groups.len());
+        bounded(out, groups, o.max_rows, |out, g| {
+            let _ = writeln!(out, "  {}", text(g));
+        });
+        for n in strings(&v["process_groups"]["notes"]) {
+            let _ = writeln!(out, "  note: {n}");
+        }
+    }
     out.push_str("  (CPU % is measured over a sampling interval; PID alone is not a stable identity, start time is shown with it)\n");
 }
 
@@ -644,5 +700,83 @@ fn usage(out: &mut String, v: &Value) {
     }
     if let Some(r) = v["reason"].as_str() {
         let _ = writeln!(out, "  {}", esc(r));
+    }
+}
+
+/// Render a worker `Response` (`{version,id,status,data,truncated}` or
+/// `{version,id,status:"error",error}`). Omitted counts are never hidden.
+fn worker(out: &mut String, v: &Value, o: &RenderOptions) {
+    let _ = writeln!(
+        out,
+        "Worker response (protocol {}, request {})",
+        text(&v["version"]),
+        text(&v["id"])
+    );
+    match v["status"].as_str() {
+        Some("ok") => {
+            let truncated = v["truncated"].as_bool();
+            let _ = writeln!(
+                out,
+                "  status: ok  truncated: {}",
+                match truncated {
+                    Some(true) => "yes (some lists omit entries; see omitted counts)",
+                    Some(false) => "no",
+                    None => "unknown",
+                }
+            );
+            let data = &v["data"];
+            let mut omitted = Vec::new();
+            collect_omitted(data, "data", &mut omitted);
+            for (path, n) in omitted.iter().take(o.max_rows) {
+                let _ = writeln!(out, "  omitted {n} at {}", esc(path));
+            }
+            if omitted.len() > o.max_rows {
+                let _ = writeln!(out, "  … {} more not shown", omitted.len() - o.max_rows);
+            }
+            if data["system"].is_object() {
+                status(out, data, o);
+            } else if data["processes"].is_array() {
+                procs(out, data, o);
+            } else if data["snapshot"].is_object() {
+                scan(out, data, o);
+            } else {
+                let _ = writeln!(out, "  data: {}", text(data));
+            }
+        }
+        Some("error") => {
+            let _ = writeln!(
+                out,
+                "  status: error  code {}  {}",
+                text(&v["error"]["code"]),
+                text(&v["error"]["message"])
+            );
+        }
+        _ => out.push_str("  status: unknown (unrecognized response)\n"),
+    }
+}
+
+/// Find numeric fields named `omitted*` greater than zero anywhere in `v`.
+fn collect_omitted(v: &Value, path: &str, found: &mut Vec<(String, u64)>) {
+    match v {
+        Value::Object(map) => {
+            for (k, child) in map {
+                let here = format!("{path}.{k}");
+                if k.starts_with("omitted")
+                    && let Some(n) = child.as_u64()
+                {
+                    if n > 0 {
+                        found.push((here, n));
+                    }
+                } else {
+                    collect_omitted(child, &here, found);
+                }
+            }
+        }
+        Value::Array(list) => {
+            for (i, child) in list.iter().enumerate().take(64) {
+                collect_omitted(child, &format!("{path}[{i}]"), found);
+            }
+        }
+        _ => {}
     }
 }

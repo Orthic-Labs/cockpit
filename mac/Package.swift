@@ -6,10 +6,14 @@ import PackageDescription
 let package = Package(
     name: "CockpitMacPrototype",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "cockpit-mac-prototype", targets: ["CockpitMacPrototype"])],
+    products: [
+        .executable(name: "cockpit-mac-prototype", targets: ["CockpitMacPrototype"]),
+        .executable(name: "cockpit-probe", targets: ["CockpitProbe"])
+    ],
     targets: [
         .target(name: "CockpitMacPrototypeCore"),
         .executableTarget(name: "CockpitMacPrototype", dependencies: ["CockpitMacPrototypeCore"]),
+        .executableTarget(name: "CockpitProbe"),
         .testTarget(name: "CockpitMacPrototypeCoreTests", dependencies: ["CockpitMacPrototypeCore"])
     ]
 )

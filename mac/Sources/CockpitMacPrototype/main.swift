@@ -161,10 +161,10 @@ private final class PillPanel: NSPanel {
     let monitorID: String
     let ringView: RingView
 
-    init(screen: NSScreen, monitorID: String, diskCount: Int) {
+    init(screen: NSScreen, monitorID: String, diskCount: Int, anchor: PillAnchor) {
         self.monitorID = monitorID
         self.ringView = RingView(frame: .zero)
-        let rect = PillPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount)
+        let rect = AnchoredPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount, anchor: anchor)
         super.init(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false, screen: screen)
         level = .statusBar
         collectionBehavior = [.canJoinAllSpaces, .fullScreenNone]
@@ -177,12 +177,12 @@ private final class PillPanel: NSPanel {
         isReleasedWhenClosed = false
         ringView.autoresizingMask = [.width, .height]
         contentView = ringView
-        orderFrontRegardless()
+        // Not shown here: the sampler decides visibility (settings, monitor, fullscreen).
     }
 
     /// Re-place on the screen's current visible frame; no-op when unchanged.
-    func place(on screen: NSScreen, diskCount: Int) {
-        let rect = PillPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount)
+    func place(on screen: NSScreen, diskCount: Int, anchor: PillAnchor) {
+        let rect = AnchoredPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount, anchor: anchor)
         if frame != rect { setFrame(rect, display: true) }
     }
 
@@ -208,34 +208,22 @@ private final class FullscreenDetector {
         )
     }
 
+    /// nil means "unavailable": any AX call failure or unexpected CF type degrades to the
+    /// conservative geometry fallback. Wrong-type CFTypeRefs are never force-cast.
     private func focusedWindowState() -> (fullscreen: Bool, frame: CGRect)? {
         let system = AXUIElementCreateSystemWide()
-        var appValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &appValue) == .success,
-              let appValue else { return nil }
-        let app = appValue as! AXUIElement
-        var windowValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowValue) == .success,
-              let windowValue else { return nil }
-        let window = windowValue as! AXUIElement
-        var fullscreenValue: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullscreenValue)
+        guard let app = AXAttributeReader.element(
+            AXAttributeReader.copyAttribute(system, kAXFocusedApplicationAttribute)),
+              let window = AXAttributeReader.element(
+            AXAttributeReader.copyAttribute(app, kAXFocusedWindowAttribute)) else { return nil }
         var frame = CGRect.null
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionValue) == .success,
-           AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success {
-            var point = CGPoint.zero
-            var size = CGSize.zero
-            if let positionValue { AXValueGetValue(positionValue as! AXValue, .cgPoint, &point) }
-            if let sizeValue { AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) }
-            frame = CGRect(origin: point, size: size)
+        if let position = AXAttributeReader.point(AXAttributeReader.copyAttribute(window, kAXPositionAttribute)),
+           let size = AXAttributeReader.size(AXAttributeReader.copyAttribute(window, kAXSizeAttribute)) {
+            frame = CGRect(origin: position, size: size)
         }
-        if status == .success, let value = fullscreenValue {
-            if let bool = value as? Bool { return (bool, frame) }
-            if let number = value as? NSNumber { return (number.boolValue, frame) }
-        }
-        return nil
+        guard let fullscreen = AXAttributeReader.bool(
+            AXAttributeReader.copyAttribute(window, "AXFullScreen")) else { return nil }
+        return (fullscreen, frame)
     }
 
     private func geometryFallback(on screen: NSScreen, monitor: CGRect) -> Bool {
@@ -274,6 +262,7 @@ private func monitorID(for screen: NSScreen) -> String {
 }
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let runtime: PillRuntime
     private let reader = SystemReader()
     private let detector = FullscreenDetector()
     private var panels: [String: PillPanel] = [:]
@@ -284,6 +273,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenObserver: NSObjectProtocol?
     private var signalSources: [DispatchSourceSignal] = []
     private var shuttingDown = false
+
+    init(runtime: PillRuntime) {
+        self.runtime = runtime
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -315,15 +309,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func shutdown(reason: String) {
         guard !shuttingDown else { return }
         shuttingDown = true
-        timer?.invalidate()
-        timer = nil
-        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
-        screenObserver = nil
-        signalSources.forEach { $0.cancel() }
-        signalSources.removeAll()
-        panels.values.forEach { $0.orderOut(nil); $0.close() }
-        panels.removeAll()
-        emit("shutdown", ["reason": reason])
+        // Order (stop timer, close panels, persist, release lock, emit shutdown) is owned by PillRuntime.
+        runtime.shutdown(reason: reason, stopTimer: { [self] in
+            timer?.invalidate()
+            timer = nil
+            if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+            screenObserver = nil
+            signalSources.forEach { $0.cancel() }
+            signalSources.removeAll()
+        }, closePanels: { [self] in
+            panels.values.forEach { $0.orderOut(nil); $0.close() }
+            panels.removeAll()
+        })
     }
 
     /// Reconcile panels with current screens by display key: add new, drop gone, re-place kept.
@@ -344,11 +341,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         for id in diff.added {
             guard let screen = byID[id] else { continue }
-            panels[id] = PillPanel(screen: screen, monitorID: id, diskCount: diskCount)
+            panels[id] = PillPanel(screen: screen, monitorID: id, diskCount: diskCount,
+                                   anchor: runtime.monitorSetting(for: id).anchor)
             emit("monitor_added", ["display": id])
         }
         for id in diff.kept {
-            if let screen = byID[id] { panels[id]?.place(on: screen, diskCount: diskCount) }
+            if let screen = byID[id] {
+                panels[id]?.place(on: screen, diskCount: diskCount, anchor: runtime.monitorSetting(for: id).anchor)
+            }
         }
     }
 
@@ -362,18 +362,26 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         for name in change.failed { emit("sampling_failed", level: "error", ["counter": name]) }
         for name in change.recovered { emit("sampling_recovered", ["counter": name]) }
         rebuildPanels()
-        var allHidden = !panels.isEmpty
+        // Start hidden: zero panels (or screens) means nothing can show, so we keep the
+        // 10s hidden cadence rather than burning the fast cadence on an empty set.
+        var allHidden = true
         for screen in NSScreen.screens {
             guard let panel = panels[monitorID(for: screen)] else { continue }
             panel.ringView.update(reading)
-            if detector.shouldHide(on: screen) {
-                panel.orderOut(nil)
-            } else {
+            let id = monitorID(for: screen)
+            let wanted = runtime.settings.visible && runtime.monitorSetting(for: id).enabled
+            // Fullscreen detection (Accessibility/CGWindowList) only runs for pills that could show.
+            let suppressed = wanted ? detector.shouldHide(on: screen) : false
+            if PillVisibility.shouldShow(settingsVisible: runtime.settings.visible,
+                                         monitorEnabled: runtime.monitorSetting(for: id).enabled,
+                                         fullscreenSuppressed: suppressed) {
                 allHidden = false
                 panel.orderFrontRegardless()
+            } else {
+                panel.orderOut(nil)
             }
         }
-        schedule(after: allHidden ? 10 : 2)
+        schedule(after: PillSchedule.interval(allHidden: allHidden, cadenceSeconds: runtime.cadenceSeconds))
     }
 
     private func schedule(after interval: TimeInterval) {
@@ -385,7 +393,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 emit("process_start")
+// Native pill is independent of the worker: nothing here starts or connects to one.
+private let runtime = PillRuntime(emit: { event, level, fields in emit(event, level: level, fields) })
+switch runtime.start() {
+case .started: break
+case .alreadyRunning: exit(0)
+case .failed: exit(1)
+}
 let app = NSApplication.shared
-private let delegate = AppDelegate()
+private let delegate = AppDelegate(runtime: runtime)
 app.delegate = delegate
 app.run()

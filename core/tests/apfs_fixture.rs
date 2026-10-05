@@ -45,14 +45,77 @@ fn apfs_fixture_accounting_is_conservative() {
         .ok()
         .and_then(|v| v.parse().ok());
     let after = used_bytes(&root);
-    let (volume, _) = cockpit_core::platform::volume_identity_for_path(&root)
+    let (volume, stable) = cockpit_core::platform::volume_identity_for_path(&root)
         .expect("volume identity for fixture root");
+    assert!(stable, "APFS volume identity must be stable");
+    assert!(
+        volume.id.starts_with("uuid:"),
+        "volume id must be a UUID identity, got {}",
+        volume.id
+    );
     let options = ScanOptions {
-        volume_deltas: vec![VolumeDelta::new(volume, baseline, after)],
+        volume_deltas: vec![VolumeDelta::new(volume.clone(), baseline, after)],
         ..ScanOptions::default()
     };
 
     let report = scan_paths(std::slice::from_ref(&root), &options);
+
+    // Stable mount identity: two different entries report the same uuid: volume id.
+    for name in ["sparse.bin", "leaf.bin"] {
+        let e = entry(&report, name);
+        assert_eq!(e.metadata.volume, volume, "{name} volume identity differs");
+        assert!(e.metadata.volume.id.starts_with("uuid:"), "{name} id");
+    }
+    assert_eq!(
+        entry(&report, "orig.bin").metadata.volume,
+        entry(&report, "mid.bin").metadata.volume
+    );
+
+    // Nested folder totals equal the sum of the children's attributed bytes.
+    let folder = |path: &Path| {
+        report
+            .folders
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("missing folder {}", path.display()))
+    };
+    let files_under = |dir: &Path| -> (u64, u64) {
+        report
+            .entries
+            .iter()
+            .filter(|e| {
+                e.path.starts_with(dir) && matches!(e.metadata.kind, cockpit_core::EntryKind::File)
+            })
+            .fold((0, 0), |(l, a), e| {
+                (l + e.logical_bytes, a + e.attributed_allocation_bytes)
+            })
+    };
+    let nested = root.join("nested");
+    let inner = nested.join("inner");
+    let deep = inner.join("deep");
+    for dir in [&nested, &inner, &deep] {
+        let (logical, attributed) = files_under(dir);
+        let f = folder(dir);
+        assert_eq!(f.attributed_allocation_bytes, attributed, "{}", dir.display());
+        assert_eq!(f.logical_bytes, logical, "{}", dir.display());
+    }
+    let direct = |dir: &Path| -> u64 {
+        report
+            .entries
+            .iter()
+            .filter(|e| e.path.parent() == Some(dir) && e.path.is_file())
+            .map(|e| e.attributed_allocation_bytes)
+            .sum()
+    };
+    assert_eq!(
+        folder(&nested).attributed_allocation_bytes,
+        direct(&nested) + folder(&inner).attributed_allocation_bytes
+    );
+    assert_eq!(
+        folder(&inner).attributed_allocation_bytes,
+        direct(&inner) + folder(&deep).attributed_allocation_bytes
+    );
+    assert!(folder(&deep).attributed_allocation_bytes >= MIB);
 
     // Hard links: three names, one inode, allocation attributed exactly once.
     let hard: Vec<_> = report
@@ -114,23 +177,33 @@ fn apfs_fixture_accounting_is_conservative() {
         "incomplete report must not offer a full-selection upper bound"
     );
     let locked = root.join("locked");
-    let mentioned = report
-        .inspection_errors
-        .iter()
-        .any(|e| e.path.starts_with(&locked))
-        || report
-            .incomplete_reasons
-            .iter()
-            .any(|r| r.contains(locked.to_string_lossy().as_ref()));
-    assert!(mentioned, "incompleteness not attributed to locked dir");
+    let identity_failure = report.inspection_errors.iter().any(|e| {
+        e.path == locked && !e.operation.is_empty() && !e.message.trim().is_empty()
+    });
+    assert!(
+        identity_failure,
+        "locked dir must yield an explicit inspection error with a reason: {:?}",
+        report.inspection_errors
+    );
+
+    // Snapshot-retained allocation: asserted only when setup actually created a snapshot.
+    let snapshot = std::env::var("COCKPIT_APFS_FIXTURE_SNAPSHOT").ok();
+    let snapshot_created = snapshot.as_deref() == Some("created");
+    match snapshot.as_deref() {
+        Some("created") => {}
+        Some(other) => eprintln!(
+            "SKIP snapshot retention: snapshot {other} (unconfigured in this harness; see setup SNAPSHOT line)"
+        ),
+        None => eprintln!("SKIP snapshot retention: COCKPIT_APFS_FIXTURE_SNAPSHOT not set"),
+    }
 
     // Volume used-delta vs attributed bytes (conservative: APFS container accounting is noisy).
     match (baseline, after) {
         (Some(before), Some(now)) => {
             let delta = now as i128 - before as i128;
             let attributed = report.accounting.attributed_allocation_bytes as i128;
-            // Unique data: hard-linked 4 MiB + one 8 MiB clone extent set + ~1 MiB sparse data.
-            let unique_floor = (13 * MIB) as i128;
+            // Unique data: 4 + 8 + 4 (snapshot file) + 3 (nested) + ~1 MiB sparse data.
+            let unique_floor = (20 * MIB) as i128;
             let slack = (64 * MIB) as i128; // metadata, snapshot retention, container noise
             assert!(
                 delta <= attributed + slack,
@@ -140,7 +213,25 @@ fn apfs_fixture_accounting_is_conservative() {
                 delta >= unique_floor / 2,
                 "volume grew {delta}, below half of unique data {unique_floor}"
             );
+            if snapshot_created {
+                // The snapshot pins the 4 MiB overwritten allocation: used space exceeds what
+                // the live tree attributes, and reclaim must stay unknown (never claimed).
+                assert!(
+                    delta > attributed,
+                    "snapshot retained space not visible: delta {delta} <= attributed {attributed}"
+                );
+                assert_eq!(report.accounting.reclaim.lower_bytes, 0);
+                assert!(matches!(
+                    report.accounting.reclaim.state,
+                    Some(ReclaimState::Unknown)
+                ));
+            }
         }
-        _ => eprintln!("SKIP volume delta: baseline or current used bytes unavailable"),
+        _ => {
+            if snapshot_created {
+                panic!("snapshot created but volume used bytes unavailable");
+            }
+            eprintln!("SKIP volume delta: baseline or current used bytes unavailable");
+        }
     }
 }

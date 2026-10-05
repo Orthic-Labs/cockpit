@@ -12,7 +12,7 @@ Evidence below distinguishes source review, hosted checks & machine measurements
 | Fullscreen hide | HeardRight source inspected; Windows source is foreground-only while Cockpit prototype enumerates topmost windows per monitor | **Pending machine matrix** |
 | TCC/signing identity | No signed Cockpit build or permission transition run | **Pending** |
 | Fn/remap hardware | No keyboard or Secure Input run | **Pending** |
-| Runtime ownership/local channel/store | Plan describes target ownership; bounded, opt-in snapshot history with atomic no-replace publication & explicit corrupt-file diagnostics implemented; IPC, single-writer settings & mutation journal remain planned | **Pending** |
+| Runtime ownership/local channel/store | Plan describes target ownership; bounded, opt-in snapshot history with atomic no-replace publication, explicit corrupt-file diagnostics & store `capability_notes` implemented; opt-in read-only IPC implemented (same-user auth, bounded frames, ops executed in killable `worker exec-op` children under a 20 s operation deadline with bounded termination confirmation); pill settings store implemented; mutation journal remains planned | **Pending real-machine gate** |
 | Filesystem provider/APFS fixtures | Metadata provider & hosted sparse-file, hard-link, clone, inaccessible-directory accounting passed; disposable APFS teardown completed; snapshot creation skipped | Hosted fixture passed; snapshot retention & real-volume matrix pending |
 
 Source pins, composition design, read-only CLI & Mac prototype are implemented. Hosted validation is separate from real-machine footprint, TCC, signing, Fn, fullscreen & extraction gates.

@@ -1,12 +1,15 @@
 //! Cockpit's conservative, read-only shared core.
 
 pub mod history;
+pub mod ipc;
 pub mod model;
 pub mod platform;
 pub mod presentation;
+pub mod processes;
 pub mod rules;
 pub mod scan;
 pub mod store;
+pub mod worker;
 
 pub use model::*;
 pub use scan::{FilesystemProvider, StdFilesystemProvider, scan, scan_paths, scan_with_provider};
@@ -136,7 +139,11 @@ pub fn procs() -> Vec<ProcessInfo> {
             memory: Metric {
                 value: Some(process.memory()),
                 capability: Capability::Available,
-                label: "resident memory (RSS); physical footprint unavailable".into(),
+                label: if cfg!(windows) {
+                    "working set; private bytes unavailable"
+                } else {
+                    "resident memory (RSS); physical footprint unavailable"
+                }.into(),
             },
             gpu_usage_percent: Metric {
                 value: None,

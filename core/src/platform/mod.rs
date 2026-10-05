@@ -5,9 +5,9 @@
 //! cannot be produced safely is reported as unavailable with a reason instead
 //! of being guessed.
 
-use crate::model::{FileIdentity, VolumeIdentity};
+use crate::model::{FileIdentity, FsError, VolumeIdentity, VolumeUsage};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 mod mac_native;
@@ -79,6 +79,47 @@ pub fn volume_identity_for_path(path: &Path) -> Option<(VolumeIdentity, bool)> {
     {
         let _ = path;
         None
+    }
+}
+
+/// Bounded, no-follow directory listing. Reads at most `limit` entries plus
+/// one probe entry; returns `(children, truncated)`. Implementations must
+/// verify the opened directory is the same object (identity) that was
+/// inspected and refuse placeholders/reparse points before listing.
+/// Settled seam: unix -> `unix_native::children_bounded`,
+/// windows -> `win_native::children_bounded`.
+pub fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
+    #[cfg(unix)]
+    {
+        unix_native::children_bounded(path, limit)
+    }
+    #[cfg(windows)]
+    {
+        win_native::children_bounded(path, limit)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, limit);
+        Err(FsError::new("directory listing unsupported on this platform"))
+    }
+}
+
+/// Native mount accounting for a scanned volume identity. Total/used/
+/// available only; purgeable and snapshot state stay unknown unless a real
+/// provider reports them. Settled seam: unix -> `unix_native::volume_usage`,
+/// windows -> `win_native::volume_usage`.
+pub fn volume_usage(volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {
+    #[cfg(unix)]
+    {
+        unix_native::volume_usage(volume)
+    }
+    #[cfg(windows)]
+    {
+        win_native::volume_usage(volume)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(FsError::new(format!("volume usage unsupported: {}", volume.id)))
     }
 }
 
