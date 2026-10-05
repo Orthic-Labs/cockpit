@@ -139,9 +139,34 @@ impl FilesystemProvider for StdFilesystemProvider {
         Ok((children, truncated))
     }
 
+    // statvfs field widths vary across Unix ABIs.
+    #[allow(clippy::unnecessary_cast)]
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {
-        // Portable std metadata has no reliable volume accounting API. Keep
-        // this explicitly unavailable instead of deriving a false total.
+        #[cfg(unix)]
+        {
+            use std::ffi::CString;
+            use std::os::unix::ffi::OsStrExt;
+            for disk in sysinfo::Disks::new_with_refreshed_list().list() {
+                let mount = disk.mount_point();
+                let Ok(metadata) = fs::symlink_metadata(mount) else { continue };
+                if metadata.dev().to_string() != volume.id { continue; }
+                let Ok(path) = CString::new(mount.as_os_str().as_bytes()) else { continue };
+                let mut statistics = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+                // statvfs reads mount accounting only, never file contents.
+                if unsafe { libc::statvfs(path.as_ptr(), statistics.as_mut_ptr()) } != 0 { continue; }
+                let statistics = unsafe { statistics.assume_init() };
+                let unit = statistics.f_frsize as u64;
+                let total = (statistics.f_blocks as u64).saturating_mul(unit);
+                let free = (statistics.f_bfree as u64).saturating_mul(unit);
+                let available = (statistics.f_bavail as u64).saturating_mul(unit);
+                return Ok(VolumeUsage {
+                    volume: volume.clone(), total_bytes: Some(total),
+                    used_bytes: Some(total.saturating_sub(free)), available_bytes: Some(available),
+                    purgeable_bytes: None, snapshots: SnapshotState::Unknown,
+                });
+            }
+        }
+        // Unsupported or inaccessible mount accounting stays explicitly unknown.
         Ok(VolumeUsage {
             volume: volume.clone(),
             total_bytes: None,

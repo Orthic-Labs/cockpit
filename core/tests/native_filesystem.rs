@@ -29,7 +29,7 @@ fn native_sparse_file_and_hardlink_use_unique_stat_allocation() {
     file.set_len(8 * 1024 * 1024).unwrap();
     fs::hard_link(&first, fixture.0.join("b")).unwrap();
     let metadata = fs::symlink_metadata(&first).unwrap();
-    let report = scan(&[fixture.0.clone()], &ScanOptions::default());
+    let report = scan(std::slice::from_ref(&fixture.0), &ScanOptions::default());
     assert_eq!(report.accounting.logical_bytes, metadata.len());
     assert_eq!(
         report.accounting.attributed_allocation_bytes,
