@@ -126,7 +126,7 @@ fn update_reading_and_visibility() {
     let mut app = state().lock().unwrap();
     let old = app.reading;
     app.reading = Some(reading);
-    
+
     let own = app.windows.clone();
     let mut any_hidden = false;
     for key in &own {

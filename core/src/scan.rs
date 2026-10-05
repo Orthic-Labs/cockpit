@@ -268,6 +268,7 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     report.volume_usage = usage_by_volume.into_values().collect();
     report.accounting.incomplete =
         !report.incomplete_reasons.is_empty() || !report.inspection_errors.is_empty();
+    if report.accounting.incomplete { report.accounting.reclaim.upper_bytes = None; report.accounting.reclaim.reasons.push("inspection incomplete; full-selection upper bound unavailable".into()); }
     report
 }
 

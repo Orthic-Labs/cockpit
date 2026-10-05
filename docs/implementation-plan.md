@@ -431,4 +431,3 @@ This task delivers Markdown proposal, adversarial review & revision notes. Futur
 - Own updater works on both OSes; Mac permissions survive update.
 
 Recommended next implementation milestone: M0 feasibility gates, then M1 read-only storage CLI.
-

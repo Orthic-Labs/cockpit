@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct VolumeIdentity {
-    /// Durable provider identity (APFS UUID, NTFS serial, or fixture id).
+    /// Provider identity (APFS UUID, NTFS serial, or fixture id).
+    /// Standard provider uses ephemeral device/mount identity; never use it to bind mutations.
     pub id: String,
 }
 
