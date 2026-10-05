@@ -220,7 +220,10 @@ mod real {
     struct Temp(PathBuf);
     impl Temp {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
+            // macOS temp paths may include /var -> /private/var. This fixture
+            // exercises entry limits, while symlink traversal stays refused.
+            let base = fs::canonicalize(std::env::temp_dir()).unwrap();
+            let root = base.join(format!(
                 "cockpit-platform-{name}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
