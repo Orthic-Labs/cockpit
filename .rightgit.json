@@ -6,7 +6,7 @@
   ],
   "matrix": {
     "os": [
-      "macos-15"
+      "windows-latest"
     ],
     "node": [
       "26.8.1"

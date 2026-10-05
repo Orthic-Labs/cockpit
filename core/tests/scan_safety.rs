@@ -15,6 +15,7 @@ struct Mock {
     kids: BTreeMap<PathBuf, Vec<PathBuf>>,
     enumerated: RefCell<Vec<PathBuf>>,
     inspected: RefCell<Vec<PathBuf>>,
+    swapped_parent: Option<PathBuf>,
 }
 
 fn p(s: &str) -> PathBuf {
@@ -67,6 +68,11 @@ impl Mock {
 impl FilesystemProvider for Mock {
     fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError> {
         self.inspected.borrow_mut().push(path.to_path_buf());
+        if self.swapped_parent.as_deref() == Some(path) && self.enumerated.borrow().contains(&path.to_path_buf()) {
+            let mut changed = dir("a");
+            changed.kind = EntryKind::Symlink;
+            return Ok(changed);
+        }
         match self.meta.get(path) {
             Some(r) => r.clone(),
             None => Err(FsError::new("missing")),
@@ -374,4 +380,19 @@ fn scanning_never_marks_anything_cleanup_eligible() {
             assert!(matches!(rc.state, cockpit_core::ReclaimState::Unknown));
         }
     }
+}
+
+#[test]
+fn parent_swapped_after_listing_blocks_child_inspection() {
+    let mut m = Mock::default();
+    m.add("/", dir("a"));
+    m.add("/r", dir("a"));
+    m.add("/r/secret", file("a", "1", 100));
+    m.kids("/r", &["/r/secret"]);
+    m.swapped_parent = Some(p("/r"));
+    let report = scan_with_provider(&m, &[p("/r")], &ScanOptions::default());
+    assert!(!m.inspected.borrow().contains(&p("/r/secret")));
+    assert!(report.accounting.incomplete);
+    assert_eq!(report.accounting.attributed_allocation_bytes, 0);
+    assert!(report.skipped_links.iter().any(|link| link.path == p("/r")));
 }
