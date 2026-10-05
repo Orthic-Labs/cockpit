@@ -426,9 +426,10 @@ fn walk<P: FilesystemProvider>(
             }
         }
         for reason in reasons {
-            report
-                .incomplete_reasons
-                .push(format!("metadata unavailable: {}: {reason}", path.display()));
+            report.incomplete_reasons.push(format!(
+                "metadata unavailable: {}: {reason}",
+                path.display()
+            ));
         }
     }
     let volume = metadata.volume.clone();
@@ -631,20 +632,40 @@ fn symlink_ancestor<P: FilesystemProvider>(
     None
 }
 
-fn directory_unchanged<P: FilesystemProvider>(provider: &P, path: &Path, expected: &FileMetadata, report: &mut ScanReport) -> bool {
+fn directory_unchanged<P: FilesystemProvider>(
+    provider: &P,
+    path: &Path,
+    expected: &FileMetadata,
+    report: &mut ScanReport,
+) -> bool {
     match provider.inspect(path) {
-        Ok(current) if current.kind == EntryKind::Directory
-            && !current.is_placeholder && current.volume == expected.volume
-            && current.file_id == expected.file_id => true,
+        Ok(current)
+            if current.kind == EntryKind::Directory
+                && !current.is_placeholder
+                && current.volume == expected.volume
+                && current.file_id == expected.file_id =>
+        {
+            true
+        }
         Ok(current) => {
             if current.kind == EntryKind::Symlink || current.is_placeholder {
-                report.skipped_links.push(SkippedLink { path: path.into(), reason: "directory changed to link or placeholder during enumeration".into() });
+                report.skipped_links.push(SkippedLink {
+                    path: path.into(),
+                    reason: "directory changed to link or placeholder during enumeration".into(),
+                });
             }
-            report.incomplete_reasons.push(format!("directory changed during enumeration: {}", path.display()));
+            report.incomplete_reasons.push(format!(
+                "directory changed during enumeration: {}",
+                path.display()
+            ));
             false
         }
         Err(error) => {
-            report.inspection_errors.push(InspectionError { path: path.into(), operation: "recheck_directory".into(), message: error.to_string() });
+            report.inspection_errors.push(InspectionError {
+                path: path.into(),
+                operation: "recheck_directory".into(),
+                message: error.to_string(),
+            });
             false
         }
     }

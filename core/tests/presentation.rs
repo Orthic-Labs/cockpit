@@ -10,7 +10,11 @@ fn entry(path: &str, logical: u64, alloc: u64) -> Value {
 }
 
 fn scan_value(entries: Vec<Value>, incomplete: bool) -> Value {
-    let reasons: Vec<&str> = if incomplete { vec!["permission denied under /data/private"] } else { vec![] };
+    let reasons: Vec<&str> = if incomplete {
+        vec!["permission denied under /data/private"]
+    } else {
+        vec![]
+    };
     json!({"snapshot": {
         "id": "snap-1",
         "report": {
@@ -33,10 +37,22 @@ fn scan_value(entries: Vec<Value>, incomplete: bool) -> Value {
 #[test]
 fn default_options_and_trailing_newline() {
     assert_eq!(RenderOptions::default().max_rows, 20);
-    for view in [View::Status, View::Scan, View::Findings, View::Explain, View::History, View::Procs, View::Usage] {
+    for view in [
+        View::Status,
+        View::Scan,
+        View::Findings,
+        View::Explain,
+        View::History,
+        View::Procs,
+        View::Usage,
+    ] {
         let out = render(view, &Value::Null, &RenderOptions::default());
         assert!(out.ends_with('\n'));
-        let out = render(view, &json!([1, "x", {"a": null}]), &RenderOptions::default());
+        let out = render(
+            view,
+            &json!([1, "x", {"a": null}]),
+            &RenderOptions::default(),
+        );
         assert!(out.ends_with('\n'));
     }
 }
@@ -65,7 +81,11 @@ fn scan_aggregates_folders_and_escapes_paths() {
 
 #[test]
 fn scan_keeps_reclaim_unknown_and_reports_incomplete_coverage() {
-    let out = render(View::Scan, &scan_value(vec![entry("/data/a/x", 1, 1)], true), &opts(20));
+    let out = render(
+        View::Scan,
+        &scan_value(vec![entry("/data/a/x", 1, 1)], true),
+        &opts(20),
+    );
     assert!(out.contains("INCOMPLETE"));
     assert!(out.contains("permission denied under /data/private"));
     assert!(out.contains("lower bound"));
@@ -75,7 +95,9 @@ fn scan_keeps_reclaim_unknown_and_reports_incomplete_coverage() {
 
 #[test]
 fn scan_bounds_rows_with_notice() {
-    let entries: Vec<_> = (0..7).map(|i| entry(&format!("/data/d{i}/f"), 1, 100 + i)).collect();
+    let entries: Vec<_> = (0..7)
+        .map(|i| entry(&format!("/data/d{i}/f"), 1, 100 + i))
+        .collect();
     let out = render(View::Scan, &scan_value(entries, false), &opts(3));
     assert!(out.contains("… 4 more not shown"), "{out}");
 }
@@ -105,7 +127,10 @@ fn status_shows_unavailable_not_zero() {
     assert!(out.contains("3.0 GiB"));
     assert!(out.contains("16.0 GiB"));
     assert!(out.contains("2.0 KiB"));
-    assert!(out.contains("unavailable (pressure level not exposed; Unavailable)"), "{out}");
+    assert!(
+        out.contains("unavailable (pressure level not exposed; Unavailable)"),
+        "{out}"
+    );
     assert!(out.contains("Purgeable:       unavailable"));
     assert!(out.contains("snapshot provider pending"));
     assert!(out.contains("… 1 more not shown"));
@@ -131,10 +156,16 @@ fn procs_show_pid_start_time_and_metric_label() {
     let out = render(View::Procs, &value, &opts(20));
     assert!(out.contains("PID 4242"));
     assert!(out.contains("1700000123"));
-    assert!(out.contains("RSS 5.0 MiB [resident memory (RSS); physical footprint unavailable]"), "{out}");
+    assert!(
+        out.contains("RSS 5.0 MiB [resident memory (RSS); physical footprint unavailable]"),
+        "{out}"
+    );
     assert!(out.contains("CPU 3.5%"));
     assert!(out.contains("bad\\x07name\\x9b"));
-    assert!(out.contains("unavailable (RSS denied; PermissionDenied)"), "{out}");
+    assert!(
+        out.contains("unavailable (RSS denied; PermissionDenied)"),
+        "{out}"
+    );
     assert!(out.contains("GPU: unavailable"));
     assert!(!out.contains('\u{7}'));
 }
@@ -161,7 +192,11 @@ fn findings_explain_history_usage_render() {
     let rule = json!({"id": "r1", "name": "Rule\u{1b}One", "rule_version": 2, "risk": "explanation", "explanation": "swap is managed by the OS"});
     let bare = render(View::Explain, &rule, &opts(5));
     assert!(bare.contains("Rule\\x1bOne") && bare.contains("swap is managed"));
-    let wrapped = render(View::Explain, &json!({"finding": finding, "rule": null}), &opts(5));
+    let wrapped = render(
+        View::Explain,
+        &json!({"finding": finding, "rule": null}),
+        &opts(5),
+    );
     assert!(wrapped.contains("f1") && wrapped.contains("Rule: unavailable"));
 
     let hist = render(

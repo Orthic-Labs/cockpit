@@ -16,8 +16,8 @@ mod visibility;
 
 use diag::{FailureLatch, Transition};
 use lifecycle::{
-    Bounds, MonitorSpec, PanelAction, ReconcileGate, VISIBLE_INTERVAL_MS, cpu_fraction, pill_bounds,
-    plan_panels, sampling_interval_ms,
+    Bounds, MonitorSpec, PanelAction, ReconcileGate, VISIBLE_INTERVAL_MS, cpu_fraction,
+    pill_bounds, plan_panels, sampling_interval_ms,
 };
 use raii::{
     ClassGuard, GdiObject, OwnedWindow, PaintScope, SelectScope, TimerGuard, hwnd_from_key,
@@ -25,15 +25,18 @@ use raii::{
 };
 use std::mem::size_of;
 use std::process::ExitCode;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use visibility::{Occupancy, classify_window, is_shell_class_name, is_tool_window_ex_style};
-use windows::Win32::Foundation::{COLORREF, FILETIME, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM, GetLastError, SetLastError, ERROR_SUCCESS};
+use windows::Win32::Foundation::{
+    COLORREF, ERROR_SUCCESS, FILETIME, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
+    SetLastError, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
-    Arc, CreatePen, CreateSolidBrush, Ellipse, EnumDisplayMonitors, FillRect, GetMonitorInfoW, HBRUSH,
-    HDC, HMONITOR, InvalidateRect, MONITORINFO, MONITORINFOEXW, PS_SOLID, SetBkMode, SetTextColor,
-    TRANSPARENT, TextOutW,
+    Arc, CreatePen, CreateSolidBrush, Ellipse, EnumDisplayMonitors, FillRect, GetMonitorInfoW,
+    HBRUSH, HDC, HMONITOR, InvalidateRect, MONITORINFO, MONITORINFOEXW, PS_SOLID, SetBkMode,
+    SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -135,7 +138,8 @@ fn run() -> Result<(), Error> {
 
     // Drop order is reverse of declaration: timer, controller window (tears down panels),
     // panel class, controller class.
-    let _controller_class = ClassGuard::register(CONTROLLER_CLASS, Some(controller_proc), instance)?;
+    let _controller_class =
+        ClassGuard::register(CONTROLLER_CLASS, Some(controller_proc), instance)?;
     let _panel_class = ClassGuard::register(PANEL_CLASS, Some(panel_proc), instance)?;
     let controller = OwnedWindow::create(
         WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
@@ -268,9 +272,23 @@ fn sample_once() -> Reading {
             None
         }
     };
-    let memory = settle(&mut sampler.memory, "GlobalMemoryStatusEx", "memory", read_memory());
-    let disk = settle(&mut sampler.disk, "GetDiskFreeSpaceExW", "disk", read_disk());
-    Reading { cpu: cpu.map(|v| v.clamp(0.0, 1.0)), memory, disk }
+    let memory = settle(
+        &mut sampler.memory,
+        "GlobalMemoryStatusEx",
+        "memory",
+        read_memory(),
+    );
+    let disk = settle(
+        &mut sampler.disk,
+        "GetDiskFreeSpaceExW",
+        "disk",
+        read_disk(),
+    );
+    Reading {
+        cpu: cpu.map(|v| v.clamp(0.0, 1.0)),
+        memory,
+        disk,
+    }
 }
 
 fn note(latch: &mut FailureLatch, op: &str, failed: bool, ctx: &str) {
@@ -279,7 +297,12 @@ fn note(latch: &mut FailureLatch, op: &str, failed: bool, ctx: &str) {
     }
 }
 
-fn settle(latch: &mut FailureLatch, op: &str, ctx: &str, result: Result<Option<f32>, Error>) -> Option<f32> {
+fn settle(
+    latch: &mut FailureLatch,
+    op: &str,
+    ctx: &str,
+    result: Result<Option<f32>, Error>,
+) -> Option<f32> {
     match result {
         Ok(value) => {
             note(latch, op, false, ctx);
@@ -334,7 +357,12 @@ struct MonitorScan {
     failed: bool,
 }
 
-unsafe extern "system" fn enum_monitor(monitor: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+unsafe extern "system" fn enum_monitor(
+    monitor: HMONITOR,
+    _: HDC,
+    _: *mut RECT,
+    data: LPARAM,
+) -> BOOL {
     // Win32 invokes this synchronously with a valid monitor; `data` is the caller's MonitorScan.
     // It only records data: no windows are created or destroyed inside the callback.
     unsafe {
@@ -354,9 +382,17 @@ unsafe extern "system" fn enum_monitor(monitor: HMONITOR, _: HDC, _: *mut RECT, 
 }
 
 fn enumerate_monitors() -> Option<Vec<MonitorSpec>> {
-    let mut scan = MonitorScan { found: Vec::new(), failed: false };
+    let mut scan = MonitorScan {
+        found: Vec::new(),
+        failed: false,
+    };
     let ok = unsafe {
-        EnumDisplayMonitors(None, None, Some(enum_monitor), LPARAM(&mut scan as *mut _ as isize))
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(enum_monitor),
+            LPARAM(&mut scan as *mut _ as isize),
+        )
     }
     .as_bool();
     if !ok {
@@ -398,7 +434,10 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
     let existing: Vec<MonitorSpec> = lock_state()
         .panels
         .iter()
-        .map(|p| MonitorSpec { id: p.id.clone(), bounds: p.bounds })
+        .map(|p| MonitorSpec {
+            id: p.id.clone(),
+            bounds: p.bounds,
+        })
         .collect();
     let mut all_ok = true;
     for action in plan_panels(&existing, desired) {
@@ -409,7 +448,10 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
             PanelAction::Destroy(id) => {
                 let removed = {
                     let mut app = lock_state();
-                    app.panels.iter().position(|p| p.id == id).map(|i| app.panels.remove(i))
+                    app.panels
+                        .iter()
+                        .position(|p| p.id == id)
+                        .map(|i| app.panels.remove(i))
                 };
                 if let Some(mut removed) = removed {
                     // Retain ownership on failure so reconciliation retries destruction.
@@ -421,7 +463,11 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
                 }
             }
             PanelAction::Move(spec) => {
-                let key = lock_state().panels.iter().find(|p| p.id == spec.id).map(|p| p.window.key());
+                let key = lock_state()
+                    .panels
+                    .iter()
+                    .find(|p| p.id == spec.id)
+                    .map(|p| p.window.key());
                 if let Some(key) = key {
                     let target = pill_bounds(spec.bounds);
                     let moved = unsafe {
@@ -437,12 +483,18 @@ fn apply_monitor_set(desired: &[MonitorSpec]) -> bool {
                     };
                     match moved {
                         Ok(()) => {
-                            if let Some(p) = lock_state().panels.iter_mut().find(|p| p.id == spec.id) {
+                            if let Some(p) =
+                                lock_state().panels.iter_mut().find(|p| p.id == spec.id)
+                            {
                                 p.bounds = spec.bounds;
                             }
                         }
                         Err(error) => {
-                            diag::win32_error("SetWindowPos", &error, &format!("move monitor={}", spec.id));
+                            diag::win32_error(
+                                "SetWindowPos",
+                                &error,
+                                &format!("move monitor={}", spec.id),
+                            );
                             all_ok = false;
                         }
                     }
@@ -474,7 +526,12 @@ fn create_panel(spec: &MonitorSpec) -> Result<Panel, Error> {
     // On error `window` drops and destroys the half-built panel. Created hidden: the first
     // refresh decides whether to show it, so it never flashes over a fullscreen app.
     unsafe { SetLayeredWindowAttributes(window.hwnd(), COLORREF(0), 238, LWA_ALPHA) }?;
-    Ok(Panel { id: spec.id.clone(), bounds: spec.bounds, hidden: true, window })
+    Ok(Panel {
+        id: spec.id.clone(),
+        bounds: spec.bounds,
+        hidden: true,
+        window,
+    })
 }
 
 fn teardown_panels() {
@@ -510,8 +567,11 @@ fn refresh_panels(new_reading: Option<Reading>) -> u32 {
             }
             None => false,
         };
-        let targets: Vec<(isize, Bounds, bool)> =
-            app.panels.iter().map(|p| (p.window.key(), p.bounds, p.hidden)).collect();
+        let targets: Vec<(isize, Bounds, bool)> = app
+            .panels
+            .iter()
+            .map(|p| (p.window.key(), p.bounds, p.hidden))
+            .collect();
         let own: Vec<isize> = targets.iter().map(|t| t.0).collect();
         (targets, own, changed)
     };
@@ -553,7 +613,10 @@ fn refresh_panels(new_reading: Option<Reading>) -> u32 {
                 panel.hidden = hidden;
             }
         }
-        (app.panels.len(), app.panels.iter().filter(|p| p.hidden).count())
+        (
+            app.panels.len(),
+            app.panels.iter().filter(|p| p.hidden).count(),
+        )
     };
     sampling_interval_ms(total, hidden_count)
 }
@@ -569,9 +632,19 @@ fn monitor_has_fullscreen_occupancy(monitor: Bounds, own: &[isize]) -> bool {
     if !COORDINATES_COMPARABLE.load(Ordering::Relaxed) {
         return false;
     }
-    let mut context = ScanContext { monitor: monitor.into(), own, decided: false, blocked: false };
+    let mut context = ScanContext {
+        monitor: monitor.into(),
+        own,
+        decided: false,
+        blocked: false,
+    };
     // The callback only reads window attributes; context outlives the synchronous call.
-    let result = unsafe { EnumWindows(Some(enum_visible_window), LPARAM(&mut context as *mut _ as isize)) };
+    let result = unsafe {
+        EnumWindows(
+            Some(enum_visible_window),
+            LPARAM(&mut context as *mut _ as isize),
+        )
+    };
     if result.is_err() && !context.decided {
         // Stopping early (decided) makes EnumWindows return an error by design; anything else is real.
         diag::last_error("EnumWindows", "occupancy_scan");
@@ -609,7 +682,8 @@ unsafe extern "system" fn enum_visible_window(hwnd: HWND, data: LPARAM) -> BOOL 
             &mut cloaked as *mut _ as *mut _,
             size_of::<u32>() as u32,
         )
-        .is_err() {
+        .is_err()
+        {
             ctx.decided = true; // unknown attributes keep pill visible
             return false.into();
         }
@@ -659,7 +733,12 @@ fn is_shell_desktop_window(hwnd: HWND) -> bool {
 
 // ---------------------------------------------------------------- window procedures
 
-extern "system" fn controller_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+extern "system" fn controller_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe {
         match message {
             WM_TIMER if wparam.0 == TIMER_ID => {
@@ -726,17 +805,26 @@ fn paint_panel(hdc: HDC, hwnd: HWND, reading: Option<Reading>) {
         if GetClientRect(hwnd, &mut rect).is_err() {
             diag::last_error("GetClientRect", "paint");
         }
-        if let Some(background) = GdiObject::<HBRUSH>::new(CreateSolidBrush(COLORREF(0x00151515)), "CreateSolidBrush") {
+        if let Some(background) =
+            GdiObject::<HBRUSH>::new(CreateSolidBrush(COLORREF(0x00151515)), "CreateSolidBrush")
+        {
             FillRect(hdc, &rect, background.get());
         }
-        let ring = RECT { left: 12, top: 12, right: 62, bottom: 62 };
-        if let Some(track) = GdiObject::new(CreatePen(PS_SOLID, 4, COLORREF(0x00555555)), "CreatePen")
+        let ring = RECT {
+            left: 12,
+            top: 12,
+            right: 62,
+            bottom: 62,
+        };
+        if let Some(track) =
+            GdiObject::new(CreatePen(PS_SOLID, 4, COLORREF(0x00555555)), "CreatePen")
             && let Some(_selected) = SelectScope::select(hdc, track.get().into(), "SelectObject")
         {
             let _ = Ellipse(hdc, ring.left, ring.top, ring.right, ring.bottom);
         }
         if let Some(value) = reading.and_then(|r| r.cpu)
-            && let Some(arc) = GdiObject::new(CreatePen(PS_SOLID, 4, COLORREF(0x0000cc66)), "CreatePen")
+            && let Some(arc) =
+                GdiObject::new(CreatePen(PS_SOLID, 4, COLORREF(0x0000cc66)), "CreatePen")
             && let Some(_selected) = SelectScope::select(hdc, arc.get().into(), "SelectObject")
         {
             let angle = value.clamp(0.0, 1.0) * std::f32::consts::TAU;
@@ -760,7 +848,9 @@ fn paint_panel(hdc: HDC, hwnd: HWND, reading: Option<Reading>) {
         }
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(0x00ffffff));
-        let cpu: Vec<u16> = format!("CPU {}", percent_text(reading.and_then(|r| r.cpu))).encode_utf16().collect();
+        let cpu: Vec<u16> = format!("CPU {}", percent_text(reading.and_then(|r| r.cpu)))
+            .encode_utf16()
+            .collect();
         let _ = TextOutW(hdc, 70, 19, &cpu);
         let details: Vec<u16> = format!(
             "M {}  D {}",
@@ -779,7 +869,12 @@ mod tests {
     use crate::visibility::{is_borderless_style, is_fullscreen_geometry};
 
     fn square() -> RECT {
-        RECT { left: 0, top: 0, right: 100, bottom: 100 }
+        RECT {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 100,
+        }
     }
 
     #[test]
@@ -788,7 +883,10 @@ mod tests {
     }
     #[test]
     fn inset_window_is_not_fullscreen() {
-        let inset = RECT { left: 1, ..square() };
+        let inset = RECT {
+            left: 1,
+            ..square()
+        };
         assert!(!is_fullscreen_geometry(inset, square()));
     }
     #[test]

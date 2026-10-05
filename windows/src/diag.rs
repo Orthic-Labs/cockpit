@@ -59,7 +59,12 @@ pub fn failure_fields(op: &str, code: u32, message: &str, ctx: &str) -> String {
     format_line(
         "error",
         "win32_failure",
-        &[("op", op), ("code", &code_text), ("msg", message.trim()), ("ctx", ctx)],
+        &[
+            ("op", op),
+            ("code", &code_text),
+            ("msg", message.trim()),
+            ("ctx", ctx),
+        ],
     )
 }
 
@@ -122,7 +127,12 @@ mod tests {
 
     #[test]
     fn failure_line_is_single_structured_line() {
-        let line = failure_fields("CreateWindowExW", 0x8007_0005, "Access is denied.\r\n", "monitor=\\\\.\\DISPLAY2");
+        let line = failure_fields(
+            "CreateWindowExW",
+            0x8007_0005,
+            "Access is denied.\r\n",
+            "monitor=\\\\.\\DISPLAY2",
+        );
         assert_eq!(
             line,
             "cockpit-windows level=error event=win32_failure op=CreateWindowExW \

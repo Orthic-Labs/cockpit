@@ -124,7 +124,11 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
             } else {
                 None
             };
-            emit(json!({"snapshot":snapshot,"saved_to":saved_to}), machine, View::Scan);
+            emit(
+                json!({"snapshot":snapshot,"saved_to":saved_to}),
+                machine,
+                View::Scan,
+            );
         }
         "findings" => {
             let rule = take_option(&mut arguments, "--rule")?;
@@ -167,7 +171,11 @@ fn run(mut arguments: Vec<String>) -> Result<(), String> {
                     .find(|f| f.id == arguments[0])
                     .ok_or("finding not present in local history")?;
                 let rule = pack.rules.iter().find(|r| r.id == finding.rule_id);
-                emit(json!({"finding":finding,"rule":rule}), machine, View::Explain);
+                emit(
+                    json!({"finding":finding,"rule":rule}),
+                    machine,
+                    View::Explain,
+                );
             }
         }
         "history" => {
@@ -250,7 +258,10 @@ fn load_history(directory: &std::path::Path) -> Result<Vec<store::Snapshot>, Str
     let report = store::history_report(directory).map_err(|e| e.to_string())?;
     // Keep stdout JSON compatible; skipped files must still be observable.
     for skipped in report.skipped {
-        eprintln!("{}", json!({"event":"snapshot_skipped","file":skipped.file,"reason":skipped.reason}));
+        eprintln!(
+            "{}",
+            json!({"event":"snapshot_skipped","file":skipped.file,"reason":skipped.reason})
+        );
     }
     Ok(report.snapshots)
 }

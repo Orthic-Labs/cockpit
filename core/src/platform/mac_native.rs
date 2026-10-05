@@ -81,7 +81,11 @@ fn volume_uuid(path: &Path) -> Result<[u8; 16], String> {
 
 fn mount_statistics(path: &Path, metadata: &fs::Metadata) -> Option<libc::statfs> {
     // Query the parent for a symlink so statfs never follows its target.
-    let query = if metadata.file_type().is_symlink() { path.parent()? } else { path };
+    let query = if metadata.file_type().is_symlink() {
+        path.parent()?
+    } else {
+        path
+    };
     let c_path = CString::new(query.as_os_str().as_bytes()).ok()?;
     let mut statistics = std::mem::MaybeUninit::<libc::statfs>::uninit();
     if unsafe { libc::statfs(c_path.as_ptr(), statistics.as_mut_ptr()) } != 0 {
@@ -97,7 +101,9 @@ pub(super) fn volume_for(
     // getattrlist volume attributes require a filesystem root, not an entry path.
     // statfs supplies that mount root; match st_dev to reject a raced mount/path.
     let statistics = mount_statistics(path, metadata);
-    let uuid_result = statistics.as_ref().ok_or_else(|| "mount root unavailable".to_owned())
+    let uuid_result = statistics
+        .as_ref()
+        .ok_or_else(|| "mount root unavailable".to_owned())
         .and_then(|statistics| {
             let mount = unsafe { CStr::from_ptr(statistics.f_mntonname.as_ptr()) };
             let mount = Path::new(std::ffi::OsStr::from_bytes(mount.to_bytes()));
@@ -122,7 +128,9 @@ pub(super) fn volume_for(
         return (
             VolumeIdentity::new(format!("fsid-unstable:{a:x}:{b:x}")),
             false,
-            Some(format!("volume identity not stable (statfs fsid fallback; {uuid_error})")),
+            Some(format!(
+                "volume identity not stable (statfs fsid fallback; {uuid_error})"
+            )),
         );
     }
     (

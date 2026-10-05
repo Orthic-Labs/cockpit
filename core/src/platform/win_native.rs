@@ -10,8 +10,8 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_OPEN_NO_RECALL, FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_NO_RECALL,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileIdInfo, FileStandardInfo, GetFileInformationByHandle,
     GetFileInformationByHandleEx, OPEN_EXISTING,
 };
@@ -110,7 +110,10 @@ pub(super) fn inspect(path: &Path, metadata: &fs::Metadata) -> NativeInfo {
     } else if basic_ok {
         unavailable.push("volume identity not stable (32-bit serial fallback)".into());
         (
-            VolumeIdentity::new(format!("serial32-unstable:{:08x}", basic.dwVolumeSerialNumber)),
+            VolumeIdentity::new(format!(
+                "serial32-unstable:{:08x}",
+                basic.dwVolumeSerialNumber
+            )),
             false,
         )
     } else {

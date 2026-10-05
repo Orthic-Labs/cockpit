@@ -9,16 +9,23 @@ use std::process::Command;
 const MIB: u64 = 1024 * 1024;
 
 fn used_bytes(path: &Path) -> Option<u64> {
-    let out = Command::new("df").args(["-k", "-P"]).arg(path).output().ok()?;
+    let out = Command::new("df")
+        .args(["-k", "-P"])
+        .arg(path)
+        .output()
+        .ok()?;
     let text = String::from_utf8(out.stdout).ok()?;
-    let kb: u64 = text.lines().nth(1)?.split_whitespace().nth(2)?.parse().ok()?;
+    let kb: u64 = text
+        .lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(2)?
+        .parse()
+        .ok()?;
     kb.checked_mul(1024)
 }
 
-fn entry<'a>(
-    report: &'a cockpit_core::ScanReport,
-    suffix: &str,
-) -> &'a cockpit_core::ScannedEntry {
+fn entry<'a>(report: &'a cockpit_core::ScanReport, suffix: &str) -> &'a cockpit_core::ScannedEntry {
     report
         .entries
         .iter()
@@ -54,10 +61,16 @@ fn apfs_fixture_accounting_is_conservative() {
         .filter(|e| e.path.starts_with(root.join("hard")) && e.path.extension().is_some())
         .collect();
     assert_eq!(hard.len(), 3, "expected three hard-link names");
-    let owners = hard.iter().filter(|e| e.attributed_allocation_bytes > 0).count();
+    let owners = hard
+        .iter()
+        .filter(|e| e.attributed_allocation_bytes > 0)
+        .count();
     assert_eq!(owners, 1, "hard-linked inode must be attributed once");
     let hard_total: u64 = hard.iter().map(|e| e.attributed_allocation_bytes).sum();
-    assert!(hard_total >= 4 * MIB && hard_total < 8 * MIB, "hard total {hard_total}");
+    assert!(
+        hard_total >= 4 * MIB && hard_total < 8 * MIB,
+        "hard total {hard_total}"
+    );
 
     // Sparse: allocation well below logical size.
     let sparse = entry(&report, "sparse.bin");
@@ -72,15 +85,30 @@ fn apfs_fixture_accounting_is_conservative() {
     // Clones: shared extents are never claimed as reclaim.
     for name in ["orig.bin", "copy1.bin", "copy2.bin"] {
         let e = entry(&report, name);
-        let reclaim = e.reclaim.as_ref().expect("file entries carry a reclaim estimate");
+        let reclaim = e
+            .reclaim
+            .as_ref()
+            .expect("file entries carry a reclaim estimate");
         assert_eq!(reclaim.lower_bytes, 0, "{name} claims reclaim");
-        assert!(matches!(reclaim.state, ReclaimState::Unknown), "{name} state");
+        assert!(
+            matches!(reclaim.state, ReclaimState::Unknown),
+            "{name} state"
+        );
     }
-    assert_eq!(report.accounting.reclaim.lower_bytes, 0, "no reclaim may be claimed");
-    assert!(matches!(report.accounting.reclaim.state, Some(ReclaimState::Unknown)));
+    assert_eq!(
+        report.accounting.reclaim.lower_bytes, 0,
+        "no reclaim may be claimed"
+    );
+    assert!(matches!(
+        report.accounting.reclaim.state,
+        Some(ReclaimState::Unknown)
+    ));
 
     // chmod 000 directory: report must be incomplete, never silently complete.
-    assert!(report.accounting.incomplete, "inaccessible dir must make report incomplete");
+    assert!(
+        report.accounting.incomplete,
+        "inaccessible dir must make report incomplete"
+    );
     assert!(
         report.accounting.reclaim.upper_bytes.is_none(),
         "incomplete report must not offer a full-selection upper bound"

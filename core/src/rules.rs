@@ -302,7 +302,9 @@ impl Rule {
                 let norm = normalize_path(pattern);
                 let first = norm.split('/').next().unwrap_or("");
                 if !pattern.starts_with('/') || first.is_empty() || first.contains(['*', '?']) {
-                    p.push(format!("{id}: pattern must be absolute with literal root: {pattern}"));
+                    p.push(format!(
+                        "{id}: pattern must be absolute with literal root: {pattern}"
+                    ));
                 }
                 if normalize_path(pattern).split('/').any(|s| s == "..") {
                     p.push(format!("{id}: pattern contains ..: {pattern}"));
@@ -322,15 +324,24 @@ impl Rule {
             }
         } else {
             if self.risk != Risk::Explanation {
-                p.push(format!("{id}: non-actionable rule must have risk explanation"));
+                p.push(format!(
+                    "{id}: non-actionable rule must have risk explanation"
+                ));
             }
-            if self.route != CleanupRoute::None || self.measurement != Measurement::ExplanationOnly {
-                p.push(format!("{id}: explanation rule needs route none and explanation_only"));
+            if self.route != CleanupRoute::None || self.measurement != Measurement::ExplanationOnly
+            {
+                p.push(format!(
+                    "{id}: explanation rule needs route none and explanation_only"
+                ));
             }
             if !self.path_patterns.is_empty() {
                 p.push(format!("{id}: explanation rule must not match paths"));
             }
-            if self.explanation.as_deref().is_none_or(|t| t.trim().is_empty()) {
+            if self
+                .explanation
+                .as_deref()
+                .is_none_or(|t| t.trim().is_empty())
+            {
                 p.push(format!("{id}: explanation text missing"));
             }
         }
@@ -391,13 +402,20 @@ impl Rule {
                 Some(false) => out.note("evidence_failed:volume_scope".to_string()),
                 None => {
                     out.unknown.push("volume_scope".to_string());
-                    out.note(format!("evidence_unknown:volume_scope:{}", scope_unknowns(&self.volumes, scan)));
+                    out.note(format!(
+                        "evidence_unknown:volume_scope:{}",
+                        scope_unknowns(&self.volumes, scan)
+                    ));
                 }
             }
             if scan.is_startup_volume == Some(true) && scan.is_external_volume == Some(true) {
                 out.note("evidence_conflict:volume_startup_and_external".to_string());
             }
-            if scan.volume_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+            if scan
+                .volume_id
+                .as_deref()
+                .is_none_or(|v| v.trim().is_empty())
+            {
                 out.unknown.push("volume_id".to_string());
                 out.note("evidence_unknown:volume_id".to_string());
             }
@@ -537,7 +555,10 @@ impl Outcome {
             }
             None => {
                 self.unknown.push(name.to_string());
-                self.note(format!("evidence_unknown:{name}{}", unknown_cause(key, scan)));
+                self.note(format!(
+                    "evidence_unknown:{name}{}",
+                    unknown_cause(key, scan)
+                ));
             }
         }
     }

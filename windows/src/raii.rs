@@ -62,7 +62,9 @@ pub struct OwnedWindow {
 impl OwnedWindow {
     /// Adopt a freshly created HWND so later failures still destroy it.
     pub fn adopt(hwnd: HWND) -> Self {
-        Self { key: hwnd_key(hwnd) }
+        Self {
+            key: hwnd_key(hwnd),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -76,7 +78,20 @@ impl OwnedWindow {
     ) -> Result<Self, Error> {
         // `title` is NUL-terminated by the caller and outlives this synchronous call.
         let hwnd = unsafe {
-            CreateWindowExW(ex, class, PCWSTR(title.as_ptr()), style, x, y, w, h, None, None, Some(instance), None)
+            CreateWindowExW(
+                ex,
+                class,
+                PCWSTR(title.as_ptr()),
+                style,
+                x,
+                y,
+                w,
+                h,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
         }?;
         Ok(Self::adopt(hwnd))
     }
@@ -90,7 +105,9 @@ impl OwnedWindow {
     }
 
     pub fn try_destroy(&mut self) -> Result<(), Error> {
-        if self.key == 0 { return Ok(()); }
+        if self.key == 0 {
+            return Ok(());
+        }
         if unsafe { IsWindow(Some(self.hwnd())) }.as_bool() {
             unsafe { DestroyWindow(self.hwnd()) }?;
         }
@@ -116,7 +133,10 @@ pub struct TimerGuard {
 
 impl TimerGuard {
     pub fn new(hwnd: HWND, id: usize) -> Self {
-        Self { hwnd: hwnd_key(hwnd), id }
+        Self {
+            hwnd: hwnd_key(hwnd),
+            id,
+        }
     }
 }
 

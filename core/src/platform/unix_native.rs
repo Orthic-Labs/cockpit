@@ -42,7 +42,10 @@ pub(super) fn inspect(path: &Path, metadata: &fs::Metadata) -> NativeInfo {
 }
 
 /// Returns (identity, stable, reason-if-not-stable).
-pub(super) fn volume_for(path: &Path, metadata: &fs::Metadata) -> (VolumeIdentity, bool, Option<String>) {
+pub(super) fn volume_for(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> (VolumeIdentity, bool, Option<String>) {
     #[cfg(target_os = "macos")]
     {
         super::mac_native::volume_for(path, metadata)

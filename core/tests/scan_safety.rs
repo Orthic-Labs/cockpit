@@ -71,7 +71,14 @@ impl FilesystemProvider for Mock {
         self.inspected.borrow_mut().push(path.to_path_buf());
         if self.swapped_parent.as_deref() == Some(path)
             && (self.enumerated.borrow().contains(&path.to_path_buf())
-                || (self.swap_before_listing && self.inspected.borrow().iter().filter(|p| p.as_path() == path).count() > 1))
+                || (self.swap_before_listing
+                    && self
+                        .inspected
+                        .borrow()
+                        .iter()
+                        .filter(|p| p.as_path() == path)
+                        .count()
+                        > 1))
         {
             let mut changed = dir("a");
             changed.kind = EntryKind::Symlink;
@@ -423,6 +430,9 @@ fn unidentified_files_never_claim_unique_allocation() {
     m.add("/f", f);
     let report = scan_with_provider(&m, &[p("/f")], &ScanOptions::default());
     assert_eq!(report.accounting.attributed_allocation_bytes, 0);
-    assert_eq!(report.entries[0].reclaim.as_ref().unwrap().upper_bytes, None);
+    assert_eq!(
+        report.entries[0].reclaim.as_ref().unwrap().upper_bytes,
+        None
+    );
     assert!(report.accounting.incomplete);
 }

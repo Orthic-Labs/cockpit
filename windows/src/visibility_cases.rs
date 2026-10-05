@@ -183,14 +183,23 @@ fn resize_frame_blocks_even_without_caption() {
 #[test]
 fn classify_outside_partial_and_covers() {
     let popup = WS_POPUP.0 | WS_VISIBLE.0;
-    assert_eq!(classify_window(PRIMARY, RIGHT_MON, popup), Occupancy::Outside);
-    assert_eq!(classify_window(r(0, 0, 960, 1080), PRIMARY, popup), Occupancy::Partial);
+    assert_eq!(
+        classify_window(PRIMARY, RIGHT_MON, popup),
+        Occupancy::Outside
+    );
+    assert_eq!(
+        classify_window(r(0, 0, 960, 1080), PRIMARY, popup),
+        Occupancy::Partial
+    );
     assert_eq!(classify_window(PRIMARY, PRIMARY, popup), Occupancy::Covers);
 }
 #[test]
 fn classify_captioned_maximized_is_partial_not_covers() {
     let style = WS_OVERLAPPEDWINDOW.0 | WS_MAXIMIZE.0;
-    assert_eq!(classify_window(r(-8, -8, 1928, 1088), PRIMARY, style), Occupancy::Partial);
+    assert_eq!(
+        classify_window(r(-8, -8, 1928, 1088), PRIMARY, style),
+        Occupancy::Partial
+    );
 }
 #[test]
 fn classify_minimized_offscreen_window_is_outside() {
@@ -211,7 +220,12 @@ fn classify_spanning_window_per_monitor() {
 // ---- shell and tool-window exclusions ----
 #[test]
 fn shell_class_names_are_excluded() {
-    for name in ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+    for name in [
+        "Progman",
+        "WorkerW",
+        "Shell_TrayWnd",
+        "Shell_SecondaryTrayWnd",
+    ] {
         assert!(is_shell_class_name(name), "{name}");
     }
     assert!(!is_shell_class_name("Chrome_WidgetWin_1"));
@@ -220,7 +234,9 @@ fn shell_class_names_are_excluded() {
 }
 #[test]
 fn tool_window_ex_style_is_excluded() {
-    assert!(is_tool_window_ex_style(WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0));
+    assert!(is_tool_window_ex_style(
+        WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0
+    ));
     assert!(!is_tool_window_ex_style(WS_EX_TOPMOST.0 | WS_EX_LAYERED.0));
     assert!(!is_tool_window_ex_style(0));
 }

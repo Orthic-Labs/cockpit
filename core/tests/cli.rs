@@ -79,12 +79,16 @@ fn scan_is_metadata_only_and_requires_opt_in_for_history() {
 
 #[test]
 fn corrupt_history_is_reported_without_breaking_json_stdout() {
-    let root = std::fs::canonicalize(std::env::temp_dir()).unwrap()
+    let root = std::fs::canonicalize(std::env::temp_dir())
+        .unwrap()
         .join(format!("cockpit-cli-corrupt-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("scan-bad.json"), b"{").unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_cockpit"))
-        .args(["history", "--json", "--state-dir"]).arg(&root).output().unwrap();
+        .args(["history", "--json", "--state-dir"])
+        .arg(&root)
+        .output()
+        .unwrap();
     assert!(result.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(stdout["history"], serde_json::json!([]));

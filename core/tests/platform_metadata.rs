@@ -80,12 +80,33 @@ fn has(reasons: &[String], needle: &str) -> bool {
 fn same_inode_text_on_different_volumes_is_not_a_hard_link() {
     // Two volumes each hand out file id "7"; they are different files.
     let mut s = Synthetic::default();
-    s.add("/", meta(EntryKind::Directory, "uuid-a", Some("1"), Some(0)), &[]);
-    s.add("/r", meta(EntryKind::Directory, "uuid-a", Some("2"), Some(0)), &[]);
-    s.add("/r/a", meta(EntryKind::File, "uuid-a", Some("7"), Some(100)), &[]);
-    s.add("/r/a2", meta(EntryKind::File, "uuid-a", Some("7"), Some(100)), &[]);
-    s.add("/r/b", meta(EntryKind::File, "uuid-b", Some("7"), Some(100)), &[]);
-    s.kids.insert(p("/r"), vec![p("/r/a"), p("/r/a2"), p("/r/b")]);
+    s.add(
+        "/",
+        meta(EntryKind::Directory, "uuid-a", Some("1"), Some(0)),
+        &[],
+    );
+    s.add(
+        "/r",
+        meta(EntryKind::Directory, "uuid-a", Some("2"), Some(0)),
+        &[],
+    );
+    s.add(
+        "/r/a",
+        meta(EntryKind::File, "uuid-a", Some("7"), Some(100)),
+        &[],
+    );
+    s.add(
+        "/r/a2",
+        meta(EntryKind::File, "uuid-a", Some("7"), Some(100)),
+        &[],
+    );
+    s.add(
+        "/r/b",
+        meta(EntryKind::File, "uuid-b", Some("7"), Some(100)),
+        &[],
+    );
+    s.kids
+        .insert(p("/r"), vec![p("/r/a"), p("/r/a2"), p("/r/b")]);
     let report = scan_with_provider(&s, &[p("/r")], &ScanOptions::default());
     // Same-volume alias counted once; cross-volume entry rejected explicitly,
     // never merged into the hard-link owner.
@@ -104,8 +125,16 @@ fn same_inode_text_on_different_volumes_is_not_a_hard_link() {
 #[test]
 fn missing_native_fields_are_reported_with_reasons() {
     let mut s = Synthetic::default();
-    s.add("/", meta(EntryKind::Directory, "v", Some("1"), Some(0)), &[]);
-    s.add("/r", meta(EntryKind::Directory, "v", Some("2"), Some(0)), &[]);
+    s.add(
+        "/",
+        meta(EntryKind::Directory, "v", Some("1"), Some(0)),
+        &[],
+    );
+    s.add(
+        "/r",
+        meta(EntryKind::Directory, "v", Some("2"), Some(0)),
+        &[],
+    );
     let mut f = meta(EntryKind::File, "v", None, None);
     f.logical_size = Some(10);
     f.metadata_complete = false;
@@ -127,18 +156,33 @@ fn missing_native_fields_are_reported_with_reasons() {
 #[test]
 fn missing_fields_without_provider_reasons_get_generic_reasons() {
     let mut s = Synthetic::default();
-    s.add("/", meta(EntryKind::Directory, "v", Some("1"), Some(0)), &[]);
+    s.add(
+        "/",
+        meta(EntryKind::Directory, "v", Some("1"), Some(0)),
+        &[],
+    );
     s.add("/f", meta(EntryKind::File, "v", None, None), &[]);
     let report = scan_with_provider(&s, &[p("/f")], &ScanOptions::default());
-    assert!(has(&report.incomplete_reasons, "allocation size unavailable"));
+    assert!(has(
+        &report.incomplete_reasons,
+        "allocation size unavailable"
+    ));
     assert!(has(&report.incomplete_reasons, "file id unavailable"));
 }
 
 #[test]
 fn placeholder_is_refused_and_never_enumerated_or_counted() {
     let mut s = Synthetic::default();
-    s.add("/", meta(EntryKind::Directory, "v", Some("1"), Some(0)), &[]);
-    s.add("/r", meta(EntryKind::Directory, "v", Some("2"), Some(0)), &[]);
+    s.add(
+        "/",
+        meta(EntryKind::Directory, "v", Some("1"), Some(0)),
+        &[],
+    );
+    s.add(
+        "/r",
+        meta(EntryKind::Directory, "v", Some("2"), Some(0)),
+        &[],
+    );
     let mut f = meta(EntryKind::File, "v", Some("3"), None);
     f.is_placeholder = true;
     f.logical_size = None;
@@ -147,11 +191,19 @@ fn placeholder_is_refused_and_never_enumerated_or_counted() {
     let mut d = meta(EntryKind::Directory, "v", Some("4"), Some(0));
     d.is_placeholder = true;
     s.add("/r/clouddir", d, &[]);
-    s.add("/r/clouddir/x", meta(EntryKind::File, "v", Some("5"), Some(9)), &[]);
-    s.kids.insert(p("/r"), vec![p("/r/cloud"), p("/r/clouddir")]);
+    s.add(
+        "/r/clouddir/x",
+        meta(EntryKind::File, "v", Some("5"), Some(9)),
+        &[],
+    );
+    s.kids
+        .insert(p("/r"), vec![p("/r/cloud"), p("/r/clouddir")]);
     s.kids.insert(p("/r/clouddir"), vec![p("/r/clouddir/x")]);
     let report = scan_with_provider(&s, &[p("/r")], &ScanOptions::default());
-    assert!(has(&report.incomplete_reasons, "placeholder rejected: /r/cloud"));
+    assert!(has(
+        &report.incomplete_reasons,
+        "placeholder rejected: /r/cloud"
+    ));
     assert!(report.entries.iter().all(|e| e.path != p("/r/cloud")));
     assert!(report.entries.iter().all(|e| e.path != p("/r/clouddir/x")));
     assert_eq!(report.accounting.attributed_allocation_bytes, 0);
@@ -234,9 +286,7 @@ mod real {
 #[test]
 fn macos_volume_identity_is_uuid_or_flagged_unstable() {
     let provider = StdFilesystemProvider;
-    let (metadata, reasons) = provider
-        .inspect_detailed(&std::env::temp_dir())
-        .unwrap();
+    let (metadata, reasons) = provider.inspect_detailed(&std::env::temp_dir()).unwrap();
     if metadata.volume.id.starts_with("uuid:") {
         assert!(metadata.metadata_complete);
     } else {
