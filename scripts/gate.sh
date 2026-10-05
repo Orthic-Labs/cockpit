@@ -23,9 +23,9 @@ emit_generated() {
 }
 trap emit_generated EXIT
 cargo fmt --all
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo run --quiet --bin cockpit -- status --json
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo run --locked --quiet --bin cockpit -- status --json
 if [[ "$RUNNER_OS" == "Windows" ]]; then
   cargo fmt --manifest-path windows/Cargo.toml
   cargo test --manifest-path windows/Cargo.toml

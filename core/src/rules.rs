@@ -277,11 +277,7 @@ impl Rule {
             && self.measurement != Measurement::ExplanationOnly
             && self.risk != Risk::Explanation;
 
-        for requirement in self
-            .liveness
-            .iter()
-            .chain(self.eligibility.iter())
-        {
+        for requirement in self.liveness.iter().chain(self.eligibility.iter()) {
             match evidence(*requirement, self, scan, liveness) {
                 Some(true) => {}
                 Some(false) => {
@@ -319,10 +315,7 @@ impl Rule {
                 EvidenceKey::NoSourceRepository,
                 scan.evidence.source_repository.map(|v| !v),
             ),
-            (
-                EvidenceKey::NoUserData,
-                scan.evidence.user_data.map(|v| !v),
-            ),
+            (EvidenceKey::NoUserData, scan.evidence.user_data.map(|v| !v)),
             (
                 EvidenceKey::NoCloudPlaceholder,
                 scan.evidence.cloud_placeholder.map(|v| !v),
@@ -388,16 +381,15 @@ impl Rule {
 
 /// Evaluate every rule against one explicitly supplied scan row.
 pub fn detect(rules: &[Rule], scan: &ScanMetadata) -> Vec<Finding> {
-    rules.iter().filter_map(|rule| rule.evaluate(scan)).collect()
+    rules
+        .iter()
+        .filter_map(|rule| rule.evaluate(scan))
+        .collect()
 }
 
 /// Adapter entry point for storage implementations that receive evidence as
 /// a separate value.  It still only evaluates supplied data.
-pub fn evaluate_scan(
-    rules: &[Rule],
-    scan: &ScanReport,
-    evidence: &Evidence,
-) -> Vec<Finding> {
+pub fn evaluate_scan(rules: &[Rule], scan: &ScanReport, evidence: &Evidence) -> Vec<Finding> {
     let mut row = scan.clone();
     row.evidence = evidence.clone();
     detect(rules, &row)
@@ -523,9 +515,12 @@ fn match_parts(pattern: &[&str], path: &[&str]) -> bool {
     match (pattern.first(), path.first()) {
         (None, None) => true,
         (Some(&"**"), _) => {
-            match_parts(&pattern[1..], path) || (!path.is_empty() && match_parts(pattern, &path[1..]))
+            match_parts(&pattern[1..], path)
+                || (!path.is_empty() && match_parts(pattern, &path[1..]))
         }
-        (Some(part), Some(value)) => segment_matches(part, value) && match_parts(&pattern[1..], &path[1..]),
+        (Some(part), Some(value)) => {
+            segment_matches(part, value) && match_parts(&pattern[1..], &path[1..])
+        }
         _ => false,
     }
 }
@@ -570,7 +565,10 @@ mod tests {
             path_patterns: vec!["/private/var/folders/**/code_sign_clone.*".into()],
             volumes: vec![VolumeScope::AnyMountedLocal],
             ownership: OwnershipCheck::ChromeCloneDirectory,
-            liveness: vec![EvidenceKey::ChromeFamilyStopped, EvidenceKey::LivenessNotInUse],
+            liveness: vec![
+                EvidenceKey::ChromeFamilyStopped,
+                EvidenceKey::LivenessNotInUse,
+            ],
             eligibility: vec![],
             age_threshold_days: None,
             measurement: Measurement::CloneAwareUniqueBytes,
@@ -631,7 +629,10 @@ mod tests {
             path_patterns: vec!["/Applications/*.app.prev-*".into()],
             volumes: vec![VolumeScope::StartupVolume],
             ownership: OwnershipCheck::AppBundleBackup,
-            liveness: vec![EvidenceKey::AppProcessStopped, EvidenceKey::LivenessNotInUse],
+            liveness: vec![
+                EvidenceKey::AppProcessStopped,
+                EvidenceKey::LivenessNotInUse,
+            ],
             eligibility: vec![EvidenceKey::ReplacementNewer],
             age_threshold_days: None,
             measurement: Measurement::AttributedAllocation,

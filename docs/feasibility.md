@@ -5,7 +5,7 @@ Status is source-inspected only unless a row says otherwise. No build, import, r
 | Gate | Evidence now | Status |
 | --- | --- | --- |
 | Four donor pins & extraction inventory | `upstream.lock.json`, immutable source reads in `docs/donors.md` | Source-inspected; subtree import pending |
-| License & packaging disposition | Vorssaint GPL-3.0-or-later, Codenotch MIT with locked SwiftNIO/Sparkle/zstd, Tinycast AGPL-3.0-or-later, Pearcleaner Apache-2.0 + Commons Clause; Cockpit has no declared license | **Pending legal/public-boundary decision** |
+| License & packaging disposition | Vorssaint GPL-3.0-or-later, Codenotch MIT with locked SwiftNIO/Sparkle/zstd, Tinycast AGPL-3.0-or-later, Pearcleaner Apache-2.0 + Commons Clause; Unmodified donor trees retain original licences | Source-vendoring disposition recorded; combined packaging pending |
 | Mac one-AppDelegate/service registry | Codenotch, Vorssaint & Tinycast each have separate composition roots and long-lived managers | **Pending design/extraction spike** |
 | Windows native ring | Codenotch Windows draws SVG in Tauri/WebView2; native Rust ring is Cockpit-owned prototype | **Pending native runtime check** |
 | Mac/Windows footprint | No release measurement; Codenotch Windows contains WebView2 and Tinycast index is unmeasured | **Pending** |

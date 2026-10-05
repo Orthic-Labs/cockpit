@@ -20,6 +20,7 @@ pub trait FilesystemProvider {
     fn children(&self, path: &Path) -> Result<Vec<PathBuf>, FsError>;
     fn children_bounded(&self, path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
         let mut children = self.children(path)?;
+        children.sort();
         let truncated = children.len() > limit;
         if truncated {
             children.truncate(limit);
@@ -205,7 +206,13 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     let mut report = ScanReport {
         roots: roots.clone(),
         entries: Vec::new(),
-        accounting: Accounting {reclaim: ReclaimEstimateSummary {upper_bytes:Some(0),..Default::default()},..Default::default()},
+        accounting: Accounting {
+            reclaim: ReclaimEstimateSummary {
+                upper_bytes: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         volume_usage: Vec::new(),
         volume_deltas: options.volume_deltas.clone(),
         inspection_errors: Vec::new(),
@@ -217,7 +224,12 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     let mut seen_dirs: HashSet<FileIdentity> = HashSet::new();
     let mut volumes = BTreeSet::new();
     for root in roots {
-        if seen_paths.len() >= options.max_entries {report.incomplete_reasons.push("entry limit reached across roots".into());break;}
+        if seen_paths.len() >= options.max_entries {
+            report
+                .incomplete_reasons
+                .push("entry limit reached across roots".into());
+            break;
+        }
         walk(
             provider,
             root,
@@ -268,7 +280,14 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     report.volume_usage = usage_by_volume.into_values().collect();
     report.accounting.incomplete =
         !report.incomplete_reasons.is_empty() || !report.inspection_errors.is_empty();
-    if report.accounting.incomplete { report.accounting.reclaim.upper_bytes = None; report.accounting.reclaim.reasons.push("inspection incomplete; full-selection upper bound unavailable".into()); }
+    if report.accounting.incomplete {
+        report.accounting.reclaim.upper_bytes = None;
+        report
+            .accounting
+            .reclaim
+            .reasons
+            .push("inspection incomplete; full-selection upper bound unavailable".into());
+    }
     report
 }
 
@@ -458,8 +477,12 @@ fn walk<P: FilesystemProvider>(
             path.display()
         ));
     }
+    let mut children = children;
+    children.sort();
     for child in children {
-        if seen_paths.len() >= options.max_entries {break;}
+        if seen_paths.len() >= options.max_entries {
+            break;
+        }
         walk(
             provider,
             child,
