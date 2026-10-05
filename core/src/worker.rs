@@ -832,10 +832,6 @@ fn internal(message: String) -> IpcError {
 
 impl ipc::Handler for Worker {
     fn handle(&mut self, request: &[u8]) -> Vec<u8> {
-        if self.execution_poisoned {
-            self.emit(None, None, Phase::Failed, Some(ErrorCode::Internal));
-            return self.error_bytes(None, internal("child termination previously unconfirmed; restart worker before more operations".into()));
-        }
         if !self.limits.viable() {
             // Limits cannot carry even a minimal error response: emit the
             // failure and return empty — transports must close rather
@@ -851,6 +847,10 @@ impl ipc::Handler for Worker {
                 return self.error_bytes(id, error);
             }
         };
+        if self.execution_poisoned {
+            self.emit(Some(&request.id), Some(&request.op), Phase::Failed, Some(ErrorCode::Internal));
+            return self.error_bytes(Some(request.id), internal("child termination previously unconfirmed; restart worker before more operations".into()));
+        }
         let id = request.id.clone();
         let op = request.op.clone();
         self.emit(Some(&id), Some(&op), Phase::Started, None);

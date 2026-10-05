@@ -36,7 +36,7 @@ const TICK: Duration = Duration::from_millis(50);
 
 fn euid() -> u32 {
     // SAFETY: geteuid has no preconditions and cannot fail.
-    unsafe { libc::geteuid() as u32 }
+    unsafe { libc::geteuid() }
 }
 
 fn unsafe_endpoint(message: impl Into<String>) -> IpcError {
@@ -201,7 +201,7 @@ fn check_existing(endpoint: &Path, wait: Duration) -> Result<(), IpcError> {
 }
 
 fn identity(meta: &Metadata) -> (u64, u64) {
-    (meta.dev() as u64, meta.ino())
+    (meta.dev(), meta.ino())
 }
 
 /// Unlinks the endpoint on drop only if it is still the socket we bound.
@@ -561,6 +561,7 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
         return Err(IpcError::from_io(&io::Error::last_os_error()));
     }
     let fd = OwnedFd(raw);
+    let deadline = Instant::now() + wait;
     // SAFETY: `fd.0` is a live fd owned by the guard.
     unsafe {
         let flags = libc::fcntl(fd.0, libc::F_GETFD);
@@ -581,15 +582,9 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
             match err.raw_os_error() {
                 // EINPROGRESS/EINTR/EAGAIN mean the connect is pending
                 // (EAGAIN also covers a saturated listen backlog on BSD).
-                Some(code)
-                    if code == libc::EINPROGRESS
-                        || code == libc::EINTR
-                        || code == libc::EAGAIN
-                        || code == libc::EWOULDBLOCK
-                        || code == libc::EALREADY => {}
+                Some(code) if connect_pending(code) => {}
                 _ => return Ok(ConnectOutcome::Refused(err)),
             }
-            let deadline = Instant::now() + wait;
             loop {
                 let left = remaining(deadline)?;
                 let mut pfd = libc::pollfd {
@@ -622,14 +617,34 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
                     return Err(IpcError::from_io(&io::Error::last_os_error()));
                 }
                 if so_error != 0 {
-                    return Ok(ConnectOutcome::Refused(io::Error::from_raw_os_error(
-                        so_error,
-                    )));
+                    if connect_pending(so_error) {
+                        let pause = remaining(deadline)?.min(TICK);
+                        if !pause.is_zero() {
+                            std::thread::sleep(pause);
+                        }
+                        continue;
+                    }
+                    return Ok(ConnectOutcome::Refused(io::Error::from_raw_os_error(so_error)));
                 }
-                // A backlog-saturated connect can fail with EAGAIN without
-                // becoming pending (Linux), leaving SO_ERROR clear on a
-                // still-unconnected socket. Re-issue connect: 0 or EISCONN
-                // proves the peer; anything else is a real refusal.
+                // SO_ERROR == 0 is not sufficient on every Unix: Linux can
+                // report a saturated backlog with a clear SO_ERROR while the
+                // socket remains unconnected. Verify the peer first; only
+                // ENOTCONN permits a retry. Reconnecting a completed Darwin
+                // socket can return EINVAL and must never be attempted.
+                let mut peer: libc::sockaddr_un = std::mem::zeroed();
+                let mut peer_len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+                if libc::getpeername(
+                    fd.0,
+                    &mut peer as *mut libc::sockaddr_un as *mut libc::sockaddr,
+                    &mut peer_len,
+                ) == 0
+                {
+                    break;
+                }
+                let peer_error = io::Error::last_os_error();
+                if peer_error.raw_os_error() != Some(libc::ENOTCONN) {
+                    return Ok(ConnectOutcome::Refused(peer_error));
+                }
                 if libc::connect(
                     fd.0,
                     &addr as *const libc::sockaddr_un as *const libc::sockaddr,
@@ -641,7 +656,13 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
                 let err = io::Error::last_os_error();
                 match err.raw_os_error() {
                     Some(code) if code == libc::EISCONN => break,
-                    Some(code) if code == libc::EINTR => continue,
+                    Some(code) if connect_pending(code) => {
+                        let pause = remaining(deadline)?.min(TICK);
+                        if !pause.is_zero() {
+                            std::thread::sleep(pause);
+                        }
+                        continue;
+                    }
                     _ => return Ok(ConnectOutcome::Refused(err)),
                 }
             }
@@ -660,6 +681,14 @@ fn connect_nb(endpoint: &Path, wait: Duration) -> Result<ConnectOutcome, IpcErro
     }))
 }
 
+fn connect_pending(code: i32) -> bool {
+    code == libc::EINPROGRESS
+        || code == libc::EINTR
+        || code == libc::EAGAIN
+        || code == libc::EWOULDBLOCK
+        || code == libc::EALREADY
+}
+
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
 fn peer_uid(stream: &UnixStream) -> Result<u32, IpcError> {
     let mut uid: libc::uid_t = 0;
@@ -672,7 +701,7 @@ fn peer_uid(stream: &UnixStream) -> Result<u32, IpcError> {
             format!("getpeereid failed: {}", io::Error::last_os_error()),
         ));
     }
-    Ok(uid as u32)
+    Ok(uid)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -699,7 +728,7 @@ fn peer_uid(stream: &UnixStream) -> Result<u32, IpcError> {
             format!("SO_PEERCRED failed: {}", io::Error::last_os_error()),
         ));
     }
-    Ok(cred.uid as u32)
+    Ok(cred.uid)
 }
 
 #[cfg(not(any(

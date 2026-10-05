@@ -83,7 +83,7 @@ fn mount_key(path: &Path, metadata: &fs::Metadata) -> Option<MountKey> {
         mount: mount.to_bytes().to_vec(),
         // SAFETY: Apple fsid_t is a C struct containing two i32 values,
         // with no padding. A successful statfs initializes this mount ID.
-        fsid: unsafe { std::mem::transmute(statistics.f_fsid) },
+        fsid: unsafe { std::mem::transmute::<libc::fsid_t, [u8; std::mem::size_of::<libc::fsid_t>()]>(statistics.f_fsid) },
     })
 }
 

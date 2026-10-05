@@ -273,14 +273,21 @@ fn worker_serves_status_then_exits_after_idle() {
     while !socket.exists() && Instant::now() < deadline {
         if server.try_wait().unwrap().is_some() {
             let output = server.wait_with_output().unwrap();
-            panic!("worker exited before binding: {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+            panic!(
+                "worker exited before binding: {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     if !socket.exists() {
         let _ = server.kill();
         let output = server.wait_with_output().unwrap();
-        panic!("worker socket never appeared: {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "worker socket never appeared: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let out = bin()
         .args(["worker", "request", "status", "--json", "--endpoint"])
