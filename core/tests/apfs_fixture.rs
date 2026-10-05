@@ -68,7 +68,7 @@ fn apfs_fixture_accounting_is_conservative() {
     assert_eq!(owners, 1, "hard-linked inode must be attributed once");
     let hard_total: u64 = hard.iter().map(|e| e.attributed_allocation_bytes).sum();
     assert!(
-        hard_total >= 4 * MIB && hard_total < 8 * MIB,
+        (4 * MIB..8 * MIB).contains(&hard_total),
         "hard total {hard_total}"
     );
 
