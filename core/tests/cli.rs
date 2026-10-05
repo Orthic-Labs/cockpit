@@ -258,23 +258,29 @@ fn human_output_is_bounded_with_truncation_notice() {
 fn worker_serves_status_then_exits_after_idle() {
     use std::time::{Duration, Instant};
     let root = fixture_dir("worker");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     // Unix socket paths are short-limited; keep the name compact.
     let socket = root.join("w.sock");
     let mut server = bin()
         .args(["worker", "serve", "--idle-seconds", "5", "--endpoint"])
         .arg(&socket)
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !socket.exists() && Instant::now() < deadline {
+        if server.try_wait().unwrap().is_some() {
+            let output = server.wait_with_output().unwrap();
+            panic!("worker exited before binding: {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     if !socket.exists() {
         let _ = server.kill();
-        let _ = server.wait();
-        panic!("worker socket never appeared");
+        let output = server.wait_with_output().unwrap();
+        panic!("worker socket never appeared: {}", String::from_utf8_lossy(&output.stderr));
     }
     let out = bin()
         .args(["worker", "request", "status", "--json", "--endpoint"])
