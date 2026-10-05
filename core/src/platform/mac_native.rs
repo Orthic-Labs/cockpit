@@ -1,5 +1,5 @@
 //! macOS volume identity: volume UUID via getattrlist(ATTR_VOL_UUID), with an
-//! explicit non-stable statfs fsid / st_dev fallback.
+//! explicit non-stable st_dev fallback.
 
 use crate::model::VolumeIdentity;
 use std::ffi::{CStr, CString};
@@ -123,16 +123,6 @@ pub(super) fn volume_for(
         }
         Err(error) => error,
     };
-    if let Some(statistics) = statistics {
-        let [a, b] = statistics.f_fsid.val;
-        return (
-            VolumeIdentity::new(format!("fsid-unstable:{a:x}:{b:x}")),
-            false,
-            Some(format!(
-                "volume identity not stable (statfs fsid fallback; {uuid_error})"
-            )),
-        );
-    }
     (
         VolumeIdentity::new(format!("dev-unstable:{}", metadata.dev())),
         false,
