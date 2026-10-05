@@ -7,9 +7,9 @@ use windows::Win32::Foundation::{COLORREF, FILETIME, HWND, LPARAM, LRESULT, RECT
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     Arc, BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
-    EnumDisplayMonitors, FillRect, GetMonitorInfoW, HDC, HMONITOR, InvalidateRect, MONITORINFO,
-    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MonitorFromWindow, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode,
-    SetTextColor, TRANSPARENT, TextOutW,
+    EnumDisplayMonitors, FillRect, GetMonitorInfoW, HDC, HMONITOR, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromWindow, PAINTSTRUCT,
+    PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -76,8 +76,11 @@ fn main() -> windows::core::Result<()> {
     update_reading_and_visibility();
     unsafe {
         let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).into() {
-            TranslateMessage(&message);
+        loop {
+            let result = GetMessageW(&mut message, None, 0, 0).0;
+            if result == 0 { break; }
+            if result < 0 { return Err(windows::core::Error::from_win32()); }
+            let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
     }
@@ -130,7 +133,7 @@ unsafe extern "system" fn enum_monitor(monitor: HMONITOR, _: HDC, _: *mut RECT, 
                 if start_timer {
                     SetTimer(Some(hwnd), TIMER_ID, 2_000, None);
                 }
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
         }
         true.into()
@@ -146,11 +149,15 @@ fn reconcile_monitors() {
     };
     for key in old {
         unsafe {
-            DestroyWindow(hwnd_from_key(key));
+            if let Err(error) = DestroyWindow(hwnd_from_key(key)) {
+                eprintln!("Cockpit pane teardown failed: {error}");
+            }
         }
     }
     unsafe {
-        EnumDisplayMonitors(None, None, Some(enum_monitor), LPARAM(0));
+        if !EnumDisplayMonitors(None, None, Some(enum_monitor), LPARAM(0)).as_bool() {
+            eprintln!("Cockpit monitor enumeration failed");
+        }
     }
 }
 
@@ -180,7 +187,7 @@ extern "system" fn window_proc(
                 let mut paint = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut paint);
                 paint_ring(hdc, hwnd);
-                EndPaint(hwnd, &paint);
+                let _ = EndPaint(hwnd, &paint);
                 return LRESULT(0);
             }
             WM_DISPLAYCHANGE => {
@@ -210,12 +217,12 @@ fn update_reading_and_visibility() {
         any_hidden |= hidden;
         unsafe {
             if hidden {
-                ShowWindow(hwnd, SW_HIDE);
+                let _ = ShowWindow(hwnd, SW_HIDE);
             } else {
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
             if old != Some(reading) && !hidden {
-                InvalidateRect(Some(hwnd), None, false);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
         }
     }
@@ -224,7 +231,7 @@ fn update_reading_and_visibility() {
     if visibility_changed {
         for key in own.iter().copied() {
             unsafe {
-                InvalidateRect(Some(hwnd_from_key(key)), None, false);
+                let _ = InvalidateRect(Some(hwnd_from_key(key)), None, false);
             }
         }
     }
@@ -318,7 +325,7 @@ unsafe fn monitor_has_fullscreen_occupancy(monitor: HMONITOR, own: &[isize]) -> 
         }
         let wanted = info.monitorInfo.rcMonitor;
         let mut context = (false, wanted, own.as_ptr(), own.len());
-        EnumWindows(
+        let _ = EnumWindows(
             Some(enum_visible_window),
             LPARAM(&mut context as *mut _ as isize),
         );
@@ -406,7 +413,7 @@ unsafe fn paint_ring(hdc: HDC, hwnd: HWND) {
         let _ = GetClientRect(hwnd, &mut rect);
         let bg = CreateSolidBrush(COLORREF(0x00151515));
         FillRect(hdc, &rect, bg);
-        DeleteObject(bg.into());
+        let _ = DeleteObject(bg.into());
         let pen = CreatePen(PS_SOLID, 4, COLORREF(0x00555555));
         let old = SelectObject(hdc, pen.into());
         let ring = RECT {
@@ -415,9 +422,9 @@ unsafe fn paint_ring(hdc: HDC, hwnd: HWND) {
             right: 62,
             bottom: 62,
         };
-        Ellipse(hdc, ring.left, ring.top, ring.right, ring.bottom);
+        let _ = Ellipse(hdc, ring.left, ring.top, ring.right, ring.bottom);
         SelectObject(hdc, old);
-        DeleteObject(pen.into());
+        let _ = DeleteObject(pen.into());
         let reading = state().lock().unwrap().reading;
         if let Some(value) = reading.and_then(|r| r.cpu) {
             let green = CreatePen(PS_SOLID, 4, COLORREF(0x0000cc66));
@@ -429,7 +436,7 @@ unsafe fn paint_ring(hdc: HDC, hwnd: HWND) {
             let radius_y = (ring.bottom - ring.top) as f32 / 2.0;
             let end_x = (center_x + radius_x * angle.cos()) as i32;
             let end_y = (center_y - radius_y * angle.sin()) as i32;
-            Arc(
+            let _ = Arc(
                 hdc,
                 ring.left,
                 ring.top,
@@ -441,7 +448,7 @@ unsafe fn paint_ring(hdc: HDC, hwnd: HWND) {
                 end_y,
             );
             SelectObject(hdc, old);
-            DeleteObject(green.into());
+            let _ = DeleteObject(green.into());
         }
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(0x00ffffff));
@@ -450,7 +457,7 @@ unsafe fn paint_ring(hdc: HDC, hwnd: HWND) {
             .map(|v| format!("{:>3}%", (v * 100.0) as u32))
             .unwrap_or_else(|| " --%".into());
         let text: Vec<u16> = format!("CPU {cpu_text}").encode_utf16().collect();
-        TextOutW(hdc, 70, 19, &text);
+        let _ = TextOutW(hdc, 70, 19, &text);
         let memory_text = reading
             .and_then(|r| r.memory)
             .map(|v| format!("{:>3}%", (v * 100.0) as u32))
@@ -462,7 +469,7 @@ unsafe fn paint_ring(hdc: HDC, hwnd: HWND) {
         let details: Vec<u16> = format!("M {memory_text}  D {disk_text}")
             .encode_utf16()
             .collect();
-        TextOutW(hdc, 8, 62, &details);
+        let _ = TextOutW(hdc, 8, 62, &details);
     }
 }
 

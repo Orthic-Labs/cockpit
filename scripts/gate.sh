@@ -29,8 +29,8 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo run --locked --quiet --bin cockpit -- status --json
 if [[ "$RUNNER_OS" == "Windows" ]]; then
   cargo fmt --manifest-path windows/Cargo.toml
-  cargo test --manifest-path windows/Cargo.toml
-  cargo clippy --manifest-path windows/Cargo.toml --all-targets -- -D warnings
+  cargo test --locked --manifest-path windows/Cargo.toml
+  cargo clippy --locked --manifest-path windows/Cargo.toml --all-targets -- -D warnings
 fi
 if [[ "$RUNNER_OS" == "macOS" ]]; then
   swift build --package-path mac -c release
