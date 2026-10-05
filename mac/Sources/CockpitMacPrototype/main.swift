@@ -30,12 +30,12 @@ private final class SystemReader {
             includingResourceValuesForKeys: [
                 .volumeUUIDStringKey, .volumeNameKey, .volumeTotalCapacityKey,
                 .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey
-            ], options: [.skipNetworkVolumes, .skipPackageDescendants]
+            ], options: [.skipHiddenVolumes]
         )?.compactMap { url -> DiskReading? in
             guard let values = try? url.resourceValues(forKeys: [
                 .volumeUUIDStringKey, .volumeNameKey, .volumeTotalCapacityKey,
                 .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey
-            ]), values.volumeIsLocal != false,
+            ]), values.volumeIsLocal == true,
                   let id = values.volumeUUIDString, !id.isEmpty,
                   let total = values.volumeTotalCapacity, total > 0,
                   let available = values.volumeAvailableCapacityForImportantUsage else { return nil }
@@ -177,11 +177,11 @@ private final class FullscreenDetector {
     private func focusedWindowState() -> (fullscreen: Bool, frame: CGRect)? {
         let system = AXUIElementCreateSystemWide()
         var appValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute, &appValue) == .success,
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &appValue) == .success,
               let appValue else { return nil }
         let app = appValue as! AXUIElement
         var windowValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, &windowValue) == .success,
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowValue) == .success,
               let windowValue else { return nil }
         let window = windowValue as! AXUIElement
         var fullscreenValue: CFTypeRef?
@@ -189,8 +189,8 @@ private final class FullscreenDetector {
         var frame = CGRect.null
         var positionValue: CFTypeRef?
         var sizeValue: CFTypeRef?
-        if AXUIElementCopyAttributeValue(window, kAXPositionAttribute, &positionValue) == .success,
-           AXUIElementCopyAttributeValue(window, kAXSizeAttribute, &sizeValue) == .success {
+        if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionValue) == .success,
+           AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success {
             var point = CGPoint.zero
             var size = CGSize.zero
             if let positionValue { AXValueGetValue(positionValue as! AXValue, .cgPoint, &point) }
@@ -210,8 +210,8 @@ private final class FullscreenDetector {
         for window in windows {
             guard let pid = window[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
                   let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
-                  let bounds = window[kCGWindowBounds as String] as? CFDictionary,
-                  let rect = CGRect(dictionaryRepresentation: bounds),
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
                   rect.intersects(monitor) else { continue }
             // Borderless windows generally have no window title. Requiring it keeps the
             // fallback conservative around ordinary maximized AppKit windows.
@@ -252,12 +252,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refresh() {
         rebuildPanels()
         let reading = reader.read()
-        hidden = false
+        hidden = !NSScreen.screens.isEmpty
         for screen in NSScreen.screens {
             let id = monitorID(for: screen)
             guard let panel = panels[id] else { continue }
             let hide = detector.shouldHide(on: screen)
-            hidden = hidden || hide
+            hidden = hidden && hide
             panel.ringView.reading = reading
             if hide { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
         }
@@ -272,7 +272,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func monitorID(for screen: NSScreen) -> String {
         let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
-        if let uuid = CGDisplayCreateUUIDFromDisplayID(number), let string = CFUUIDCreateString(nil, uuid) {
+        if let uuid = CGDisplayCreateUUIDFromDisplayID(number)?.takeRetainedValue(), let string = CFUUIDCreateString(nil, uuid) {
             return string as String
         }
         return "display-\(number)"
@@ -280,6 +280,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-let delegate = AppDelegate()
+private let delegate = AppDelegate()
 app.delegate = delegate
 app.run()

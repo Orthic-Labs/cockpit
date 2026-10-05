@@ -52,5 +52,10 @@ fn native_symlink_ancestor_blocks_requested_descendant() {
     let report = scan(&[fixture.0.join("link/secret")], &ScanOptions::default());
     assert!(report.entries.is_empty());
     assert!(report.accounting.incomplete);
-    assert!(report.skipped_links.iter().any(|link| link.reason.contains("symlink")));
+    assert!(
+        report
+            .skipped_links
+            .iter()
+            .any(|link| link.reason.contains("symlink"))
+    );
 }

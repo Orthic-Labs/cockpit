@@ -180,8 +180,8 @@ fn read_system() -> Reading {
         if !ok { return Reading { cpu: None, memory: read_memory(), disk: read_disk() }; }
         let current = (filetime(idle), filetime(kernel), filetime(user));
         let cpu = app.previous_times.and_then(|(pi, pk, pu)| {
-            let total = (current.1 - pk).saturating_add(current.2 - pu);
-            let busy = total.saturating_sub(current.0 - pi);
+            let total = current.1.saturating_sub(pk).saturating_add(current.2.saturating_sub(pu));
+            let busy = total.saturating_sub(current.0.saturating_sub(pi));
             if total == 0 { None } else { Some(busy as f32 / total as f32) }
         });
         app.previous_times = Some(current);
@@ -243,7 +243,7 @@ fn is_shell_desktop_window(hwnd: HWND) -> bool {
     let mut class = [0u16; 256];
     let length = unsafe { GetClassNameW(hwnd, &mut class) };
     let name = String::from_utf16_lossy(&class[..length.max(0) as usize]);
-    matches!(name.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Windows.UI.Core.CoreWindow")
+    matches!(name.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
 }
 
 fn is_fullscreen_geometry(window: RECT, monitor: RECT) -> bool {
