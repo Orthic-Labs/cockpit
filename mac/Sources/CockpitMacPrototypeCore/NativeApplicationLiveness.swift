@@ -204,7 +204,9 @@ public enum NativeApplicationLiveness {
     }
 
     private static func executablePath(pid: pid_t) throws -> String {
-        var buffer = [UInt8](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+        // sys/proc_info.h defines PROC_PIDPATHINFO_MAXSIZE as 4 * MAXPATHLEN;
+        // Swift does not import that compound C macro.
+        var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
         let length = buffer.withUnsafeMutableBytes { bytes in
             proc_pidpath(pid, bytes.baseAddress, UInt32(bytes.count))
         }

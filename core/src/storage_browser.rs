@@ -304,7 +304,10 @@ fn dates_from_metadata(metadata: &crate::model::FileMetadata) -> DateAvailabilit
         (Some(_), None) | (None, Some(_)) => {
             (true, "one filesystem timestamp unavailable".to_owned())
         }
-        (None, None) => (false, "dates are unavailable in filesystem metadata".to_owned()),
+        (None, None) => (
+            false,
+            "dates are unavailable in filesystem metadata".to_owned(),
+        ),
     };
     DateAvailability {
         available,

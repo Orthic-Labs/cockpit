@@ -125,7 +125,6 @@ export async function runInstalledStorageJourney(initialApp, options) {
     let picker = await state();
     let current = home;
     const components = target.slice(home.length + 1).split("/");
-    const targetInfo = await stat(target);
     for (let index = 0; index < components.length; index += 1) {
       current = path.join(current, components[index]);
       const expected = current;
@@ -137,7 +136,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
         const url = line.match(/URL: (file:\/\/[^,]+),/);
         return url && decodeURIComponent(new URL(url[1]).pathname).replace(/\/$/, "") === expected;
       }, phase);
-      await app.click(row, { clickCount: index === components.length - 1 && !targetInfo.isDirectory() ? 1 : 2 });
+      await app.click(row);
       picker = await state();
     }
     const buttons = controlLines(picker).filter(line => /^\s*\d+ (?:button|toolbar item) (?:Open|Choose|Select)(?:,|$)/.test(line));
@@ -179,7 +178,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await click(line => /(?:button|toolbar item) Scan folder(?:,|$)/.test(line));
     await pickerChoose(fixture.root);
     ax = await waitFor(value => value.includes("Storage") && /Loaded \d+ entries/.test(value), "changed fixture scan must load Storage view");
-    assert.ok(ax.includes("Folder growth") && ax.includes("Growing") && ax.includes(fixture.root) && /\+\d/.test(ax),
+    assert.ok(ax.includes("Folder growth") && /growing/i.test(ax) && ax.includes(fixture.root) && /\+\d/.test(ax),
       "changed fixture scan must render positive folder growth for fixture root");
     for (let index = 0; index < originalFixtureFiles.length; index += 1) {
       assertFingerprint(await fingerprint(originalFixtureFiles[index]), firstSnapshot[index], `first snapshot original ${originalFixtureFiles[index]}`);

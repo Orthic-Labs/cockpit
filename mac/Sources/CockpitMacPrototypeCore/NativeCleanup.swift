@@ -369,7 +369,7 @@ public final class NativeCleanupService {
         guard items.allSatisfy({ $0.volume == $0.trashVolume }) else { throw Error.unsupported("different_volume") }
         let now = Date().timeIntervalSince1970
         let expires = now + Self.reviewLifetime
-        let plan = ReviewedPlanData(id: Self.randomID(), createdAt: UInt64(now), expiresAt: UInt64(expires), items: items.map(ItemData.init))
+        let plan = ReviewedPlanData(id: Self.randomID(), createdAt: UInt64(now), expiresAt: UInt64(expires), items: items.map { ItemData($0) })
         if let presenting {
             let alert = NSAlert()
             alert.messageText = "Move selected files to Trash?"
