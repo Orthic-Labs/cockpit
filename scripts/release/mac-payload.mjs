@@ -165,7 +165,7 @@ function once(emitter, event) {
   });
 }
 
-async function packageMac() {
+async function packageMac({ local = false } = {}) {
   await requireDirectory(paths.app, 'staged Cockpit.app');
   await requireFile(paths.appExecutable, 'staged app executable');
   await requireFile(paths.helper, 'staged Cockpit CLI');
@@ -175,10 +175,10 @@ async function packageMac() {
 
   const require = createRequire(import.meta.url);
   const { resolveMacosDeveloperIdIdentity } = await import('@rightkit/release/macos-signing-identity.mjs');
-  const { signAsync } = require('@electron/osx-sign');
+  const { sign } = require('@electron/osx-sign');
   const appdmg = require('appdmg');
   const entitlements = join(releaseRoot, 'entitlements.plist');
-  await signAsync({
+  await sign({
     app: paths.app,
     identity: resolveMacosDeveloperIdIdentity({ env: { ...process.env, APPLE_DEVELOPER_ID: identity } }),
     platform: 'darwin',
@@ -189,7 +189,7 @@ async function packageMac() {
     preEmbedProvisioningProfile: false,
     gatekeeperAssess: false
   });
-  await new Promise((resolvePromise,reject) => {
+  if (!local) await new Promise((resolvePromise,reject) => {
     const child=spawn(process.execPath,[join(repoRoot,'scripts/release/candidate.mjs'),'check'],{
       stdio:'inherit',env:{...process.env,COCKPIT_CHECK_APP:paths.app}
     });
@@ -207,11 +207,15 @@ async function packageMac() {
 
 const mode = process.argv[2];
 try {
-  if (process.env.GITHUB_ACTIONS !== 'true' || process.platform !== 'darwin') fail('Generated native macOS CI is required');
-  if (mode === 'candidate') await candidate();
+  if (process.platform !== 'darwin') fail('Native macOS host is required');
+  // Explicit local packaging reuses an already-qualified candidate; it performs
+  // no source build, CI impersonation, notarization or publication.
+  if (mode === 'package-local') await packageMac({ local: true });
+  else if (process.env.GITHUB_ACTIONS !== 'true') fail('Generated native macOS CI is required');
+  else if (mode === 'candidate') await candidate();
   else if (mode === 'prepare') await prepare();
   else if (mode === 'package') await packageMac();
-  else fail('usage: mac-payload.mjs <candidate|prepare|package>');
+  else fail('usage: mac-payload.mjs <candidate|prepare|package|package-local>');
 } catch (error) {
   console.error(error?.stack || error);
   process.exitCode = 1;

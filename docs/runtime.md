@@ -22,3 +22,7 @@ Mutation journal design: persist plan effect, recursive inspected identities, ex
 ## Platform identity
 
 Product bundle identity: `dev.orthic.cockpit`; native notch & bundled worker keep stable bundle/code identity across RightKit updates. Permission testing must use signed app identity, not an unsigned SwiftPM executable. Accessibility/Input Monitoring/Automation belong to Mac notch; Full Disk Access coverage for bundled worker & Terminal-launched CLI must be tested separately. Existing provisioned RightKit signing owns signing & updater integration; this repository adds no signer or installer machinery.
+
+## Installed local preview — 2026-10-06
+
+User authorized local delivery using verified CI candidate `2588a8c25fd5649c4209767185d7190f9341e7bb`. Developer ID signed app installed at `/Applications/Cockpit.app`; signatures, actual installed folder scan & visible dashboard rendering passed. Local package mode reuses candidate without rebuilding. Preview DMG is signed, not notarized or published; [delivery evidence](mac-app-delivery.md) records checksum & scope.
