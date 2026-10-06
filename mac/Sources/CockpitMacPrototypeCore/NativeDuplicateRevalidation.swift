@@ -347,6 +347,13 @@ public final class NativeDuplicateRevalidation {
             mounts.append(MountRecord(mountPoint: mountPoint, local: (value.f_flags & UInt32(MNT_LOCAL)) != 0))
         }
         for path in paths {
+            let foldedPath = path.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            for mount in mounts where !mount.local {
+                let foldedMount = mount.mountPoint.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                if foldedPath == foldedMount || foldedPath.hasPrefix(foldedMount == "/" ? "/" : foldedMount + "/") {
+                    throw Error.unsupported("nonlocal")
+                }
+            }
             let matching = mounts.filter {
                 path == $0.mountPoint || path.hasPrefix($0.mountPoint == "/" ? "/" : $0.mountPoint + "/")
             }
@@ -362,7 +369,7 @@ public final class NativeDuplicateRevalidation {
             pointer.withMemoryRebound(to: UInt8.self, capacity: capacity) { bytes in
                 let buffer = UnsafeBufferPointer(start: bytes, count: capacity)
                 guard let end = buffer.firstIndex(of: 0) else { return nil }
-                return String(decoding: buffer[..<end], as: UTF8.self)
+                return String(bytes: buffer[..<end], encoding: .utf8)
             }
         }
     }
