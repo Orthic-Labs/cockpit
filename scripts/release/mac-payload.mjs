@@ -119,6 +119,7 @@ async function candidate() {
   const index = await readFile(join(dashboard, 'index.html'), 'utf8');
   await writeFile(join(dashboard, 'index.html'), index.replace('<script type="module" src="./app.mjs"></script>', '<script src="./app.js"></script>'));
   await writeInfoPlist(join(app, 'Contents', 'Info.plist'));
+  await cp(join(repoRoot, 'upstream/codenotch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
   await copyExecutable(source.appExecutable, join(root, 'raw', 'Cockpit'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'cockpit'), 'Cockpit CLI');
   await dittoZip(app, join(root, `${appName}.zip`));

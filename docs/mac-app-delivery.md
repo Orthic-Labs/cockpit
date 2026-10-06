@@ -42,3 +42,12 @@ Local signed preview delivered:
 - `/Applications/Cockpit.app` installed & launched. Installed smoke emitted `dashboard_smoke_pass`; native folder chooser loaded fixture & visible dashboard displayed 3 entries, 32 B logical & 4.00 KB attributed allocation.
 - Signed local preview is not notarized or published. Hardware qualification & retained feature expansion continue separately.
 
+
+
+## Installed UI repair — 2026-10-06
+
+Owner rejected M0 debug panel & subsequent oversized donor-scale notch. Current preview adapts donor bezel outline to 26 pt rings with centered percentages, 40 × 158 pt resting footprint, hover details, dashboard click & icon-only menu-bar status entry. MIT attribution ships at `Contents/Resources/codeNOTCH-LICENSE.txt`.
+
+Dashboard fixes add working Search submission, native JSON open panel, fixed table columns, independent content scrolling & retained scan state across window close/reopen. Bundled native smoke now exercises rendered one/zero-match searches & close/reopen retention.
+
+Owner-authorized local Swift rebuild reused hosted scanner build; Developer ID app & DMG signatures passed strict verification. Installed compact app emitted `dashboard_smoke_pass`. Manual installed UI checks covered JSON import/cancel/error, searches, folder inspector, scrolling, fullscreen, retained scans & notch opening. Current DMG SHA-256: `ac779ee8b34e0f16c96492de1b002fb82baacb301d87a0942e830427da0cfc48`. Local screenshot evidence remains ignored; this records installed UI repair, not completion of pending product modules.

@@ -8,13 +8,13 @@ import Foundation
 // Native notch & on-demand storage dashboard. Provider readers & donor extraction
 // remain separate integrations.
 
-private struct DiskReading: Equatable {
+struct DiskReading: Equatable {
     let id: String
     let name: String
     let free: Double
 }
 
-private struct SystemReading: Equatable {
+struct SystemReading: Equatable {
     let cpu: Double?
     let memory: Double?
     let disks: [DiskReading]
@@ -102,87 +102,55 @@ private final class SystemReader {
     }
 }
 
-private final class RingView: NSView {
-    private var gate = RedrawGate()
-    private(set) var reading = SystemReading(cpu: nil, memory: nil, disks: [])
-
-    private static func rows(_ r: SystemReading) -> [(name: String, fraction: Double?)] {
-        [("CPU", r.cpu), ("RAM", r.memory)] + r.disks.map { (String($0.name.prefix(10)), Optional(1 - $0.free)) }
-    }
-
-    /// Redraws only when the rendered text changes (ring arcs derive from the same values at
-    /// whole-percent resolution; sub-percent changes are intentionally not redrawn).
-    func update(_ new: SystemReading) {
-        reading = new
-        if gate.shouldRedraw(PillFormat.signature(Self.rows(new))) { needsDisplay = true }
-    }
-
-
-    override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.06, alpha: 0.94).setFill()
-        dirtyRect.fill()
-        let values: [(String, Double?, NSColor)] = [
-            ("CPU", reading.cpu, NSColor.systemBlue),
-            ("RAM", reading.memory, NSColor.systemOrange)
-        ] + reading.disks.map { (String($0.name.prefix(10)), Optional(1 - $0.free), NSColor.systemGreen) }
-        let diameter: CGFloat = 30
-        let x: CGFloat = 8
-        for (index, value) in values.enumerated() {
-            let y = CGFloat(index) * 34 + 8
-            let rect = NSRect(x: x, y: y, width: diameter, height: diameter)
-            NSColor(calibratedWhite: 0.28, alpha: 1).setStroke()
-            let backgroundRing = NSBezierPath(ovalIn: rect)
-            backgroundRing.lineWidth = 3
-            backgroundRing.stroke()
-            let text: String
-            if let fraction = PillFormat.displayedFraction(value.1) {
-                value.2.setStroke()
-                let path = NSBezierPath()
-                path.lineWidth = 3
-                path.appendArc(withCenter: NSPoint(x: rect.midX, y: rect.midY), radius: diameter / 2,
-                               startAngle: 90, endAngle: 90 - CGFloat(fraction * 360), clockwise: true)
-                path.stroke()
-                text = PillFormat.label(value.0, fraction: value.1)
-            } else {
-                text = PillFormat.label(value.0, fraction: nil)
-            }
-            NSString(string: text).draw(at: NSPoint(x: x + diameter + 8, y: y + 8),
-                                        withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
-                                                         .foregroundColor: NSColor.white])
-        }
-        NSString(string: "M0 NATIVE PROTOTYPE").draw(at: NSPoint(x: x, y: bounds.height - 18),
-            withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 8, weight: .regular),
-                             .foregroundColor: NSColor.secondaryLabelColor])
-    }
-}
-
 private final class PillPanel: NSPanel {
     let monitorID: String
-    let ringView: RingView
+    let surfaceView: NotchSurfaceView
+    private var placementScreen: NSScreen
+    private var placementAnchor: PillAnchor
 
-    init(screen: NSScreen, monitorID: String, diskCount: Int, anchor: PillAnchor) {
+    init(screen: NSScreen, monitorID: String, diskCount: Int, anchor: PillAnchor,
+         onClick: @escaping () -> Void) {
         self.monitorID = monitorID
-        self.ringView = RingView(frame: .zero)
-        let rect = AnchoredPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount, anchor: anchor)
+        self.placementScreen = screen
+        self.placementAnchor = anchor
+        let edge = CockpitNotchEdge.from(anchor: anchor)
+        self.surfaceView = NotchSurfaceView(edge: edge)
+        // Attach to physical bezel; visibleFrame would leave a menu bar/Dock gap
+        // for top/bottom anchors.
+        let rect = NotchPresentationLayout.frame(visible: screen.frame, edge: edge)
         super.init(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        title = "Cockpit — Notch"
+        setAccessibilityLabel("Cockpit system notch")
         level = .statusBar
         collectionBehavior = [.canJoinAllSpaces, .fullScreenNone]
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
-        ignoresMouseEvents = true
+        // The surface draws its own bezel silhouette; a panel shadow would expose
+        // the transparent expanded hit frame as a rectangular card.
+        hasShadow = false
+        ignoresMouseEvents = false
         hidesOnDeactivate = false
         // Panels are owned by the delegate's dictionary; AppKit must not release them on close.
         isReleasedWhenClosed = false
-        ringView.autoresizingMask = [.width, .height]
-        contentView = ringView
+        surfaceView.autoresizingMask = [.width, .height]
+        contentView = surfaceView
+        surfaceView.onClick = onClick
+        surfaceView.onHoverChanged = { [weak self] expanded in
+            guard let self else { return }
+            let edge = CockpitNotchEdge.from(anchor: self.placementAnchor)
+            self.setFrame(NotchPresentationLayout.frame(visible: self.placementScreen.frame,
+                                                        edge: edge, expanded: expanded), display: true)
+        }
         // Not shown here: the sampler decides visibility (settings, monitor, fullscreen).
     }
 
     /// Re-place on the screen's current visible frame; no-op when unchanged.
     func place(on screen: NSScreen, diskCount: Int, anchor: PillAnchor) {
-        let rect = AnchoredPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount, anchor: anchor)
+        placementScreen = screen
+        placementAnchor = anchor
+        let edge = CockpitNotchEdge.from(anchor: anchor)
+        surfaceView.edge = edge
+        let rect = NotchPresentationLayout.frame(visible: screen.frame, edge: edge, expanded: surfaceView.isExpanded)
         if frame != rect { setFrame(rect, display: true) }
     }
 
@@ -290,8 +258,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(open)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Cockpit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "Cockpit"
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: "Cockpit")
+        item.button?.image?.isTemplate = true
+        item.button?.title = ""
         item.menu = menu
         statusItem = item
         let mainMenu = NSMenu()
@@ -385,7 +355,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         for id in diff.added {
             guard let screen = byID[id] else { continue }
             panels[id] = PillPanel(screen: screen, monitorID: id, diskCount: diskCount,
-                                   anchor: runtime.monitorSetting(for: id).anchor)
+                                   anchor: runtime.monitorSetting(for: id).anchor,
+                                   onClick: { [weak self] in self?.openDashboard() })
             emit("monitor_added", ["display": id])
         }
         for id in diff.kept {
@@ -410,7 +381,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         var allHidden = true
         for screen in NSScreen.screens {
             guard let panel = panels[monitorID(for: screen)] else { continue }
-            panel.ringView.update(reading)
+            panel.surfaceView.update(reading)
             let id = monitorID(for: screen)
             let wanted = runtime.settings.visible && runtime.monitorSetting(for: id).enabled
             // Fullscreen detection (Accessibility/CGWindowList) only runs for notches that could show.

@@ -369,7 +369,7 @@ function folderRow(folder) {
 }
 
 function table(headers, rows, emptyText) {
-  const tableNode = node("table", { className: "data-table" });
+  const tableNode = node("table", { className: headers.length === 4 ? "data-table entry-table" : "data-table folder-table" });
   tableNode.append(node("thead", {}, [node("tr", {}, headers.map((header) => node("th", { scope: "col", textContent: header })))]));
   const body = node("tbody");
   if (!rows.length) body.append(node("tr", {}, [node("td", { colSpan: headers.length, className: "muted", textContent: emptyText })]));
@@ -427,7 +427,7 @@ function renderFind(scan, state) {
     node("div", { className: "field" }, [node("label", { for: "find-kind", textContent: "Kind" }), node("select", { id: "find-kind", name: "kind" }, [node("option", { value: "", textContent: "Any kind" }), ...["file", "directory", "symlink", "other"].map((kind) => node("option", { value: kind, selected: state.filters.kind === kind, textContent: kind }))])]),
     node("div", { className: "field" }, [node("label", { for: "find-min", textContent: "Min bytes" }), node("input", { id: "find-min", name: "minBytes", type: "number", min: "0", inputMode: "numeric", value: state.filters.minBytes })]),
     node("div", { className: "field" }, [node("label", { for: "find-max", textContent: "Max bytes" }), node("input", { id: "find-max", name: "maxBytes", type: "number", min: "0", inputMode: "numeric", value: state.filters.maxBytes })]),
-    node("button", { className: "button button-quiet", type: "button", dataset: { clearFilters: "" }, textContent: "Clear" }),
+    node("div", { className: "filter-actions" }, [node("button", { className: "button button-primary", type: "submit", textContent: "Search" }), node("button", { className: "button button-quiet", type: "button", dataset: { clearFilters: "" }, textContent: "Clear" })]),
   ]);
   const countText = filtered.length > MAX_RENDER_ROWS ? `Showing first ${formatCount(MAX_RENDER_ROWS)} of ${formatCount(filtered.length)} matches` : `${formatCount(filtered.length)} matches`;
   return [node("div", { className: "page-head" }, [node("div", {}, [node("p", { className: "eyebrow", textContent: "Find" }), node("h2", { textContent: "Search supplied entries" }), node("p", { textContent: "Filter loaded metadata without touching filesystem contents." })])]), card("Filters", "All filters are local to this imported scan", [form]), node("div", { className: "results-bar" }, [node("span", { textContent: countText }), node("span", { className: "faint", textContent: scan.limits.entriesOmitted ? "Loaded result is bounded" : "" })]), node("section", { className: "card" }, [node("div", { className: "table-wrap" }, [table(["Entry", "Size", "Kind", "Metadata"], visible.map((entry) => entryRow(entry)), "No entries match these filters.")])])];
@@ -499,6 +499,7 @@ async function importFile(file) {
     state.selected = null;
     state.staged = new Set();
     setStatus(`Loaded ${formatCount(state.scan.entries.length)} entries`, "good");
+    syncNav();
     renderApp();
   } catch (error) {
     setStatus("Could not load scan JSON", "danger");

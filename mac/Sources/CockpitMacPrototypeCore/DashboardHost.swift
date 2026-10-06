@@ -2,6 +2,7 @@ import Foundation
 #if canImport(AppKit) && canImport(WebKit)
 import AppKit
 import WebKit
+import UniformTypeIdentifiers
 #endif
 
 // On-demand dashboard host: an AppKit window hosting the bundled static dashboard
@@ -354,9 +355,27 @@ public final class DashboardHost: NSObject {
         _ = try await webView.evaluateJavaScript(script)
         let imported = try await webView.evaluateJavaScript("window.CockpitDashboard.getState().scan.entries.length > 0")
         guard (imported as? Bool) == true else { throw ScanFailure.emptyReport }
+        let searchPassed = try await webView.evaluateJavaScript("""
+            (() => {
+                document.querySelector('[data-view="find"]').click();
+                document.querySelector('#find-name').value = 'example.txt';
+                document.querySelector('#find-form').requestSubmit();
+                const one = document.querySelector('.results-bar').textContent.trim() === '1 matches';
+                document.querySelector('#find-name').value = 'cockpit-no-match-92481';
+                document.querySelector('#find-form').requestSubmit();
+                const zero = document.querySelector('.results-bar').textContent.trim() === '0 matches';
+                document.querySelector('[data-clear-filters]').click();
+                return one && zero;
+            })()
+            """)
+        guard (searchPassed as? Bool) == true else { throw ScanFailure.invalidJSON("Dashboard search regression") }
+        window?.performClose(nil)
+        show()
+        let retained = try await webView.evaluateJavaScript("window.CockpitDashboard.getState().scan.entries.length > 0")
+        guard (retained as? Bool) == true else { throw ScanFailure.invalidJSON("Dashboard close lost scan") }
     }
 
-    /// Cancels any scan, destroys the webview and releases the window; reopening is fresh.
+    /// Full app shutdown: cancels scanning & releases retained dashboard state.
     public func stop() {
         scanTask?.cancel()
         coordinator.runner.cancel()
@@ -393,6 +412,7 @@ public final class DashboardHost: NSObject {
                            styleMask: [.titled, .closable, .resizable, .miniaturizable],
                            backing: .buffered, defer: false)
         win.title = "Cockpit — Storage"
+        win.minSize = NSSize(width: 640, height: 480)
         win.isReleasedWhenClosed = false
         win.delegate = self
         win.contentView = web
@@ -448,7 +468,11 @@ private final class BridgeSink: NSObject, WKScriptMessageHandler {
 }
 
 extension DashboardHost: NSWindowDelegate {
-    public func windowWillClose(_ notification: Notification) { stop() }
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // Closing a dashboard is not quitting Cockpit; retain loaded scan & navigation.
+        sender.orderOut(nil)
+        return false
+    }
 }
 
 extension DashboardHost: WKNavigationDelegate {
@@ -461,7 +485,23 @@ extension DashboardHost: WKNavigationDelegate {
     }
 }
 
-extension DashboardHost: WKUIDelegate {}
+extension DashboardHost: WKUIDelegate {
+    public func webView(_ webView: WKWebView,
+                        runOpenPanelWith parameters: WKOpenPanelParameters,
+                        initiatedByFrame frame: WKFrameInfo,
+                        completionHandler: @escaping ([URL]?) -> Void) {
+        guard webView === self.webView, let window else { completionHandler(nil); return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        panel.message = "Choose a Cockpit scan JSON export"
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
+}
 
 extension DashboardHost: NSToolbarDelegate {
     public func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
