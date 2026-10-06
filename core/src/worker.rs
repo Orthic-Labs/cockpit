@@ -45,9 +45,11 @@ enum Execution {
     Subprocess { exe: PathBuf },
 }
 
+type EventSink = Box<dyn FnMut(&Event) + Send>;
+
 pub struct Worker {
     limits: Limits,
-    sink: Option<Box<dyn FnMut(&Event) + Send>>,
+    sink: Option<EventSink>,
     seen: HashSet<String>,
     order: VecDeque<String>,
     execution: Execution,
@@ -450,14 +452,14 @@ fn drive_child(
         }
         Ok(())
     };
-    if let Some(pipe) = &stdin {
-        if let Err(e) = nonblocking(pipe.as_raw_fd()) {
-            let reap = kill_and_reap(child);
-            return Err(internal(format!(
-                "exec-op stdin setup failed: {e}; {}",
-                reap.note()
-            )));
-        }
+    if let Some(pipe) = &stdin
+        && let Err(e) = nonblocking(pipe.as_raw_fd())
+    {
+        let reap = kill_and_reap(child);
+        return Err(internal(format!(
+            "exec-op stdin setup failed: {e}; {}",
+            reap.note()
+        )));
     }
     if let Err(e) = nonblocking(stdout.as_raw_fd()) {
         let reap = kill_and_reap(child);

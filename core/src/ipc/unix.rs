@@ -499,14 +499,12 @@ fn handle_connection(mut stream: UnixStream, limits: &Limits, handler: &mut dyn 
         &response,
         limits.max_response_bytes,
         write_deadline,
-    ) {
-        if e.code == ErrorCode::OversizedFrame {
-            send_error(
-                &mut stream,
-                limits,
-                IpcError::new(ErrorCode::Internal, "response violates frame limits"),
-            );
-        }
+    ) && e.code == ErrorCode::OversizedFrame {
+        send_error(
+            &mut stream,
+            limits,
+            IpcError::new(ErrorCode::Internal, "response violates frame limits"),
+        );
     }
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }

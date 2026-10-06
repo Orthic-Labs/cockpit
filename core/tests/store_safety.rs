@@ -596,7 +596,10 @@ fn parent_replacement_never_redirects_pinned_writes_or_reads() {
     assert!(
         [&real, &hold].iter().any(|dir| {
             store::history_report(dir).is_ok_and(|history| {
-                history.snapshots.iter().any(|snapshot| snapshot.id == "scan-before")
+                history
+                    .snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.id == "scan-before")
             })
         }),
         "pre-race publication lost during parent replacement"
@@ -604,7 +607,12 @@ fn parent_replacement_never_redirects_pinned_writes_or_reads() {
     // Stable access must recover after the race, even if all raced saves
     // refused. This checks write & read behavior through production storage.
     store::save(&real, &snap("scan-after-race", 301)).unwrap();
-    assert!(store::history(&real).unwrap().iter().any(|snapshot| snapshot.id == "scan-after-race"));
+    assert!(
+        store::history(&real)
+            .unwrap()
+            .iter()
+            .any(|snapshot| snapshot.id == "scan-after-race")
+    );
     // Reads through a swapped-in symlink are refused, never redirected.
     fs::remove_dir_all(&real).unwrap();
     symlink(&evil, &real).unwrap();
