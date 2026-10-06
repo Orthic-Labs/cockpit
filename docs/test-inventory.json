@@ -1043,7 +1043,7 @@
       },
       {
         "file": "core/tests/duplicates.rs",
-        "sha256": "25bf41bcab5c7274a3d9161694b5bbd61d3c95e240271ec2a12fddc885f5bd23",
+        "sha256": "ee7671dfa932bbe879c580b2631a8210cdc1019a54202381934d1464fb609c4b",
         "declared_test_names": [
           "exact_bytes_form_group_and_changed_content_does_not",
           "hardlinks_are_skipped_by_identity_and_symlinks_are_refused",
@@ -1054,7 +1054,7 @@
       },
       {
         "file": "core/tests/durable_storage.rs",
-        "sha256": "fd319684c9cbf23c6fb54e58bd578380b4b1d21698fa9a5e051a9338d40da8ac",
+        "sha256": "4e4f2edc75e9d7b547c8200353bceb7d5c98e30d74b4fd090ad08add4695208a",
         "declared_test_names": [
           "durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_rejects_unknown_state"
         ],

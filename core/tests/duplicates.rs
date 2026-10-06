@@ -7,16 +7,21 @@ use cockpit_core::duplicates::{
 use cockpit_core::platform;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 fn fixture() -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+    let process = std::process::id();
     let path = fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("cockpit-duplicates-{stamp}"));
+        .join(format!("cockpit-duplicates-{process}-{stamp}-{sequence}"));
     fs::create_dir(&path).unwrap();
     path
 }
