@@ -124,21 +124,22 @@ export async function runInstalledStorageJourney(initialApp, options) {
       const currentArea = controlLines(ax).find(line => /^\s*\d+ scroll area$/.test(line));
       if (!currentArea) break;
       await app.scroll(Number(currentArea.trim().split(" ")[0]), "down", 1);
-      const next = await state();
-      if (next === ax) break;
-      ax = next;
+      // AX can retain one frame while native scrolling settles. Keep bounded
+      // navigation instead of treating that frame as end-of-content evidence.
+      ax = await state();
     }
     return ax;
   };
-  const waitFor = async (predicate, description, timeout = 30_000) => {
+  const waitFor = async (predicate, description, timeout = 30_000, revealOffscreen = false) => {
     const deadline = Date.now() + timeout;
     let ax = await state();
     do {
       if (predicate(ax)) return ax;
-      ax = await state();
+      ax = revealOffscreen ? await reveal(predicate) : await state();
     } while (Date.now() < deadline);
     throw Error(`${phase}: ${description}`);
   };
+  const waitForVisible = (predicate, description, timeout) => waitFor(predicate, description, timeout, true);
   const click = async predicate => { const ax = await reveal(value => controlLines(value).some(predicate)); await app.click(locate(ax, predicate, phase)); return state(); };
   const checkpoint = async name => {
     const ax = await state();
@@ -606,6 +607,15 @@ export async function runInstalledStorageJourney(initialApp, options) {
         } else {
           assert.ok(/Showing 1–\d+ of|No processes reported/.test(ax), "short process source must explicitly report its supplied rows");
         }
+        ax = await reveal(value => value.includes("Listening ports") && /CAPACITY HEALTH/i.test(value));
+        for (const label of ["CAPACITY HEALTH", "CYCLES", "TEMPERATURE", "BATTERY POWER", "ADAPTER RATING", "TIME REMAINING"]) {
+          assert.ok(ax.includes(label), `native battery observations must expose ${label}`);
+        }
+        assert.ok(/No battery reading|\d+(?:\.\d+)?%/.test(ax), "battery must report measured charge or explicit missing reading");
+        for (const line of controlLines(ax).filter(value => value.includes("Identity verified"))) {
+          assert.match(line, /PID \d+ · Start [1-9]\d* .*Identity verified/, "listening ports must expose verified PID/start incarnation");
+        }
+        await checkpoint("monitor-battery-and-listening-ports");
       }
       await phaseDone(phase);
       if (view === "Apps") {
@@ -624,44 +634,44 @@ export async function runInstalledStorageJourney(initialApp, options) {
         ax = await findApplicationDetails(appName, appBundle);
         assert.ok(ax.includes(appBundle), "Apps inventory must include current Cockpit bundle path");
         ax = await click(hasButton(`Details for ${appName}`));
-        ax = await waitFor(value => value.includes(`Details · ${appName}`) && value.includes(appBundle), "app details must render current bundle identity and exact path");
+        ax = await waitForVisible(value => value.includes(`Details · ${appName}`) && value.includes(appBundle), "app details must render current bundle identity and exact path");
         for (const related of ["Library/Preferences", "Library/Caches", "Library/Application Support", "Library/Logs", "Library/Containers"]) {
           assert.ok(ax.includes(related), `app details must render exact related path family ${related}`);
         }
         assert.ok(ax.includes("report only"), "related app paths must remain report only");
-        ax = await waitFor(value => value.includes("app details complete") && value.includes("Verified app inspection") && value.includes("Resource history"), "current running app must expose verified native inspection & confirmed persisted history");
+        ax = await waitForVisible(value => value.includes("app details complete") && value.includes("Verified app inspection") && value.includes("Resource history"), "current running app must expose verified native inspection & confirmed persisted history");
         assert.ok(/Verified process · PID \d+ · start \d+/.test(ax), "native inspection must expose verified incarnation");
         assert.ok(/Disk I\/O/i.test(ax) && /Open files/i.test(ax) && /Network endpoints/i.test(ax), "app inspection must render bounded native I/O observations");
         const previousSamples = Number(ax.match(/(\d+) retained samples/)?.[1] ?? 0);
         assert.ok(previousSamples > 0 && previousSamples <= 256, "confirmed native history must contain bounded samples");
         ax = await click(hasButton("Check app feed"));
-        ax = await waitFor(value => value.includes("App feed result") && value.includes(appBundle) && /(?:unavailable|unsupported)/i.test(value) && /(?:Not performed|false)/i.test(value),
+        ax = await waitForVisible(value => value.includes("App feed result") && value.includes(appBundle) && /(?:unavailable|unsupported)/i.test(value) && /(?:Not performed|false)/i.test(value),
           "selected Cockpit feed check must report real unsupported state without network");
         assert.ok(/SUFeedURL|feed_url_not_declared|bundle_feed_url_not_declared/i.test(ax), "Cockpit feed result must explain missing SUFeedURL");
         ax = await click(hasButton("Check Homebrew"));
-        ax = await waitFor(value => value.includes("Homebrew result") && value.includes(appBundle)
+        ax = await waitForVisible(value => value.includes("Homebrew result") && value.includes(appBundle)
           && /not_managed|unavailable|partial|no-update|available/.test(value),
           "explicit Homebrew check must return correlated metadata or supported unavailable state", 50_000);
         assert.ok(!/upgrade complete|installed update/i.test(ax), "Homebrew metadata must never claim an installation");
         const cockpitBefore = await stat(appBundle);
         ax = await click(hasButton("Review app uninstall"));
-        ax = await waitFor(value => /Action failed:/i.test(value) && /running|liveness|process/i.test(value),
+        ax = await waitForVisible(value => /Action failed:/i.test(value) && /running|liveness|process/i.test(value),
           "running Cockpit uninstall review must fail before any effect");
         const cockpitAfter = await stat(appBundle);
         assert.equal(cockpitAfter.dev, cockpitBefore.dev, "running Cockpit uninstall failure changed volume identity");
         assert.equal(cockpitAfter.ino, cockpitBefore.ino, "running Cockpit uninstall failure changed bundle identity");
         await click(hasButton(`Details for ${appName}`));
-        ax = await waitFor(value => value.includes("app details complete") && Number(value.match(/(\d+) retained samples/)?.[1]) === Math.min(256, previousSamples + 1), "second verified inspection must append bounded resource history");
+        ax = await waitForVisible(value => value.includes("app details complete") && Number(value.match(/(\d+) retained samples/)?.[1]) === Math.min(256, previousSamples + 1), "second verified inspection must append bounded resource history");
         const historyAx = await reveal(value => value.includes("Application history") && /partial|unknown/i.test(value));
         assert.ok(historyAx.includes("Application history") && /partial|unknown/i.test(historyAx), "app history must expose partial or unknown coverage");
         await phaseDone(phase);
 
         phase = "disposable-app-inventory-and-details";
         ax = await findApplicationDetails(appFixture.name, appFixture.path);
-        ax = await waitFor(value => value.includes(appFixture.path) && value.includes(appFixture.bundleID),
+        ax = await waitForVisible(value => value.includes(appFixture.path) && value.includes(appFixture.bundleID),
           "fresh app inventory must include disposable fixture bundle and bundle ID");
         ax = await click(hasButton(`Details for ${appFixture.name}`));
-        ax = await waitFor(value => value.includes(`Details · ${appFixture.name}`) && value.includes(appFixture.path) && value.includes(appFixture.bundleID),
+        ax = await waitForVisible(value => value.includes(`Details · ${appFixture.name}`) && value.includes(appFixture.path) && value.includes(appFixture.bundleID),
           "disposable app Details must render exact path and bundle identity");
         assert.ok(ax.includes("Unknown") && ax.includes("report only"), "disposable app metadata must preserve unknown bytes and report-only related paths");
         await phaseDone(phase);
@@ -671,21 +681,21 @@ export async function runInstalledStorageJourney(initialApp, options) {
         } else {
           phase = "disposable-app-uninstall-cancel-and-apply";
           ax = await click(hasButton("Review app uninstall"));
-          ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
+          ax = await waitForVisible(value => value.includes("Move App to Trash") && value.includes("Cancel"),
             "disposable app uninstall review must show native confirmation");
           await app.click(locate(ax, hasButton("Cancel"), phase));
-          ax = await waitFor(value => /Action failed:/i.test(value) && /cancel/i.test(value),
+          ax = await waitForVisible(value => /Action failed:/i.test(value) && /cancel/i.test(value),
             "disposable app uninstall review cancel must return explicit cancellation");
           const canceledBundle = await bundleFingerprint(appFixture);
           assert.equal(canceledBundle.ino, beforeApp.ino, "canceled app review changed bundle identity");
           ax = await click(hasButton("Review app uninstall"));
-          ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
+          ax = await waitForVisible(value => value.includes("Move App to Trash") && value.includes("Cancel"),
             "disposable app uninstall retry must show native confirmation");
           await app.click(locate(ax, hasButton("Move App to Trash"), phase));
-          ax = await waitFor(value => value.includes("Review ready · app uninstall") && value.includes("Apply app uninstall"),
+          ax = await waitForVisible(value => value.includes("Review ready · app uninstall") && value.includes("Apply app uninstall"),
             "accepted app uninstall review must expose native apply action");
           ax = await click(hasButton("Apply app uninstall"));
-          ax = await waitFor(value => value.includes("App uninstall complete") && /1 app moved to Trash/.test(value),
+          ax = await waitForVisible(value => value.includes("App uninstall complete") && /1 app moved to Trash/.test(value),
             "app uninstall apply must report one moved bundle");
           await assert.rejects(() => access(appFixture.path), /ENOENT/, "app bundle must be absent after uninstall apply");
           await phaseDone(phase, { appPath: appFixture.path, bundleID: appFixture.bundleID });
@@ -761,6 +771,15 @@ export async function runInstalledStorageJourney(initialApp, options) {
     report.failedPhase = phase;
     report.error = String(error);
     report.finishedAt = new Date().toISOString();
+    const integrity = await Promise.all([...before, ...beforeApp.files].map(async expected => {
+      try {
+        const actual = await fingerprint(expected.path);
+        return { path: expected.path, unchanged: ["size", "sha256", "dev", "ino"].every(key => actual[key] === expected[key]), actual };
+      } catch (failure) {
+        return { path: expected.path, unchanged: false, error: String(failure) };
+      }
+    }));
+    report.failureIntegrity = { status: integrity.every(item => item.unchanged) ? "unchanged" : "changed-or-unavailable", files: integrity };
     await writeFile(path.join(output, "failure.txt"), await state()).catch(() => {});
     await app.getScreenshot({ emit: false }).then(bytes => writeFile(path.join(output, "failure.jpg"), bytes)).catch(() => {});
     await writeFile(path.join(output, "result.json"), `${JSON.stringify(report, null, 2)}\n`);
