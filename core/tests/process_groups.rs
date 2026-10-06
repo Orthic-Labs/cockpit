@@ -40,7 +40,8 @@ fn shape(g: &ProcessGroups) -> Vec<(u32, Vec<u32>)> {
 
 #[test]
 fn table_of_group_shapes() {
-    let cases: Vec<(&str, Vec<ProcessInfo>, Vec<(u32, Vec<u32>)>, bool)> = vec![
+    type GroupCase = (&'static str, Vec<ProcessInfo>, Vec<(u32, Vec<u32>)>, bool);
+    let cases: Vec<GroupCase> = vec![
         (
             "helper chain",
             vec![
