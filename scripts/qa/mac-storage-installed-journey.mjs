@@ -66,13 +66,13 @@ export async function runInstalledStorageJourney(initialApp, options) {
   const { appBundle, fixture, output, onRelaunch, onCheckpoint = () => {}, onRingHover } = options;
   assert.ok(initialApp && typeof initialApp.getAXState === "function", "CUA app is required");
   assert.ok(path.isAbsolute(appBundle) && path.isAbsolute(output), "appBundle/output must be absolute");
-  assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.sourcePng && fixture?.growthFile,
-    "fixture must include root, discard, duplicateA, duplicateB, sourcePng, growthFile");
+  assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.growthFile,
+    "fixture must include root, discard, duplicateA, duplicateB, duplicateC, sourcePng, growthFile");
   assert.equal(typeof onRelaunch, "function", "onRelaunch callback is required for restart coverage");
   await mkdir(output, { recursive: true });
   let app = initialApp;
   const report = { status: "running", appBundle, startedAt: new Date().toISOString(), phases: [], checkpoints: [] };
-  const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.discard, fixture.sourcePng];
+  const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC, fixture.discard, fixture.sourcePng];
   const bundleFiles = ["Contents/MacOS/Cockpit", "Contents/Helpers/cockpit", "Contents/Resources/dashboard/app.js", "Contents/Resources/dashboard/index.html"]
     .map(file => path.join(appBundle, file));
   const before = await Promise.all([...originalFixtureFiles, ...bundleFiles].map(fingerprint));
@@ -160,21 +160,24 @@ export async function runInstalledStorageJourney(initialApp, options) {
     phase = "native-duplicates-opt-in";
     await navigate("Duplicates");
     ax = await click(line => /button (?:Inspect content for duplicates|Re-run content inspection)(?:,|$)/.test(line));
-    ax = await waitFor(value => value.includes("Exact duplicate groups") && value.includes(fixture.duplicateA) && value.includes(fixture.duplicateB), "native duplicate inspection must report both fixture paths");
+    ax = await waitFor(value => value.includes("Exact duplicate groups") && value.includes(fixture.duplicateA) && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC), "native duplicate inspection must report all duplicate fixture paths");
     assert.ok(ax.includes("2 files considered") || ax.includes("1 groups shown"), "duplicate summary must be rendered");
     await phaseDone(phase);
 
-    phase = "native-trash-review-and-apply";
-    await navigate("Storage");
-    ax = await click(controlIncluding("button", `Inspect ${fixture.discard}`));
-    ax = await click(line => /button .*review move to trash(?:,|$)/i.test(line));
+    phase = "native-trash-multi-review-and-apply";
+    await navigate("Cleanup");
+    ax = await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC), "cleanup must expose both duplicate extras for explicit review");
+    await click(controlIncluding("checkbox", `Stage ${fixture.duplicateB}`));
+    await click(controlIncluding("checkbox", `Stage ${fixture.duplicateC}`));
+    ax = await click(hasButton("Review selected files"));
     ax = await waitFor(value => value.includes("Move selected files to Trash?") && value.includes("Move to Trash"), "native Trash review must be visible");
     await app.click(locate(ax, hasButton("Move to Trash"), phase));
     ax = await waitFor(value => value.includes("Review ready") || value.includes("Cleanup complete"), "native review must return to dashboard");
     ax = await click(hasButton("Apply cleanup"));
-    ax = await waitFor(value => value.includes("Cleanup complete") && value.includes("moved to Trash"), "native cleanup apply must complete");
-    await assert.rejects(() => access(fixture.discard), /ENOENT/, "discard fixture must be absent after native apply");
-    await navigate("Cleanup");
+    ax = await waitFor(value => value.includes("Cleanup complete") && value.includes("2 files moved to Trash"), "native multi-file cleanup apply must complete");
+    await assert.rejects(() => access(fixture.duplicateB), /ENOENT/, "first duplicate extra must be absent after native apply");
+    await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must be absent after native apply");
+    await access(fixture.discard);
     ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render applied plan");
     assert.ok(!/\b(?:interrupted|indeterminate|failed|partial)\b/i.test(ax), "partial native cleanup outcome cannot be reported as success");
     await phaseDone(phase);
@@ -188,14 +191,21 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await navigate("Activity");
     ax = await click(hasButton("Refresh activity"));
     ax = await waitFor(value => value.includes("Cleanup, scan, compression") && value.includes("Cleanup history"), "activity must reload durable cleanup journal");
+    await click(hasButton(`Restore ${path.basename(fixture.duplicateB)}`));
+    ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "native per-item Restore must complete after relaunch");
+    const restoredOneFile = await assertLiveFile(fixture.duplicateB);
+    assertFingerprint(restoredOneFile, before[originalFixtureFiles.indexOf(fixture.duplicateB)], "restored first duplicate extra");
+    await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must remain missing after per-item Restore");
     ax = await click(hasButton("Undo"));
-    ax = await waitFor(value => value.includes("Undo complete") && value.includes("restored"), "native Undo must complete after relaunch");
+    ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "whole Undo must restore remaining item");
+    const restoredTwo = await assertLiveFile(fixture.duplicateC);
+    assertFingerprint(restoredTwo, before[originalFixtureFiles.indexOf(fixture.duplicateC)], "restored second duplicate extra");
     const restored = await assertLiveFile(fixture.discard);
-    assertFingerprint(restored, before[originalFixtureFiles.indexOf(fixture.discard)], "restored discard fixture");
+    assertFingerprint(restored, before[originalFixtureFiles.indexOf(fixture.discard)], "retained discard fixture");
     await navigate("Cleanup");
     ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render restored plan");
     assert.ok(!/\b(?:interrupted|indeterminate|failed|partial)\b/i.test(ax), "partial native Undo outcome cannot be reported as success");
-    await phaseDone(phase, { restored: { sha256: restored.sha256, dev: restored.dev, ino: restored.ino } });
+    await phaseDone(phase, { restored: [restoredOneFile, restoredTwo, restored] });
 
     phase = "native-compression-picker";
     const sourceBefore = await assertLiveFile(fixture.sourcePng);
@@ -224,8 +234,21 @@ export async function runInstalledStorageJourney(initialApp, options) {
       const action = view === "Apps" ? "Refresh app inventory" : view === "Monitor" ? "Refresh readings" : "Refresh activity";
       ax = await click(hasButton(action));
       const expected = view === "Apps" ? "Application inventory" : view === "Monitor" ? "Storage volumes" : "Cleanup, scan, compression";
-      await waitFor(value => value.includes(expected), `${view} native reading must render`);
+      ax = await waitFor(value => value.includes(expected) && value.includes(`${action.replace("Refresh readings", "refresh monitor").replace("Refresh app inventory", "refresh apps").replace("Refresh activity", "refresh activity")} complete`), `${view} native reading must render after response`);
       await phaseDone(phase);
+      if (view === "Apps") {
+        phase = "native-app-details";
+        const appName = path.basename(appBundle, path.extname(appBundle));
+        assert.ok(ax.includes(appBundle), "Apps inventory must include current Cockpit bundle path");
+        ax = await click(hasButton(`Details for ${appName}`));
+        ax = await waitFor(value => value.includes(`Details · ${appName}`) && value.includes(appBundle), "app details must render current bundle identity and exact path");
+        for (const related of ["Library/Preferences", "Library/Caches", "Library/Application Support", "Library/Logs", "Library/Containers"]) {
+          assert.ok(ax.includes(related), `app details must render exact related path family ${related}`);
+        }
+        assert.ok(ax.includes("report only"), "related app paths must remain report only");
+        assert.ok(ax.includes("Application history") && /partial|unknown/i.test(ax), "app history must expose partial or unknown coverage");
+        await phaseDone(phase);
+      }
     }
 
     phase = "per-ring-hover";

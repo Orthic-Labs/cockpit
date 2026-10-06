@@ -102,15 +102,17 @@ export async function createStorageFixture({ destination }) {
     compressionOutput,
     duplicateA: path.join(destination, "duplicate-a.bin"),
     duplicateB: path.join(nested, "duplicate-b.bin"),
+    duplicateC: path.join(nested, "duplicate-c.bin"),
     discard: path.join(destination, "discard-me.txt"),
     sourcePng: path.join(destination, "source-image.png"),
     growthFile: path.join(destination, "growth-after-first-scan.bin"),
   };
   await exclusiveWrite(paths.duplicateA, duplicate);
   await exclusiveWrite(paths.duplicateB, duplicate);
+  await exclusiveWrite(paths.duplicateC, duplicate);
   await exclusiveWrite(paths.discard, Buffer.from("Cockpit installed journey discard fixture\n", "utf8"));
   await exclusiveWrite(paths.sourcePng, makePng());
-  await Promise.all([paths.duplicateA, paths.duplicateB, paths.discard, paths.sourcePng].map(async file => {
+  await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng].map(async file => {
     const info = await lstat(file);
     assert.equal(info.isSymbolicLink(), false, `Fixture child cannot be a symlink: ${file}`);
     assert.equal(info.isFile(), true, `Fixture child must be a regular file: ${file}`);
@@ -125,7 +127,7 @@ export async function createStorageFixture({ destination }) {
   });
   return {
     ...paths,
-    files: await Promise.all([paths.duplicateA, paths.duplicateB, paths.discard, paths.sourcePng].map(fingerprint)),
+    files: await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng].map(fingerprint)),
     duplicateBytes: DUPLICATE_BYTES,
     trash,
   };

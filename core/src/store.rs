@@ -1743,9 +1743,7 @@ fn encode_id(id: &str) -> String {
 }
 
 fn decode_id(key: &str) -> io::Result<String> {
-    if key.is_empty()
-        || !key.len().is_multiple_of(2)
-        || !key.bytes().all(|b| b.is_ascii_hexdigit())
+    if key.is_empty() || !key.len().is_multiple_of(2) || !key.bytes().all(|b| b.is_ascii_hexdigit())
     {
         return Err(invalid("invalid state record filename"));
     }

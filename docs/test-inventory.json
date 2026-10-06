@@ -1274,7 +1274,7 @@
       },
       {
         "file": "core/tests/storage_browser.rs",
-        "sha256": "c544ed0e12ff882a0971e543a83c5ca0188d7b1dfb14530b03e68e590d3ba93d",
+        "sha256": "7ad2cc6dda5e9d80e77676bdf2e082be3a23be2d08cc11e111992e4c2ae1c105",
         "declared_test_names": [
           "search_includes_hidden_files_filters_extension_and_paginates",
           "malformed_query_and_limits_are_rejected",

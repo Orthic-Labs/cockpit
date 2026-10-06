@@ -117,27 +117,35 @@ fn search_includes_hidden_files_filters_extension_and_paginates() {
 #[test]
 fn malformed_query_and_limits_are_rejected() {
     let report = report(Vec::new(), Vec::new(), false);
-    let mut zero = SearchRequest::default();
-    zero.limit = 0;
+    let zero = SearchRequest {
+        limit: 0,
+        ..SearchRequest::default()
+    };
     assert!(matches!(
         search_filenames(&report, &zero),
         Err(StorageBrowserError::InvalidLimit(0))
     ));
-    let mut offset = SearchRequest::default();
-    offset.offset = cockpit_core::storage_browser::MAX_PAGE_OFFSET + 1;
+    let offset = SearchRequest {
+        offset: cockpit_core::storage_browser::MAX_PAGE_OFFSET + 1,
+        ..SearchRequest::default()
+    };
     assert!(matches!(
         search_filenames(&report, &offset),
         Err(StorageBrowserError::InvalidOffset(_))
     ));
-    let mut long = SearchRequest::default();
-    long.query = "x".repeat(cockpit_core::storage_browser::MAX_QUERY_LENGTH + 1);
+    let long = SearchRequest {
+        query: "x".repeat(cockpit_core::storage_browser::MAX_QUERY_LENGTH + 1),
+        ..SearchRequest::default()
+    };
     assert!(matches!(
         search_filenames(&report, &long),
         Err(StorageBrowserError::InvalidQuery(_))
     ));
-    let mut range = SearchRequest::default();
-    range.min_size = Some(10);
-    range.max_size = Some(1);
+    let range = SearchRequest {
+        min_size: Some(10),
+        max_size: Some(1),
+        ..SearchRequest::default()
+    };
     assert!(matches!(
         search_filenames(&report, &range),
         Err(StorageBrowserError::InvalidSizeRange)
@@ -172,7 +180,7 @@ fn incomplete_and_placeholder_state_is_preserved_without_hydration() {
     let report = report(vec![placeholder], Vec::new(), true);
     let result = search_filenames(&report, &SearchRequest::new("cloud", 10)).unwrap();
     assert!(result.incomplete);
-    assert_eq!(result.items[0].is_placeholder, true);
+    assert!(result.items[0].is_placeholder);
     assert_eq!(result.items[0].logical_size, None);
     let inspection = inspect(&report, Path::new("/scope/cloud")).unwrap();
     assert!(inspection.incomplete);
