@@ -31,7 +31,7 @@ final class PillSettingsStoreTrustTests: XCTestCase {
         let store = PillSettingsStore(directory: dir)
         XCTAssertEqual(store.ensureDirectory(), .refused(.ioError(EACCES)))
         XCTAssertEqual(store.load().state, .protected(.ioError(EACCES)))
-        XCTAssertEqual(store.save(.defaults), .failure(.refused(.ioError(EACCES))))
+        assertVoidResultEqual(store.save(.defaults), .failure(.refused(.ioError(EACCES))))
         XCTAssertEqual(try mode(dir), 0o755, "must never chmod a pre-existing directory")
     }
 
@@ -40,7 +40,7 @@ final class PillSettingsStoreTrustTests: XCTestCase {
         let store = PillSettingsStore(directory: dir, expectedUID: getuid() &+ 1)
         XCTAssertEqual(store.ensureDirectory(), .refused(.ioError(EPERM)))
         XCTAssertEqual(store.load().state, .protected(.ioError(EPERM)))
-        XCTAssertEqual(store.save(.defaults), .failure(.refused(.ioError(EPERM))))
+        assertVoidResultEqual(store.save(.defaults), .failure(.refused(.ioError(EPERM))))
     }
 
     func testPermissiveFileIsProtectedOnLoadAndRefusedOnSave() throws {
@@ -49,7 +49,7 @@ final class PillSettingsStoreTrustTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
         let store = PillSettingsStore(directory: dir)
         XCTAssertEqual(store.load().state, .protected(.ioError(EACCES)))
-        XCTAssertEqual(store.save(.defaults), .failure(.refused(.ioError(EACCES))))
+        assertVoidResultEqual(store.save(.defaults), .failure(.refused(.ioError(EACCES))))
         XCTAssertEqual(try mode(file), 0o644)
     }
 
@@ -79,7 +79,7 @@ final class PillSettingsStoreTrustTests: XCTestCase {
         let linked = PillSettingsStore(directory: linkDir)
         XCTAssertEqual(linked.ensureDirectory(), .refused(.symlink))
         XCTAssertEqual(linked.load().state, .protected(.symlink))
-        XCTAssertEqual(linked.save(.defaults), .failure(.refused(.symlink)))
+        assertVoidResultEqual(linked.save(.defaults), .failure(.refused(.symlink)))
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: realDir.path).isEmpty)
 
         try makeDir()
@@ -88,7 +88,7 @@ final class PillSettingsStoreTrustTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
         let store = PillSettingsStore(directory: dir)
         XCTAssertEqual(store.load().state, .protected(.symlink))
-        XCTAssertEqual(store.save(PillSettings(visible: false)), .failure(.refused(.symlink)))
+        assertVoidResultEqual(store.save(PillSettings(visible: false)), .failure(.refused(.symlink)))
         XCTAssertEqual(try Data(contentsOf: target), Data(#"{"schema_version":1}"#.utf8))
     }
 
@@ -102,13 +102,13 @@ final class PillSettingsStoreTrustTests: XCTestCase {
         let store = PillSettingsStore(directory: nested)
         XCTAssertEqual(store.ensureDirectory(), .refused(.symlink))
         XCTAssertEqual(store.load().state, .protected(.symlink))
-        XCTAssertEqual(store.save(.defaults), .failure(.refused(.symlink)))
+        assertVoidResultEqual(store.save(.defaults), .failure(.refused(.symlink)))
         XCTAssertFalse(FileManager.default.fileExists(atPath: realParent.appendingPathComponent("Cockpit").path))
     }
 
     func testFreshSaveUsesOwnerOnlyModes() throws {
         let store = PillSettingsStore(directory: dir)
-        XCTAssertEqual(store.save(.defaults), .success(()))
+        assertVoidResultEqual(store.save(.defaults), .success(()))
         XCTAssertEqual(try mode(dir), 0o700)
         XCTAssertEqual(try mode(file), 0o600)
     }

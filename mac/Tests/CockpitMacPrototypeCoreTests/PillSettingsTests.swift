@@ -225,7 +225,7 @@ final class PillStoreFileTests: XCTestCase {
     func testSaveCreatesPrivateDirectoryAndFileAndRoundTrips() throws {
         let store = PillSettingsStore(directory: dir)
         let s = PillSettings(visible: false, cadenceSeconds: 4, monitors: ["K": MonitorSetting(enabled: true, anchor: .bottomLeft)])
-        XCTAssertEqual(store.save(s), .success(()))
+        assertVoidResultEqual(store.save(s), .success(()))
         XCTAssertEqual(try mode(dir), 0o700)
         XCTAssertEqual(try mode(file), 0o600)
         XCTAssertEqual(store.load(), .init(settings: s, state: .loaded))
@@ -237,7 +237,7 @@ final class PillStoreFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o755])
         XCTAssertEqual(PillSettingsStore(directory: dir).ensureDirectory(), .existing)
-        XCTAssertEqual(PillSettingsStore(directory: dir).save(.defaults), .success(()))
+        assertVoidResultEqual(PillSettingsStore(directory: dir).save(.defaults), .success(()))
         XCTAssertEqual(try mode(dir), 0o755)
     }
 
@@ -267,7 +267,7 @@ final class PillStoreFileTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
         let store = PillSettingsStore(directory: dir)
         XCTAssertEqual(store.load().state, .protected(.symlink))
-        XCTAssertEqual(store.save(PillSettings(visible: false)), .failure(.refused(.symlink)))
+        assertVoidResultEqual(store.save(PillSettings(visible: false)), .failure(.refused(.symlink)))
         XCTAssertEqual(try Data(contentsOf: target), Data(#"{"schema_version":1}"#.utf8))
 
         let realDir = root.appendingPathComponent("real", isDirectory: true)
@@ -277,7 +277,7 @@ final class PillStoreFileTests: XCTestCase {
         let linked = PillSettingsStore(directory: linkDir)
         XCTAssertEqual(linked.ensureDirectory(), .refused(.symlink))
         XCTAssertEqual(linked.load().state, .protected(.symlink))
-        XCTAssertEqual(linked.save(PillSettings(visible: false)), .failure(.refused(.symlink)))
+        assertVoidResultEqual(linked.save(PillSettings(visible: false)), .failure(.refused(.symlink)))
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: realDir.path).isEmpty)
     }
 }
