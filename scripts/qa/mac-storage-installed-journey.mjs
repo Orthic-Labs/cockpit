@@ -549,6 +549,11 @@ export async function runInstalledStorageJourney(initialApp, options) {
         ax = await waitFor(value => value.includes("App feed result") && value.includes(appBundle) && /(?:unavailable|unsupported)/i.test(value) && /(?:Not performed|false)/i.test(value),
           "selected Cockpit feed check must report real unsupported state without network");
         assert.ok(/SUFeedURL|feed_url_not_declared|bundle_feed_url_not_declared/i.test(ax), "Cockpit feed result must explain missing SUFeedURL");
+        ax = await click(hasButton("Check Homebrew"));
+        ax = await waitFor(value => value.includes("Homebrew result") && value.includes(appBundle)
+          && /not_managed|unavailable|partial|no-update|available/.test(value),
+          "explicit Homebrew check must return correlated metadata or supported unavailable state", 50_000);
+        assert.ok(!/upgrade complete|installed update/i.test(ax), "Homebrew metadata must never claim an installation");
         const cockpitBefore = await stat(appBundle);
         ax = await click(hasButton("Review app uninstall"));
         ax = await waitFor(value => /Action failed:/i.test(value) && /running|liveness|process/i.test(value),

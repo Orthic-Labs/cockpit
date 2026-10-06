@@ -705,7 +705,16 @@ public final class DashboardHost: NSObject {
             guard let path = payload["path"] as? String, let bundle = trustedApplications[path] else {
                 throw ScanFailure.invalidJSON("Refresh inventory & select an application first")
             }
-            var result = try await applicationUpdates.check(applicationPath: URL(fileURLWithPath: path), expectedBundleID: bundle)
+            let provider = payload["provider"] as? String ?? "appcast"
+            var result: [String: Any]
+            switch provider {
+            case "appcast":
+                result = try await applicationUpdates.check(applicationPath: URL(fileURLWithPath: path), expectedBundleID: bundle)
+            case "homebrew":
+                result = await NativeHomebrewUpdates.check(bundleURL: URL(fileURLWithPath: path), bundleID: bundle)
+            default:
+                throw ScanFailure.invalidJSON("Unsupported update metadata provider")
+            }
             result["path"] = path
             return result
         case "review_app_uninstall":
