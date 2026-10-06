@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 
-/// Cockpit fork: the machine's own readings as notch rings — CPU, memory
-/// pressure and one ring per mounted local disk. Each is a `UsageProvider` of
+/// Cockpit fork: the machine's own readings as notch rings — memory
+/// pressure and one ring per mounted local disk (CPU is available, unused). Each is a `UsageProvider` of
 /// kind `.system`, so it gets Codenotch's ring, hover card and ordering for
 /// free, while the store refreshes it every two seconds and keeps it out of
 /// the usage archive and alerts.
@@ -20,7 +20,9 @@ enum SystemProviders {
     /// Disks are discovered once, at launch; one mounted later gets its ring
     /// on the next launch.
     static func all() -> [UsageProvider] {
-        let fixed: [UsageProvider] = [CPUProvider(), MemoryProvider()]
+        // CPU is left out on purpose: memory pressure is the reading that
+        // means something at a glance. `CPUProvider` stays for the hub.
+        let fixed: [UsageProvider] = [MemoryProvider()]
         return fixed + DiskProvider.discover().map { $0 as UsageProvider }
     }
 

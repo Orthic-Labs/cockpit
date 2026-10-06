@@ -24,7 +24,7 @@ jobs:
       matrix:
         # Full validation stays on one declared runner; prefer configured
         # Windows when available, otherwise preserve first configured OS.
-        os: ["macos-26"]
+        os: ["xcode-27"]
         node: ["26.8.1"]
     runs-on: ${{ matrix.os }}
     steps:

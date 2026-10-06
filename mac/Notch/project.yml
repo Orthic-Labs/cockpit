@@ -2,7 +2,7 @@ name: Cockpit
 options:
   bundleIdPrefix: dev.orthic
   deploymentTarget:
-    macOS: "15.0"
+    macOS: "26.0"
   createIntermediateGroups: true
   defaultLocalization: en
 
@@ -83,7 +83,7 @@ targets:
           - uk
           - uz
           - tr
-        LSMinimumSystemVersion: "15.0"
+        LSMinimumSystemVersion: "26.0"
         # Sources/Info.plist is *generated* from this block, so editing that
         # file directly is undone by the next `make gen`. Pointing both at the
         # build settings keeps one place to bump.

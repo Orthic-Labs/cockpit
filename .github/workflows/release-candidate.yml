@@ -101,7 +101,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: "macos-26"
+          - os: "xcode-27"
             node: "26.8.1"
             platform: "macos"
             architecture: "arm64"
@@ -207,7 +207,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: "macos-26"
+          - os: "xcode-27"
             platform: "macos"
             architecture: "arm64"
             targetTriple: "aarch64-apple-darwin"

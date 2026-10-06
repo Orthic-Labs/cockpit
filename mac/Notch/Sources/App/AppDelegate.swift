@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// vendor's own order instead — see their sink.
     static func drawn(_ snapshots: [ProviderSnapshot], weekly: Bool, paced: Bool)
     -> [ProviderSnapshot] {
-        DailyPace.apply(to: WeeklyHeadline.apply(to: snapshots, enabled: weekly), enabled: paced)
+        SplitWeeklyRing.apply(to: DailyPace.apply(to: WeeklyHeadline.apply(to: snapshots, enabled: weekly), enabled: paced))
     }
 
     /// Every Claude Code configuration directory on this Mac — `~/.claude` and

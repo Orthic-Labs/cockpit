@@ -2,7 +2,7 @@
 
 Forked from [vinzdg/codenotch](https://github.com/vinzdg/codenotch) at `72fb2169ef316834ad632f85de27a415cd0d2298` (MIT, see `LICENSE`). The pristine donor stays in `upstream/codenotch` for diffing; this copy is Cockpit's own.
 
-Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, then `xcodebuild -scheme Cockpit` on macOS 26 / Xcode 26. CI only (see `scripts/gate.sh`).
+Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, then `xcodebuild -scheme Cockpit` on the `xcode-27` runner (macOS 27, Xcode 27). CI only (see `scripts/gate.sh`).
 
 ## Local changes
 
@@ -13,7 +13,9 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 | Right-click | One item: Quit Cockpit | `Notch/NotchWindowController.swift` |
 | Updater | Sparkle removed; `Updater` is an inert stub so no Codenotch update can install over Cockpit | `App/Updater.swift`, `project.yml` |
 | Providers | Claude and Codex only (other provider code still compiled, not instantiated) | `App/AppDelegate.swift` |
-| System rings | CPU, memory pressure, one ring per mounted local disk; `ProviderKind.system`, 2 s refresh, no archive, no refresh spinner, excluded from usage alerts; SF Symbol glyphs | `System/SystemProviders.swift`, `Model/UsageStore.swift`, `Providers/UsageProvider.swift`, `Providers/ProviderGlyph.swift`, `Settings/Preferences.swift`, `App/AppDelegate.swift` |
+| System rings | Memory pressure and one ring per mounted local disk (CPU provider kept, not shown); `ProviderKind.system`, 2 s refresh, no archive, no refresh spinner, excluded from usage alerts; SF Symbol glyphs | `System/SystemProviders.swift`, `Model/UsageStore.swift`, `Providers/UsageProvider.swift`, `Providers/ProviderGlyph.swift`, `Settings/Preferences.swift`, `App/AppDelegate.swift` |
+| Claude rings | Two rings: five-hour session and weekly, side by side (notch only) | `System/SplitWeeklyRing.swift`, `App/AppDelegate.swift` |
+| Platform | Minimum macOS 26 (Liquid Glass always available); built with Xcode 27 | `project.yml` |
 | First run | No What's New, no first-run Settings window | `App/AppDelegate.swift` |
 | Tests | Codenotch's unit tests not carried over | `project.yml` |
 
