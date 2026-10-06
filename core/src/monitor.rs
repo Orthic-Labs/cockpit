@@ -418,16 +418,17 @@ impl ResourceHistory {
 
     pub fn push_processes(&mut self, sampled_at_ms: u64, processes: &[ProcessInfo]) {
         for process in processes {
-            if process.cpu_usage_percent.is_finite() && process.cpu_usage_percent >= 0.0 {
-                if let Some(memory_bytes) = process.memory.value {
-                    self.push(ResourceSample {
-                        sampled_at_ms,
-                        identity: process.identity.clone(),
-                        name: process.name.clone(),
-                        cpu_usage_percent: process.cpu_usage_percent,
-                        memory_bytes,
-                    });
-                }
+            if process.cpu_usage_percent.is_finite()
+                && process.cpu_usage_percent >= 0.0
+                && let Some(memory_bytes) = process.memory.value
+            {
+                self.push(ResourceSample {
+                    sampled_at_ms,
+                    identity: process.identity.clone(),
+                    name: process.name.clone(),
+                    cpu_usage_percent: process.cpu_usage_percent,
+                    memory_bytes,
+                });
             }
         }
     }

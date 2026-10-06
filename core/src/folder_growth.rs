@@ -103,7 +103,7 @@ fn valid_volume(volume: &VolumeIdentity) -> bool {
 
 fn has_dot_component(path: &Path) -> bool {
     path.to_string_lossy()
-        .split(|character| character == '/' || character == '\\')
+        .split(['/', '\\'])
         .any(|component| component == "." || component == "..")
 }
 

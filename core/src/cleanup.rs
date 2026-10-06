@@ -444,22 +444,22 @@ impl Journal {
         self.entries.get(id)
     }
     fn mark_started(&mut self, id: &str, index: usize) {
-        if let Some(e) = self.entries.get_mut(id) {
-            if let Some(i) = e.items.get_mut(index) {
-                i.state = ItemJournalState::Started;
-            }
+        if let Some(e) = self.entries.get_mut(id)
+            && let Some(i) = e.items.get_mut(index)
+        {
+            i.state = ItemJournalState::Started;
         }
     }
     fn mark_item(&mut self, id: &str, index: usize, outcome: ItemOutcome) {
-        if let Some(e) = self.entries.get_mut(id) {
-            if let Some(i) = e.items.get_mut(index) {
-                i.state = if matches!(&outcome, ItemOutcome::Interrupted) {
-                    ItemJournalState::Indeterminate
-                } else {
-                    ItemJournalState::Completed
-                };
-                i.outcome = Some(outcome);
-            }
+        if let Some(e) = self.entries.get_mut(id)
+            && let Some(i) = e.items.get_mut(index)
+        {
+            i.state = if matches!(&outcome, ItemOutcome::Interrupted) {
+                ItemJournalState::Indeterminate
+            } else {
+                ItemJournalState::Completed
+            };
+            i.outcome = Some(outcome);
         }
     }
     fn finish(&mut self, id: &str, interrupted: bool) {

@@ -1675,13 +1675,13 @@ impl StateStore {
         let encoded = encode_id(id);
         let mut newest: Option<(u64, String)> = None;
         for name in names {
-            if let Some((key, version)) = parse_state_file_name(&name) {
-                if key == encoded {
-                    newest = match newest {
-                        Some((v, n)) if v >= version => Some((v, n)),
-                        _ => Some((version, name)),
-                    };
-                }
+            if let Some((key, version)) = parse_state_file_name(&name)
+                && key == encoded
+            {
+                newest = match newest {
+                    Some((v, n)) if v >= version => Some((v, n)),
+                    _ => Some((version, name)),
+                };
             }
         }
         newest
@@ -1743,7 +1743,10 @@ fn encode_id(id: &str) -> String {
 }
 
 fn decode_id(key: &str) -> io::Result<String> {
-    if key.is_empty() || key.len() % 2 != 0 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if key.is_empty()
+        || !key.len().is_multiple_of(2)
+        || !key.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Err(invalid("invalid state record filename"));
     }
     let mut bytes = Vec::with_capacity(key.len() / 2);

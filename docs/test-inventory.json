@@ -894,7 +894,7 @@
     "source_working_tree_inventory": [
       {
         "file": "core/src/compression.rs",
-        "sha256": "7df18c100a15a1a8966db8fb5057f93ba5ceea6875afb9ca4594a2ccd98b343c",
+        "sha256": "e0f57b899cca0a6c5f4fd8ee9f55df9ede81c390a6f7521bfefa73b10f55f9cf",
         "declared_test_names": [
           "plan_keeps_estimate_separate_from_measured_savings",
           "unsafe_and_unknown_sources_are_refused",

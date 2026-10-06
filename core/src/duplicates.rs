@@ -100,7 +100,7 @@ impl DuplicateReport {
 pub fn find_duplicates(paths: &[PathBuf], options: &DuplicateOptions) -> DuplicateReport {
     #[cfg(unix)]
     {
-        return find_duplicates_with_reader(paths, options, &UnixContentReader);
+        find_duplicates_with_reader(paths, options, &UnixContentReader)
     }
     #[cfg(not(unix))]
     {

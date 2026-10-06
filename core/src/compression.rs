@@ -269,10 +269,10 @@ impl CompressionPlan {
             return Err(CompressionPlanError::InvalidQuality);
         }
         request.resize.validate()?;
-        if let Some(target) = request.target_size_bytes {
-            if target == 0 {
-                return Err(CompressionPlanError::InvalidTargetSize);
-            }
+        if let Some(target) = request.target_size_bytes
+            && target == 0
+        {
+            return Err(CompressionPlanError::InvalidTargetSize);
         }
         if evidence.is_symlink {
             return Err(CompressionPlanError::SourceSymlink);
@@ -299,10 +299,10 @@ impl CompressionPlan {
         let source_bytes = evidence
             .logical_bytes
             .ok_or(CompressionPlanError::UnknownSourceSize)?;
-        if let Some(target) = request.target_size_bytes {
-            if target >= source_bytes {
-                return Err(CompressionPlanError::TargetSizeNotSmaller);
-            }
+        if let Some(target) = request.target_size_bytes
+            && target >= source_bytes
+        {
+            return Err(CompressionPlanError::TargetSizeNotSmaller);
         }
         Ok(Self {
             request,
@@ -370,11 +370,11 @@ impl CompressionPlan {
                 return Err(self.failure(CompressionFailureReason::OutputInvalid));
             }
         };
-        if let Some(target) = self.request.target_size_bytes {
-            if output_bytes > target {
-                self.lifecycle = CompressionLifecycle::Failed;
-                return Err(self.failure(CompressionFailureReason::TargetSizeNotMet));
-            }
+        if let Some(target) = self.request.target_size_bytes
+            && output_bytes > target
+        {
+            self.lifecycle = CompressionLifecycle::Failed;
+            return Err(self.failure(CompressionFailureReason::TargetSizeNotMet));
         }
         self.lifecycle = CompressionLifecycle::Completed;
         Ok(CompressionResult {

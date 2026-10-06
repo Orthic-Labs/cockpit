@@ -498,10 +498,10 @@ impl InstalledAppHistory {
         if currently_present {
             InstallState::Installed
         } else if coverage.complete_for_leftovers() {
-            if let Some(key) = identity.stable_key() {
-                if self.records.contains_key(&key) {
-                    return InstallState::ConfirmedGone;
-                }
+            if let Some(key) = identity.stable_key()
+                && self.records.contains_key(&key)
+            {
+                return InstallState::ConfirmedGone;
             }
             InstallState::Unknown
         } else {
@@ -860,12 +860,12 @@ impl ProcessHistory {
                 sample.process.pid == process.pid && sample.process.start_time == process.start_time
             })
             .count();
-        if count > self.max_samples_per_process {
-            if let Some(index) = self.samples.iter().position(|sample| {
+        if count > self.max_samples_per_process
+            && let Some(index) = self.samples.iter().position(|sample| {
                 sample.process.pid == process.pid && sample.process.start_time == process.start_time
-            }) {
-                self.samples.remove(index);
-            }
+            })
+        {
+            self.samples.remove(index);
         }
         sequence
     }

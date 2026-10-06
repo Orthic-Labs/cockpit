@@ -183,7 +183,7 @@ pub struct StorageCounts {
 
 /// Sharing facts are optional because absence of identity is an unknown, not
 /// proof that a file is unshared.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShareInfo {
     pub file_id: Option<FileIdentity>,
     pub clone_id: Option<CloneIdentity>,
@@ -191,19 +191,6 @@ pub struct ShareInfo {
     pub paths_with_same_clone_id: Option<usize>,
     pub hardlink_shared: Option<bool>,
     pub clone_shared: Option<bool>,
-}
-
-impl Default for ShareInfo {
-    fn default() -> Self {
-        Self {
-            file_id: None,
-            clone_id: None,
-            paths_with_same_file_id: None,
-            paths_with_same_clone_id: None,
-            hardlink_shared: None,
-            clone_shared: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
