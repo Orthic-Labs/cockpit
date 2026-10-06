@@ -1,7 +1,15 @@
 use cockpit_core::presentation::{RenderOptions, View, render};
-use cockpit_core::{ScanOptions, rules, scan_paths, store};
+use cockpit_core::{
+    FilesystemProvider, ScanOptions, StdFilesystemProvider, rules, scan_paths, scan_with_provider,
+    store,
+};
 use serde_json::{Value, json};
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 /// CLI failure: optional JSON body for stderr and the process exit code.
 struct CliError {
@@ -73,7 +81,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     arguments.retain(|a| a != "--json");
     if arguments.is_empty() || ["help", "--help", "-h"].contains(&arguments[0].as_str()) {
         println!(
-            "Cockpit — read-only system inspection\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\n\nScans never read file contents. --save opts into local metadata history.\nCleanup, uninstall & process actions await feasibility & safety gates."
+            "Cockpit — read-only system inspection\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\nCleanup, uninstall & process actions await feasibility & safety gates."
         );
         return Ok(());
     }
@@ -107,6 +115,12 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 return Err("scan limits: depth ≤ 128; entries 1–1000000".into());
             }
             let save = take_flag(&mut arguments, "--save");
+            let exclude_state = take_option(&mut arguments, "--exclude-state")?
+                .map(|path| resolve_path(&path))
+                .transpose()?;
+            if exclude_state.is_some() && !save {
+                return Err("--exclude-state requires --save".into());
+            }
             if arguments.is_empty() {
                 return Err("scan requires explicit paths".into());
             }
@@ -121,14 +135,74 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     if p.is_absolute() { p } else { cwd.join(p) }
                 })
                 .collect();
-            let report = scan_paths(
-                &paths,
-                &ScanOptions {
-                    max_depth,
-                    max_entries,
-                    ..Default::default()
-                },
-            );
+            let state_directory = if save { Some(directory()?) } else { None };
+            let excluded_state = if let Some(excluded) = exclude_state {
+                let state_directory = state_directory
+                    .as_deref()
+                    .ok_or("--exclude-state requires --save")?;
+                let canonical_state = canonical_nearest_existing(state_directory)?;
+                let canonical_excluded = canonical_nearest_existing(&excluded)?;
+                if canonical_state != canonical_excluded {
+                    return Err("--exclude-state must match --state-dir".into());
+                }
+                let inside_root = paths.iter().any(|root| {
+                    canonical_nearest_existing(root)
+                        .map(|root| {
+                            canonical_excluded == root || canonical_excluded.starts_with(root)
+                        })
+                        .unwrap_or(false)
+                });
+                if !inside_root {
+                    return Err("--exclude-state must be inside selected scan roots".into());
+                }
+                Some(canonical_excluded)
+            } else {
+                if let Some(state_directory) = state_directory.as_deref() {
+                    ensure_state_directory_outside_roots(state_directory, &paths)?;
+                }
+                None
+            };
+            let options = ScanOptions {
+                max_depth,
+                max_entries,
+                ..Default::default()
+            };
+            let scan_roots = excluded_state
+                .as_deref()
+                .map(|_| {
+                    paths
+                        .iter()
+                        .map(|path| canonical_nearest_existing(path))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_else(|| paths.clone());
+            let mut report = if let Some(excluded) = excluded_state.as_deref() {
+                scan_with_provider(
+                    &ExcludingProvider {
+                        inner: StdFilesystemProvider,
+                        excluded: excluded.to_path_buf(),
+                    },
+                    &scan_roots,
+                    &options,
+                )
+            } else {
+                scan_paths(&scan_roots, &options)
+            };
+            if let Some(excluded) = excluded_state.as_deref() {
+                report.accounting.incomplete = true;
+                let reason = format!(
+                    "excluded state directory not scanned: {}",
+                    excluded.display()
+                );
+                report.incomplete_reasons.push(reason.clone());
+                report.accounting.reclaim.upper_bytes = None;
+                report.accounting.reclaim.state = Some(cockpit_core::ReclaimState::Unknown);
+                report.accounting.reclaim.reasons.push(reason);
+                for folder in &mut report.folders {
+                    folder.incomplete = true;
+                }
+            }
             let mut totals = std::collections::BTreeMap::<PathBuf, (u64, u64)>::new();
             for entry in &report.entries {
                 for ancestor in entry.path.ancestors() {
@@ -171,11 +245,28 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 .collect();
             let findings = rules::evaluate_all(&pack.rules, &rows);
             let snapshot = store::Snapshot::new(report, findings);
-            let saved_to = if save {
-                Some(store::save(&directory()?, &snapshot).map_err(|e| e.to_string())?)
-            } else {
-                None
-            };
+            let saved_to = state_directory
+                .as_deref()
+                .map(|directory| store::save(directory, &snapshot).map_err(|e| e.to_string()))
+                .transpose()?;
+            if let Some(state_directory) = state_directory.as_deref() {
+                let mut activity =
+                    cockpit_core::activity::DurableActivityLedger::open(state_directory)
+                        .map_err(|e| e.to_string())?;
+                activity
+                    .record(cockpit_core::activity::ActivityEvent {
+                        id: snapshot.id.clone(),
+                        occurred_at: snapshot.created_at,
+                        kind: cockpit_core::activity::ActivityKind::Scan {
+                            logical_bytes: snapshot.report.accounting.logical_bytes,
+                            attributed_bytes: snapshot
+                                .report
+                                .accounting
+                                .attributed_allocation_bytes,
+                        },
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
             emit(
                 json!({"snapshot":snapshot,"saved_to":saved_to}),
                 machine,
@@ -185,7 +276,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         "findings" => {
             let rule = take_option(&mut arguments, "--rule")?;
             require_empty(&arguments)?;
-            let (history, diagnostics, notes) = load_history(&directory()?)?;
+            let (history, diagnostics, notes, _) = load_history(&directory()?)?;
             let findings: Vec<_> = history
                 .last()
                 .map(|s| {
@@ -215,7 +306,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
             if let Some(rule) = pack.rules.iter().find(|r| r.id == arguments[0]) {
                 emit(json!(rule), machine, View::Explain);
             } else {
-                let (history, diagnostics, notes) = load_history(&directory()?)?;
+                let (history, diagnostics, notes, _) = load_history(&directory()?)?;
                 let finding = history
                     .iter()
                     .rev()
@@ -232,10 +323,13 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         }
         "history" => {
             require_empty(&arguments)?;
-            let (history, diagnostics, notes) = load_history(&directory()?)?;
+            let (history, diagnostics, notes, _) = load_history(&directory()?)?;
             let rows: Vec<_> = history.iter().enumerate().map(|(index, snapshot)| {
                 let comparison = index.checked_sub(1).map(|previous| cockpit_core::history::compare(&history[previous], snapshot));
-                json!({"id":snapshot.id,"created_at":snapshot.created_at,"roots":snapshot.report.roots,"accounting":snapshot.report.accounting,"attributed_growth_bytes":comparison.as_ref().and_then(|c| c.attributed_growth_bytes).map(wide),"comparison":comparison.as_ref().map(comparison_value),"findings_count":snapshot.findings.len()})
+                let folder_comparison = index.checked_sub(1).map(|previous| {
+                    cockpit_core::folder_growth::compare_folders(&history[previous], snapshot, 100)
+                });
+                json!({"id":snapshot.id,"created_at":snapshot.created_at,"roots":snapshot.report.roots,"accounting":snapshot.report.accounting,"attributed_growth_bytes":comparison.as_ref().and_then(|c| c.attributed_growth_bytes).map(wide),"comparison":comparison.as_ref().map(comparison_value),"folder_comparison":folder_comparison,"findings_count":snapshot.findings.len()})
             }).collect();
             emit(
                 json!({"history":rows,"history_diagnostics":diagnostics,"capability_notes":notes}),
@@ -261,10 +355,238 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
             }
             emit(value, machine, View::Procs);
         }
+        "monitor" => {
+            require_empty(&arguments)?;
+            let extended = cockpit_core::monitor::sample_extended();
+            emit_inspection(
+                json!({
+                    "schema_version": 1,
+                    "extended": extended,
+                    "modules": {"monitor": extended},
+                    "actions_enabled": false,
+                }),
+                machine,
+            );
+        }
+        "find" | "browse" | "export" => {
+            let offset = take_number(&mut arguments, "--offset", 0)?;
+            let limit = take_number(&mut arguments, "--limit", 100)?;
+            cockpit_core::storage_browser::validate_page_bounds(offset, limit)
+                .map_err(|e| e.to_string())?;
+            let requested_snapshot_id = if command == "export" {
+                if arguments.len() > 1 {
+                    return Err("export accepts at most one snapshot ID".into());
+                }
+                arguments.pop()
+            } else {
+                None
+            };
+            let (history, diagnostics, notes, history_skips) = load_history(&directory()?)?;
+            let snapshot_index = if let Some(id) = requested_snapshot_id.as_deref() {
+                history
+                    .iter()
+                    .position(|snapshot| snapshot.id == id)
+                    .ok_or("snapshot ID is not present in local history")?
+            } else {
+                history
+                    .len()
+                    .checked_sub(1)
+                    .ok_or("no saved scan; run scan <path> --save first")?
+            };
+            let snapshot = &history[snapshot_index];
+            let report = &snapshot.report;
+            let payload = match command.as_str() {
+                "find" => {
+                    let extension = take_option(&mut arguments, "--ext")?;
+                    let kind_text = take_option(&mut arguments, "--kind")?;
+                    let kind = match kind_text.as_deref() {
+                        None => None,
+                        Some("file") => Some(cockpit_core::EntryKind::File),
+                        Some("directory") => Some(cockpit_core::EntryKind::Directory),
+                        _ => return Err("kind must be file or directory".into()),
+                    };
+                    let min_size = take_u64_option(&mut arguments, "--min-size")?;
+                    let max_size = take_u64_option(&mut arguments, "--max-size")?;
+                    if arguments.len() != 1 || arguments[0].starts_with('-') {
+                        return Err("find requires one filename query".into());
+                    }
+                    let request = cockpit_core::storage_browser::SearchRequest {
+                        query: arguments.remove(0),
+                        kind,
+                        extension,
+                        min_size,
+                        max_size,
+                        offset,
+                        limit,
+                    };
+                    json!(
+                        cockpit_core::storage_browser::search(report, &request)
+                            .map_err(|e| e.to_string())?
+                    )
+                }
+                "browse" => {
+                    let folder = take_option(&mut arguments, "--folder")?
+                        .map(|path| resolve_path(&path))
+                        .transpose()?;
+                    let inspect = take_option(&mut arguments, "--inspect")?
+                        .map(|path| resolve_path(&path))
+                        .transpose()?;
+                    let largest = take_option(&mut arguments, "--largest")?;
+                    require_empty(&arguments)?;
+                    if usize::from(folder.is_some())
+                        + usize::from(inspect.is_some())
+                        + usize::from(largest.is_some())
+                        > 1
+                    {
+                        return Err("choose one browse mode".into());
+                    }
+                    if let Some(path) = inspect {
+                        json!(
+                            cockpit_core::storage_browser::inspect_path(report, &path)
+                                .map_err(|e| e.to_string())?
+                        )
+                    } else if let Some(path) = folder {
+                        json!(
+                            cockpit_core::storage_browser::drilldown_children(
+                                report, &path, offset, limit
+                            )
+                            .map_err(|e| e.to_string())?
+                        )
+                    } else {
+                        if offset != 0 {
+                            return Err("offset requires --folder".into());
+                        }
+                        match largest.as_deref().unwrap_or("folders") {
+                            "files" => json!({
+                                "items": cockpit_core::storage_browser::largest_files(report, limit)
+                                    .map_err(|e| e.to_string())?,
+                                "limit": limit,
+                                "incomplete": report.accounting.incomplete,
+                            }),
+                            "folders" => json!({
+                                "items": cockpit_core::storage_browser::largest_folders(report, limit)
+                                    .map_err(|e| e.to_string())?,
+                                "limit": limit,
+                                "incomplete": report.accounting.incomplete,
+                            }),
+                            _ => return Err("largest must be files or folders".into()),
+                        }
+                    }
+                }
+                _ => {
+                    require_empty(&arguments)?;
+                    let folder_growth = snapshot_index.checked_sub(1).map(|previous| {
+                        cockpit_core::folder_growth::compare_folders(
+                            &history[previous],
+                            snapshot,
+                            limit,
+                        )
+                    });
+                    let export = cockpit_core::dashboard_export::DashboardExport::from_snapshot(
+                        snapshot.clone(),
+                        history
+                            .iter()
+                            .map(cockpit_core::dashboard_export::SnapshotSummary::from_snapshot)
+                            .collect(),
+                        history_skips,
+                        load_activity_projection(&directory()?, snapshot.created_at)?,
+                        folder_growth,
+                        cockpit_core::monitor::sample_extended(),
+                    );
+                    emit_inspection(
+                        serde_json::to_value(export).map_err(|e| e.to_string())?,
+                        machine,
+                    );
+                    return Ok(());
+                }
+            };
+            emit_inspection(
+                json!({
+                    "schema_version": 1,
+                    "operation": command,
+                    "snapshot_id": snapshot.id,
+                    "sampled_at": snapshot.created_at,
+                    "data": payload,
+                    "history_diagnostics": diagnostics,
+                    "capability_notes": notes,
+                }),
+                machine,
+            );
+        }
+        "duplicates" => {
+            let min_bytes = take_u64_option(&mut arguments, "--min-size")?
+                .unwrap_or(cockpit_core::duplicates::DEFAULT_MIN_DUPLICATE_BYTES);
+            let max_files = take_number(&mut arguments, "--max-files", 100_000)?;
+            let max_total_read_bytes = take_u64_option(&mut arguments, "--max-read-bytes")?
+                .unwrap_or(cockpit_core::duplicates::DEFAULT_MAX_TOTAL_READ_BYTES);
+            let seconds = take_number(&mut arguments, "--seconds", 30)?;
+            if max_files == 0
+                || max_files > 100_000
+                || max_total_read_bytes == 0
+                || max_total_read_bytes > (8u64 << 30)
+                || seconds == 0
+                || seconds > 120
+            {
+                return Err(
+                    "duplicate limits: files 1–100000; read bytes 1–8GiB; seconds 1–120".into(),
+                );
+            }
+            if arguments.is_empty() || arguments.iter().any(|path| path.starts_with('-')) {
+                return Err("duplicates requires explicit scan paths".into());
+            }
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            let roots: Vec<_> = arguments
+                .iter()
+                .map(|path| {
+                    let path = PathBuf::from(path);
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        cwd.join(path)
+                    }
+                })
+                .collect();
+            let report = scan_paths(
+                &roots,
+                &ScanOptions {
+                    max_entries: max_files,
+                    ..Default::default()
+                },
+            );
+            let paths: Vec<_> = report
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.metadata.kind == cockpit_core::EntryKind::File
+                        && !entry.metadata.is_placeholder
+                        && entry.metadata.metadata_complete
+                })
+                .map(|entry| entry.path.clone())
+                .collect();
+            let duplicates = cockpit_core::duplicates::find_duplicates(
+                &paths,
+                &cockpit_core::duplicates::DuplicateOptions {
+                    min_bytes,
+                    max_files,
+                    max_total_read_bytes,
+                    deadline: std::time::Duration::from_secs(seconds as u64),
+                },
+            );
+            emit_inspection(
+                json!({
+                    "schema_version": 1,
+                    "duplicates": duplicates,
+                    "scan_incomplete": report.accounting.incomplete,
+                    "scan_diagnostics": report.incomplete_reasons,
+                    "actions_enabled": false,
+                }),
+                machine,
+            );
+        }
         "usage" => {
             require_empty(&arguments)?;
             emit(
-                json!({"claude":{"value":null,"state":"unavailable","source":null,"observed_at":null},"codex":{"value":null,"state":"unavailable","source":null,"observed_at":null},"reason":"pill usage-reader integration pending; credentials are not inspected by CLI"}),
+                json!({"claude":{"value":null,"state":"unavailable","source":null,"observed_at":null},"codex":{"value":null,"state":"unavailable","source":null,"observed_at":null},"reason":"notch provider readings are available in native app; CLI unavailable; credentials are not inspected by CLI"}),
                 machine,
                 View::Usage,
             );
@@ -291,6 +613,160 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, Str
         Ok(None)
     }
 }
+fn emit_inspection(value: Value, machine: bool) {
+    if machine {
+        println!("{value}");
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value).expect("JSON value serialization")
+        );
+    }
+}
+fn take_u64_option(args: &mut Vec<String>, flag: &str) -> Result<Option<u64>, String> {
+    take_option(args, flag)?
+        .map(|value| value.parse().map_err(|_| format!("invalid {flag}")))
+        .transpose()
+}
+fn resolve_path(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(path))
+    }
+}
+/// Canonicalize a path even when its leaf does not exist yet. Existing
+/// ancestors are resolved first so `root/../root/state` cannot evade scope
+/// checks through lexical aliases.
+fn canonical_nearest_existing(path: &Path) -> Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        resolve_path(&path.to_string_lossy())?
+    };
+    let mut cursor = absolute.as_path();
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match fs::symlink_metadata(cursor) {
+            Ok(_) => {
+                let mut canonical = fs::canonicalize(cursor).map_err(|e| e.to_string())?;
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor
+                    .file_name()
+                    .ok_or("cannot normalize path without existing ancestor")?;
+                missing.push(name.to_os_string());
+                cursor = cursor
+                    .parent()
+                    .ok_or("cannot normalize path without existing ancestor")?;
+            }
+            Err(error) => return Err(format!("cannot inspect path: {error}")),
+        }
+    }
+}
+
+fn ensure_state_directory_outside_roots(
+    state_directory: &Path,
+    roots: &[PathBuf],
+) -> Result<(), String> {
+    let state = canonical_nearest_existing(state_directory)?;
+    for root in roots {
+        let root = canonical_nearest_existing(root)?;
+        if state == root || state.starts_with(&root) {
+            return Err(format!(
+                "--state-dir must be outside selected scan roots (state: {}; root: {})",
+                state.display(),
+                root.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Provider boundary used only by an explicit saved scan. The excluded state
+/// subtree is never inspected or enumerated, while its omission is disclosed
+/// in the resulting report by the caller above.
+struct ExcludingProvider<P> {
+    inner: P,
+    excluded: PathBuf,
+}
+
+impl<P: FilesystemProvider> ExcludingProvider<P> {
+    fn is_excluded(&self, path: &Path) -> bool {
+        path == self.excluded || path.starts_with(&self.excluded)
+    }
+
+    fn reject(&self, path: &Path) -> Result<(), cockpit_core::FsError> {
+        if self.is_excluded(path) {
+            Err(cockpit_core::FsError::new(format!(
+                "excluded state directory: {}",
+                path.display()
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
+    fn begin_scan(&self) {
+        self.inner.begin_scan();
+    }
+
+    fn inspect(&self, path: &Path) -> Result<cockpit_core::FileMetadata, cockpit_core::FsError> {
+        self.reject(path)?;
+        self.inner.inspect(path)
+    }
+
+    fn inspect_detailed(
+        &self,
+        path: &Path,
+    ) -> Result<(cockpit_core::FileMetadata, Vec<String>), cockpit_core::FsError> {
+        self.reject(path)?;
+        self.inner.inspect_detailed(path)
+    }
+
+    fn children(&self, path: &Path) -> Result<Vec<PathBuf>, cockpit_core::FsError> {
+        self.reject(path)?;
+        Ok(self
+            .inner
+            .children(path)?
+            .into_iter()
+            .filter(|child| !self.is_excluded(child))
+            .collect())
+    }
+
+    fn children_bounded(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<(Vec<PathBuf>, bool), cockpit_core::FsError> {
+        self.reject(path)?;
+        let (children, truncated) = self.inner.children_bounded(path, limit)?;
+        Ok((
+            children
+                .into_iter()
+                .filter(|child| !self.is_excluded(child))
+                .collect(),
+            truncated,
+        ))
+    }
+
+    fn volume_usage(
+        &self,
+        volume: &cockpit_core::VolumeIdentity,
+    ) -> Result<cockpit_core::VolumeUsage, cockpit_core::FsError> {
+        self.inner.volume_usage(volume)
+    }
+}
+
 fn take_number(args: &mut Vec<String>, flag: &str, default: usize) -> Result<usize, String> {
     take_option(args, flag)?.map_or(Ok(default), |s| {
         s.parse().map_err(|_| format!("invalid {flag}"))
@@ -316,18 +792,52 @@ fn require_empty(args: &[String]) -> Result<(), String> {
 /// store. `capability_notes` discloses platform limits that affect the
 /// privacy of the store itself (for example Windows ACL inheritance); it
 /// is surfaced verbatim alongside `history_diagnostics`.
-type LoadedHistory = (Vec<store::Snapshot>, Vec<Value>, Vec<String>);
+type LoadedHistory = (
+    Vec<store::Snapshot>,
+    Vec<Value>,
+    Vec<String>,
+    Vec<cockpit_core::dashboard_export::HistorySkip>,
+);
 
 fn load_history(directory: &std::path::Path) -> Result<LoadedHistory, String> {
     let report = store::history_report(directory).map_err(|e| e.to_string())?;
     // Stdout JSON gains `history_diagnostics`; stderr keeps one event per file.
     let mut diagnostics = Vec::new();
+    let mut skips = Vec::new();
     for skipped in report.skipped {
         let event = json!({"event":"snapshot_skipped","file":skipped.file,"reason":skipped.reason});
         eprintln!("{event}");
         diagnostics.push(json!({"file":event["file"],"reason":event["reason"]}));
+        skips.push(cockpit_core::dashboard_export::HistorySkip {
+            file: event["file"].as_str().unwrap_or_default().to_owned(),
+            reason: event["reason"].as_str().unwrap_or_default().to_owned(),
+        });
     }
-    Ok((report.snapshots, diagnostics, report.capability_notes))
+    Ok((
+        report.snapshots,
+        diagnostics,
+        report.capability_notes,
+        skips,
+    ))
+}
+
+fn load_activity_projection(
+    directory: &Path,
+    timestamp: u64,
+) -> Result<cockpit_core::dashboard_export::ActivityProjection, String> {
+    let activity_directory = directory.join("activity");
+    match fs::symlink_metadata(&activity_directory) {
+        Ok(metadata) if metadata.is_dir() => {
+            let ledger = cockpit_core::activity::DurableActivityLedger::open(directory)
+                .map_err(|e| e.to_string())?;
+            Ok(cockpit_core::dashboard_export::ActivityProjection::from_ledger(&ledger, timestamp))
+        }
+        Ok(_) => Err("activity state path is not a directory".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(
+            cockpit_core::dashboard_export::ActivityProjection::empty(timestamp),
+        ),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn limits_for_scan(arguments: &mut Vec<String>) -> Result<(usize, usize), String> {

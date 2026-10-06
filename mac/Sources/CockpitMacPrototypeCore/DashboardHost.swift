@@ -3,6 +3,7 @@ import Foundation
 import AppKit
 import WebKit
 import UniformTypeIdentifiers
+import Quartz
 #endif
 
 // On-demand dashboard host: an AppKit window hosting the bundled static dashboard
@@ -289,7 +290,7 @@ public enum DashboardNavigation {
     }
 
     /// Allowlisted script-message names the page may send. Anything else is dropped.
-    public static let allowedScriptMessages: Set<String> = ["cockpitStatus"]
+    public static let allowedScriptMessages: Set<String> = ["cockpitStatus", "cockpitAction"]
 }
 
 // MARK: - Scan coordinator (AppKit-free test seam)
@@ -302,6 +303,34 @@ public struct ScanCoordinator: Sendable {
     public init(configuration: DashboardHostConfiguration, runner: any ScanRunning) {
         self.configuration = configuration
         self.runner = runner
+    }
+
+    public func commandObject(arguments: [String]) async throws -> [String: Any] {
+        guard let helper = configuration.helperURL else { throw ScanFailure.helperMissing }
+        let request = ScanRequest(executable: helper, arguments: arguments,
+                                  deadline: configuration.deadline,
+                                  stdoutLimit: configuration.stdoutLimit,
+                                  stderrLimit: configuration.stderrLimit)
+        let outcome = try await runner.run(request)
+        guard !outcome.truncated else { throw ScanFailure.outputTruncated }
+        guard let object = try JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any] else {
+            throw ScanFailure.invalidJSON("Expected a JSON object")
+        }
+        return object
+    }
+
+    public func scanExport(root: URL, stateDirectory: URL) async throws -> [String: Any] {
+        var arguments = ["scan", root.path, "--save", "--state-dir", stateDirectory.path, "--json"]
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let canonicalState = stateDirectory.resolvingSymlinksInPath().standardizedFileURL.path
+        if canonicalState == canonicalRoot || canonicalState.hasPrefix(canonicalRoot == "/" ? "/" : canonicalRoot + "/") {
+            arguments += ["--exclude-state", stateDirectory.path]
+        }
+        let object = try await commandObject(arguments: arguments)
+        guard let snapshot = object["snapshot"] as? [String: Any], let id = snapshot["id"] as? String else {
+            throw ScanFailure.emptyReport
+        }
+        return try await commandObject(arguments: ["export", id, "--state-dir", stateDirectory.path, "--json"])
     }
 
     /// Full scan for a user-selected root; throws ScanFailure on any bound violation.
@@ -327,9 +356,26 @@ public final class DashboardHost: NSObject {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var scanTask: Task<Void, Never>?
+    private var actionTask: Task<Void, Never>?
+    private var busy = false
+    private let stateDirectory: URL
+    private let nativeServices: NativeStorageServices
+    private let cleanupService: NativeCleanupService
+    private var trustedSnapshotID: String?
+    private var trustedRoot: URL?
+    private var trustedEntries: [String: [String: Any]] = [:]
+    private var trustedCleanupPaths: Set<String> = []
+    private var previewURL: URL?
+    private var restoreEnabled = true
+
 
     public init(configuration: DashboardHostConfiguration = .bundleDefault(),
-                runner: any ScanRunning = ProcessScanRunner()) {
+                runner: any ScanRunning = ProcessScanRunner(), stateDirectory: URL? = nil) {
+        let state = stateDirectory ?? FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath()
+            .appendingPathComponent("Library/Application Support/Cockpit/Storage", isDirectory: true)
+        self.stateDirectory = state.standardizedFileURL
+        self.nativeServices = NativeStorageServices(stateDirectory: state)
+        self.cleanupService = NativeCleanupService(stateDirectory: state)
         self.configuration = configuration
         self.coordinator = ScanCoordinator(configuration: configuration, runner: runner)
     }
@@ -342,6 +388,7 @@ public final class DashboardHost: NSObject {
 
     /// Hosted package smoke: verify bundled page scripts & real scanner exchange.
     public func verifyBundledScan(root: URL) async throws {
+        restoreEnabled = false
         show()
         guard let webView else { throw ScanFailure.emptyReport }
         var ready = false
@@ -351,8 +398,12 @@ public final class DashboardHost: NSObject {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         guard ready else { throw ScanFailure.invalidJSON("Bundled dashboard did not become ready") }
-        let script = try await coordinator.importScript(for: root)
-        _ = try await webView.evaluateJavaScript(script)
+        let smokeState = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("cockpit-dashboard-state-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: smokeState) }
+        let object = try await coordinator.scanExport(root: root, stateDirectory: smokeState)
+        acceptNativeScan(object)
+        _ = try await webView.evaluateJavaScript(DashboardInjection.importJavaScript(for: object))
         let imported = try await webView.evaluateJavaScript("window.CockpitDashboard.getState().scan.entries.length > 0")
         guard (imported as? Bool) == true else { throw ScanFailure.emptyReport }
         let searchPassed = try await webView.evaluateJavaScript("""
@@ -378,6 +429,7 @@ public final class DashboardHost: NSObject {
     /// Full app shutdown: cancels scanning & releases retained dashboard state.
     public func stop() {
         scanTask?.cancel()
+        actionTask?.cancel()
         coordinator.runner.cancel()
         webView?.stopLoading()
         webView?.navigationDelegate = nil
@@ -393,7 +445,9 @@ public final class DashboardHost: NSObject {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         // No WKUserContentController script handlers beyond the allowlisted name.
-        config.userContentController.add(BridgeSink(host: self), name: "cockpitStatus")
+        let sink = BridgeSink(host: self)
+        config.userContentController.add(sink, name: "cockpitStatus")
+        config.userContentController.add(sink, name: "cockpitAction")
         // CSP via document-start script: file:// pages can't carry response headers.
         // 'self' + file subresources under the read-access grant; connect-src 'none' blocks
         // any network fetch the page might attempt.
@@ -433,6 +487,7 @@ public final class DashboardHost: NSObject {
     }
 
     @objc private func scanFolder() {
+        guard !busy else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -440,13 +495,17 @@ public final class DashboardHost: NSObject {
         panel.message = "Choose a folder to scan (read-only)"
         guard window != nil, panel.runModal() == .OK, let root = panel.url else { return }
         scanTask?.cancel()
+        busy = true
         scanTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.busy = false; self.scanTask = nil }
             do {
-                let script = try await self.coordinator.importScript(for: root)
+                let object = try await self.coordinator.scanExport(root: root, stateDirectory: self.stateDirectory)
+                let script = try DashboardInjection.importJavaScript(for: object)
                 guard !Task.isCancelled, let webView = self.webView else { return }
                 if script.count > self.configuration.requestLimit { throw ScanFailure.outputTruncated }
                 try await webView.evaluateJavaScript(script)
+                self.acceptNativeScan(object)
             } catch is CancellationError {
             } catch {
                 guard !Task.isCancelled else { return }
@@ -455,15 +514,160 @@ public final class DashboardHost: NSObject {
             }
         }
     }
+
+    private func acceptNativeScan(_ object: [String: Any]) {
+        guard let snapshot = object["snapshot"] as? [String: Any],
+              let id = snapshot["id"] as? String,
+              let report = snapshot["report"] as? [String: Any],
+              let roots = report["roots"] as? [String], roots.count == 1,
+              let entries = report["entries"] as? [[String: Any]] else { return }
+        cleanupService.revokeReviewedPlans()
+        trustedCleanupPaths = Set((snapshot["findings"] as? [[String: Any]] ?? []).compactMap { finding in
+            guard finding["eligible"] as? Bool == true,
+                  finding["report_only"] as? Bool != true,
+                  finding["route"] as? String == "trash" else { return nil }
+            return finding["path"] as? String
+        })
+        trustedSnapshotID = id
+        trustedRoot = URL(fileURLWithPath: roots[0]).standardizedFileURL
+        trustedEntries = Dictionary(entries.compactMap { entry in
+            guard let path = entry["path"] as? String else { return nil }
+            return (path, entry)
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func requireNativeScan(_ payload: [String: Any]) throws -> URL {
+        guard let root = trustedRoot, let id = payload["snapshot_id"] as? String,
+              id == trustedSnapshotID else {
+            throw ScanFailure.invalidJSON("Scan a folder in Cockpit before using this native action")
+        }
+        return root
+    }
+
+    fileprivate func receiveAction(_ message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame,
+              message.frameInfo.request.url.map({ DashboardNavigation.isAllowed($0, dashboardRoot: configuration.dashboardDirectory) }) == true,
+              let body = message.body as? [String: Any], (body["version"] as? Int) == 1,
+              let id = body["request_id"] as? String, !id.isEmpty, id.utf8.count <= 128,
+              let action = body["action"] as? String, action.utf8.count <= 64,
+              let bytes = try? JSONSerialization.data(withJSONObject: body), bytes.count <= 64 * 1024 else { return }
+        let payload = body["payload"] as? [String: Any] ?? [:]
+        guard !busy else {
+            respond(id: id, action: action, result: .failure(ScanFailure.invalidJSON("Another operation is running")))
+            return
+        }
+        busy = true
+        actionTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.busy = false; self.actionTask = nil }
+            do {
+                let data = try await self.performAction(action, payload: payload)
+                try Task.checkCancellation()
+                self.respond(id: id, action: action, result: .success(data))
+            } catch {
+                self.respond(id: id, action: action, result: .failure(error))
+            }
+        }
+    }
+
+    private func performAction(_ action: String, payload: [String: Any]) async throws -> [String: Any] {
+        switch action {
+        case "refresh_apps": return try await nativeServices.appsPayload()
+        case "refresh_monitor":
+            var monitor = try await nativeServices.monitorPayload()
+            let processes = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--groups", "--json"])
+            monitor["processes"] = processes["processes"]
+            monitor["process_groups"] = processes["process_groups"]
+            return monitor
+        case "refresh_activity":
+            var activity = try await nativeServices.activityPayload()
+            if let scan = try? await coordinator.commandObject(arguments: ["export", "--state-dir", stateDirectory.path, "--json"]),
+               let modules = scan["modules"] as? [String: Any] {
+                activity["scans"] = modules["activity"]
+                activity["history"] = modules["history"]
+            }
+            activity["cleanup"] = try cleanupService.historyPayload()
+            return activity
+        case "find_duplicates":
+            let root = try requireNativeScan(payload)
+            let minimum = payload["min_size"] as? Int ?? 102400
+            guard minimum >= 1 else { throw ScanFailure.invalidJSON("Minimum duplicate size must be positive") }
+            let result = try await coordinator.commandObject(arguments: ["duplicates", root.path, "--min-size", String(minimum), "--max-files", "10000", "--max-read-bytes", "1073741824", "--seconds", "30", "--json"])
+            guard let report = result["duplicates"] as? [String: Any] else { throw ScanFailure.invalidJSON("Duplicate report missing") }
+            return report
+        case "compress_media":
+            let quality = (payload["quality"] as? NSNumber)?.doubleValue ?? 0.8
+            return try await nativeServices.compress(format: payload["format"] as? String ?? "jpeg",
+                                                      quality: quality,
+                                                      maxPixelDimension: payload["max_pixel_dimension"] as? Int,
+                                                      targetSizeBytes: payload["target_size_bytes"] as? Int64,
+                                                      presenting: window)
+        case "reveal_item", "preview_item":
+            _ = try requireNativeScan(payload)
+            guard let path = payload["path"] as? String, trustedEntries[path] != nil else {
+                throw ScanFailure.invalidJSON("Item is outside current native scan")
+            }
+            let url = URL(fileURLWithPath: path)
+            if action == "reveal_item" { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            else {
+                previewURL = url
+                if let panel = QLPreviewPanel.shared() { panel.dataSource = self; panel.makeKeyAndOrderFront(nil); panel.reloadData() }
+            }
+            return ["path": path, "state": "opened"]
+        case "review_cleanup":
+            let root = try requireNativeScan(payload)
+            guard let paths = payload["paths"] as? [String], !paths.isEmpty, paths.count <= 100 else {
+                throw ScanFailure.invalidJSON("Select between 1 & 100 ordinary files")
+            }
+            for path in paths {
+                guard payload["selection_mode"] as? String == "manual" || trustedCleanupPaths.contains(path) else {
+                    throw ScanFailure.invalidJSON("This finding is report-only or lacks verified eligibility")
+                }
+                guard let entry = trustedEntries[path], let metadata = entry["metadata"] as? [String: Any],
+                      metadata["kind"] as? String == "File", metadata["metadata_complete"] as? Bool == true,
+                      metadata["is_placeholder"] as? Bool == false else {
+                    throw ScanFailure.invalidJSON("Cleanup requires fully inspected ordinary files")
+                }
+            }
+            return try cleanupService.review(paths: paths.map { URL(fileURLWithPath: $0) }, root: root, presenting: window)
+        case "apply_cleanup":
+            guard let plan = payload["plan_id"] as? String else { throw ScanFailure.invalidJSON("Review cleanup first") }
+            return try cleanupService.apply(planID: plan)
+        case "undo_cleanup":
+            guard let plan = payload["plan_id"] as? String else { throw ScanFailure.invalidJSON("Missing cleanup plan") }
+            return try cleanupService.undo(planID: plan)
+        default: throw ScanFailure.invalidJSON("Unsupported native action")
+        }
+    }
+
+    private func respond(id: String, action: String, result: Result<[String: Any], Error>) {
+        var object: [String: Any] = ["request_id": id, "action": action]
+        switch result {
+        case .success(let data): object["ok"] = true; object["data"] = data
+        case .failure(let error): object["ok"] = false; object["error"] = String(describing: error)
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: object), data.count <= configuration.requestLimit else { return }
+        let literal = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028").replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        webView?.evaluateJavaScript("window.CockpitDashboard.receiveAction(\(literal))", completionHandler: nil)
+    }
 }
 
-/// Drops every script message except allowlisted ones; messages never carry commands.
+/// Drops every script message except allowlisted ones; commands remain fixed native actions.
+@MainActor
 private final class BridgeSink: NSObject, WKScriptMessageHandler {
     weak var host: DashboardHost?
     init(host: DashboardHost) { self.host = host }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard DashboardNavigation.allowedScriptMessages.contains(message.name) else { return }
-        // Informational only — status strings are never executed.
+        if message.name == "cockpitAction" { host?.receiveAction(message) }
+    }
+}
+
+extension DashboardHost: QLPreviewPanelDataSource {
+    public func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { previewURL == nil ? 0 : 1 }
+    public func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        previewURL as NSURL?
     }
 }
 
@@ -476,6 +680,25 @@ extension DashboardHost: NSWindowDelegate {
 }
 
 extension DashboardHost: WKNavigationDelegate {
+    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard restoreEnabled, trustedSnapshotID == nil, !busy,
+              FileManager.default.fileExists(atPath: stateDirectory.path) else { return }
+        busy = true
+        scanTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.busy = false; self.scanTask = nil }
+            do {
+                let object = try await self.coordinator.commandObject(arguments: ["export", "--state-dir", self.stateDirectory.path, "--json"])
+                guard !Task.isCancelled else { return }
+                _ = try await webView.evaluateJavaScript(DashboardInjection.importJavaScript(for: object))
+                self.acceptNativeScan(object)
+            } catch {
+                // A missing/corrupt history never replaces a user-selected scan.
+                // Scan folder remains available to create a fresh snapshot.
+            }
+        }
+    }
+
     public func webView(_ webView: WKWebView,
                         decidePolicyFor action: WKNavigationAction,
                         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

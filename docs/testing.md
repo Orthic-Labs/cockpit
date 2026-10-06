@@ -1,6 +1,6 @@
 # Cockpit behavioral verification
 
-Quality means proving complete user journeys against actual delivered app. Test counts are not acceptance evidence. Keep focused tests for security/accounting boundaries; avoid new tests that mirror implementation or assert fixture construction.
+Quality means proving complete user journeys against actual delivered app. New coverage must be a substantial end-to-end journey through a real product boundary. Retain focused security/accounting/component checks until equivalent journey evidence exists; do not delete them or add tests that mirror implementation, assert fixture construction, or pad counts.
 
 ## Installed Mac journey
 

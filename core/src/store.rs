@@ -17,7 +17,10 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -382,6 +385,41 @@ mod pinned {
             Ok(())
         }
 
+        /// Create/open one child relative to this already-pinned directory.
+        /// No pathname lookup is involved, so renaming the parent path cannot
+        /// redirect this child handle.
+        pub fn ensure_child(&self, name: &str) -> io::Result<Self> {
+            let c = c_name(name)?;
+            let file = match Self::open_dir_at(self.fd(), &c) {
+                Ok(file) => file,
+                Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+                    let made = unsafe { libc::mkdirat(self.fd(), c.as_ptr(), 0o700) };
+                    if made != 0 {
+                        let mkdir_error = io::Error::last_os_error();
+                        if mkdir_error.raw_os_error() != Some(libc::EEXIST) {
+                            return Err(mkdir_error);
+                        }
+                    }
+                    Self::open_dir_at(self.fd(), &c)?
+                }
+                Err(error) => return Err(error),
+            };
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstat(file.as_raw_fd(), &mut st) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if st.st_mode & libc::S_IFMT != libc::S_IFDIR {
+                return Err(invalid_input("metadata child is not a directory"));
+            }
+            if st.st_uid != unsafe { libc::geteuid() } {
+                return Err(denied("metadata child is not owned by the current user"));
+            }
+            if st.st_mode & 0o022 != 0 {
+                return Err(denied("metadata child is writable by group or others"));
+            }
+            Ok(Self(file))
+        }
+
         /// `fstatat` relative to the pinned fd, never following a symlinked
         /// final component. `Ok(None)` covers absent names (and a
         /// non-directory intermediate, which cannot occur for leaf names but
@@ -460,8 +498,8 @@ mod pinned {
                 ));
             }
             let _ = self.unlink(from);
-            // Best effort: make the new directory entry durable.
-            let _ = self.0.sync_all();
+            // Make the new directory entry durable before reporting success.
+            self.0.sync_all()?;
             Ok(())
         }
 
@@ -555,7 +593,7 @@ mod pinned {
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_INFO_BY_HANDLE_CLASS,
         FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdBothDirectoryInfo,
-        GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING,
+        FlushFileBuffers, GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING,
     };
     use windows::Win32::System::IO::IO_STATUS_BLOCK;
     use windows::core::PWSTR;
@@ -822,6 +860,11 @@ mod pinned {
         handle: Handle,
     }
 
+    // NT directory handles are kernel-owned capabilities; the relative
+    // operations below are thread-safe, and Handle owns the single close.
+    unsafe impl Send for PinnedDir {}
+    unsafe impl Sync for PinnedDir {}
+
     /// Verified child handle: an open file object whose on-disk name was
     /// opened relative to the pinned directory before any byte is read or written.
     pub struct VerifiedFile {
@@ -897,6 +940,20 @@ mod pinned {
                 FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             )?;
             reject_info(&info(child.raw())?, true)
+        }
+
+        /// Create/open one child relative to this already-pinned directory.
+        /// Reparse points remain refused by the opened handle's attributes.
+        pub fn ensure_child(&self, name: &str) -> io::Result<Self> {
+            let child = nt_open_relative(
+                self.handle.raw(),
+                name,
+                FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
+                FILE_OPEN_IF,
+                FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+            )?;
+            reject_info(&info(child.raw())?, true)?;
+            Ok(Self { handle: child })
         }
 
         fn open_verified(
@@ -1021,6 +1078,8 @@ mod pinned {
                 };
             }
             let _ = self.unlink(from);
+            // Flush the pinned directory handle before reporting publication.
+            unsafe { FlushFileBuffers(self.handle.raw()) }.map_err(|_| last_err())?;
             Ok(())
         }
 
@@ -1454,4 +1513,322 @@ pub fn history_report_with_budget(directory: &Path, budget: u64) -> io::Result<H
 /// `history_report` to see why.
 pub fn history(directory: &Path) -> io::Result<Vec<Snapshot>> {
     history_report(directory).map(|r| r.snapshots)
+}
+
+// ---------------------------------------------------------------------------
+// Versioned durable records.
+// ---------------------------------------------------------------------------
+
+/// Schema version for generic state records. Snapshot schema is deliberately
+/// separate: records are journals/projections, never scan snapshots.
+pub const STATE_SCHEMA_VERSION: u32 = 1;
+/// Maximum serialized record size. Records are bounded independently from
+/// snapshots so a corrupt journal cannot consume the snapshot read budget.
+pub const MAX_STATE_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum number of record files retained in one state namespace.
+pub const MAX_STATE_RECORDS: usize = 10_000;
+/// Maximum number of version files examined for one namespace.
+pub const MAX_STATE_VERSIONS: usize = MAX_STATE_RECORDS * 32;
+const MAX_STATE_ID_BYTES: usize = 256;
+const STATE_FILE_PREFIX: &str = "record-";
+
+/// A generic, versioned state value. The `id` is data, not a path; record
+/// filenames use a byte-safe hexadecimal key so activity IDs may retain their
+/// existing syntax without weakening path validation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VersionedRecord<T> {
+    pub schema_version: u32,
+    pub id: String,
+    pub version: u64,
+    pub state: T,
+}
+
+/// A pinned private child namespace below a caller-provided state directory.
+/// Each publication is append-only and exact: an existing `(id, version)` can
+/// never be replaced. Readers select the highest valid version for each id.
+#[derive(Clone)]
+pub struct StateStore {
+    directory: PathBuf,
+    namespace: String,
+    pinned: Arc<pinned::PinnedDir>,
+}
+
+impl std::fmt::Debug for StateStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StateStore")
+            .field("directory", &self.directory)
+            .field("namespace", &self.namespace)
+            .finish()
+    }
+}
+
+impl StateStore {
+    /// Open (and, when absent, create) a private child namespace. Existing
+    /// paths are only accepted after the same pinned ownership/mode checks as
+    /// snapshot storage; no permissions or ACLs are rewritten.
+    pub fn open(directory: &Path, namespace: &str) -> io::Result<Self> {
+        validate_namespace(namespace)?;
+        reject_links(directory)?;
+        create_directory(directory)?;
+        reject_links(directory)?;
+        // Pin parent first so a concurrently swapped parent cannot redirect
+        // child creation. Child creation is descriptor-relative.
+        let parent = pinned::PinnedDir::pin(directory)?;
+        let child = directory.join(namespace);
+        let child_handle = parent.ensure_child(namespace)?;
+        Ok(Self {
+            directory: child,
+            namespace: namespace.to_owned(),
+            pinned: Arc::new(child_handle),
+        })
+    }
+
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Publish one immutable version. `AlreadyExists` is returned for an
+    /// exact existing claim; unrelated files are never overwritten.
+    pub fn publish<T: Serialize>(&self, id: &str, version: u64, state: &T) -> io::Result<PathBuf> {
+        validate_state_id(id)?;
+        if version == 0 {
+            return Err(invalid_input("state record version must be nonzero"));
+        }
+        let record = VersionedRecord {
+            schema_version: STATE_SCHEMA_VERSION,
+            id: id.to_owned(),
+            version,
+            state,
+        };
+        let bytes = serde_json::to_vec(&record).map_err(io::Error::other)?;
+        if bytes.len() as u64 > MAX_STATE_RECORD_BYTES {
+            return Err(invalid_input("state record exceeds size cap"));
+        }
+        let dir = self.pin()?;
+        let destination = state_file_name(id, version)?;
+        if dir.stat(&destination)?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "state record already exists",
+            ));
+        }
+        let existing_names = state_names(&dir)?;
+        if existing_names
+            .iter()
+            .filter(|name| parse_state_file_name(name).is_some())
+            .count()
+            >= MAX_STATE_VERSIONS
+        {
+            return Err(invalid_input("state record version cap exceeded"));
+        }
+        let encoded = encode_id(id);
+        let has_id = existing_names
+            .iter()
+            .filter_map(|name| parse_state_file_name(name))
+            .any(|(key, _)| key == encoded);
+        if !has_id {
+            let mut ids = std::collections::BTreeSet::new();
+            for name in &existing_names {
+                if let Some((key, _)) = parse_state_file_name(name) {
+                    ids.insert(key);
+                }
+            }
+            if ids.len() >= MAX_STATE_RECORDS {
+                return Err(invalid_input("state record id cap exceeded"));
+            }
+        }
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary = format!(
+            ".{}{}-{}-{}.tmp",
+            STATE_FILE_PREFIX,
+            encode_id(id),
+            std::process::id(),
+            unique
+        );
+        let result = (|| {
+            let mut file = dir.create_temp(&temporary)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            drop(file);
+            dir.publish(&temporary, &destination)?;
+            Ok(self.directory.join(destination))
+        })();
+        if result.is_err() {
+            let _ = dir.unlink(&temporary);
+        }
+        result
+    }
+
+    /// Return newest record for `id`, or `None` if no record has been claimed.
+    pub fn load<T: for<'de> Deserialize<'de>>(
+        &self,
+        id: &str,
+    ) -> io::Result<Option<VersionedRecord<T>>> {
+        validate_state_id(id)?;
+        let dir = self.pin()?;
+        let names = state_names(&dir)?;
+        let encoded = encode_id(id);
+        let mut newest: Option<(u64, String)> = None;
+        for name in names {
+            if let Some((key, version)) = parse_state_file_name(&name) {
+                if key == encoded {
+                    newest = match newest {
+                        Some((v, n)) if v >= version => Some((v, n)),
+                        _ => Some((version, name)),
+                    };
+                }
+            }
+        }
+        newest
+            .map(|(_, name)| read_state_record(&dir, &name, id))
+            .transpose()
+    }
+
+    /// Load newest record for every id. Malformed records are an error: using
+    /// an older journal silently would risk repeating an indeterminate effect.
+    pub fn records<T: for<'de> Deserialize<'de>>(&self) -> io::Result<Vec<VersionedRecord<T>>> {
+        let dir = self.pin()?;
+        let names = state_names(&dir)?;
+        let mut newest: std::collections::BTreeMap<String, (u64, String)> =
+            std::collections::BTreeMap::new();
+        for name in names {
+            if let Some((key, version)) = parse_state_file_name(&name) {
+                let id = decode_id(&key)?;
+                let entry = newest.entry(id).or_insert((version, name.clone()));
+                if version > entry.0 {
+                    *entry = (version, name);
+                }
+            }
+        }
+        if newest.len() > MAX_STATE_RECORDS {
+            return Err(invalid("state record id cap exceeded"));
+        }
+        newest
+            .into_iter()
+            .map(|(id, (_, name))| read_state_record(&dir, &name, &id))
+            .collect()
+    }
+
+    fn pin(&self) -> io::Result<Arc<pinned::PinnedDir>> {
+        Ok(Arc::clone(&self.pinned))
+    }
+}
+
+fn validate_namespace(namespace: &str) -> io::Result<()> {
+    if namespace.is_empty()
+        || namespace.len() > 64
+        || !namespace
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(invalid_input("invalid state namespace"));
+    }
+    Ok(())
+}
+
+fn validate_state_id(id: &str) -> io::Result<()> {
+    if id.is_empty() || id.len() > MAX_STATE_ID_BYTES || !id.is_char_boundary(id.len()) {
+        return Err(invalid_input("invalid state record id"));
+    }
+    Ok(())
+}
+
+fn encode_id(id: &str) -> String {
+    id.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn decode_id(key: &str) -> io::Result<String> {
+    if key.is_empty() || key.len() % 2 != 0 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(invalid("invalid state record filename"));
+    }
+    let mut bytes = Vec::with_capacity(key.len() / 2);
+    for pair in key.as_bytes().chunks_exact(2) {
+        let high = (pair[0] as char).to_digit(16).unwrap();
+        let low = (pair[1] as char).to_digit(16).unwrap();
+        bytes.push((high * 16 + low) as u8);
+    }
+    let id = String::from_utf8(bytes).map_err(|_| invalid("state record id is not UTF-8"))?;
+    validate_state_id(&id)?;
+    Ok(id)
+}
+
+fn state_file_name(id: &str, version: u64) -> io::Result<String> {
+    validate_state_id(id)?;
+    Ok(format!(
+        "{}{}-v{}.json",
+        STATE_FILE_PREFIX,
+        encode_id(id),
+        version
+    ))
+}
+
+fn parse_state_file_name(name: &str) -> Option<(String, u64)> {
+    let rest = name
+        .strip_prefix(STATE_FILE_PREFIX)?
+        .strip_suffix(".json")?;
+    let (key, version) = rest.rsplit_once("-v")?;
+    if key.is_empty() || version.is_empty() || !version.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let version = version.parse().ok()?;
+    (version > 0).then(|| (key.to_owned(), version))
+}
+
+fn state_names(dir: &pinned::PinnedDir) -> io::Result<Vec<String>> {
+    #[cfg(unix)]
+    let names = dir.names(MAX_STATE_VERSIONS)?;
+    #[cfg(windows)]
+    let names: Vec<String> = dir
+        .names(MAX_STATE_VERSIONS)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    if names
+        .iter()
+        .filter(|name| parse_state_file_name(name).is_some())
+        .count()
+        > MAX_STATE_VERSIONS
+    {
+        return Err(invalid("state record count cap exceeded"));
+    }
+    Ok(names)
+}
+
+fn read_state_record<T: for<'de> Deserialize<'de>>(
+    dir: &pinned::PinnedDir,
+    name: &str,
+    expected_id: &str,
+) -> io::Result<VersionedRecord<T>> {
+    let file = dir.open_read(name)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(invalid("state record is not a regular file"));
+    }
+    if meta.len() > MAX_STATE_RECORD_BYTES {
+        return Err(invalid("state record exceeds size cap"));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_STATE_RECORD_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_STATE_RECORD_BYTES {
+        return Err(invalid("state record exceeds size cap"));
+    }
+    let record: VersionedRecord<T> = serde_json::from_slice(&bytes)
+        .map_err(|e| invalid(format!("malformed state record: {e}")))?;
+    if record.schema_version != STATE_SCHEMA_VERSION {
+        return Err(invalid(format!(
+            "unsupported state schema version {}",
+            record.schema_version
+        )));
+    }
+    validate_state_id(&record.id)?;
+    if record.id != expected_id || record.version == 0 {
+        return Err(invalid("state record identity does not match filename"));
+    }
+    Ok(record)
 }

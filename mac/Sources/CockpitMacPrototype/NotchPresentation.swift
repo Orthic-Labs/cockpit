@@ -57,30 +57,73 @@ private struct NotchMetric {
     let value: Double?
     let symbol: String
     let color: NSColor
-    var detail: String? = nil
-    var summary: String { detail ?? PillFormat.label(title, fraction: value) }
+    let detailLines: [String]
+    let recovery: AIUsageRecovery?
+    var summary: String { "\(title) \(value.map { String(format: "%.0f%%", $0 * 100) } ?? "--")" }
+}
+
+private final class NotchAccessibilityElement: NSAccessibilityElement {
+    enum Action {
+        case metric
+        case recovery
+    }
+
+    weak var owner: NotchSurfaceView?
+    let action: Action
+    let metricIndex: Int?
+
+    init(owner: NotchSurfaceView, action: Action, metricIndex: Int? = nil) {
+        self.owner = owner
+        self.action = action
+        self.metricIndex = metricIndex
+        super.init()
+    }
+
+    @objc func accessibilityPerformPress() -> Bool {
+        guard let owner else { return false }
+        switch action {
+        case .metric:
+            if let metricIndex { owner.selectMetric(metricIndex) }
+            owner.onClick?()
+        case .recovery:
+            owner.onRecovery?()
+        }
+        return true
+    }
 }
 
 final class NotchSurfaceView: NSView {
     var onClick: (() -> Void)?
+    var onRecovery: (() -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
     var edge: CockpitNotchEdge { didSet { needsDisplay = true } }
     private(set) var reading = SystemReading(cpu: nil, memory: nil, disks: [])
-    private var expanded = false { didSet { if oldValue != expanded { needsDisplay = true; onHoverChanged?(expanded) } } }
+    private var expanded = false {
+        didSet {
+            guard oldValue != expanded else { return }
+            needsDisplay = true
+            refreshAccessibilityChildren()
+            updateTrackingAreas()
+            onHoverChanged?(expanded)
+        }
+    }
     var isExpanded: Bool { expanded }
-    private var tracking: NSTrackingArea?
+    private var selectedMetric: Int?
+    private var metricTracking: [NSTrackingArea] = []
+    private var detailTracking: NSTrackingArea?
+    private var accessibilityChildrenElements: [NSAccessibilityElement] = []
 
     init(edge: CockpitNotchEdge) {
         self.edge = edge
         super.init(frame: .zero)
         setAccessibilityElement(true)
-        setAccessibilityRole(.button)
+        setAccessibilityRole(.group)
         setAccessibilityLabel("Open Cockpit dashboard")
         setAccessibilityHelp("Live CPU, memory usage & volume allocation; click to open Storage")
         wantsLayer = true
         layer?.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        tracking = NSTrackingArea(rect: bounds, options: [.activeAlways, .mouseEnteredAndExited], owner: self)
-        if let tracking { addTrackingArea(tracking) }
+        refreshAccessibilityChildren()
+        rebuildTrackingAreas()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -88,39 +131,64 @@ final class NotchSurfaceView: NSView {
     func update(_ reading: SystemReading) {
         self.reading = reading
         toolTip = metrics.map { $0.summary }.joined(separator: " · ")
-        setAccessibilityValue(metrics.map { $0.summary }.joined(separator: ", "))
+        setAccessibilityLabel(metrics.map { $0.title }.joined(separator: ", ") + ". Open Cockpit dashboard")
+        setAccessibilityValue(metrics.map { "\($0.title): \($0.detailLines.joined(separator: ", "))" }.joined(separator: "; "))
+        refreshAccessibilityChildren()
+        rebuildTrackingAreas()
         needsDisplay = true
     }
 
     override var isFlipped: Bool { true }
 
     override func accessibilityPerformPress() -> Bool {
-        onClick?()
-        return onClick != nil
+        false
+    }
+
+    fileprivate func selectMetric(_ index: Int) {
+        guard metrics.indices.contains(index) else { return }
+        selectedMetric = index
+        refreshAccessibilityChildren()
+        needsDisplay = true
     }
 
     override func updateTrackingAreas() {
-        if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: bounds, options: [.activeAlways, .mouseEnteredAndExited], owner: self)
-        if let tracking { addTrackingArea(tracking) }
+        rebuildTrackingAreas()
         super.updateTrackingAreas()
     }
 
-    override func mouseEntered(with event: NSEvent) { expanded = true }
-    override func mouseExited(with event: NSEvent) { expanded = false }
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseEntered(with event: NSEvent) {
+        if let index = event.trackingArea?.userInfo?["metricIndex"] as? Int {
+            selectMetric(index)
+            expanded = true
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        DispatchQueue.main.async { [weak self] in self?.reconcilePointer() }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        if let index = event.trackingArea?.userInfo?["metricIndex"] as? Int, selectedMetric != index {
+            selectMetric(index)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let depth = expanded ? NotchPresentationLayout.expandedDepth : NotchPresentationLayout.restingDepth(for: edge)
+        let length = NotchPresentationLayout.stackLength(count: metricCount)
+        let alongOffset = edge == .right || edge == .left ? (bounds.height - length) / 2 : (bounds.width - length) / 2
+        if expanded, let selectedMetric, metrics.indices.contains(selectedMetric),
+           metrics[selectedMetric].recovery.map({ $0 == .allowKeychainAccess }) == true,
+           recoveryButtonRect(depth: depth, alongOffset: alongOffset).contains(point) {
+            onRecovery?()
+            return
+        }
+        onClick?()
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if expanded { return self }
-        let hot = NotchPresentationLayout.restingDepth(for: edge)
-        let inside: Bool
-        switch edge {
-        case .right: inside = point.x >= bounds.maxX - hot
-        case .left: inside = point.x <= hot
-        case .top: inside = point.y <= hot
-        case .bottom: inside = point.y >= bounds.maxY - hot
-        }
-        return inside ? self : nil
+        return isInteractive(point) ? self : nil
     }
 
     var metricCount: Int { 4 + reading.disks.count }
@@ -128,21 +196,180 @@ final class NotchSurfaceView: NSView {
     private var metrics: [NotchMetric] {
         let providers = [("claude", "Claude", "claude"), ("chatgpt", "ChatGPT", "openai")].map { id, title, symbol in
             let sample = reading.ai.first { $0.id == id }
+            let windows = sample?.windows.map { window in
+                "\(window.label): \(percentLabel(window.fraction))" + (window.resetsAt.map { " · resets \(resetLabel($0))" } ?? "")
+            } ?? []
+            var details = windows.isEmpty ? (sample?.detail.split(separator: " · ").map(String.init) ?? ["Unavailable"]) : windows
+            if let status = sample?.status, status != .live { details.append("Status: \(status.label)") }
+            if let recovery = sample?.recovery {
+                details.append(recovery == .allowKeychainAccess ? "Click to allow keychain access" : "See dashboard for recovery")
+            }
             return NotchMetric(title: title, value: sample?.fraction, symbol: symbol,
                                color: id == "claude" ? .systemOrange : .systemTeal,
-                               detail: sample?.detail ?? "\(title): awaiting provider reading")
+                               detailLines: details, recovery: sample?.recovery)
         }
         let pressure = reading.memoryPressure
-        let memoryDetail = "Memory pressure: \(pressure?.label ?? "Unavailable") · \(PillFormat.label("RAM used", fraction: reading.memory))"
+        let memoryStatus = pressure?.label ?? "Unavailable"
+        let memoryDetail = [
+            "Pressure: \(memoryStatus)",
+            "RAM: \(byteLabel(reading.memoryUsedBytes)) / \(byteLabel(reading.memoryTotalBytes)) (\(percentLabel(reading.memory)))",
+            "Swap: \(byteLabel(reading.swapUsedBytes)) / \(byteLabel(reading.swapTotalBytes))"
+        ]
         return providers + [
-            NotchMetric(title: "CPU", value: reading.cpu, symbol: "cpu", color: .systemBlue),
+            NotchMetric(title: "CPU", value: reading.cpu, symbol: "cpu", color: .systemBlue,
+                        detailLines: ["Utilization: \(percentLabel(reading.cpu))", "All cores"], recovery: nil),
             NotchMetric(title: "Memory pressure", value: pressure?.severity, symbol: "memorychip",
-                        color: pressure == .critical ? .systemRed : pressure == .warning ? .systemOrange : .systemGreen,
-                        detail: memoryDetail)
+                        color: pressure == nil ? .white.withAlphaComponent(0.4)
+                            : pressure == .critical ? .systemRed : pressure == .warning ? .systemOrange : .systemGreen,
+                        detailLines: memoryDetail, recovery: nil)
         ] + reading.disks.map { disk in
-            NotchMetric(title: disk.name, value: disk.free, symbol: "externaldrive", color: .systemGreen,
-                        detail: "\(disk.name) · \(PillFormat.label("free", fraction: disk.free))")
+            let total = disk.totalBytes
+            let free = disk.freeBytes
+            let used: UInt64? = {
+                guard let total, let free, total >= free else { return nil }
+                return total - free
+            }()
+            return NotchMetric(title: disk.name, value: disk.free, symbol: disk.isInternal ? "internaldrive" : "externaldrive", color: .systemGreen,
+                               detailLines: [
+                                   "Free: \(byteLabel(free))",
+                                   "Used: \(byteLabel(used))",
+                                   "Total: \(byteLabel(total))"
+                               ], recovery: nil)
         }
+    }
+
+    private func percentLabel(_ fraction: Double?) -> String {
+        guard let fraction, fraction.isFinite else { return "Unavailable" }
+        return String(format: "%.0f%%", min(max(fraction, 0), 1) * 100)
+    }
+
+    private func byteLabel(_ bytes: UInt64?) -> String {
+        guard let bytes else { return "Unavailable" }
+        return ByteCountFormatter.string(fromByteCount: Int64(min(bytes, UInt64(Int64.max))), countStyle: .file)
+    }
+
+    private func resetLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    fileprivate func refreshAccessibilityChildren() {
+        let depth = expanded ? NotchPresentationLayout.expandedDepth : NotchPresentationLayout.restingDepth(for: edge)
+        let length = NotchPresentationLayout.stackLength(count: metricCount)
+        let alongOffset = edge == .right || edge == .left ? (bounds.height - length) / 2 : (bounds.width - length) / 2
+        let elements = metrics.enumerated().map { index, metric in
+            let element = NotchAccessibilityElement(owner: self, action: .metric, metricIndex: index)
+            element.setAccessibilityElement(true)
+            element.setAccessibilityRole(.button)
+            element.setAccessibilityLabel(metric.title)
+            element.setAccessibilityValue(metric.detailLines.joined(separator: ", "))
+            element.setAccessibilityHelp("Hover for live \(metric.title) details; click to open its Cockpit view")
+            element.setAccessibilityParent(self)
+            element.accessibilityFrameInParentSpace = metricRect(index: index, depth: depth, alongOffset: alongOffset)
+            return element
+        }
+        var children: [NSAccessibilityElement] = elements
+        if expanded, let selectedMetric, metrics.indices.contains(selectedMetric),
+           metrics[selectedMetric].recovery.map({ $0 == .allowKeychainAccess }) == true {
+            let recoveryIndex = selectedMetric
+            let recovery = NotchAccessibilityElement(owner: self, action: .recovery, metricIndex: recoveryIndex)
+            recovery.setAccessibilityElement(true)
+            recovery.setAccessibilityRole(.button)
+            recovery.setAccessibilityLabel("Allow Claude Keychain access")
+            recovery.setAccessibilityValue("Explicit user action; opens Keychain access prompt")
+            recovery.setAccessibilityHelp("Allow Cockpit to read Claude usage. This prompt appears only after this action.")
+            recovery.setAccessibilityParent(self)
+            recovery.accessibilityFrameInParentSpace = recoveryButtonRect(depth: depth, alongOffset: alongOffset)
+            children.append(recovery)
+        }
+        accessibilityChildrenElements = children
+        setAccessibilityChildren(children)
+    }
+
+    private func metricCenter(index: Int, depth: CGFloat, alongOffset: CGFloat) -> CGPoint {
+        let top = 26 + CGFloat(index) * NotchPresentationLayout.cellExtent
+        let ring = NotchPresentationLayout.ringDiameter
+        return map(CGPoint(x: depth - NotchPresentationLayout.ringMargin - ring / 2,
+                           y: top + ring / 2), depth: depth, alongOffset: alongOffset)
+    }
+
+    private func metricRect(index: Int, depth: CGFloat, alongOffset: CGFloat) -> NSRect {
+        let center = metricCenter(index: index, depth: depth, alongOffset: alongOffset)
+        let ring = NotchPresentationLayout.ringDiameter
+        return NSRect(x: center.x - ring / 2 - 5, y: center.y - ring / 2 - 5,
+                      width: ring + 10, height: ring + 10)
+    }
+
+    private func detailRect(depth: CGFloat, alongOffset: CGFloat) -> NSRect {
+        let gap = NotchPresentationLayout.ringDiameter + NotchPresentationLayout.ringMargin * 2
+        switch edge {
+        case .right:
+            return NSRect(x: 0, y: alongOffset, width: max(0, depth - gap), height: NotchPresentationLayout.stackLength(count: metricCount))
+        case .left:
+            return NSRect(x: gap, y: alongOffset, width: max(0, depth - gap), height: NotchPresentationLayout.stackLength(count: metricCount))
+        case .top:
+            return NSRect(x: alongOffset, y: 0, width: NotchPresentationLayout.stackLength(count: metricCount), height: max(0, depth - gap))
+        case .bottom:
+            return NSRect(x: alongOffset, y: gap, width: NotchPresentationLayout.stackLength(count: metricCount), height: max(0, depth - gap))
+        }
+    }
+
+    private func recoveryButtonRect(depth: CGFloat, alongOffset: CGFloat) -> NSRect {
+        let card = detailRect(depth: depth, alongOffset: alongOffset)
+        guard expanded else { return NSRect(x: card.minX, y: card.minY, width: 1, height: 1) }
+        switch edge {
+        case .right, .left, .top:
+            return NSRect(x: card.minX + 14, y: card.maxY - 42,
+                          width: min(190, max(1, card.width - 28)), height: 28)
+        case .bottom:
+            return NSRect(x: card.minX + 14, y: card.minY + 14,
+                          width: min(190, max(1, card.width - 28)), height: 28)
+        }
+    }
+
+    private func rebuildTrackingAreas() {
+        metricTracking.forEach(removeTrackingArea)
+        metricTracking.removeAll(keepingCapacity: true)
+        if let detailTracking { removeTrackingArea(detailTracking) }
+        detailTracking = nil
+
+        let depth = expanded ? NotchPresentationLayout.expandedDepth : NotchPresentationLayout.restingDepth(for: edge)
+        let length = NotchPresentationLayout.stackLength(count: metricCount)
+        let alongOffset = edge == .right || edge == .left ? (bounds.height - length) / 2 : (bounds.width - length) / 2
+        for index in metrics.indices {
+            let area = NSTrackingArea(rect: metricRect(index: index, depth: depth, alongOffset: alongOffset),
+                                      options: [.activeAlways, .mouseEnteredAndExited, .mouseMoved],
+                                      owner: self, userInfo: ["metricIndex": index])
+            addTrackingArea(area)
+            metricTracking.append(area)
+        }
+        if expanded {
+            let area = NSTrackingArea(rect: detailRect(depth: depth, alongOffset: alongOffset),
+                                      options: [.activeAlways, .mouseEnteredAndExited, .mouseMoved], owner: self)
+            addTrackingArea(area)
+            detailTracking = area
+        }
+    }
+
+    private func isInteractive(_ point: NSPoint) -> Bool {
+        let depth = expanded ? NotchPresentationLayout.expandedDepth : NotchPresentationLayout.restingDepth(for: edge)
+        let length = NotchPresentationLayout.stackLength(count: metricCount)
+        let alongOffset = edge == .right || edge == .left ? (bounds.height - length) / 2 : (bounds.width - length) / 2
+        if metrics.indices.contains(where: { metricRect(index: $0, depth: depth, alongOffset: alongOffset).contains(point) }) { return true }
+        return expanded && detailRect(depth: depth, alongOffset: alongOffset).contains(point)
+    }
+
+    private func reconcilePointer() {
+        guard let window else { expanded = false; selectedMetric = nil; return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard expanded, isInteractive(point) else {
+            expanded = false
+            selectedMetric = nil
+            return
+        }
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -199,11 +426,9 @@ final class NotchSurfaceView: NSView {
     }
 
     private func drawMetrics(depth: CGFloat, alongOffset: CGFloat) {
-        let margin = NotchPresentationLayout.ringMargin
         let ring = NotchPresentationLayout.ringDiameter
         for (index, metric) in metrics.enumerated() {
-            let top = 26 + CGFloat(index) * NotchPresentationLayout.cellExtent
-            let center = map(CGPoint(x: depth - margin - ring / 2, y: top + ring / 2), depth: depth, alongOffset: alongOffset)
+            let center = metricCenter(index: index, depth: depth, alongOffset: alongOffset)
             let ringRect = NSRect(x: center.x - ring / 2, y: center.y - ring / 2, width: ring, height: ring)
             NSColor.white.withAlphaComponent(0.22).setStroke()
             let track = NSBezierPath(ovalIn: ringRect)
@@ -218,33 +443,7 @@ final class NotchSurfaceView: NSView {
                               startAngle: 90, endAngle: 90 - CGFloat(min(max(value, 0), 1) * 360), clockwise: true)
                 arc.stroke()
             }
-            let iconRect = NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
-            let outline = metric.symbol == "claude" ? ProviderGlyphOutlines.claude
-                : metric.symbol == "openai" ? ProviderGlyphOutlines.openai : nil
-            if let outline {
-                let path = NSBezierPath()
-                path.windingRule = .evenOdd
-                for loop in outline {
-                    guard let first = loop.first else { continue }
-                    path.move(to: CGPoint(x: iconRect.minX + first.x * iconRect.width,
-                                          y: iconRect.minY + first.y * iconRect.height))
-                    for point in loop.dropFirst() {
-                        path.line(to: CGPoint(x: iconRect.minX + point.x * iconRect.width,
-                                              y: iconRect.minY + point.y * iconRect.height))
-                    }
-                    path.close()
-                }
-                NSColor.white.setFill()
-                path.fill()
-            } else if let image = NSImage(systemSymbolName: metric.symbol, accessibilityDescription: metric.title) {
-                let tinted = image.copy() as! NSImage
-                tinted.lockFocus()
-                NSColor.white.setFill()
-                NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
-                tinted.unlockFocus()
-                tinted.draw(in: NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12),
-                            from: .zero, operation: .sourceOver, fraction: 1)
-            }
+            drawMetricIcon(metric, in: NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12))
         }
     }
 
@@ -257,42 +456,80 @@ final class NotchSurfaceView: NSView {
     }
 
     private func drawDetails(depth: CGFloat, alongOffset: CGFloat) {
-        let lines = ["System"] + metrics.map { $0.summary }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.9)
+        guard let selectedMetric, metrics.indices.contains(selectedMetric) else { return }
+        let metric = metrics[selectedMetric]
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.95)
         ]
-        let secondary: [NSAttributedString.Key: Any] = [
+        let bodyAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.58)
+            .foregroundColor: NSColor.white.withAlphaComponent(0.72)
         ]
+        let card = detailRect(depth: depth, alongOffset: alongOffset)
+        let x = card.minX + 16
+        let y: CGFloat
         switch edge {
-        case .right:
-            var y: CGFloat = alongOffset + 26
-            for (index, line) in lines.enumerated() {
-                drawDetail(line, at: CGPoint(x: 18, y: y), attributes: index == 1 ? secondary : attributes)
-                y += index == 0 ? 22 : 17
-            }
-        case .left:
-            var y: CGFloat = alongOffset + 26
-            for (index, line) in lines.enumerated() {
-                drawDetail(line, at: CGPoint(x: NotchPresentationLayout.ringDiameter + 20, y: y), attributes: index == 1 ? secondary : attributes)
-                y += index == 0 ? 22 : 17
+        case .right, .left: y = card.minY + 20
+        case .top: y = card.minY + 16
+        case .bottom: y = card.maxY - 32
+        }
+        drawMetricIcon(metric, in: NSRect(x: x, y: y, width: 14, height: 14))
+        let titleX = x + 20
+        drawDetail(metric.title, at: CGPoint(x: titleX, y: y), attributes: titleAttributes)
+        let hasRecoveryButton = metric.recovery.map({ $0 == .allowKeychainAccess }) == true
+        let lineLimit = hasRecoveryButton ? 3 : 4
+        switch edge {
+        case .right, .left:
+            for (offset, line) in metric.detailLines.prefix(lineLimit).enumerated() {
+                drawDetail(line, at: CGPoint(x: x, y: y + 20 + CGFloat(offset) * 16), attributes: bodyAttributes)
             }
         case .top:
-            var y: CGFloat = 88
-            for (index, line) in lines.prefix(5).enumerated() {
-                let size = line.size(withAttributes: index == 1 ? secondary : attributes)
-                (line as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: y), withAttributes: index == 1 ? secondary : attributes)
-                y += 16
+            for (offset, line) in metric.detailLines.prefix(lineLimit).enumerated() {
+                drawDetail(line, at: CGPoint(x: x, y: y + 20 + CGFloat(offset) * 16), attributes: bodyAttributes)
             }
         case .bottom:
-            var y: CGFloat = bounds.height - 88
-            for (index, line) in lines.prefix(5).enumerated() {
-                let size = line.size(withAttributes: index == 1 ? secondary : attributes)
-                (line as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: y), withAttributes: index == 1 ? secondary : attributes)
-                y -= 16
+            for (offset, line) in metric.detailLines.prefix(lineLimit).enumerated() {
+                drawDetail(line, at: CGPoint(x: x, y: y - 20 - CGFloat(offset) * 16), attributes: bodyAttributes)
             }
         }
+        if hasRecoveryButton {
+            let button = recoveryButtonRect(depth: depth, alongOffset: alongOffset)
+            NSColor.systemBlue.withAlphaComponent(0.9).setFill()
+            NSBezierPath(roundedRect: button, xRadius: 6, yRadius: 6).fill()
+            let buttonAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+                .foregroundColor: NSColor.white
+            ]
+            let label = "Allow Claude Keychain access"
+            let size = label.size(withAttributes: buttonAttributes)
+            (label as NSString).draw(at: CGPoint(x: button.midX - size.width / 2,
+                                                  y: button.midY - size.height / 2),
+                                     withAttributes: buttonAttributes)
+        }
+    }
+
+    private func drawMetricIcon(_ metric: NotchMetric, in rect: NSRect) {
+        let outline = metric.symbol == "claude" ? ProviderGlyphOutlines.claude
+            : metric.symbol == "openai" ? ProviderGlyphOutlines.openai : nil
+        if let outline {
+            let path = NSBezierPath()
+            path.windingRule = .evenOdd
+            for loop in outline {
+                guard let first = loop.first else { continue }
+                path.move(to: CGPoint(x: rect.minX + first.x * rect.width,
+                                      y: rect.minY + first.y * rect.height))
+                for point in loop.dropFirst() {
+                    path.line(to: CGPoint(x: rect.minX + point.x * rect.width,
+                                          y: rect.minY + point.y * rect.height))
+                }
+                path.close()
+            }
+            NSColor.white.setFill()
+            path.fill()
+            return
+        }
+        guard let image = NSImage(systemSymbolName: metric.symbol, accessibilityDescription: metric.title) else { return }
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
     }
 }

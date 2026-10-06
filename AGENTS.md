@@ -6,4 +6,6 @@ Use primary checkout. Preserve concurrent changes. Primary agent alone owns Git 
 Public Orthic-Labs repo: local-static-only. Compile, tests, packaging & signing use generated RightKit GitHub workflows; never run local Cargo/Swift builds. No private data, captured machine paths, credentials or usage snapshots in commits.
 Do not install apps, change shortcuts, disable existing utilities or enable cleanup while feasibility gates are unresolved. Donor extraction follows pinned inventory & licence review. No fake telemetry or reclamation claims. Unknown liveness/metadata is explicit & never eligible for cleanup.
 
-Prioritize substantial end-to-end user journeys over new small tests or test counts. Verify installed native interactions, rendered outcomes, failure recovery & retained state; preserve useful boundary tests, remove tautologies. Follow docs/testing.md. Treat green helper tests as component evidence only.
+Add only substantial end-to-end user journeys; do not add new small tests or pad test counts. Verify installed native interactions, rendered outcomes, failure recovery & retained state. Report total test inventory at delivery, distinguishing existing component tests from end-to-end journeys. Follow docs/testing.md. Treat green helper tests as component evidence only.
+
+Every test migration must inventory exact deleted test names/files, replacement E2E journeys, retained tests & before/after totals. Map removed behavior to observed replacement coverage; never claim replacement from a renamed unit test or an unexecuted journey.

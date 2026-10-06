@@ -191,6 +191,233 @@ fn corrupt_history_file_appears_in_history_diagnostics() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn storage_cli_journey_is_bounded_opt_in_and_preserves_fixture_bytes() {
+    let root = fixture_dir("storage-journey");
+    let data = root.join("data");
+    let state = root.join("state");
+    std::fs::create_dir_all(data.join("nested")).unwrap();
+    let first = data.join("alpha.txt");
+    let second = data.join("nested/alpha-copy.txt");
+    std::fs::write(&first, b"same fixture bytes").unwrap();
+    std::fs::write(&second, b"same fixture bytes").unwrap();
+    let before_first = std::fs::read(&first).unwrap();
+    let before_second = std::fs::read(&second).unwrap();
+
+    let inside_state = data.join("state-inside");
+    let rejected = bin()
+        .args(["scan", "--save", "--state-dir"])
+        .arg(&inside_state)
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(rejected.status.code(), Some(2));
+    let rejected: Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert!(
+        rejected["error"]
+            .as_str()
+            .unwrap()
+            .contains("outside selected scan roots")
+    );
+    assert!(!inside_state.exists());
+
+    let scan = bin()
+        .args(["scan", "--save", "--json", "--state-dir"])
+        .arg(&state)
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(
+        scan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
+
+    let duplicate_before_change = bin()
+        .args(["duplicates", "--min-size", "1", "--json"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(
+        duplicate_before_change.status.success(),
+        "{}",
+        String::from_utf8_lossy(&duplicate_before_change.stderr)
+    );
+    let duplicate_before_change: Value =
+        serde_json::from_slice(&duplicate_before_change.stdout).unwrap();
+    assert_eq!(
+        duplicate_before_change["duplicates"]["groups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let updated_first = b"same fixture bytes plus";
+    std::fs::write(&first, updated_first).unwrap();
+    let second_scan = bin()
+        .args(["scan", "--save", "--json", "--state-dir"])
+        .arg(&state)
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(
+        second_scan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second_scan.stderr)
+    );
+
+    let found = run_json(&["find", "alpha", "--kind", "file"], &state);
+    assert_eq!(found["operation"], "find");
+    assert!(found["data"]["total_matches"].as_u64().unwrap_or(0) >= 2);
+
+    let browsed = bin()
+        .args(["browse", "--folder"])
+        .arg(&data)
+        .args(["--state-dir"])
+        .arg(&state)
+        .args(["--json"])
+        .output()
+        .unwrap();
+    assert!(
+        browsed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&browsed.stderr)
+    );
+    let browsed: Value = serde_json::from_slice(&browsed.stdout).unwrap();
+    assert!(browsed["data"]["total_children"].is_number());
+
+    let exported = run_json(&["export"], &state);
+    assert_eq!(exported["schema_version"], 1);
+    assert!(exported["snapshot"]["report"]["entries"].is_array());
+    assert!(exported["modules"]["storage"]["largest_files"].is_array());
+    assert!(exported["modules"]["monitor"]["network"].is_object());
+    assert_eq!(
+        exported["modules"]["history"]["snapshots"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        exported["modules"]["activity"]["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let history = run_json(&["history"], &state);
+    assert_eq!(history["history"].as_array().unwrap().len(), 2);
+    let expected_growth = updated_first.len() as i64 - before_first.len() as i64;
+    assert_eq!(
+        history["history"][1]["comparison"]["logical_growth_bytes"],
+        expected_growth
+    );
+    assert_eq!(
+        history["history"][1]["folder_comparison"]["comparable"],
+        true
+    );
+
+    let duplicate_after_change = bin()
+        .args(["duplicates", "--min-size", "1", "--json"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(
+        duplicate_after_change.status.success(),
+        "{}",
+        String::from_utf8_lossy(&duplicate_after_change.stderr)
+    );
+    let duplicate_after_change: Value =
+        serde_json::from_slice(&duplicate_after_change.stdout).unwrap();
+    assert_eq!(
+        duplicate_after_change["duplicates"]["groups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let malformed = bin()
+        .args(["find", "alpha", "--min-size", "malformed", "--state-dir"])
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert_eq!(malformed.status.code(), Some(2));
+    let malformed: Value = serde_json::from_slice(&malformed.stderr).unwrap();
+    assert!(
+        malformed["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid --min-size")
+    );
+    assert_cli_error(&["duplicates"], "explicit scan paths");
+    assert_eq!(std::fs::read(&first).unwrap(), updated_first);
+    assert_eq!(std::fs::read(&second).unwrap(), before_second);
+
+    let parent = root.join("parent");
+    let parent_data = parent.join("visible");
+    let parent_state = parent.join(".cockpit-state");
+    std::fs::create_dir_all(&parent_data).unwrap();
+    std::fs::create_dir_all(&parent_state).unwrap();
+    std::fs::write(parent_data.join("visible.txt"), b"visible").unwrap();
+    let private_marker = parent_state.join("private.marker");
+    std::fs::write(&private_marker, b"private state").unwrap();
+    let parent_scan = bin()
+        .args(["scan", "--save", "--exclude-state"])
+        .arg(&parent_state)
+        .args(["--state-dir"])
+        .arg(&parent_state)
+        .arg(&parent)
+        .args(["--json"])
+        .output()
+        .unwrap();
+    assert!(
+        parent_scan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&parent_scan.stderr)
+    );
+    let parent_snapshot: Value = serde_json::from_slice(&parent_scan.stdout).unwrap();
+    let excluded = std::fs::canonicalize(&parent_state).unwrap();
+    let entries = parent_snapshot["snapshot"]["report"]["entries"]
+        .as_array()
+        .unwrap();
+    assert!(entries.iter().all(|entry| {
+        !entry["path"]
+            .as_str()
+            .map(Path::new)
+            .is_some_and(|path| path == excluded || path.starts_with(&excluded))
+    }));
+    let folders = parent_snapshot["snapshot"]["report"]["folders"]
+        .as_array()
+        .unwrap();
+    assert!(folders.iter().all(|folder| {
+        !folder["path"]
+            .as_str()
+            .map(Path::new)
+            .is_some_and(|path| path == excluded || path.starts_with(&excluded))
+    }));
+    assert_eq!(
+        parent_snapshot["snapshot"]["report"]["accounting"]["logical_bytes"],
+        7
+    );
+    assert!(parent_snapshot["snapshot"]["report"]["accounting"]["incomplete"]);
+    assert!(
+        parent_snapshot["snapshot"]["report"]["incomplete_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap()
+                .contains("excluded state directory"))
+    );
+    assert_eq!(std::fs::read(&private_marker).unwrap(), b"private state");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn assert_cli_error(args: &[&str], needle: &str) {
     let out = bin().args(args).output().unwrap();
     assert_eq!(out.status.code(), Some(2), "{args:?}");

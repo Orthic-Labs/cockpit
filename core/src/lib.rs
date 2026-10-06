@@ -1,13 +1,22 @@
 //! Cockpit's conservative, read-only shared core.
 
+pub mod activity;
+pub mod apps;
+pub mod cleanup;
+pub mod compression;
+pub mod dashboard_export;
+pub mod duplicates;
+pub mod folder_growth;
 pub mod history;
 pub mod ipc;
 pub mod model;
+pub mod monitor;
 pub mod platform;
 pub mod presentation;
 pub mod processes;
 pub mod rules;
 pub mod scan;
+pub mod storage_browser;
 pub mod store;
 pub mod worker;
 

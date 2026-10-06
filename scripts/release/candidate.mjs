@@ -39,12 +39,13 @@ if (action === 'admit') {
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
   for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Resources/dashboard/index.html','Contents/Resources/dashboard/app.js','Contents/Resources/dashboard/style.css']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
   const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-smoke-')));
+  const state=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-state-')));
   try{
     writeFileSync(path.join(fixture,'example.txt'),'Cockpit fixture');
-    const out=run(path.join(app,'Contents/Helpers/cockpit'),['scan',fixture,'--save','--state-dir',path.join(fixture,'state'),'--json'],{encoding:'utf8',stdio:'pipe'});
+    const out=run(path.join(app,'Contents/Helpers/cockpit'),['scan',fixture,'--save','--state-dir',state,'--json'],{encoding:'utf8',stdio:'pipe'});
     const scan=JSON.parse(out);
     if(!scan.snapshot?.report?.entries?.some(e=>e.path.endsWith('/example.txt')))throw new Error('Bundled scanner smoke failed');
     const launch=spawnSync(path.join(app,'Contents/MacOS/Cockpit'),['--package-smoke-root',fixture],{encoding:'utf8',timeout:150_000});
     if(launch.status!==0 || !launch.stderr?.includes('dashboard_smoke_pass'))throw new Error(`Native dashboard smoke failed: ${launch.stderr || launch.error}`);
-  } finally {rmSync(fixture,{recursive:true,force:true});}
+  } finally {rmSync(fixture,{recursive:true,force:true});rmSync(state,{recursive:true,force:true});}
 } else throw new Error(`Unknown action: ${action}`);

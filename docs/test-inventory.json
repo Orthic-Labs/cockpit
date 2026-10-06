@@ -1,0 +1,1765 @@
+{
+  "schema_version": 1,
+  "before": {
+    "baseline_head": "32e6ce51de88969a5a7143185afd37568d4a038c",
+    "source_working_tree_inventory": [
+      {
+        "file": "core/src/compression.rs",
+        "sha256": "3db0e79575cdaf754d624ab3e67a8a088c8f8bb12a658cd58db2693add22265b",
+        "declared_test_names": [
+          "plan_keeps_estimate_separate_from_measured_savings",
+          "unsafe_and_unknown_sources_are_refused",
+          "cancellation_is_terminal_and_does_not_publish",
+          "existing_output_is_refused"
+        ],
+        "count": 4
+      },
+      {
+        "file": "core/src/ipc/mod.rs",
+        "sha256": "52d803a84c6399eecdb9b4e2d31c9cd549823e2806b48ec9ea16d80888ffb0f2",
+        "declared_test_names": [
+          "frame_round_trip_and_bounds",
+          "request_ids_are_bounded_tokens"
+        ],
+        "count": 2
+      },
+      {
+        "file": "core/src/ipc/unix.rs",
+        "sha256": "c5cb2ff282e629f82845c0f3abcfe95129c40aaeb09f9bea68bb8c64bde28b85",
+        "declared_test_names": [
+          "buffered_response_survives_peer_shutdown",
+          "peer_shutdown_mid_body_is_transport_closed"
+        ],
+        "count": 2
+      },
+      {
+        "file": "core/src/platform/mod.rs",
+        "sha256": "16231b803615fc51ff7eef11a084e543b297cefacdd2f16c6b4ef1f474814e55",
+        "declared_test_names": [
+          "uuid_format_is_canonical"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/src/rules.rs",
+        "sha256": "98ecb042aca7c367d04174bd6f1d6db55d406184eb31f1c597c8c07da2c5e31f",
+        "declared_test_names": [
+          "running_item_is_reported_but_ineligible",
+          "unknown_item_is_reported_but_ineligible",
+          "app_backup_requires_newer_replacement"
+        ],
+        "count": 3
+      },
+      {
+        "file": "core/src/scan.rs",
+        "sha256": "1d8620832f984e23ecd878fc2e34deb7a1c26f492efec42589175c004a6cd423",
+        "declared_test_names": [
+          "swapped_directory_is_refused_before_listing"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/tests/activity.rs",
+        "sha256": "3e5daa104f5b87e58883ac3aa81d89934f94265db0601149334feb44806173b6",
+        "declared_test_names": [
+          "duplicate_event_is_idempotent_but_changed_duplicate_is_rejected",
+          "moved_logical_and_observed_delta_stay_separate",
+          "weekly_and_monthly_windows_are_utc_and_have_explicit_bounds"
+        ],
+        "count": 3
+      },
+      {
+        "file": "core/tests/apfs_fixture.rs",
+        "sha256": "87d422371da63eee87c077ea0bc4f28c2e5befeae72c747728453a1f83e2bab2",
+        "declared_test_names": [
+          "apfs_fixture_accounting_is_conservative"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/tests/apps.rs",
+        "sha256": "ab7d3f20ecb4aa39761afb615f048eaa0720433994183a55726313974bb1e579",
+        "declared_test_names": [
+          "ownership_requires_exact_identity_and_excludes_shared_user_data",
+          "projector_uses_supplied_records_and_deduplicates_overlap_and_hardlinks",
+          "missing_external_or_portable_coverage_keeps_disappearance_unknown",
+          "malformed_and_unavailable_updates_are_distinct_and_network_free",
+          "bounded_history_keys_samples_by_incarnation_and_session",
+          "byte_totals_report_units_and_saturating_overflow"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/cleanup.rs",
+        "sha256": "072b3468894dfa07a44e2ac14ec8431ce9b87bd236d9cce73f41f3c34b5f911c",
+        "declared_test_names": [
+          "overlapping_targets_are_deduplicated_to_outer_target",
+          "protected_descendant_refuses_plan_before_claim",
+          "claim_is_one_time_and_expiry_is_enforced",
+          "changed_effect_cannot_reuse_claim",
+          "interrupted_item_is_indeterminate_and_never_replayed",
+          "changed_identity_is_recorded_as_item_failure_without_execution",
+          "undo_only_uses_confirmed_moves_and_reports_restore_conflict"
+        ],
+        "count": 7
+      },
+      {
+        "file": "core/tests/cli.rs",
+        "sha256": "384ed8ec482d06166b60de913a28d0fd8a1cd9d94a9b67978c9848d6c9af75b7",
+        "declared_test_names": [
+          "apply_never_accepts_paths_or_unissued_ids",
+          "missing_usage_is_unavailable_not_zero",
+          "scan_is_metadata_only_and_requires_opt_in_for_history",
+          "corrupt_history_is_reported_without_breaking_json_stdout",
+          "save_then_history_findings_explain_round_trip",
+          "corrupt_history_file_appears_in_history_diagnostics",
+          "storage_cli_journey_is_bounded_opt_in_and_preserves_fixture_bytes",
+          "option_validation_errors_are_typed_and_exit_two",
+          "mutation_commands_refuse",
+          "human_output_is_bounded_with_truncation_notice",
+          "worker_serves_status_then_exits_after_idle",
+          "exec_op_round_trip_one_bounded_request_one_response",
+          "exec_op_oversized_request_is_typed_not_fatal",
+          "exec_op_rejects_bad_or_nonviable_limits",
+          "history_outputs_capability_notes_field"
+        ],
+        "count": 15
+      },
+      {
+        "file": "core/tests/compression.rs",
+        "sha256": "c764f041ec95f92572044a1edcd84070895c8bc3e1ea32923e2b3f1d94c0250a",
+        "declared_test_names": [
+          "malformed_parameters_are_rejected_before_io",
+          "unsupported_codec_is_explicit",
+          "source_safety_failures_are_typed",
+          "failure_and_cancel_never_complete",
+          "measured_output_is_read_separately_from_estimate",
+          "finalize_rejects_unsafe_or_source_identity_output"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/descriptor_race.rs",
+        "sha256": "40d4f0d0b0383fc47266d3296c62f23498580fccfba93d816dec6fa9a36cbb86",
+        "declared_test_names": [
+          "swapped_ancestor_symlink_refuses_descendant_listing",
+          "renamed_replacement_is_listed_as_itself_not_stale_object",
+          "final_component_symlink_swap_is_refused",
+          "bounded_listing_still_reports_truncation",
+          "listing_survives_parent_rename_after_acceptance",
+          "junction_ancestor_is_refused",
+          "bounded_listing_still_reports_truncation"
+        ],
+        "count": 7
+      },
+      {
+        "file": "core/tests/duplicates.rs",
+        "sha256": "71223c8676508aba4853c0f927c6b60607e06ed15a35f1c711089710d827e0d6",
+        "declared_test_names": [
+          "exact_bytes_form_group_and_changed_content_does_not",
+          "hardlinks_are_skipped_by_identity_and_symlinks_are_refused",
+          "injected_partial_reader_is_reported_without_group",
+          "read_budget_and_deadline_truncate_before_unbounded_content_reads"
+        ],
+        "count": 4
+      },
+      {
+        "file": "core/tests/durable_storage.rs",
+        "sha256": "9cca095cca4c3dfbb516668304b15d4c73a91e7a3ad8337908ce6ef93441db5d",
+        "declared_test_names": [
+          "durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_rejects_unknown_state"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/tests/folder_growth.rs",
+        "sha256": "44a28423ab65a5f02a3eee2611f1553b5bd79607ef7e2a15d7be83136372352d",
+        "declared_test_names": [
+          "signed_changes_added_removed_and_deterministic_order_are_reported",
+          "incomplete_snapshot_refuses_folder_totals",
+          "remount_and_root_change_use_history_compatibility_guard",
+          "missing_identity_duplicate_and_out_of_scope_rows_refuse_ambiguity",
+          "u64_extremes_use_signed_i128_without_underflow",
+          "each_output_list_is_bounded_and_truncation_is_explicit",
+          "caller_limit_is_capped_and_reported",
+          "dot_components_in_roots_or_folder_rows_are_rejected",
+          "empty_folder_coverage_for_nonempty_report_is_rejected",
+          "skipped_symlink_note_alone_does_not_invalidate_complete_comparison",
+          "attributed_direction_wins_when_logical_direction_differs"
+        ],
+        "count": 11
+      },
+      {
+        "file": "core/tests/history.rs",
+        "sha256": "becb36c9478ba92f26e3424c2af644987485085d2e48416de34477238af18df7",
+        "declared_test_names": [
+          "same_scope_growth_is_signed_and_positive",
+          "same_scope_shrink_is_negative_without_underflow",
+          "changed_roots_are_not_comparable",
+          "reordered_and_duplicated_roots_still_compare",
+          "changed_volume_set_is_not_comparable",
+          "empty_volume_identity_is_not_comparable",
+          "no_observed_volumes_is_not_comparable",
+          "incomplete_accounting_is_not_comparable",
+          "differing_schema_versions_are_not_comparable",
+          "unknown_sharing_does_not_block_comparison"
+        ],
+        "count": 10
+      },
+      {
+        "file": "core/tests/ipc_unix.rs",
+        "sha256": "5a5a8b73784f0388c673d0f601d138c53addc4524b18bcfcaea85aae5f0c7d43",
+        "declared_test_names": [
+          "round_trip_and_cleanup",
+          "invalid_limits_are_refused_before_creating_endpoint",
+          "symlinked_ancestor_cannot_create_endpoint_parent",
+          "cleanup_uses_original_parent_after_rename",
+          "oversized_request_is_rejected",
+          "malformed_connection_does_not_kill_server",
+          "slowly_arriving_request_cannot_extend_frame_deadline",
+          "symlinked_parent_is_refused",
+          "world_writable_parent_is_refused",
+          "missing_parent_is_created_private",
+          "live_endpoint_is_in_use",
+          "unrelated_files_and_stale_sockets_are_not_removed",
+          "idle_exit",
+          "shutdown_flag_stops_server",
+          "socket_is_unlinked_only_when_owned",
+          "saturated_backlog_is_in_use_not_stale",
+          "connect_to_saturated_backlog_is_bounded",
+          "stale_socket_fails_fast",
+          "oversized_endpoint_path_is_refused"
+        ],
+        "count": 19
+      },
+      {
+        "file": "core/tests/ipc_windows.rs",
+        "sha256": "9d519063ce610669445149bf73657dfa675116fd02bc15f6d768e29ca182f97b",
+        "declared_test_names": [
+          "round_trip_and_shutdown_flag",
+          "default_endpoint_is_a_safe_pipe_name",
+          "oversized_request_is_rejected_both_sides",
+          "second_server_reports_endpoint_in_use",
+          "bad_endpoint_names_are_unsafe",
+          "idle_exit",
+          "silent_peer_is_dropped_within_bounded_wait",
+          "tiny_response_limit_is_rejected",
+          "oversized_handler_reply_becomes_capped_error",
+          "client_times_out_without_server"
+        ],
+        "count": 10
+      },
+      {
+        "file": "core/tests/monitor.rs",
+        "sha256": "2da9ce207e0ae9a69444227fc3d2adcda490f5114bf04cc0e62e348206bc58ce",
+        "declared_test_names": [
+          "rate_requires_interval_and_handles_zero_time",
+          "rate_rejects_time_backwards_counter_reset_and_overflow_shape",
+          "battery_rejects_invalid_units_and_preserves_valid_reading",
+          "listener_owner_requires_start_time_and_rejects_pid_reuse",
+          "history_is_bounded_and_pid_reuse_gets_new_identity",
+          "process_history_skips_invalid_cpu_or_unknown_memory"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/native_filesystem.rs",
+        "sha256": "6122a0495b649e85950b0244a4740bf75123aef79f54a10b7b5c3895745972f3",
+        "declared_test_names": [
+          "native_sparse_file_and_hardlink_use_unique_stat_allocation",
+          "native_symlink_ancestor_blocks_requested_descendant"
+        ],
+        "count": 2
+      },
+      {
+        "file": "core/tests/platform_metadata.rs",
+        "sha256": "592b74c86dd146fe249b72759bcf550a846f66a84a9a1b402b58b243a81fc5de",
+        "declared_test_names": [
+          "same_inode_text_on_different_volumes_is_not_a_hard_link",
+          "missing_native_fields_are_reported_with_reasons",
+          "missing_fields_without_provider_reasons_get_generic_reasons",
+          "placeholder_is_refused_and_never_enumerated_or_counted",
+          "hard_link_shares_file_id_and_directory_has_one",
+          "bounded_enumeration_stops_and_reports_truncation",
+          "macos_volume_identity_is_uuid_or_flagged_unstable"
+        ],
+        "count": 7
+      },
+      {
+        "file": "core/tests/presentation.rs",
+        "sha256": "f43ffa8bcfdd467a97cf58de52878a73f835c30ad4def2949363532027f0acbb",
+        "declared_test_names": [
+          "default_options_and_trailing_newline",
+          "scan_aggregates_folders_and_escapes_paths",
+          "scan_keeps_reclaim_unknown_and_reports_incomplete_coverage",
+          "scan_bounds_rows_with_notice",
+          "status_shows_unavailable_not_zero",
+          "procs_show_pid_start_time_and_metric_label",
+          "findings_explain_history_usage_render",
+          "scan_uses_provider_subtree_folder_totals",
+          "growth_extremes_render_full_range",
+          "evidence_sufficiency_is_not_actions_enabled",
+          "capability_notes_render_bounded_and_escaped",
+          "worker_response_shows_truncation_and_errors"
+        ],
+        "count": 12
+      },
+      {
+        "file": "core/tests/process_groups.rs",
+        "sha256": "d9f1a8dd36c59d4308cea9cb38c1c2e5ddb0349a430795781bf5e67344fca79a",
+        "declared_test_names": [
+          "table_of_group_shapes",
+          "duplicate_pid_both_incarnations_retained",
+          "ambiguous_parent_is_not_attached",
+          "duplicate_parent_pid_remains_ambiguous_when_one_started_later",
+          "cycle_reports_identities_as_evidence",
+          "cpu_sums_and_memory_sums_when_complete",
+          "partial_memory_is_unavailable_not_fabricated",
+          "single_process_evidence_and_name_never_groups",
+          "deterministic_regardless_of_input_order",
+          "deep_chain_is_bounded"
+        ],
+        "count": 10
+      },
+      {
+        "file": "core/tests/rule_evidence.rs",
+        "sha256": "f298935dc0fb133317f9b009a7ca7bd581dfd8ef23f03eeca9d860b4c484866a",
+        "declared_test_names": [
+          "pack_is_structurally_safe_and_report_only",
+          "explanation_rules_never_attach_or_become_eligible",
+          "fully_evidenced_rows_are_the_only_eligible_rows",
+          "every_declared_requirement_unknown_failed_or_in_use_blocks",
+          "baseline_protections_apply_to_every_rule",
+          "unknown_liveness_never_hides_in_use_and_has_a_cause",
+          "contradictory_evidence_is_never_eligible",
+          "volume_scope_must_be_confirmed_not_assumed",
+          "missing_measured_size_is_reported_not_invented",
+          "report_only_findings_name_every_unknown_signal",
+          "path_matching_is_segment_exact_and_case_insensitive",
+          "relative_and_traversing_paths_match_but_never_become_eligible",
+          "finding_ids_are_stable_and_order_independent",
+          "duplicate_rows_collapse_and_conflicts_are_ineligible",
+          "explicit_unknown_defaults_are_never_eligible",
+          "findings_carry_rule_text_for_the_report"
+        ],
+        "count": 16
+      },
+      {
+        "file": "core/tests/scan_runtime.rs",
+        "sha256": "a5e57282a24ce1f24b26f6e462d2e974c86dfadc3a1e26a8d1312db266c233b1",
+        "declared_test_names": [
+          "per_scan_cache_is_reset_and_results_are_consistent",
+          "bounded_listing_truncates_after_limit",
+          "listing_does_not_follow_symlinked_directory",
+          "special_file_is_unknown_not_zero_allocated",
+          "removed_between_listing_and_inspection_is_rejected",
+          "one_scan_reports_consistent_identities_on_one_volume"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/scan_safety.rs",
+        "sha256": "8f2eeb27362c611ccd032220c955fc35a1c375f3526dbb65b0d688919d5de5d9",
+        "declared_test_names": [
+          "denied_ancestor_blocks_root_and_is_not_reported_as_symlink",
+          "placeholder_ancestor_blocks_root",
+          "cross_volume_descendant_is_rejected_explicitly",
+          "depth_limit_is_explicit",
+          "entry_limit_is_explicit_and_deterministic",
+          "entry_limit_applies_across_roots",
+          "placeholder_file_rejected_by_default",
+          "placeholder_directory_is_never_enumerated_even_when_allowed",
+          "overlapping_roots_count_once",
+          "duplicate_children_are_visited_once",
+          "hard_links_dedupe_within_volume_but_not_across_volumes",
+          "cross_volume_hard_link_alias_is_not_counted",
+          "missing_metadata_is_incomplete_even_if_provider_claims_complete",
+          "inspect_failure_is_recorded_and_incomplete",
+          "revisited_directory_identity_is_explicit",
+          "scanning_never_marks_anything_cleanup_eligible",
+          "parent_swapped_after_listing_blocks_child_inspection",
+          "directory_swapped_before_listing_is_not_enumerated",
+          "unidentified_files_never_claim_unique_allocation"
+        ],
+        "count": 19
+      },
+      {
+        "file": "core/tests/storage.rs",
+        "sha256": "410f880eb0a5c1161caa68d4c6d1219ee19960b498e3b2f67b9067507fbc2e5f",
+        "declared_test_names": [
+          "hardlinks_are_attributed_once_in_lexical_order",
+          "entry_limit_is_explicitly_incomplete",
+          "placeholder_root_is_rejected_without_enumeration",
+          "links_are_reported_and_overlapping_roots_are_deduplicated",
+          "missing_allocation_metadata_has_no_guessed_upper_bound",
+          "placeholder_ancestor_stops_before_descendant_inspection"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/storage_browser.rs",
+        "sha256": "243d64b5554543f478ae513ff1f6b05d492624de4bef13f3517af274025be996",
+        "declared_test_names": [
+          "search_includes_hidden_files_filters_extension_and_paginates",
+          "malformed_query_and_limits_are_rejected",
+          "overlap_duplicates_collapse_without_merging_distinct_hardlinks",
+          "incomplete_and_placeholder_state_is_preserved_without_hydration",
+          "drilldown_is_direct_child_only_and_rejects_outside_path",
+          "largest_folders_are_deterministic_and_report_incompleteness"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/store_safety.rs",
+        "sha256": "8bdcd8ea0c51efedc345056ca1c09c03411793f90ecdde17555a014553982366",
+        "declared_test_names": [
+          "round_trip_and_deterministic_order",
+          "rejects_path_like_and_malformed_ids",
+          "save_never_overwrites_existing_file",
+          "refuses_state_path_that_is_a_file",
+          "malformed_and_future_snapshots_are_skipped_with_reasons",
+          "oversized_snapshot_is_skipped_not_parsed",
+          "history_rejects_too_many_unrelated_directory_entries",
+          "interrupted_temp_files_are_reported_never_parsed",
+          "size_cap_boundary_exact_vs_plus_one",
+          "snapshot_count_cap_boundary",
+          "temp_files_count_toward_candidate_cap",
+          "aggregate_read_budget_stops_and_records_skips",
+          "case_variant_names_are_duplicate_id_skips",
+          "concurrent_distinct_ids_all_publish",
+          "dangling_symlink_destination_is_not_written_through",
+          "windows_capability_note_is_reported",
+          "missing_directory_is_empty_history",
+          "refuses_symlinked_state_directory_and_snapshot_links",
+          "permissions_new_dir_private_existing_dir_preserved",
+          "windows_directory_junction_is_refused",
+          "windows_rejects_reserved_and_stream_ids",
+          "windows_real_directory_replacement_keeps_operations_inside_owned_dirs",
+          "parent_replacement_never_redirects_pinned_writes_or_reads",
+          "refuses_group_or_other_writable_existing_directory",
+          "concurrent_save_publishes_exactly_one_snapshot"
+        ],
+        "count": 25
+      },
+      {
+        "file": "core/tests/windows_filesystem.rs",
+        "sha256": "69dbb059d8077955fdfb4136cd5c4631e7ea0c10ae87835f407c198b6630c139",
+        "declared_test_names": [
+          "listing_is_bounded_and_reports_truncation",
+          "listing_refuses_junction_or_symlink",
+          "listing_refuses_files",
+          "listing_identity_matches_inspection",
+          "volume_usage_for_temp_volume_is_consistent",
+          "volume_usage_rejects_unmatched_identity"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/worker_protocol.rs",
+        "sha256": "f11f6e9426babb3a672998f14e3523cdfe2fe8acf62f97a805863c29fdc5f753",
+        "declared_test_names": [
+          "oversized_request_is_rejected",
+          "malformed_requests_have_typed_errors_and_unreadable_ids_are_none",
+          "unsupported_version_is_rejected",
+          "reused_request_id_conflicts_even_after_failure",
+          "mutating_and_settings_operations_are_unsupported",
+          "invalid_arguments_are_rejected",
+          "scan_on_temp_dir_with_small_limits",
+          "scan_entry_limit_is_reported_not_hidden",
+          "oversized_scan_response_is_truncated_and_marked_incomplete",
+          "reused_request_id_conflicts_after_version_failure",
+          "tiny_but_viable_error_limit_uses_minimal_error",
+          "maximal_request_id_retains_correlation_at_error_budget_floor",
+          "impossible_response_limit_closes_instead_of_overrunning",
+          "bounded_worker_executes_ops_in_killable_child",
+          "blocked_stdin_child_is_killed_at_deadline",
+          "flooding_stdout_is_capped_and_killed",
+          "exec_op_spawn_failure_is_typed",
+          "status_and_processes_use_core_data",
+          "events_follow_request_lifecycle",
+          "limits_expose_idle_and_transport_bounds"
+        ],
+        "count": 20
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/AccessibilityGeometryTests.swift",
+        "sha256": "d23136338161b46091dfd0f21e4b48cacdb39edf7854326b724012a97050e6e0",
+        "declared_test_names": [
+          "testElementRejectsNonAXUIElement",
+          "testBoolDecoding",
+          "testPointDecoding",
+          "testSizeDecoding",
+          "testCopyAttributeOnForeignTypeFails"
+        ],
+        "count": 5
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostTests.swift",
+        "sha256": "a04628442b64ed465cd5233e84327de17ee5d0906de7267d1bf183d324bc7021",
+        "declared_test_names": [
+          "testScanRequestArgvIsExplicitRootNoShell",
+          "testRunnerCapturesBoundedStdout",
+          "testRunnerTruncatesOverLimitStdout",
+          "testRunnerKillsChildBeforeDeadline",
+          "testRunnerNonZeroExit",
+          "testRunnerCancelTerminatesChild",
+          "testScanObjectAcceptsSnapshotEnvelope",
+          "testScanObjectRejectsTruncated",
+          "testScanObjectRejectsEmptyAndMalformed",
+          "testImportJavaScriptCallsAllowlistedEntry",
+          "testImportJavaScriptEscapesBreakoutSequences",
+          "testNavigationAllowsOnlyBundledSubtree",
+          "testScriptMessageAllowlistIsClosed",
+          "testCoordinatorMissingHelper",
+          "testCoordinatorBuildsImportScript"
+        ],
+        "count": 15
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/MediaCompressionTests.swift",
+        "sha256": "c5c33a52ab765e58c6e13d612529b3c6a95c3c5222e46a601311faa50ab755b3",
+        "declared_test_names": [
+          "testInvalidParametersAreRejectedWithoutEncoding",
+          "testCancellationStopsBeforePublishAndLeavesOriginal",
+          "testImageEncodePublishesUniqueOutputAndPreservesOriginal",
+          "testTargetSizeFailureRemovesOnlyJobOutputAndPreservesOriginal",
+          "testSymlinkedSourceIsRejected"
+        ],
+        "count": 5
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
+        "sha256": "32fc277ef3c6e80b2bfc0ff85c5d6e1578252c69cb567d24e650581cd01ebd34",
+        "declared_test_names": [
+          "testReviewApplyRestartUndoConflictAndAncestorProtection"
+        ],
+        "count": 1
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeStorageServicesTests.swift",
+        "sha256": "d7e83608de915dd644d17b41a3358575ad583c12618b5699f79f18a0aecdf8e7",
+        "declared_test_names": [
+          "testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput"
+        ],
+        "count": 1
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillLifecycleTests.swift",
+        "sha256": "85b28f2b82d3696b078af8e776203a97ea34c55fc0438195bd493f90f0d93856",
+        "declared_test_names": [
+          "testCPUNoPreviousIsUnavailable",
+          "testCPUDelta",
+          "testCPUZeroTotalIsUnavailable",
+          "testCPUWraparound",
+          "testDisplayDiff",
+          "testDisplayDiffEmpty",
+          "testRedrawGate",
+          "testUnavailableRendersDashes",
+          "testArcQuantizationMatchesRedrawLabels",
+          "testPlacementStaysInsideVisibleFrame",
+          "testFailureTrackerReportsTransitionsOnly",
+          "testStructuredEventLine",
+          "testTimestampFormat"
+        ],
+        "count": 13
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillRuntimeTests.swift",
+        "sha256": "3ff6919b1518d5351759b160e5c040631fecae5f85472e3262d2e2bb864e5e62",
+        "declared_test_names": [
+          "testMonitorCapIsAnExplicitRefusal",
+          "testInvalidMonitorKeysAreRefused",
+          "testSettingDefaultsOnAbsentKeyIsANoOp",
+          "testDoubleStartTakesNoSecondOwnerRole",
+          "testStartAfterShutdownIsRefused",
+          "testShutdownIsIdempotentAndOrdered",
+          "testLockReacquireAfterShutdownSucceeds",
+          "testRefusedDirectoryFailsStart"
+        ],
+        "count": 8
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsStoreTests.swift",
+        "sha256": "e5f4383197544545e61ec12ddfb317bcdafd423522d18143af468ed744a36f54",
+        "declared_test_names": [
+          "testPermissiveDirectoryIsRefusedAndUntouched",
+          "testForeignOwnedDirectoryIsRefused",
+          "testPermissiveFileIsProtectedOnLoadAndRefusedOnSave",
+          "testGroupWritableDirectoryIsRefused",
+          "testMalformedFileIsPreservedByteForByte",
+          "testSymlinkedDirectoryAndFileAreRefused",
+          "testSymlinkedAncestorIsRefusedBeforeCreation",
+          "testFreshSaveUsesOwnerOnlyModes",
+          "testAcquireCreatesOwnerOnlyLockFile",
+          "testPermissiveDirectoryRefusesAcquire",
+          "testForeignOwnedDirectoryRefusesAcquire",
+          "testPermissivePreexistingLockFileIsRefusedAndPreserved",
+          "testSymlinkedLockIsRefusedAndPreserved",
+          "testSymlinkedLockAncestorIsRefused",
+          "testNonRegularLockIsRefusedAndPreserved",
+          "testMissingDirectoryFailsWithoutCreatingAnything"
+        ],
+        "count": 16
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsTests.swift",
+        "sha256": "fef8650d76a548a92df4363c00142567ed9ce487b1a53d1b4ea25d24f338ef4d",
+        "declared_test_names": [
+          "testFullDocument",
+          "testDefaultsForAbsentFields",
+          "testMalformedFieldsRejectWholePayload",
+          "testDecodeFailureYieldsNoSettings",
+          "testFailures",
+          "testMonitorCountCapIsStrict",
+          "testMonitorKeyUTF8ByteLimit",
+          "testSetMonitorMutatorEnforcesBounds",
+          "testEncodeRefusesUnserializableMonitors",
+          "testEncodeRoundTripAndDeterminism",
+          "testEncodeClampsCadenceAndRejectsOversize",
+          "testDecisionTable",
+          "testShutdownOrder",
+          "testVisibilityAndSchedule",
+          "testAnchoredPlacement",
+          "testMissingDirectoryLoadsDefaults",
+          "testSaveCreatesPrivateDirectoryAndFileAndRoundTrips",
+          "testExistingDirectoryModeIsPreserved",
+          "testUnreadableFilesAreProtectedAndNeverOverwritten",
+          "testSymlinkedFileAndDirectoryAreRefused",
+          "testSecondAcquireIsRejectedAndReleaseKeepsFile",
+          "testSymlinkedLockIsRefused",
+          "testSecondRuntimeReportsAlreadyRunning",
+          "testShutdownOrderAndNoWriteWhenUnchanged",
+          "testChangedSettingsPersistBeforeLockRelease",
+          "testCorruptFileUsesDefaultsAndIsPreserved"
+        ],
+        "count": 26
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityEdgeCasesTests.swift",
+        "sha256": "113249390bb926aeba8b743c89d3673cc18e256de62122c9afc35f398fd02619",
+        "declared_test_names": [
+          "testNegativeCoordinatesCover",
+          "testMixedMonitorSizes",
+          "testPartialCoverageIsNotCovered",
+          "testDegenerateRectsNeverCover",
+          "testFocusedWindowOnAnotherMonitorFallsBackToGeometry",
+          "testExplicitAXFalseWinsOnSameMonitor",
+          "testMissingAXObservations",
+          "testDeniedAccessibilityNeverHides"
+        ],
+        "count": 8
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityGeometryTests.swift",
+        "sha256": "f37878f7e12614f5d6d4ce26247ee33aaee618175d776c96767d1540eb6b597c",
+        "declared_test_names": [
+          "testCoverageRequiresCompleteMonitor",
+          "testFallbackRequiresUntitledBorderlessCandidate",
+          "testAccessibilityDenialKeepsPillVisible",
+          "testExplicitAXFalseWinsOverGeometry",
+          "testMissingAXUsesGeometryFallback",
+          "testOtherMonitorAXFalseDoesNotOverrideFullscreenOccupancy"
+        ],
+        "count": 6
+      },
+      {
+        "file": "scripts/probes/footprint-report.test.mjs",
+        "sha256": "b5f8e2501b3858fd15f96cf50a63fab51670fc0a9cf7cd7a2f5a67a1e10af141",
+        "declared_test_names": [
+          "parseArgs refuses without a pid and bounds duration",
+          "parseArgs defaults to a 10 sample 1s smoke window",
+          "ps parsing",
+          "powershell parsing: ISO (7.x) and legacy 5.1 shapes",
+          "powershell: missing cpu time is explicit, missing start time is unavailable",
+          "malformed output",
+          "empty output means vanished",
+          "cpuPercent from deltas",
+          "stats: min/median/p95/max with empty case",
+          "aggregation over a short run",
+          "PID reuse stops the run and is not counted as a measurement",
+          "vanished process terminates with process_exited",
+          "malformed output tolerated twice, third consecutive stops; success resets",
+          "failed samples retain parser reason for unavailable metrics",
+          "windows tracker: null cpu time is recorded as unavailable",
+          "probe: ok sample from another PID reports Mach ports unavailable with a reason",
+          "probe: self sample carries the Mach port count",
+          "probe: reused, vanished, unavailable and malformed documents",
+          "probe samples flow into a report with footprint and no private bytes",
+          "powershell: private bytes, handles; GDI unavailable with a reason",
+          "powershell: start time changed or missing after the sample",
+          "probe start time differing between samples stops the run as pid_reused",
+          "parseArgs soak rules",
+          "stream stat: exact while small, bounded and sane when large",
+          "soak summary keeps memory bounded and tracker retains no records"
+        ],
+        "count": 25,
+        "captured_registration_text": [
+          "\"parseArgs refuses without a pid and bounds duration\", () => {",
+          "\"parseArgs defaults to a 10 sample 1s smoke window\", () => {",
+          "\"ps parsing\", () => {",
+          "\"powershell parsing: ISO (7.x) and legacy 5.1 shapes\", () => {",
+          "\"powershell: missing cpu time is explicit, missing start time is unavailable\", () => {",
+          "\"malformed output\", () => {",
+          "\"empty output means vanished\", () => {",
+          "\"cpuPercent from deltas\", () => {",
+          "\"stats: min/median/p95/max with empty case\", () => {",
+          "\"aggregation over a short run\", () => {",
+          "\"PID reuse stops the run and is not counted as a measurement\", () => {",
+          "\"vanished process terminates with process_exited\", () => {",
+          "\"malformed output tolerated twice, third consecutive stops; success resets\", () => {",
+          "\"failed samples retain parser reason for unavailable metrics\", () => {",
+          "\"windows tracker: null cpu time is recorded as unavailable\", () => {",
+          "\"probe: ok sample from another PID reports Mach ports unavailable with a reason\", () => {",
+          "\"probe: self sample carries the Mach port count\", () => {",
+          "\"probe: reused, vanished, unavailable and malformed documents\", () => {",
+          "\"probe samples flow into a report with footprint and no private bytes\", () => {",
+          "\"powershell: private bytes, handles; GDI unavailable with a reason\", () => {",
+          "\"powershell: start time changed or missing after the sample\", () => {",
+          "\"probe start time differing between samples stops the run as pid_reused\", () => {",
+          "\"parseArgs soak rules\", () => {",
+          "\"stream stat: exact while small, bounded and sane when large\", () => {",
+          "\"soak summary keeps memory bounded and tracker retains no records\", () => {"
+        ]
+      },
+      {
+        "file": "scripts/upstream-report.test.mjs",
+        "sha256": "8aa77b8ccb7de46c21b56de3fb36109edb82a71320a3a54e084860258c53fe2e",
+        "declared_test_names": [
+          "fixture: ${name}",
+          "parseLsRemote rejects conflicting duplicate lines and ignores other refs",
+          "validateDonor flags non-https repositories and option-like refs",
+          "classifyPollError and lock read failure are structured and bounded",
+          "upstream-check keeps git bounded and shell-free"
+        ],
+        "count": 5,
+        "captured_registration_text": [
+          "`fixture: ${name}`, () => {",
+          "\"parseLsRemote rejects conflicting duplicate lines and ignores other refs\", () => {",
+          "\"validateDonor flags non-https repositories and option-like refs\", () => {",
+          "\"classifyPollError and lock read failure are structured and bounded\", () => {",
+          "\"upstream-check keeps git bounded and shell-free\", () => {"
+        ]
+      },
+      {
+        "file": "windows/src/diag.rs",
+        "sha256": "6ab30239b99b2ed325476c1be098e1f0e450db2fd1c9f9e072e6f41995eb5056",
+        "declared_test_names": [
+          "plain_values_are_unquoted",
+          "spaces_quotes_and_newlines_are_escaped",
+          "failure_line_is_single_structured_line",
+          "latch_reports_edges_only"
+        ],
+        "count": 4
+      },
+      {
+        "file": "windows/src/lifecycle.rs",
+        "sha256": "18294b0f8a2f8307fd7ce4829e9fd5c7910967a9f59af16cec9ddbb4f37c1edb",
+        "declared_test_names": [
+          "pill_is_right_edge_vertically_centred",
+          "pill_on_negative_origin_monitor",
+          "unchanged_set_plans_nothing",
+          "disconnect_destroys_only_missing_monitor",
+          "reconnect_creates_panel",
+          "all_monitors_gone_then_back",
+          "rearranged_or_resized_monitor_moves_panel",
+          "destroys_precede_creates_and_duplicate_ids_collapse",
+          "cadence_slows_only_when_every_panel_hidden",
+          "cpu_fraction_cases",
+          "gate_coalesces_reentrant_requests"
+        ],
+        "count": 11
+      },
+      {
+        "file": "windows/src/main.rs",
+        "sha256": "3761563dc28c1f798d89c3dece130d53f5c248980891f7aa34e123ca26f6e429",
+        "declared_test_names": [
+          "exact_monitor_bounds_are_fullscreen",
+          "inset_window_is_not_fullscreen",
+          "captioned_window_is_not_borderless",
+          "percent_text_formats_known_and_unknown",
+          "production_sampling_cadence_matches_helper"
+        ],
+        "count": 5
+      },
+      {
+        "file": "windows/src/runtime.rs",
+        "sha256": "88b0545321f8ab881e63dbb951dd77be24497967542b7385acfbf8330e62ef4b",
+        "declared_test_names": [
+          "anchor_math_on_primary",
+          "anchor_math_on_negative_origin_monitor",
+          "anchor_math_never_leaves_origin_on_tiny_monitor",
+          "startup_creates_with_stored_anchor",
+          "unchanged_placement_plans_nothing",
+          "anchor_change_on_same_bounds_moves",
+          "bounds_and_anchor_change_yields_single_move",
+          "disabled_or_unplugged_monitor_is_destroyed_and_reconnect_recreates",
+          "failed_move_is_replanned_until_applied",
+          "retry_stays_pending_until_success_and_reports_edges",
+          "retry_target_can_change_between_attempts",
+          "hidden_policy",
+          "cadence_uses_setting_only_while_a_panel_is_visible",
+          "clamp_keeps_pill_inside_negative_origin_monitor",
+          "clamp_on_tiny_negative_origin_monitor_hugs_origin",
+          "mutex_name_is_sid_scoped",
+          "restrictive_sddl_grants_only_user_and_system",
+          "live_current_user_security_yields_user_sid",
+          "live_second_acquire_reports_already_running",
+          "live_restricted_dir_passes_and_world_dacl_is_refused"
+        ],
+        "count": 20
+      },
+      {
+        "file": "windows/src/settings.rs",
+        "sha256": "3a1536f7b13267facc6ba07236bebb36265966a018e7a2ba5aa6ec1c8ad39136",
+        "declared_test_names": [
+          "parses_full_schema",
+          "defaults_when_optional_fields_missing",
+          "unknown_fields_are_ignored_at_every_level",
+          "cadence_mutators_are_clamped_but_file_values_are_strict",
+          "unknown_version_and_missing_version",
+          "malformed_inputs_are_rejected",
+          "depth_is_bounded",
+          "oversized_input_is_rejected",
+          "too_many_monitors_rejected",
+          "string_escapes_and_surrogates_decode",
+          "bom_is_tolerated",
+          "encode_roundtrips_and_is_exact",
+          "encode_escapes_control_characters_and_roundtrips",
+          "encode_clamps_cadence",
+          "encode_refuses_oversize_instead_of_truncating",
+          "mutators_report_change_and_enforce_bounds",
+          "anchor_names_roundtrip",
+          "reparse_attribute_detection_and_paths",
+          "load_missing_is_writable_default",
+          "live_save_then_load_roundtrips_in_restricted_tree",
+          "live_malformed_file_is_never_truncated",
+          "live_broad_file_acl_is_refused_and_preserved"
+        ],
+        "count": 22
+      },
+      {
+        "file": "windows/src/visibility_cases.rs",
+        "sha256": "648b59bc5e5759437be59d4f01fbdb7dbf95cbe0bea5daad2a662e36586c5e10",
+        "declared_test_names": [
+          "secondary_right_monitor_exact_bounds",
+          "primary_sized_window_on_secondary_is_not_fullscreen",
+          "fullscreen_on_primary_does_not_cover_secondary",
+          "negative_origin_monitor_exact_bounds",
+          "negative_monitor_inset_by_one_is_not_fullscreen",
+          "monitor_above_primary_negative_top",
+          "oversized_window_with_negative_overhang_is_fullscreen",
+          "half_screen_snap_is_not_fullscreen",
+          "taskbar_height_shortfall_is_not_fullscreen",
+          "partial_window_still_overlaps_for_enumeration",
+          "degenerate_zero_size_rect_is_not_fullscreen",
+          "spanning_borderless_window_covers_both_monitors",
+          "spanning_window_covers_only_monitors_fully_inside",
+          "spanning_left_and_primary_negative_coordinates",
+          "spanning_window_taller_monitor_not_covered",
+          "captioned_maximized_window_is_geometry_fullscreen_but_not_borderless",
+          "captioned_maximized_on_negative_secondary_is_not_hiding",
+          "caption_alone_or_thickframe_alone_blocks_hiding",
+          "lone_border_or_dlgframe_bit_is_not_a_caption",
+          "resize_frame_blocks_even_without_caption",
+          "classify_outside_partial_and_covers",
+          "classify_captioned_maximized_is_partial_not_covers",
+          "classify_minimized_offscreen_window_is_outside",
+          "classify_spanning_window_per_monitor",
+          "shell_class_names_are_excluded",
+          "tool_window_ex_style_is_excluded",
+          "popup_borderless_exact_monitor_hides",
+          "borderless_fullscreen_on_secondary_and_negative_monitors",
+          "borderless_but_smaller_than_monitor_does_not_hide",
+          "zero_style_is_borderless",
+          "unrelated_style_bits_do_not_affect_borderless",
+          "monitor_id_stops_at_nul",
+          "monitor_id_empty_when_unset",
+          "monitor_id_full_length_without_nul"
+        ],
+        "count": 34
+      }
+    ],
+    "total_declared": 484
+  },
+  "after": {
+    "schema_version": 1,
+    "counting_method": "Source test declarations; cfg exclusions & parameterized registrations may change runtime case counts. Standalone assertion scripts & installed journeys are separate.",
+    "total_declared": 485,
+    "by_area": {
+      "core": 254,
+      "mac": 105,
+      "scripts": 30,
+      "windows": 96
+    },
+    "source_working_tree_inventory": [
+      {
+        "file": "core/src/compression.rs",
+        "sha256": "7df18c100a15a1a8966db8fb5057f93ba5ceea6875afb9ca4594a2ccd98b343c",
+        "declared_test_names": [
+          "plan_keeps_estimate_separate_from_measured_savings",
+          "unsafe_and_unknown_sources_are_refused",
+          "cancellation_is_terminal_and_does_not_publish",
+          "existing_output_is_refused"
+        ],
+        "count": 4
+      },
+      {
+        "file": "core/src/ipc/mod.rs",
+        "sha256": "52d803a84c6399eecdb9b4e2d31c9cd549823e2806b48ec9ea16d80888ffb0f2",
+        "declared_test_names": [
+          "frame_round_trip_and_bounds",
+          "request_ids_are_bounded_tokens"
+        ],
+        "count": 2
+      },
+      {
+        "file": "core/src/ipc/unix.rs",
+        "sha256": "c5cb2ff282e629f82845c0f3abcfe95129c40aaeb09f9bea68bb8c64bde28b85",
+        "declared_test_names": [
+          "buffered_response_survives_peer_shutdown",
+          "peer_shutdown_mid_body_is_transport_closed"
+        ],
+        "count": 2
+      },
+      {
+        "file": "core/src/platform/mod.rs",
+        "sha256": "16231b803615fc51ff7eef11a084e543b297cefacdd2f16c6b4ef1f474814e55",
+        "declared_test_names": [
+          "uuid_format_is_canonical"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/src/rules.rs",
+        "sha256": "98ecb042aca7c367d04174bd6f1d6db55d406184eb31f1c597c8c07da2c5e31f",
+        "declared_test_names": [
+          "running_item_is_reported_but_ineligible",
+          "unknown_item_is_reported_but_ineligible",
+          "app_backup_requires_newer_replacement"
+        ],
+        "count": 3
+      },
+      {
+        "file": "core/src/scan.rs",
+        "sha256": "1d8620832f984e23ecd878fc2e34deb7a1c26f492efec42589175c004a6cd423",
+        "declared_test_names": [
+          "swapped_directory_is_refused_before_listing"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/tests/activity.rs",
+        "sha256": "8a783a01e8129e923c04fd1c8fe594a6e962a4a3d7dbfb85c53e65ca4f147cc5",
+        "declared_test_names": [
+          "duplicate_event_is_idempotent_but_changed_duplicate_is_rejected",
+          "moved_logical_and_observed_delta_stay_separate",
+          "weekly_and_monthly_windows_are_utc_and_have_explicit_bounds"
+        ],
+        "count": 3
+      },
+      {
+        "file": "core/tests/apfs_fixture.rs",
+        "sha256": "87d422371da63eee87c077ea0bc4f28c2e5befeae72c747728453a1f83e2bab2",
+        "declared_test_names": [
+          "apfs_fixture_accounting_is_conservative"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/tests/apps.rs",
+        "sha256": "70a74d4fd2c8a62d1390d6dcbbbdf435a2a6e207afa40354332fc3a595672121",
+        "declared_test_names": [
+          "ownership_requires_exact_identity_and_excludes_shared_user_data",
+          "projector_uses_supplied_records_and_deduplicates_overlap_and_hardlinks",
+          "missing_external_or_portable_coverage_keeps_disappearance_unknown",
+          "malformed_and_unavailable_updates_are_distinct_and_network_free",
+          "bounded_history_keys_samples_by_incarnation_and_session",
+          "byte_totals_report_units_and_saturating_overflow"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/cleanup.rs",
+        "sha256": "a784a31b3373eeb35ee010f845e75467e1767b83605d229f7632048b0016015f",
+        "declared_test_names": [
+          "overlapping_targets_are_deduplicated_to_outer_target",
+          "protected_descendant_refuses_plan_before_claim",
+          "claim_is_one_time_and_expiry_is_enforced",
+          "changed_effect_cannot_reuse_claim",
+          "interrupted_item_is_indeterminate_and_never_replayed",
+          "changed_identity_is_recorded_as_item_failure_without_execution",
+          "undo_only_uses_confirmed_moves_and_reports_restore_conflict"
+        ],
+        "count": 7
+      },
+      {
+        "file": "core/tests/cli.rs",
+        "sha256": "6c23fbf312c0b3809653b9a9c635ce096b7817844a00b9575c3b0be59f4e1008",
+        "declared_test_names": [
+          "apply_never_accepts_paths_or_unissued_ids",
+          "missing_usage_is_unavailable_not_zero",
+          "scan_is_metadata_only_and_requires_opt_in_for_history",
+          "corrupt_history_is_reported_without_breaking_json_stdout",
+          "save_then_history_findings_explain_round_trip",
+          "corrupt_history_file_appears_in_history_diagnostics",
+          "storage_cli_journey_is_bounded_opt_in_and_preserves_fixture_bytes",
+          "option_validation_errors_are_typed_and_exit_two",
+          "mutation_commands_refuse",
+          "human_output_is_bounded_with_truncation_notice",
+          "worker_serves_status_then_exits_after_idle",
+          "exec_op_round_trip_one_bounded_request_one_response",
+          "exec_op_oversized_request_is_typed_not_fatal",
+          "exec_op_rejects_bad_or_nonviable_limits",
+          "history_outputs_capability_notes_field"
+        ],
+        "count": 15
+      },
+      {
+        "file": "core/tests/compression.rs",
+        "sha256": "9af963d3c04af005cfa0d658beced82d950cd9712459c08a977a5faf6e787d02",
+        "declared_test_names": [
+          "malformed_parameters_are_rejected_before_io",
+          "unsupported_codec_is_explicit",
+          "source_safety_failures_are_typed",
+          "failure_and_cancel_never_complete",
+          "measured_output_is_read_separately_from_estimate",
+          "finalize_rejects_unsafe_or_source_identity_output"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/descriptor_race.rs",
+        "sha256": "40d4f0d0b0383fc47266d3296c62f23498580fccfba93d816dec6fa9a36cbb86",
+        "declared_test_names": [
+          "swapped_ancestor_symlink_refuses_descendant_listing",
+          "renamed_replacement_is_listed_as_itself_not_stale_object",
+          "final_component_symlink_swap_is_refused",
+          "bounded_listing_still_reports_truncation",
+          "listing_survives_parent_rename_after_acceptance",
+          "junction_ancestor_is_refused",
+          "bounded_listing_still_reports_truncation"
+        ],
+        "count": 7
+      },
+      {
+        "file": "core/tests/duplicates.rs",
+        "sha256": "71223c8676508aba4853c0f927c6b60607e06ed15a35f1c711089710d827e0d6",
+        "declared_test_names": [
+          "exact_bytes_form_group_and_changed_content_does_not",
+          "hardlinks_are_skipped_by_identity_and_symlinks_are_refused",
+          "injected_partial_reader_is_reported_without_group",
+          "read_budget_and_deadline_truncate_before_unbounded_content_reads"
+        ],
+        "count": 4
+      },
+      {
+        "file": "core/tests/durable_storage.rs",
+        "sha256": "a8c44be0c12359a9fc9fb8dc2393a18006f08dc40e288649a14c7ac989c2b863",
+        "declared_test_names": [
+          "durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_rejects_unknown_state"
+        ],
+        "count": 1
+      },
+      {
+        "file": "core/tests/folder_growth.rs",
+        "sha256": "44a28423ab65a5f02a3eee2611f1553b5bd79607ef7e2a15d7be83136372352d",
+        "declared_test_names": [
+          "signed_changes_added_removed_and_deterministic_order_are_reported",
+          "incomplete_snapshot_refuses_folder_totals",
+          "remount_and_root_change_use_history_compatibility_guard",
+          "missing_identity_duplicate_and_out_of_scope_rows_refuse_ambiguity",
+          "u64_extremes_use_signed_i128_without_underflow",
+          "each_output_list_is_bounded_and_truncation_is_explicit",
+          "caller_limit_is_capped_and_reported",
+          "dot_components_in_roots_or_folder_rows_are_rejected",
+          "empty_folder_coverage_for_nonempty_report_is_rejected",
+          "skipped_symlink_note_alone_does_not_invalidate_complete_comparison",
+          "attributed_direction_wins_when_logical_direction_differs"
+        ],
+        "count": 11
+      },
+      {
+        "file": "core/tests/history.rs",
+        "sha256": "becb36c9478ba92f26e3424c2af644987485085d2e48416de34477238af18df7",
+        "declared_test_names": [
+          "same_scope_growth_is_signed_and_positive",
+          "same_scope_shrink_is_negative_without_underflow",
+          "changed_roots_are_not_comparable",
+          "reordered_and_duplicated_roots_still_compare",
+          "changed_volume_set_is_not_comparable",
+          "empty_volume_identity_is_not_comparable",
+          "no_observed_volumes_is_not_comparable",
+          "incomplete_accounting_is_not_comparable",
+          "differing_schema_versions_are_not_comparable",
+          "unknown_sharing_does_not_block_comparison"
+        ],
+        "count": 10
+      },
+      {
+        "file": "core/tests/ipc_unix.rs",
+        "sha256": "5a5a8b73784f0388c673d0f601d138c53addc4524b18bcfcaea85aae5f0c7d43",
+        "declared_test_names": [
+          "round_trip_and_cleanup",
+          "invalid_limits_are_refused_before_creating_endpoint",
+          "symlinked_ancestor_cannot_create_endpoint_parent",
+          "cleanup_uses_original_parent_after_rename",
+          "oversized_request_is_rejected",
+          "malformed_connection_does_not_kill_server",
+          "slowly_arriving_request_cannot_extend_frame_deadline",
+          "symlinked_parent_is_refused",
+          "world_writable_parent_is_refused",
+          "missing_parent_is_created_private",
+          "live_endpoint_is_in_use",
+          "unrelated_files_and_stale_sockets_are_not_removed",
+          "idle_exit",
+          "shutdown_flag_stops_server",
+          "socket_is_unlinked_only_when_owned",
+          "saturated_backlog_is_in_use_not_stale",
+          "connect_to_saturated_backlog_is_bounded",
+          "stale_socket_fails_fast",
+          "oversized_endpoint_path_is_refused"
+        ],
+        "count": 19
+      },
+      {
+        "file": "core/tests/ipc_windows.rs",
+        "sha256": "9d519063ce610669445149bf73657dfa675116fd02bc15f6d768e29ca182f97b",
+        "declared_test_names": [
+          "round_trip_and_shutdown_flag",
+          "default_endpoint_is_a_safe_pipe_name",
+          "oversized_request_is_rejected_both_sides",
+          "second_server_reports_endpoint_in_use",
+          "bad_endpoint_names_are_unsafe",
+          "idle_exit",
+          "silent_peer_is_dropped_within_bounded_wait",
+          "tiny_response_limit_is_rejected",
+          "oversized_handler_reply_becomes_capped_error",
+          "client_times_out_without_server"
+        ],
+        "count": 10
+      },
+      {
+        "file": "core/tests/monitor.rs",
+        "sha256": "2a5d7c80eccef748f7361351ebb082a9336babc3607b93eb5f1dc47cbe245949",
+        "declared_test_names": [
+          "rate_requires_interval_and_handles_zero_time",
+          "rate_rejects_time_backwards_counter_reset_and_overflow_shape",
+          "battery_rejects_invalid_units_and_preserves_valid_reading",
+          "listener_owner_requires_start_time_and_rejects_pid_reuse",
+          "history_is_bounded_and_pid_reuse_gets_new_identity",
+          "process_history_skips_invalid_cpu_or_unknown_memory"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/native_filesystem.rs",
+        "sha256": "6122a0495b649e85950b0244a4740bf75123aef79f54a10b7b5c3895745972f3",
+        "declared_test_names": [
+          "native_sparse_file_and_hardlink_use_unique_stat_allocation",
+          "native_symlink_ancestor_blocks_requested_descendant"
+        ],
+        "count": 2
+      },
+      {
+        "file": "core/tests/platform_metadata.rs",
+        "sha256": "592b74c86dd146fe249b72759bcf550a846f66a84a9a1b402b58b243a81fc5de",
+        "declared_test_names": [
+          "same_inode_text_on_different_volumes_is_not_a_hard_link",
+          "missing_native_fields_are_reported_with_reasons",
+          "missing_fields_without_provider_reasons_get_generic_reasons",
+          "placeholder_is_refused_and_never_enumerated_or_counted",
+          "hard_link_shares_file_id_and_directory_has_one",
+          "bounded_enumeration_stops_and_reports_truncation",
+          "macos_volume_identity_is_uuid_or_flagged_unstable"
+        ],
+        "count": 7
+      },
+      {
+        "file": "core/tests/presentation.rs",
+        "sha256": "f43ffa8bcfdd467a97cf58de52878a73f835c30ad4def2949363532027f0acbb",
+        "declared_test_names": [
+          "default_options_and_trailing_newline",
+          "scan_aggregates_folders_and_escapes_paths",
+          "scan_keeps_reclaim_unknown_and_reports_incomplete_coverage",
+          "scan_bounds_rows_with_notice",
+          "status_shows_unavailable_not_zero",
+          "procs_show_pid_start_time_and_metric_label",
+          "findings_explain_history_usage_render",
+          "scan_uses_provider_subtree_folder_totals",
+          "growth_extremes_render_full_range",
+          "evidence_sufficiency_is_not_actions_enabled",
+          "capability_notes_render_bounded_and_escaped",
+          "worker_response_shows_truncation_and_errors"
+        ],
+        "count": 12
+      },
+      {
+        "file": "core/tests/process_groups.rs",
+        "sha256": "d9f1a8dd36c59d4308cea9cb38c1c2e5ddb0349a430795781bf5e67344fca79a",
+        "declared_test_names": [
+          "table_of_group_shapes",
+          "duplicate_pid_both_incarnations_retained",
+          "ambiguous_parent_is_not_attached",
+          "duplicate_parent_pid_remains_ambiguous_when_one_started_later",
+          "cycle_reports_identities_as_evidence",
+          "cpu_sums_and_memory_sums_when_complete",
+          "partial_memory_is_unavailable_not_fabricated",
+          "single_process_evidence_and_name_never_groups",
+          "deterministic_regardless_of_input_order",
+          "deep_chain_is_bounded"
+        ],
+        "count": 10
+      },
+      {
+        "file": "core/tests/rule_evidence.rs",
+        "sha256": "f298935dc0fb133317f9b009a7ca7bd581dfd8ef23f03eeca9d860b4c484866a",
+        "declared_test_names": [
+          "pack_is_structurally_safe_and_report_only",
+          "explanation_rules_never_attach_or_become_eligible",
+          "fully_evidenced_rows_are_the_only_eligible_rows",
+          "every_declared_requirement_unknown_failed_or_in_use_blocks",
+          "baseline_protections_apply_to_every_rule",
+          "unknown_liveness_never_hides_in_use_and_has_a_cause",
+          "contradictory_evidence_is_never_eligible",
+          "volume_scope_must_be_confirmed_not_assumed",
+          "missing_measured_size_is_reported_not_invented",
+          "report_only_findings_name_every_unknown_signal",
+          "path_matching_is_segment_exact_and_case_insensitive",
+          "relative_and_traversing_paths_match_but_never_become_eligible",
+          "finding_ids_are_stable_and_order_independent",
+          "duplicate_rows_collapse_and_conflicts_are_ineligible",
+          "explicit_unknown_defaults_are_never_eligible",
+          "findings_carry_rule_text_for_the_report"
+        ],
+        "count": 16
+      },
+      {
+        "file": "core/tests/scan_runtime.rs",
+        "sha256": "a5e57282a24ce1f24b26f6e462d2e974c86dfadc3a1e26a8d1312db266c233b1",
+        "declared_test_names": [
+          "per_scan_cache_is_reset_and_results_are_consistent",
+          "bounded_listing_truncates_after_limit",
+          "listing_does_not_follow_symlinked_directory",
+          "special_file_is_unknown_not_zero_allocated",
+          "removed_between_listing_and_inspection_is_rejected",
+          "one_scan_reports_consistent_identities_on_one_volume"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/scan_safety.rs",
+        "sha256": "8f2eeb27362c611ccd032220c955fc35a1c375f3526dbb65b0d688919d5de5d9",
+        "declared_test_names": [
+          "denied_ancestor_blocks_root_and_is_not_reported_as_symlink",
+          "placeholder_ancestor_blocks_root",
+          "cross_volume_descendant_is_rejected_explicitly",
+          "depth_limit_is_explicit",
+          "entry_limit_is_explicit_and_deterministic",
+          "entry_limit_applies_across_roots",
+          "placeholder_file_rejected_by_default",
+          "placeholder_directory_is_never_enumerated_even_when_allowed",
+          "overlapping_roots_count_once",
+          "duplicate_children_are_visited_once",
+          "hard_links_dedupe_within_volume_but_not_across_volumes",
+          "cross_volume_hard_link_alias_is_not_counted",
+          "missing_metadata_is_incomplete_even_if_provider_claims_complete",
+          "inspect_failure_is_recorded_and_incomplete",
+          "revisited_directory_identity_is_explicit",
+          "scanning_never_marks_anything_cleanup_eligible",
+          "parent_swapped_after_listing_blocks_child_inspection",
+          "directory_swapped_before_listing_is_not_enumerated",
+          "unidentified_files_never_claim_unique_allocation"
+        ],
+        "count": 19
+      },
+      {
+        "file": "core/tests/storage_browser.rs",
+        "sha256": "519adc5d5bf64c890cf3f3e2eeedcd329d27a956b1dd0e8d091320e059f3a39e",
+        "declared_test_names": [
+          "search_includes_hidden_files_filters_extension_and_paginates",
+          "malformed_query_and_limits_are_rejected",
+          "overlap_duplicates_collapse_without_merging_distinct_hardlinks",
+          "incomplete_and_placeholder_state_is_preserved_without_hydration",
+          "drilldown_is_direct_child_only_and_rejects_outside_path",
+          "largest_folders_are_deterministic_and_report_incompleteness"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/storage.rs",
+        "sha256": "410f880eb0a5c1161caa68d4c6d1219ee19960b498e3b2f67b9067507fbc2e5f",
+        "declared_test_names": [
+          "hardlinks_are_attributed_once_in_lexical_order",
+          "entry_limit_is_explicitly_incomplete",
+          "placeholder_root_is_rejected_without_enumeration",
+          "links_are_reported_and_overlapping_roots_are_deduplicated",
+          "missing_allocation_metadata_has_no_guessed_upper_bound",
+          "placeholder_ancestor_stops_before_descendant_inspection"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/store_safety.rs",
+        "sha256": "8bdcd8ea0c51efedc345056ca1c09c03411793f90ecdde17555a014553982366",
+        "declared_test_names": [
+          "round_trip_and_deterministic_order",
+          "rejects_path_like_and_malformed_ids",
+          "save_never_overwrites_existing_file",
+          "refuses_state_path_that_is_a_file",
+          "malformed_and_future_snapshots_are_skipped_with_reasons",
+          "oversized_snapshot_is_skipped_not_parsed",
+          "history_rejects_too_many_unrelated_directory_entries",
+          "interrupted_temp_files_are_reported_never_parsed",
+          "size_cap_boundary_exact_vs_plus_one",
+          "snapshot_count_cap_boundary",
+          "temp_files_count_toward_candidate_cap",
+          "aggregate_read_budget_stops_and_records_skips",
+          "case_variant_names_are_duplicate_id_skips",
+          "concurrent_distinct_ids_all_publish",
+          "dangling_symlink_destination_is_not_written_through",
+          "windows_capability_note_is_reported",
+          "missing_directory_is_empty_history",
+          "refuses_symlinked_state_directory_and_snapshot_links",
+          "permissions_new_dir_private_existing_dir_preserved",
+          "windows_directory_junction_is_refused",
+          "windows_rejects_reserved_and_stream_ids",
+          "windows_real_directory_replacement_keeps_operations_inside_owned_dirs",
+          "parent_replacement_never_redirects_pinned_writes_or_reads",
+          "refuses_group_or_other_writable_existing_directory",
+          "concurrent_save_publishes_exactly_one_snapshot"
+        ],
+        "count": 25
+      },
+      {
+        "file": "core/tests/windows_filesystem.rs",
+        "sha256": "69dbb059d8077955fdfb4136cd5c4631e7ea0c10ae87835f407c198b6630c139",
+        "declared_test_names": [
+          "listing_is_bounded_and_reports_truncation",
+          "listing_refuses_junction_or_symlink",
+          "listing_refuses_files",
+          "listing_identity_matches_inspection",
+          "volume_usage_for_temp_volume_is_consistent",
+          "volume_usage_rejects_unmatched_identity"
+        ],
+        "count": 6
+      },
+      {
+        "file": "core/tests/worker_protocol.rs",
+        "sha256": "f11f6e9426babb3a672998f14e3523cdfe2fe8acf62f97a805863c29fdc5f753",
+        "declared_test_names": [
+          "oversized_request_is_rejected",
+          "malformed_requests_have_typed_errors_and_unreadable_ids_are_none",
+          "unsupported_version_is_rejected",
+          "reused_request_id_conflicts_even_after_failure",
+          "mutating_and_settings_operations_are_unsupported",
+          "invalid_arguments_are_rejected",
+          "scan_on_temp_dir_with_small_limits",
+          "scan_entry_limit_is_reported_not_hidden",
+          "oversized_scan_response_is_truncated_and_marked_incomplete",
+          "reused_request_id_conflicts_after_version_failure",
+          "tiny_but_viable_error_limit_uses_minimal_error",
+          "maximal_request_id_retains_correlation_at_error_budget_floor",
+          "impossible_response_limit_closes_instead_of_overrunning",
+          "bounded_worker_executes_ops_in_killable_child",
+          "blocked_stdin_child_is_killed_at_deadline",
+          "flooding_stdout_is_capped_and_killed",
+          "exec_op_spawn_failure_is_typed",
+          "status_and_processes_use_core_data",
+          "events_follow_request_lifecycle",
+          "limits_expose_idle_and_transport_bounds"
+        ],
+        "count": 20
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/AccessibilityGeometryTests.swift",
+        "sha256": "d23136338161b46091dfd0f21e4b48cacdb39edf7854326b724012a97050e6e0",
+        "declared_test_names": [
+          "testElementRejectsNonAXUIElement",
+          "testBoolDecoding",
+          "testPointDecoding",
+          "testSizeDecoding",
+          "testCopyAttributeOnForeignTypeFails"
+        ],
+        "count": 5
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostE2ETests.swift",
+        "sha256": "ed59a67cc428fe47f2c4465d53cc96636115003a3d40256f9bcaf97101a75042",
+        "declared_test_names": [
+          "testPackagedDashboardScansFixtureThroughNativeHostAndRetainsResults"
+        ],
+        "count": 1
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostTests.swift",
+        "sha256": "a04628442b64ed465cd5233e84327de17ee5d0906de7267d1bf183d324bc7021",
+        "declared_test_names": [
+          "testScanRequestArgvIsExplicitRootNoShell",
+          "testRunnerCapturesBoundedStdout",
+          "testRunnerTruncatesOverLimitStdout",
+          "testRunnerKillsChildBeforeDeadline",
+          "testRunnerNonZeroExit",
+          "testRunnerCancelTerminatesChild",
+          "testScanObjectAcceptsSnapshotEnvelope",
+          "testScanObjectRejectsTruncated",
+          "testScanObjectRejectsEmptyAndMalformed",
+          "testImportJavaScriptCallsAllowlistedEntry",
+          "testImportJavaScriptEscapesBreakoutSequences",
+          "testNavigationAllowsOnlyBundledSubtree",
+          "testScriptMessageAllowlistIsClosed",
+          "testCoordinatorMissingHelper",
+          "testCoordinatorBuildsImportScript"
+        ],
+        "count": 15
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/MediaCompressionTests.swift",
+        "sha256": "c5c33a52ab765e58c6e13d612529b3c6a95c3c5222e46a601311faa50ab755b3",
+        "declared_test_names": [
+          "testInvalidParametersAreRejectedWithoutEncoding",
+          "testCancellationStopsBeforePublishAndLeavesOriginal",
+          "testImageEncodePublishesUniqueOutputAndPreservesOriginal",
+          "testTargetSizeFailureRemovesOnlyJobOutputAndPreservesOriginal",
+          "testSymlinkedSourceIsRejected"
+        ],
+        "count": 5
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
+        "sha256": "55ac2bdf8854a8eb25f95f03a00fd6cb549970172574135d96010b4b4ea65a1b",
+        "declared_test_names": [
+          "testReviewApplyRestartUndoConflictAndAncestorProtection"
+        ],
+        "count": 1
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeStorageServicesTests.swift",
+        "sha256": "d7e83608de915dd644d17b41a3358575ad583c12618b5699f79f18a0aecdf8e7",
+        "declared_test_names": [
+          "testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput"
+        ],
+        "count": 1
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillLifecycleTests.swift",
+        "sha256": "85b28f2b82d3696b078af8e776203a97ea34c55fc0438195bd493f90f0d93856",
+        "declared_test_names": [
+          "testCPUNoPreviousIsUnavailable",
+          "testCPUDelta",
+          "testCPUZeroTotalIsUnavailable",
+          "testCPUWraparound",
+          "testDisplayDiff",
+          "testDisplayDiffEmpty",
+          "testRedrawGate",
+          "testUnavailableRendersDashes",
+          "testArcQuantizationMatchesRedrawLabels",
+          "testPlacementStaysInsideVisibleFrame",
+          "testFailureTrackerReportsTransitionsOnly",
+          "testStructuredEventLine",
+          "testTimestampFormat"
+        ],
+        "count": 13
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillRuntimeTests.swift",
+        "sha256": "3ff6919b1518d5351759b160e5c040631fecae5f85472e3262d2e2bb864e5e62",
+        "declared_test_names": [
+          "testMonitorCapIsAnExplicitRefusal",
+          "testInvalidMonitorKeysAreRefused",
+          "testSettingDefaultsOnAbsentKeyIsANoOp",
+          "testDoubleStartTakesNoSecondOwnerRole",
+          "testStartAfterShutdownIsRefused",
+          "testShutdownIsIdempotentAndOrdered",
+          "testLockReacquireAfterShutdownSucceeds",
+          "testRefusedDirectoryFailsStart"
+        ],
+        "count": 8
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsStoreTests.swift",
+        "sha256": "e5f4383197544545e61ec12ddfb317bcdafd423522d18143af468ed744a36f54",
+        "declared_test_names": [
+          "testPermissiveDirectoryIsRefusedAndUntouched",
+          "testForeignOwnedDirectoryIsRefused",
+          "testPermissiveFileIsProtectedOnLoadAndRefusedOnSave",
+          "testGroupWritableDirectoryIsRefused",
+          "testMalformedFileIsPreservedByteForByte",
+          "testSymlinkedDirectoryAndFileAreRefused",
+          "testSymlinkedAncestorIsRefusedBeforeCreation",
+          "testFreshSaveUsesOwnerOnlyModes",
+          "testAcquireCreatesOwnerOnlyLockFile",
+          "testPermissiveDirectoryRefusesAcquire",
+          "testForeignOwnedDirectoryRefusesAcquire",
+          "testPermissivePreexistingLockFileIsRefusedAndPreserved",
+          "testSymlinkedLockIsRefusedAndPreserved",
+          "testSymlinkedLockAncestorIsRefused",
+          "testNonRegularLockIsRefusedAndPreserved",
+          "testMissingDirectoryFailsWithoutCreatingAnything"
+        ],
+        "count": 16
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsTests.swift",
+        "sha256": "fef8650d76a548a92df4363c00142567ed9ce487b1a53d1b4ea25d24f338ef4d",
+        "declared_test_names": [
+          "testFullDocument",
+          "testDefaultsForAbsentFields",
+          "testMalformedFieldsRejectWholePayload",
+          "testDecodeFailureYieldsNoSettings",
+          "testFailures",
+          "testMonitorCountCapIsStrict",
+          "testMonitorKeyUTF8ByteLimit",
+          "testSetMonitorMutatorEnforcesBounds",
+          "testEncodeRefusesUnserializableMonitors",
+          "testEncodeRoundTripAndDeterminism",
+          "testEncodeClampsCadenceAndRejectsOversize",
+          "testDecisionTable",
+          "testShutdownOrder",
+          "testVisibilityAndSchedule",
+          "testAnchoredPlacement",
+          "testMissingDirectoryLoadsDefaults",
+          "testSaveCreatesPrivateDirectoryAndFileAndRoundTrips",
+          "testExistingDirectoryModeIsPreserved",
+          "testUnreadableFilesAreProtectedAndNeverOverwritten",
+          "testSymlinkedFileAndDirectoryAreRefused",
+          "testSecondAcquireIsRejectedAndReleaseKeepsFile",
+          "testSymlinkedLockIsRefused",
+          "testSecondRuntimeReportsAlreadyRunning",
+          "testShutdownOrderAndNoWriteWhenUnchanged",
+          "testChangedSettingsPersistBeforeLockRelease",
+          "testCorruptFileUsesDefaultsAndIsPreserved"
+        ],
+        "count": 26
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityEdgeCasesTests.swift",
+        "sha256": "113249390bb926aeba8b743c89d3673cc18e256de62122c9afc35f398fd02619",
+        "declared_test_names": [
+          "testNegativeCoordinatesCover",
+          "testMixedMonitorSizes",
+          "testPartialCoverageIsNotCovered",
+          "testDegenerateRectsNeverCover",
+          "testFocusedWindowOnAnotherMonitorFallsBackToGeometry",
+          "testExplicitAXFalseWinsOnSameMonitor",
+          "testMissingAXObservations",
+          "testDeniedAccessibilityNeverHides"
+        ],
+        "count": 8
+      },
+      {
+        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityGeometryTests.swift",
+        "sha256": "f37878f7e12614f5d6d4ce26247ee33aaee618175d776c96767d1540eb6b597c",
+        "declared_test_names": [
+          "testCoverageRequiresCompleteMonitor",
+          "testFallbackRequiresUntitledBorderlessCandidate",
+          "testAccessibilityDenialKeepsPillVisible",
+          "testExplicitAXFalseWinsOverGeometry",
+          "testMissingAXUsesGeometryFallback",
+          "testOtherMonitorAXFalseDoesNotOverrideFullscreenOccupancy"
+        ],
+        "count": 6
+      },
+      {
+        "file": "scripts/probes/footprint-report.test.mjs",
+        "sha256": "b5f8e2501b3858fd15f96cf50a63fab51670fc0a9cf7cd7a2f5a67a1e10af141",
+        "declared_test_names": [
+          "parseArgs refuses without a pid and bounds duration",
+          "parseArgs defaults to a 10 sample 1s smoke window",
+          "ps parsing",
+          "powershell parsing: ISO (7.x) and legacy 5.1 shapes",
+          "powershell: missing cpu time is explicit, missing start time is unavailable",
+          "malformed output",
+          "empty output means vanished",
+          "cpuPercent from deltas",
+          "stats: min/median/p95/max with empty case",
+          "aggregation over a short run",
+          "PID reuse stops the run and is not counted as a measurement",
+          "vanished process terminates with process_exited",
+          "malformed output tolerated twice, third consecutive stops; success resets",
+          "failed samples retain parser reason for unavailable metrics",
+          "windows tracker: null cpu time is recorded as unavailable",
+          "probe: ok sample from another PID reports Mach ports unavailable with a reason",
+          "probe: self sample carries the Mach port count",
+          "probe: reused, vanished, unavailable and malformed documents",
+          "probe samples flow into a report with footprint and no private bytes",
+          "powershell: private bytes, handles; GDI unavailable with a reason",
+          "powershell: start time changed or missing after the sample",
+          "probe start time differing between samples stops the run as pid_reused",
+          "parseArgs soak rules",
+          "stream stat: exact while small, bounded and sane when large",
+          "soak summary keeps memory bounded and tracker retains no records"
+        ],
+        "count": 25
+      },
+      {
+        "file": "scripts/upstream-report.test.mjs",
+        "sha256": "8aa77b8ccb7de46c21b56de3fb36109edb82a71320a3a54e084860258c53fe2e",
+        "declared_test_names": [
+          "fixture: ${name}",
+          "parseLsRemote rejects conflicting duplicate lines and ignores other refs",
+          "validateDonor flags non-https repositories and option-like refs",
+          "classifyPollError and lock read failure are structured and bounded",
+          "upstream-check keeps git bounded and shell-free"
+        ],
+        "count": 5
+      },
+      {
+        "file": "windows/src/diag.rs",
+        "sha256": "6ab30239b99b2ed325476c1be098e1f0e450db2fd1c9f9e072e6f41995eb5056",
+        "declared_test_names": [
+          "plain_values_are_unquoted",
+          "spaces_quotes_and_newlines_are_escaped",
+          "failure_line_is_single_structured_line",
+          "latch_reports_edges_only"
+        ],
+        "count": 4
+      },
+      {
+        "file": "windows/src/lifecycle.rs",
+        "sha256": "18294b0f8a2f8307fd7ce4829e9fd5c7910967a9f59af16cec9ddbb4f37c1edb",
+        "declared_test_names": [
+          "pill_is_right_edge_vertically_centred",
+          "pill_on_negative_origin_monitor",
+          "unchanged_set_plans_nothing",
+          "disconnect_destroys_only_missing_monitor",
+          "reconnect_creates_panel",
+          "all_monitors_gone_then_back",
+          "rearranged_or_resized_monitor_moves_panel",
+          "destroys_precede_creates_and_duplicate_ids_collapse",
+          "cadence_slows_only_when_every_panel_hidden",
+          "cpu_fraction_cases",
+          "gate_coalesces_reentrant_requests"
+        ],
+        "count": 11
+      },
+      {
+        "file": "windows/src/main.rs",
+        "sha256": "3761563dc28c1f798d89c3dece130d53f5c248980891f7aa34e123ca26f6e429",
+        "declared_test_names": [
+          "exact_monitor_bounds_are_fullscreen",
+          "inset_window_is_not_fullscreen",
+          "captioned_window_is_not_borderless",
+          "percent_text_formats_known_and_unknown",
+          "production_sampling_cadence_matches_helper"
+        ],
+        "count": 5
+      },
+      {
+        "file": "windows/src/runtime.rs",
+        "sha256": "88b0545321f8ab881e63dbb951dd77be24497967542b7385acfbf8330e62ef4b",
+        "declared_test_names": [
+          "anchor_math_on_primary",
+          "anchor_math_on_negative_origin_monitor",
+          "anchor_math_never_leaves_origin_on_tiny_monitor",
+          "startup_creates_with_stored_anchor",
+          "unchanged_placement_plans_nothing",
+          "anchor_change_on_same_bounds_moves",
+          "bounds_and_anchor_change_yields_single_move",
+          "disabled_or_unplugged_monitor_is_destroyed_and_reconnect_recreates",
+          "failed_move_is_replanned_until_applied",
+          "retry_stays_pending_until_success_and_reports_edges",
+          "retry_target_can_change_between_attempts",
+          "hidden_policy",
+          "cadence_uses_setting_only_while_a_panel_is_visible",
+          "clamp_keeps_pill_inside_negative_origin_monitor",
+          "clamp_on_tiny_negative_origin_monitor_hugs_origin",
+          "mutex_name_is_sid_scoped",
+          "restrictive_sddl_grants_only_user_and_system",
+          "live_current_user_security_yields_user_sid",
+          "live_second_acquire_reports_already_running",
+          "live_restricted_dir_passes_and_world_dacl_is_refused"
+        ],
+        "count": 20
+      },
+      {
+        "file": "windows/src/settings.rs",
+        "sha256": "3a1536f7b13267facc6ba07236bebb36265966a018e7a2ba5aa6ec1c8ad39136",
+        "declared_test_names": [
+          "parses_full_schema",
+          "defaults_when_optional_fields_missing",
+          "unknown_fields_are_ignored_at_every_level",
+          "cadence_mutators_are_clamped_but_file_values_are_strict",
+          "unknown_version_and_missing_version",
+          "malformed_inputs_are_rejected",
+          "depth_is_bounded",
+          "oversized_input_is_rejected",
+          "too_many_monitors_rejected",
+          "string_escapes_and_surrogates_decode",
+          "bom_is_tolerated",
+          "encode_roundtrips_and_is_exact",
+          "encode_escapes_control_characters_and_roundtrips",
+          "encode_clamps_cadence",
+          "encode_refuses_oversize_instead_of_truncating",
+          "mutators_report_change_and_enforce_bounds",
+          "anchor_names_roundtrip",
+          "reparse_attribute_detection_and_paths",
+          "load_missing_is_writable_default",
+          "live_save_then_load_roundtrips_in_restricted_tree",
+          "live_malformed_file_is_never_truncated",
+          "live_broad_file_acl_is_refused_and_preserved"
+        ],
+        "count": 22
+      },
+      {
+        "file": "windows/src/visibility_cases.rs",
+        "sha256": "648b59bc5e5759437be59d4f01fbdb7dbf95cbe0bea5daad2a662e36586c5e10",
+        "declared_test_names": [
+          "secondary_right_monitor_exact_bounds",
+          "primary_sized_window_on_secondary_is_not_fullscreen",
+          "fullscreen_on_primary_does_not_cover_secondary",
+          "negative_origin_monitor_exact_bounds",
+          "negative_monitor_inset_by_one_is_not_fullscreen",
+          "monitor_above_primary_negative_top",
+          "oversized_window_with_negative_overhang_is_fullscreen",
+          "half_screen_snap_is_not_fullscreen",
+          "taskbar_height_shortfall_is_not_fullscreen",
+          "partial_window_still_overlaps_for_enumeration",
+          "degenerate_zero_size_rect_is_not_fullscreen",
+          "spanning_borderless_window_covers_both_monitors",
+          "spanning_window_covers_only_monitors_fully_inside",
+          "spanning_left_and_primary_negative_coordinates",
+          "spanning_window_taller_monitor_not_covered",
+          "captioned_maximized_window_is_geometry_fullscreen_but_not_borderless",
+          "captioned_maximized_on_negative_secondary_is_not_hiding",
+          "caption_alone_or_thickframe_alone_blocks_hiding",
+          "lone_border_or_dlgframe_bit_is_not_a_caption",
+          "resize_frame_blocks_even_without_caption",
+          "classify_outside_partial_and_covers",
+          "classify_captioned_maximized_is_partial_not_covers",
+          "classify_minimized_offscreen_window_is_outside",
+          "classify_spanning_window_per_monitor",
+          "shell_class_names_are_excluded",
+          "tool_window_ex_style_is_excluded",
+          "popup_borderless_exact_monitor_hides",
+          "borderless_fullscreen_on_secondary_and_negative_monitors",
+          "borderless_but_smaller_than_monitor_does_not_hide",
+          "zero_style_is_borderless",
+          "unrelated_style_bits_do_not_affect_borderless",
+          "monitor_id_stops_at_nul",
+          "monitor_id_empty_when_unset",
+          "monitor_id_full_length_without_nul"
+        ],
+        "count": 34
+      }
+    ],
+    "standalone_assertion_scripts": [
+      "dashboard/app.test.mjs"
+    ],
+    "installed_journey_runners": [
+      "scripts/qa/mac-installed-journey.mjs"
+    ]
+  },
+  "migration": {
+    "proposed_removal_entries": 65,
+    "restored_entries": 65,
+    "accepted_deleted_declarations": 0,
+    "completed_replacements": 0,
+    "added_declarations": {
+      "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostE2ETests.swift": [
+        "testPackagedDashboardScansFixtureThroughNativeHostAndRetainsResults"
+      ]
+    },
+    "removed_declarations": {},
+    "new_journey_execution": "awaiting hosted execution"
+  }
+}

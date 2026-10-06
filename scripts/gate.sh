@@ -54,6 +54,8 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   cargo test --locked -p cockpit-core --test apfs_fixture -- --nocapture
   apfs_teardown
   unset COCKPIT_APFS_FIXTURE_STATE
+  COCKPIT_TEST_HELPER="$(cargo build --locked --bin cockpit --message-format=json | python3 -c 'import json,sys; paths=[r["executable"] for line in sys.stdin if (r:=json.loads(line)).get("reason")=="compiler-artifact" and r.get("target",{}).get("name")=="cockpit" and r.get("executable")]; assert paths, "Missing cockpit compiler artifact"; print(paths[-1])')"
+  export COCKPIT_TEST_HELPER
   swift build --package-path mac -c release
   swift test --package-path mac
 fi

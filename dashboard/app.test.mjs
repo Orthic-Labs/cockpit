@@ -15,7 +15,7 @@ const report = {
   folders: [
     { path: "/Users/test/Library", volume: { id: "disk-a" }, logical_bytes: 800, attributed_allocation_bytes: 700, incomplete: false },
     { path: "/Users/test/Projects", volume: { id: "disk-a" }, logical_bytes: 400, attributed_allocation_bytes: 390, incomplete: false },
-    { path: "/Users/test/Unknown", volume: { id: "disk-a" }, logical_bytes: 200, incomplete: true },
+    { path: "/Users/test/Unknown", volume: { id: "disk-a" }, logical_bytes: 200, attributed_allocation_bytes: 200, incomplete: true },
   ],
   entries: [
     { path: "/Users/test/Library/cache.db", metadata: { kind: "File", volume: { id: "disk-a" }, logical_size: 500, allocation_size: 450, metadata_complete: true }, logical_bytes: 500, attributed_allocation_bytes: 450 },

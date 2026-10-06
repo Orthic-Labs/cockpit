@@ -18,16 +18,40 @@ struct DiskReading: Equatable {
     let id: String
     let name: String
     let free: Double
+    let freeBytes: UInt64?
+    let totalBytes: UInt64?
+    let isInternal: Bool
 }
 
 struct SystemReading {
     let cpu: Double?
     let memory: Double?
     let disks: [DiskReading]
+    let memoryUsedBytes: UInt64?
+    let memoryTotalBytes: UInt64?
+    let swapUsedBytes: UInt64?
+    let swapTotalBytes: UInt64?
     /// Counter names that failed to sample this tick (unavailable, rendered as "--").
     var failures: Set<String> = []
     var memoryPressure: MemoryPressure? = nil
     var ai: [AIUsageReading] = []
+
+    init(cpu: Double?, memory: Double?, disks: [DiskReading],
+         memoryUsedBytes: UInt64? = nil, memoryTotalBytes: UInt64? = nil,
+         swapUsedBytes: UInt64? = nil, swapTotalBytes: UInt64? = nil,
+         failures: Set<String> = [], memoryPressure: MemoryPressure? = nil,
+         ai: [AIUsageReading] = []) {
+        self.cpu = cpu
+        self.memory = memory
+        self.disks = disks
+        self.memoryUsedBytes = memoryUsedBytes
+        self.memoryTotalBytes = memoryTotalBytes
+        self.swapUsedBytes = swapUsedBytes
+        self.swapTotalBytes = swapTotalBytes
+        self.failures = failures
+        self.memoryPressure = memoryPressure
+        self.ai = ai
+    }
 }
 
 /// Mach host calls: every mach_host_self() call returns a send right that must be released.
@@ -49,10 +73,11 @@ private final class SystemReader {
     func read() -> SystemReading {
         var failures = Set<String>()
         let cpu = readCPU(&failures)
-        let memory = readMemory(&failures)
+        let memorySample = readMemory(&failures)
         let keys: [URLResourceKey] = [
             .volumeUUIDStringKey, .volumeNameKey, .volumeTotalCapacityKey,
-            .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey
+            .volumeAvailableCapacityForImportantUsageKey, .volumeIsLocalKey,
+            .volumeIsInternalKey
         ]
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes])
         if urls == nil { failures.insert("disks") }
@@ -64,14 +89,22 @@ private final class SystemReader {
             return DiskReading(
                 id: id,
                 name: values.volumeName?.isEmpty == false ? values.volumeName! : url.path,
-                free: min(max(Double(available) / Double(total), 0), 1)
+                free: min(max(Double(available) / Double(total), 0), 1),
+                freeBytes: available >= 0 ? UInt64(available) : nil,
+                totalBytes: total >= 0 ? UInt64(total) : nil,
+                isInternal: values.volumeIsInternal == true || url.path == "/"
             )
         }.sorted { $0.id < $1.id }
         var pressureLevel: Int32 = 0
         var pressureSize = MemoryLayout<Int32>.size
         let pressure = sysctlbyname("kern.memorystatus_vm_pressure_level", &pressureLevel, &pressureSize, nil, 0) == 0
             ? MemoryPressure(rawValue: pressureLevel) : nil
-        return SystemReading(cpu: cpu, memory: memory, disks: disks, failures: failures, memoryPressure: pressure)
+        return SystemReading(cpu: cpu, memory: memorySample.fraction, disks: disks,
+                             memoryUsedBytes: memorySample.usedBytes,
+                             memoryTotalBytes: memorySample.totalBytes,
+                             swapUsedBytes: memorySample.swapUsedBytes,
+                             swapTotalBytes: memorySample.swapTotalBytes,
+                             failures: failures, memoryPressure: pressure)
     }
 
     private func readCPU(_ failures: inout Set<String>) -> Double? {
@@ -97,7 +130,8 @@ private final class SystemReader {
         return CPUMath.utilization(previous: previousCPU, current: current)
     }
 
-    private func readMemory(_ failures: inout Set<String>) -> Double? {
+    private func readMemory(_ failures: inout Set<String>) ->
+        (fraction: Double?, usedBytes: UInt64?, totalBytes: UInt64?, swapUsedBytes: UInt64?, swapTotalBytes: UInt64?) {
         var vm = vm_statistics64()
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
         let result = withHostPort { host in
@@ -107,10 +141,26 @@ private final class SystemReader {
                 }
             }
         }
-        guard result == KERN_SUCCESS else { failures.insert("memory"); return nil }
+        guard result == KERN_SUCCESS else {
+            failures.insert("memory")
+            return (nil, nil, nil, nil, nil)
+        }
         let page = Double(vm_page_size)
         let used = (Double(vm.active_count) + Double(vm.wire_count) + Double(vm.compressor_page_count)) * page
-        return min(max(used / Double(ProcessInfo.processInfo.physicalMemory), 0), 1)
+        let total = ProcessInfo.processInfo.physicalMemory
+        let swap = readSwap(&failures)
+        return (min(max(used / Double(total), 0), 1),
+                UInt64(max(0.0, used)), total, swap.used, swap.total)
+    }
+
+    private func readSwap(_ failures: inout Set<String>) -> (used: UInt64?, total: UInt64?) {
+        var usage = xsw_usage()
+        var size = MemoryLayout<xsw_usage>.size
+        guard sysctlbyname("vm.swapusage", &usage, &size, nil, 0) == 0 else {
+            failures.insert("swap")
+            return (nil, nil)
+        }
+        return (UInt64(usage.xsu_used), UInt64(usage.xsu_total))
     }
 }
 
@@ -152,6 +202,7 @@ private final class PillPanel: NSPanel {
             let edge = CockpitNotchEdge.from(anchor: self.placementAnchor)
             self.setFrame(NotchPresentationLayout.frame(visible: self.placementScreen.frame,
                                                         edge: edge, count: self.surfaceView.metricCount, expanded: expanded), display: true)
+            self.surfaceView.refreshAccessibilityChildren()
         }
         // Not shown here: the sampler decides visibility (settings, monitor, fullscreen).
     }
@@ -392,15 +443,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         for id in diff.added {
             guard let screen = byID[id] else { continue }
-            panels[id] = PillPanel(screen: screen, monitorID: id, diskCount: diskCount,
-                                   anchor: runtime.monitorSetting(for: id).anchor,
-                                   onClick: { [weak self] in self?.openDashboard() })
+            let panel = PillPanel(screen: screen, monitorID: id, diskCount: diskCount,
+                                  anchor: runtime.monitorSetting(for: id).anchor,
+                                  onClick: { [weak self] in self?.openDashboard() })
+            panel.surfaceView.onRecovery = { [weak self] in self?.recoverClaudeKeychain() }
+            panels[id] = panel
             emit("monitor_added", ["display": id])
         }
         for id in diff.kept {
             if let screen = byID[id] {
                 panels[id]?.place(on: screen, diskCount: diskCount, anchor: runtime.monitorSetting(for: id).anchor)
             }
+        }
+    }
+
+    /// Explicit recovery is only reachable from the Claude hover panel's action.
+    /// Background refreshes keep fail-fast keychain access and never prompt.
+    private func recoverClaudeKeychain() {
+        Task { [weak self] in
+            guard let self else { return }
+            let readings = await self.aiSampler.requestClaudeKeychainAccess()
+            guard !Task.isCancelled else { return }
+            self.aiReadings = readings
+            self.sample()
         }
     }
 
