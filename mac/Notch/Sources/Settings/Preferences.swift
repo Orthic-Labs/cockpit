@@ -885,7 +885,9 @@ final class Preferences: ObservableObject {
         self.weeklyReading = defaults.object(forKey: Keys.weeklyReading) as? Bool ?? false
 
         self.weeklyRing = defaults.string(forKey: Keys.weeklyRing)
-            .flatMap(WeeklyRing.init(rawValue:)) ?? .off
+            // Cockpit fork: one cell per account, with the weekly limit as a
+            // second, thinner ring around the session ring.
+            .flatMap(WeeklyRing.init(rawValue:)) ?? .outside
         // On unless turned off: it is how the notch is carried to another edge,
         // and a control that is missing by default is one nobody finds.
         self.accentColor = defaults.string(forKey: Keys.accentColor)
