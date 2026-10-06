@@ -464,6 +464,35 @@ public final class DashboardHost: NSObject {
             })()
             """)
         guard (searchPassed as? Bool) == true else { throw ScanFailure.invalidJSON("Dashboard search regression") }
+        // Exercise real WKScriptMessage numeric bridging through indexed search.
+        // JavaScript integral numbers arrive as floating NSNumber values, unlike
+        // directly constructed Swift dictionaries in helper checks.
+        _ = try await webView.evaluateJavaScript("""
+            document.querySelector('[data-action="refresh_filename_index"]').click();
+            """)
+        var indexReady = false
+        for _ in 0..<150 {
+            let loaded = try await webView.evaluateJavaScript("""
+                !!document.querySelector('[data-action="filename_index_status"]')
+                """)
+            if (loaded as? Bool) == true { indexReady = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard indexReady else { throw ScanFailure.invalidJSON("Native filename index did not become ready") }
+        _ = try await webView.evaluateJavaScript("""
+            document.querySelector('#find-name').value = 'example.txt';
+            document.querySelector('#find-form').requestSubmit();
+            """)
+        var indexedSearchPassed = false
+        for _ in 0..<150 {
+            let matched = try await webView.evaluateJavaScript("""
+                document.querySelector('.results-bar').textContent.trim() === '1 indexed matches · 0 offset'
+                && !!document.querySelector('[data-index-inspect$="/example.txt"]')
+                """)
+            if (matched as? Bool) == true { indexedSearchPassed = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard indexedSearchPassed else { throw ScanFailure.invalidJSON("Native indexed dashboard search regression") }
         window?.performClose(nil)
         show()
         let retained = try await webView.evaluateJavaScript("window.CockpitDashboard.getState().scan.entries.length > 0")

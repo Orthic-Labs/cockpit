@@ -958,13 +958,13 @@ public final class NativeFilenameIndex {
         guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else {
             throw NativeFilenameIndexError.invalidQuery("page bounds must be integers")
         }
-        let type = String(cString: number.objCType)
-        guard !["c", "C", "B", "f", "d"].contains(type),
-              let exact = Self.strictInteger(number),
+        // WKScriptMessage carries JavaScript numbers as floating NSNumber values.
+        // Admit exact integral values while preserving CFBoolean rejection above.
+        guard let exact = Int(exactly: number.doubleValue),
               NSNumber(value: exact).compare(number) == .orderedSame else {
             throw NativeFilenameIndexError.invalidQuery("page bounds must be integers")
         }
-        return Int(exact)
+        return exact
     }
 
     nonisolated private static func strictInteger(_ value: Any) -> Int64? {

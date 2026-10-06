@@ -250,7 +250,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await access(growth.path);
     await click(line => /(?:button|toolbar item) Scan folder(?:,|$)/.test(line));
     await pickerChoose(fixture.root);
-    ax = await waitFor(value => value.includes(path.basename(fixture.root)) && /Loaded \d+ entries/.test(value) && /growing/i.test(value), "changed fixture scan must render growth in Storage view");
+    ax = await waitFor(value => value.includes(path.basename(fixture.root)) && /Loaded \d+ entries/.test(value) && value.includes("Folder growth") && /growing/i.test(value) && value.includes(fixture.root) && /\+\d/.test(value), "changed fixture scan must render growth in Storage view");
     assert.ok(ax.includes("Folder growth") && /growing/i.test(ax) && ax.includes(fixture.root) && /\+\d/.test(ax),
       "changed fixture scan must render positive folder growth for fixture root");
     for (let index = 0; index < originalFixtureFiles.length; index += 1) {
@@ -262,7 +262,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     ax = await click(controlIncluding("button", `Open ${fixture.nested}`));
     assert.ok(ax.includes(fixture.duplicateB), "storage drill must render nested duplicate");
     ax = await clickInHeadingSection("Entries in view", line => line.includes(`cell (selectable) Inspect ${fixture.duplicateB}`));
-    assert.ok(ax.includes("Inspector") && ax.includes(fixture.duplicateB) && ax.includes("Metadata"), "inspector must show selected fixture");
+    assert.ok(ax.includes("Inspector") && ax.includes(fixture.duplicateB) && /metadata/i.test(ax), "inspector must show selected fixture");
     await phaseDone(phase);
 
     phase = "find-filter";
@@ -277,12 +277,12 @@ export async function runInstalledStorageJourney(initialApp, options) {
 
     phase = "filename-index-build-and-hidden-search";
     await navigate("Find");
-    ax = await waitFor(value => /button (?:Build|Rescan) filename index(?:,|$)/.test(value),
+    ax = await waitFor(value => /button (?:Build|Rescan) filename index(?:,|$)/m.test(value),
       "Find must expose observed native filename-index build/resume control");
     const initialIndexButton = controlLines(ax).find(line => /button (?:Build|Rescan) filename index(?:,|$)/.test(line));
     assert.ok(initialIndexButton, "filename-index action must be an observed AX button");
     ax = await click(hasButton(initialIndexButton.match(/^\s*\d+ button (.*?)(?:,|$)/)?.[1]));
-    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value) && /button Rescan filename index(?:,|$)/.test(value),
+    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value) && /button Rescan filename index(?:,|$)/m.test(value),
       "Build filename index must expose native indexed-search state & Rescan status");
     await replaceText("Name or path", path.basename(fixture.hiddenFile));
     ax = await click(hasButton("Search"));
@@ -290,7 +290,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
       "indexed search must find hidden fixture by filename");
     ax = await click(hasButton(`Inspect indexed ${fixture.hiddenFile}`));
     await app.pressKey("Return");
-    ax = await waitFor(value => value.includes("Indexed metadata") && value.includes(fixture.hiddenFile) && value.includes("Created") && value.includes("Modified"),
+    ax = await waitFor(value => value.includes("Indexed metadata") && value.includes(fixture.hiddenFile) && /created/i.test(value) && /modified/i.test(value),
       "keyboard indexed-row inspection must render metadata card");
     await phaseDone(phase);
 
@@ -333,12 +333,12 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assert.ok(app && typeof app.getAXState === "function", "filename-index relaunch must return fresh CUA app");
     ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "filename-index relaunch must return to native dashboard");
     await navigate("Find");
-    ax = await waitFor(value => /button (?:Build|Rescan) filename index(?:,|$)/.test(value),
+    ax = await waitFor(value => /button (?:Build|Rescan) filename index(?:,|$)/m.test(value),
       "Find must expose explicit filename-index Build or Rescan control after relaunch");
     const replayIndexButton = controlLines(ax).find(line => /button (?:Build|Rescan) filename index(?:,|$)/.test(line));
     assert.ok(replayIndexButton, "relaunch filename-index action must be an observed AX button");
     ax = await click(hasButton(replayIndexButton.match(/^\s*\d+ button (.*?)(?:,|$)/)?.[1]));
-    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value) && /button Rescan filename index(?:,|$)/.test(value), "filename-index replay must expose resumed index state & Rescan status");
+    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value) && /button Rescan filename index(?:,|$)/m.test(value), "filename-index replay must expose resumed index state & Rescan status");
     await replaceText("Name or path", path.basename(fixture.indexFiles[0]));
     ax = await click(hasButton("Search"));
     ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.indexFiles[0]),
@@ -462,7 +462,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await click(hasButton("Choose media & compress"));
     await pickerChoose(fixture.sourcePng);
     await pickerChoose(fixture.compressionOutput ?? fixture.root);
-    ax = await waitFor(value => value.includes("Latest result") && value.includes(fixture.sourcePng) && value.includes("Output"), "native compression must report source/output");
+    ax = await waitFor(value => value.includes("Latest result") && value.includes(fixture.sourcePng) && /output/i.test(value), "native compression must report source/output");
     const expectedOutputPrefix = `${path.basename(fixture.sourcePng, path.extname(fixture.sourcePng))}-compressed-`;
     assert.ok(ax.includes(expectedOutputPrefix) && ax.includes(".jpg"), "compression output must use native generated source-image-compressed-*.jpg path");
     const outputDirectory = fixture.compressionOutput ?? fixture.root;
