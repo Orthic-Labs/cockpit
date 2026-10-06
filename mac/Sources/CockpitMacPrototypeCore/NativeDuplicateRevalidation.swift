@@ -209,7 +209,7 @@ public final class NativeDuplicateRevalidation {
         let budget = ReadBudget()
         var identities: [(path: String, identity: Identity)] = []
         let selectedFilePaths = selections.flatMap { [$0.keptPath] + $0.extras }
-        try preflightLocalMounts(selectedFilePaths)
+        try Self.preflightLocalMounts(selectedFilePaths)
         try budget.checkDeadline()
         for group in selections {
             for extra in group.extras {
@@ -229,8 +229,8 @@ public final class NativeDuplicateRevalidation {
                 try budget.checkDeadline()
             }
         }
-        try preflightLocalMounts(Array(pinned.keys))
-        try finalFingerprintClosure(pinned: pinned, budget: budget)
+        try Self.preflightLocalMounts(Array(pinned.keys))
+        try Self.finalFingerprintClosure(pinned: pinned, budget: budget)
         try budget.checkDeadline()
     }
 
