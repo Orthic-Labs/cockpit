@@ -6,3 +6,5 @@
 .DS_Store
 *.xcuserstate
 /local/
+/dist/
+/.right-release/

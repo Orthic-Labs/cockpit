@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "compile": "github-actions-only",
   "lanes": [
-    "ci"
+    "ci",
+    "release-candidate"
   ],
   "matrix": {
     "os": [
@@ -24,5 +25,23 @@
   },
   "gate": {
     "path": "scripts/gate.sh"
+  },
+  "candidate": {
+    "buildScript": "release:candidate",
+    "checkScript": "release:check",
+    "admissionScript": "release:admit",
+    "stageSummaryScript": "release:summary",
+    "artifactRoot": "cockpit-candidate",
+    "os": [
+      "macos-15"
+    ],
+    "targets": [
+      {
+        "os": "macos-15",
+        "platform": "macos",
+        "architecture": "arm64"
+      }
+    ],
+    "signMacos": true
   }
 }

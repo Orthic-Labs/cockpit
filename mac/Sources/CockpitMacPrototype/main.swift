@@ -430,6 +430,9 @@ case .alreadyRunning: exit(0)
 case .failed: exit(1)
 }
 let app = NSApplication.shared
-private let delegate = AppDelegate(runtime: runtime)
-app.delegate = delegate
-app.run()
+MainActor.assumeIsolated {
+    let delegate = AppDelegate(runtime: runtime)
+    app.delegate = delegate
+    app.run()
+    withExtendedLifetime(delegate) {}
+}

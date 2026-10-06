@@ -9,6 +9,18 @@
   },
   "scripts": {
     "check": "bash scripts/gate.sh",
-    "upstream:check": "node scripts/upstream-check.mjs"
+    "upstream:check": "node scripts/upstream-check.mjs",
+    "release:admit": "node scripts/release/candidate.mjs admit",
+    "release:summary": "node scripts/release/candidate.mjs summary",
+    "release:candidate": "node scripts/release/candidate.mjs build",
+    "release:check": "node scripts/release/candidate.mjs check",
+    "rightkit:prepare:mac": "node scripts/release/mac-payload.mjs prepare",
+    "rightkit:package:mac": "node scripts/release/mac-payload.mjs package",
+    "postinstall": "node scripts/release/dispatch-env.mjs"
+  },
+  "devDependencies": {
+    "@rightkit/release": "0.2.111",
+    "@electron/osx-sign": "2.7.1",
+    "appdmg": "0.6.6"
   }
 }

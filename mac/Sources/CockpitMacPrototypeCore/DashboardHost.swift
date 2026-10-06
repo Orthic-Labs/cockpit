@@ -95,6 +95,7 @@ public final class ProcessScanRunner: ScanRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var current: Process?
     private var cancelGeneration = 0
+    private let executionQueue = DispatchQueue(label: "cockpit.dashboard.scan")
 
     public init() {}
 
@@ -117,8 +118,7 @@ public final class ProcessScanRunner: ScanRunning, @unchecked Sendable {
         lock.unlock()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let queue = DispatchQueue(label: "cockpit.dashboard.scan")
-                queue.async { continuation.resume(with: .init { try self.execute(request, generation: generation) }) }
+                executionQueue.async { continuation.resume(with: .init { try self.execute(request, generation: generation) }) }
             }
         } onCancel: { self.cancel() }
     }
@@ -201,13 +201,19 @@ final class BoundedPipes: @unchecked Sendable {
         self.errLimit = errLimit
     }
 
-    func append(stdout chunk: Data) { append(&out, chunk: chunk, limit: outLimit) }
-    func append(stderr chunk: Data) { append(&err, chunk: chunk, limit: errLimit) }
+    func append(stdout chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        append(&out, chunk: chunk, limit: outLimit)
+    }
+    func append(stderr chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        append(&err, chunk: chunk, limit: errLimit)
+    }
 
     private func append(_ buffer: inout Data, chunk: Data, limit: Int) {
         guard !chunk.isEmpty else { return }
-        lock.lock()
-        defer { lock.unlock() }
         let room = limit - buffer.count
         if room <= 0 { truncated = true; return }
         if chunk.count > room { truncated = true }
