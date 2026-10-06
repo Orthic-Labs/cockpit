@@ -36,7 +36,7 @@ trap gate_exit EXIT
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
 node --test dashboard/app.test.mjs
 cargo fmt --all
-cargo test --locked --workspace
+cargo test --locked --workspace --no-fail-fast
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo run --locked --quiet --bin cockpit -- status --json
 if [[ "$RUNNER_OS" == "Windows" ]]; then
