@@ -46,18 +46,36 @@ public final class NativeStorageServices {
         let observedAt = isoFormatter.string(from: Date())
         var reasons: [String] = []
         var apps: [[String: Any]] = []
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
         let roots = [
             URL(fileURLWithPath: "/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true)
         ]
         for root in roots {
             do {
-                apps.append(contentsOf: try enumerateApps(in: root))
+                apps.append(contentsOf: try enumerateApps(in: root, deadline: deadline, reasons: &reasons))
             } catch {
                 reasons.append("apps_unavailable:\(root.path)")
             }
         }
         apps.sort { ($0["path"] as? String ?? "") < ($1["path"] as? String ?? "") }
+        let footprintDeadline = ProcessInfo.processInfo.systemUptime + 5
+        for index in apps.indices {
+            guard ProcessInfo.processInfo.systemUptime < footprintDeadline else {
+                apps[index]["incomplete"] = true
+                apps[index]["bundleSizeIncomplete"] = true
+                if !reasons.contains("bundle_measurement_time_limit") { reasons.append("bundle_measurement_time_limit") }
+                continue
+            }
+            guard let path = apps[index]["path"] as? String else { continue }
+            let measured = measureBundle(URL(fileURLWithPath: path), deadline: footprintDeadline)
+            apps[index]["bundleBytes"] = measured.bytes
+            apps[index]["incomplete"] = measured.incomplete
+            apps[index]["bundleSizeIncomplete"] = measured.incomplete
+        }
         let startup = startupPayload()
         if let startupReason = startup["reason"] as? String { reasons.append(startupReason) }
         let payload: [String: Any] = [
@@ -65,6 +83,7 @@ public final class NativeStorageServices {
             "observedAt": observedAt,
             "apps": apps,
             "startup": startup,
+            "inventoryIncomplete": !reasons.isEmpty,
             "reasons": reasons
         ]
         try persist(payload, fileName: "apps-observation.json")
@@ -219,17 +238,21 @@ public final class NativeStorageServices {
         return url.standardizedFileURL
     }
 
-    private func enumerateApps(in root: URL) throws -> [[String: Any]] {
+    private func enumerateApps(in root: URL, deadline: TimeInterval, reasons: inout [String]) throws -> [[String: Any]] {
         var rootIsDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &rootIsDirectory), rootIsDirectory.boolValue else {
             throw NativeStorageError.unavailable
         }
         let entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles])
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        if entries.count > 512 { reasons.append("application_root_entry_limit") }
         var result: [[String: Any]] = []
         for url in entries.prefix(512) where url.pathExtension.caseInsensitiveCompare("app") == .orderedSame {
+            if ProcessInfo.processInfo.systemUptime >= deadline { reasons.append("application_inventory_time_limit"); break }
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard values?.isDirectory == true, values?.isSymbolicLink != true else { continue }
+            var bundleStat = stat()
+            guard lstat(url.path, &bundleStat) == 0, bundleStat.st_flags & 0x4000_0000 == 0 else { reasons.append("application_metadata_unavailable_or_placeholder"); continue }
             let bundle = Bundle(url: url)
             var row: [String: Any] = [
                 "path": url.path,
@@ -246,29 +269,35 @@ public final class NativeStorageServices {
             } else if let build = bundle?.object(forInfoDictionaryKey: "CFBundleVersion") as? String, !build.isEmpty {
                 row["version"] = build
             }
-            let measured = measureBundle(url)
-            row["bundleBytes"] = measured.bytes
-            row["incomplete"] = measured.incomplete
-            row["bundleSizeIncomplete"] = measured.incomplete
             result.append(row)
         }
         return result
     }
 
-    private func measureBundle(_ url: URL) -> (bytes: Int64, incomplete: Bool) {
+    private func measureBundle(_ url: URL, deadline: TimeInterval) -> (bytes: Int64, incomplete: Bool) {
         let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
+        var incomplete = false
         guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys,
-                                                               options: [], errorHandler: { _, _ in true }) else {
+                                                               options: [], errorHandler: { _, _ in incomplete = true; return true }) else {
             return (0, true)
         }
         var total: Int64 = 0
         var count = 0
-        var incomplete = false
         for case let entry as URL in enumerator {
+            if ProcessInfo.processInfo.systemUptime >= deadline { incomplete = true; break }
             count += 1
             if count > 20_000 { incomplete = true; break }
-            guard let values = try? entry.resourceValues(forKeys: Set(keys)), values.isSymbolicLink != true else { continue }
-            if values.isDirectory != true { total += Int64(values.fileSize ?? 0) }
+            var entryStat = stat()
+            guard lstat(entry.path, &entryStat) == 0 else { incomplete = true; enumerator.skipDescendants(); continue }
+            if entryStat.st_flags & 0x4000_0000 != 0 { incomplete = true; enumerator.skipDescendants(); continue }
+            if entryStat.st_mode & S_IFMT == S_IFLNK { enumerator.skipDescendants(); continue }
+            guard let values = try? entry.resourceValues(forKeys: Set(keys)) else { incomplete = true; enumerator.skipDescendants(); continue }
+            if values.isDirectory != true {
+                guard let size = values.fileSize, size >= 0 else { incomplete = true; continue }
+                let (next, overflow) = total.addingReportingOverflow(Int64(size))
+                if overflow { incomplete = true; break }
+                total = next
+            }
         }
         return (total, incomplete)
     }

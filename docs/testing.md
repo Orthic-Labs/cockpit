@@ -32,6 +32,8 @@ Use a fresh evidence directory for every run; retain failure evidence before rep
 
 ## Hosted checks
 
+`scripts/qa/mac-storage-installed-journey.mjs` adds a substantial real-desktop journey: native folder scan → changed-fixture rescan/growth → drilldown/inspector/search → opt-in duplicates → native ordinary-file Trash review/apply → app quit/relaunch → durable Undo → native compression pickers → app/resource/activity refresh. Fixture helper creates only new owner-only files beneath caller-selected Documents directory, on same volume as user Trash; it never overwrites existing files. SHA-256, volume/inode & bundle fingerprints verify preserved originals/restored items. Metric-specific hover uses a separate native observation callback; absent callback is explicitly unrun. Journey is authored, with execution evidence pending new installed candidate.
+
 Generated RightKit CI runs existing component checks. Release candidate check launches bundled native app & real scanner, exercising packaged WKWebView search & window retention. This is package integration coverage; it bypasses native picker & does not replace installed journey. CUA journey requires an active native desktop session, so a hosted component pass never claims its completion.
 
 Every behavioral change should first extend a relevant journey at observable failure boundary. Report delivered build identity, journey outcome & actionable failure; omit test-count celebrations.

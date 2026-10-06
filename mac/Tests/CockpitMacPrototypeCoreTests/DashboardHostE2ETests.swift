@@ -31,18 +31,18 @@ final class DashboardHostE2ETests: XCTestCase {
         }
 
         let fixture = fileManager.temporaryDirectory
+            .resolvingSymlinksInPath()
             .appendingPathComponent("cockpit-dashboard-e2e-\(UUID().uuidString)", isDirectory: true)
         let scanRoot = fixture.appendingPathComponent("scan-root", isDirectory: true)
         let dashboard = fixture.appendingPathComponent("dashboard", isDirectory: true)
-        let state = fixture.appendingPathComponent("persistent-state", isDirectory: true)
         try fileManager.createDirectory(at: scanRoot, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: scanRoot.appendingPathComponent("subfolder", isDirectory: true),
                                         withIntermediateDirectories: true)
         try fileManager.createDirectory(at: dashboard, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: fixture) }
 
-        // Keep state beside, rather than inside, selected scan root so the real CLI
-        // boundary is exercised with the same isolation used by packaged smoke.
+        // verifyBundledScan owns isolated smoke state outside selected scan root.
+        // Installed journey separately verifies durable state across app restart.
         try Data("dashboard fixture".utf8)
             .write(to: scanRoot.appendingPathComponent("overview.txt"))
         try Data("nested example".utf8)
@@ -55,8 +55,7 @@ final class DashboardHostE2ETests: XCTestCase {
         let configuration = DashboardHostConfiguration(dashboardDirectory: dashboard,
                                                         helperURL: helper)
         let host = DashboardHost(configuration: configuration,
-                                  runner: ProcessScanRunner(),
-                                  stateDirectory: state)
+                                  runner: ProcessScanRunner())
         defer {
             host.stop()
             application.hide(nil)
@@ -66,7 +65,6 @@ final class DashboardHostE2ETests: XCTestCase {
 
         XCTAssertTrue(fileManager.fileExists(atPath: scanRoot.appendingPathComponent("overview.txt").path))
         XCTAssertTrue(fileManager.fileExists(atPath: scanRoot.appendingPathComponent("subfolder/example.txt").path))
-        XCTAssertFalse(state.standardizedFileURL.path.hasPrefix(scanRoot.standardizedFileURL.path + "/"))
     }
 
     private func preparePackagedDashboard(at destination: URL) throws {

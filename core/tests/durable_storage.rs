@@ -70,7 +70,7 @@ fn hex_id(id: &str) -> String {
 
 #[test]
 fn durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_rejects_unknown_state() {
-    let root = std::env::temp_dir().join(format!(
+    let root = fs::canonicalize(std::env::temp_dir()).unwrap().join(format!(
         "cockpit-durable-e2e-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()

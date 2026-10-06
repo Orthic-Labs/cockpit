@@ -38,5 +38,6 @@ process.stdout.write(JSON.stringify({
   by_area: byArea,
   source_working_tree_inventory: rows,
   standalone_assertion_scripts: assertionScripts,
-  installed_journey_runners: ['scripts/qa/mac-installed-journey.mjs'],
+  installed_journey_runners: ['scripts/qa/mac-installed-journey.mjs', 'scripts/qa/mac-storage-installed-journey.mjs']
+    .filter(file => statSync(path.join(root, file), { throwIfNoEntry: false })?.isFile()),
 }, null, 2) + '\n');

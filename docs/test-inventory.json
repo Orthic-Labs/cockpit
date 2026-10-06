@@ -1043,7 +1043,7 @@
       },
       {
         "file": "core/tests/duplicates.rs",
-        "sha256": "71223c8676508aba4853c0f927c6b60607e06ed15a35f1c711089710d827e0d6",
+        "sha256": "25bf41bcab5c7274a3d9161694b5bbd61d3c95e240271ec2a12fddc885f5bd23",
         "declared_test_names": [
           "exact_bytes_form_group_and_changed_content_does_not",
           "hardlinks_are_skipped_by_identity_and_symlinks_are_refused",
@@ -1054,7 +1054,7 @@
       },
       {
         "file": "core/tests/durable_storage.rs",
-        "sha256": "a8c44be0c12359a9fc9fb8dc2393a18006f08dc40e288649a14c7ac989c2b863",
+        "sha256": "fd319684c9cbf23c6fb54e58bd578380b4b1d21698fa9a5e051a9338d40da8ac",
         "declared_test_names": [
           "durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_rejects_unknown_state"
         ],
@@ -1274,7 +1274,7 @@
       },
       {
         "file": "core/tests/storage_browser.rs",
-        "sha256": "38e90ce0ee5d034d28e193f4a2ca70b7f5c4697efa3bacf687d5888448b36c59",
+        "sha256": "c544ed0e12ff882a0971e543a83c5ca0188d7b1dfb14530b03e68e590d3ba93d",
         "declared_test_names": [
           "search_includes_hidden_files_filters_extension_and_paginates",
           "malformed_query_and_limits_are_rejected",
@@ -1384,7 +1384,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostE2ETests.swift",
-        "sha256": "ed59a67cc428fe47f2c4465d53cc96636115003a3d40256f9bcaf97101a75042",
+        "sha256": "197c0ddb21c8144c0c8ee18ecd39f95199e43e497191e9330536c80950e2aec9",
         "declared_test_names": [
           "testPackagedDashboardScansFixtureThroughNativeHostAndRetainsResults"
         ],
@@ -1414,7 +1414,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/MediaCompressionTests.swift",
-        "sha256": "c5c33a52ab765e58c6e13d612529b3c6a95c3c5222e46a601311faa50ab755b3",
+        "sha256": "f721fa9da71493404fd6958c6af1ffd37d24feb5272151cba9d9a133a475aa38",
         "declared_test_names": [
           "testInvalidParametersAreRejectedWithoutEncoding",
           "testCancellationStopsBeforePublishAndLeavesOriginal",
@@ -1434,7 +1434,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeStorageServicesTests.swift",
-        "sha256": "d7e83608de915dd644d17b41a3358575ad583c12618b5699f79f18a0aecdf8e7",
+        "sha256": "c17def4ee6ee3df2c2098a6c501445fb049dfee44018c7b66284f4295f7e54f6",
         "declared_test_names": [
           "testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput"
         ],
@@ -1746,7 +1746,8 @@
       "dashboard/app.test.mjs"
     ],
     "installed_journey_runners": [
-      "scripts/qa/mac-installed-journey.mjs"
+      "scripts/qa/mac-installed-journey.mjs",
+      "scripts/qa/mac-storage-installed-journey.mjs"
     ]
   },
   "migration": {

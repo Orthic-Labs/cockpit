@@ -130,7 +130,7 @@ final class NotchSurfaceView: NSView {
 
     func update(_ reading: SystemReading) {
         self.reading = reading
-        toolTip = metrics.map { $0.summary }.joined(separator: " · ")
+        toolTip = nil // Selected ring owns its detail card; avoid a second combined tooltip.
         setAccessibilityLabel(metrics.map { $0.title }.joined(separator: ", ") + ". Open Cockpit dashboard")
         setAccessibilityValue(metrics.map { "\($0.title): \($0.detailLines.joined(separator: ", "))" }.joined(separator: "; "))
         refreshAccessibilityChildren()
@@ -265,12 +265,23 @@ final class NotchSurfaceView: NSView {
             element.setAccessibilityRole(.button)
             element.setAccessibilityLabel(metric.title)
             element.setAccessibilityValue(metric.detailLines.joined(separator: ", "))
-            element.setAccessibilityHelp("Hover for live \(metric.title) details; click to open its Cockpit view")
+            element.setAccessibilityHelp("Hover for live \(metric.title) details; click to open Cockpit dashboard")
             element.setAccessibilityParent(self)
             element.accessibilityFrameInParentSpace = metricRect(index: index, depth: depth, alongOffset: alongOffset)
             return element
         }
         var children: [NSAccessibilityElement] = elements
+        if expanded, let selectedMetric, metrics.indices.contains(selectedMetric) {
+            let metric = metrics[selectedMetric]
+            let details = NSAccessibilityElement()
+            details.setAccessibilityElement(true)
+            details.setAccessibilityRole(.staticText)
+            details.setAccessibilityLabel("\(metric.title) details")
+            details.setAccessibilityValue(metric.detailLines.joined(separator: ", "))
+            details.setAccessibilityParent(self)
+            details.accessibilityFrameInParentSpace = detailRect(depth: depth, alongOffset: alongOffset)
+            children.append(details)
+        }
         if expanded, let selectedMetric, metrics.indices.contains(selectedMetric),
            metrics[selectedMetric].recovery.map({ $0 == .allowKeychainAccess }) == true {
             let recoveryIndex = selectedMetric

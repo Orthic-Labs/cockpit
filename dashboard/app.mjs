@@ -329,23 +329,69 @@ function renderStorage(scan, localState) {
   return [pageHead("Storage", localState.path ? pathBase(localState.path) : "Where space lives", node("span", { className: "tag", textContent: `${formatCount(scan.entries.length)} entries loaded` })), notice(scan), node("div", { className: "stats-grid" }, [statistic("Logical scanned", formatBytes(accounting.logicalBytes), "metadata sum"), statistic("Attributed allocation", formatBytes(accounting.attributedBytes), "shared bytes counted once"), statistic("Volume used", formatBytes(accounting.usedBytes), accounting.usedBytes === null ? "volume reading unavailable" : "provider reading"), statistic("Reclaim lower bound", formatBytes(accounting.reclaim.lowerBytes), accounting.reclaim.upperBytes === null ? "upper bound unknown" : `up to ${formatBytes(accounting.reclaim.upperBytes)}`)]), node("div", { className: "storage-grid" }, [node("div", { className: "storage-main" }, sections), renderInspector(scan, localState.selected)])].filter(Boolean);
 }
 function renderFind(scan, localState) { const filtered = filterEntries(scan.entries, localState.filters); const form = node("form", { className: "filters", id: "find-form" }, [node("div", { className: "field" }, [node("label", { for: "find-name", textContent: "Name or path" }), node("input", { id: "find-name", name: "name", type: "search", placeholder: "e.g. screenshots", value: localState.filters.name })]), node("div", { className: "field" }, [node("label", { for: "find-extension", textContent: "Extension" }), node("input", { id: "find-extension", name: "extension", type: "text", placeholder: "pdf", value: localState.filters.extension })]), node("div", { className: "field" }, [node("label", { for: "find-kind", textContent: "Kind" }), node("select", { id: "find-kind", name: "kind" }, [node("option", { value: "", textContent: "Any kind" }), ...["file", "directory", "symlink", "other"].map((kind) => node("option", { value: kind, selected: localState.filters.kind === kind, textContent: kind }))])]), node("div", { className: "field" }, [node("label", { for: "find-min", textContent: "Min bytes" }), node("input", { id: "find-min", name: "minBytes", type: "number", min: "0", inputMode: "numeric", value: localState.filters.minBytes })]), node("div", { className: "field" }, [node("label", { for: "find-max", textContent: "Max bytes" }), node("input", { id: "find-max", name: "maxBytes", type: "number", min: "0", inputMode: "numeric", value: localState.filters.maxBytes })]), node("div", { className: "filter-actions" }, [node("button", { className: "button button-primary", type: "submit", textContent: "Search" }), node("button", { className: "button button-quiet", type: "button", dataset: { clearFilters: "" }, textContent: "Clear" })])]); return [pageHead("Find", "Search entries"), card("Filters", "All filters stay local to this scan", [form]), node("div", { className: "results-bar" }, [node("span", { textContent: filtered.length > MAX_RENDER_ROWS ? `Showing first ${formatCount(MAX_RENDER_ROWS)} of ${formatCount(filtered.length)} matches` : `${formatCount(filtered.length)} matches` }), node("span", { className: "faint", textContent: scan.limits.entriesOmitted ? "Loaded result is bounded" : "" })]), node("section", { className: "card" }, [node("div", { className: "table-wrap" }, [table(["Entry", "Size", "Kind", "Metadata"], filtered.slice(0, MAX_RENDER_ROWS).map((entry) => entryRow(entry)), "No entries match these filters.")])])]; }
-function capability(title, reason, action) { return node("div", { className: "capability" }, [node("div", { className: "capability-inner" }, [node("span", { className: "tag" , textContent: "Unavailable" }), node("h2", { textContent: title }), node("p", { textContent: reason }), action ? action : node("p", { className: "faint", textContent: "Native host can populate this panel with a bounded versioned response." })])]); }
-function pageHead(title, description, action) { return node("div", { className: "page-head" }, [node("div", {}, [node("p", { className: "eyebrow", textContent: title }), node("h2", { textContent: description }), node("p", { textContent: "Rendered from saved readings; unknown values stay unknown." })]), action ? node("div", { className: "head-actions" }, [action]) : ""]); }
+function capability(title, reason, action) { return node("div", { className: "capability" }, [node("div", { className: "capability-inner" }, [node("span", { className: "tag" , textContent: "Unavailable" }), node("h2", { textContent: title }), node("p", { textContent: reason }), action ? action : node("p", { className: "faint", textContent: "Request this reading when required permission is available." })])]); }
+function pageHead(title, description, action) { return node("div", { className: "page-head" }, [node("div", {}, [node("p", { className: "eyebrow", textContent: title }), node("h2", { textContent: description }), node("p", { textContent: "Values reflect reported readings; unknown values stay unknown." })]), action ? node("div", { className: "head-actions" }, [action]) : ""]); }
 function nativeAvailable() { return Boolean(globalThis?.webkit?.messageHandlers?.cockpitAction?.postMessage); }
-function nativeButton(label, action, payload = {}, className = "button button-primary") { const disabled = Boolean(bridge.pending) || !nativeAvailable(); return node("button", { className, type: "button", disabled, dataset: { action, payload: JSON.stringify(payload) }, title: nativeAvailable() ? "" : "Native host unavailable", textContent: disabled && bridge.pending ? "Working…" : label }); }
+function nativeButton(label, action, payload = {}, className = "button button-primary") { const disabled = Boolean(bridge.pending) || !nativeAvailable(); return node("button", { className, type: "button", disabled, dataset: { action, payload: JSON.stringify(payload) }, title: nativeAvailable() ? "" : "Action unavailable outside Cockpit app", textContent: disabled && bridge.pending ? "Working…" : label }); }
 function observation(value, unit = "") { const source = objectOrEmpty(value); const reading = source.value; if (reading === null || reading === undefined) return `${text(source.capability, "Unavailable")} · ${text(source.label, "No reading")}`; return `${unit ? `${reading} ${unit}` : text(reading)} · ${text(source.label, "OS reading")}`; }
 function actionFeedback() { if (!bridge.feedback && !bridge.error) return null; const message = bridge.error ? `Action failed: ${bridge.error}` : bridge.feedback; return node("div", { className: `notice ${bridge.error ? "notice-danger" : "notice-good"}`, role: "status" }, [node("div", { className: "notice-icon", ariaHidden: "true", textContent: bridge.error ? "!" : "✓" }), node("p", { textContent: message })]); }
 function moduleUnavailable(scan, title, action, reason) { const actionNode = action && nativeAvailable() ? nativeButton(action.label, action.name, action.payload ?? {}) : null; return [pageHead(title, `No ${title.toLowerCase()} readings yet`, actionNode), actionFeedback(), capability(`${title} readings unavailable`, reason || "No ${title.toLowerCase()} readings are available in this scan.", nativeAvailable() ? node("p", { className: "faint", textContent: "Use action above to refresh this panel." }) : null)]; }
-function renderDuplicates(scan) { const module = moduleFor(scan, "duplicates"); const request = { consent: "exact_content_read", snapshot_id: scan.snapshotId, min_size: 102400 }; if (!module) return moduleUnavailable(scan, "Duplicates", { label: "Inspect content for duplicates", name: "find_duplicates", payload: request }, "Duplicate detection is an explicit content-read operation. Nothing reads file content until you choose it."); const data = modulePayload(module); const groups = (data.groups ?? []).slice(0, MAX_RENDER_ROWS); const groupNodes = groups.map((group) => node("div", { className: "duplicate-group" }, [node("div", { className: "duplicate-head" }, [node("strong", { textContent: text(group.kept_path, "Kept item") }), node("span", { className: "number", textContent: formatBytes(group.size_bytes ?? group.sizeBytes) })]), node("p", { className: "muted", textContent: `${formatCount((group.extras ?? []).length)} duplicate${(group.extras ?? []).length === 1 ? "" : "s"} · ${pathText((group.extras ?? []).join(" · "))}` }), node("div", { className: "row-actions" }, (group.extras ?? []).map((path) => knownPathButton(scan, path, "Reveal", "reveal_item"))) ])); return [pageHead("Duplicates", "Exact duplicate groups", nativeButton("Re-run content inspection", "find_duplicates", request)), actionFeedback(), card("Duplicate groups", `${formatCount(groups.length)} groups shown · ${numberText(data.files_considered)} files considered · ${formatBytes(data.bytes_read)} read`, [node("div", { className: "duplicate-list" }, groupNodes.length ? groupNodes : [node("p", { className: "muted", textContent: "No duplicate groups were found." })])]), data.skipped?.length ? card("Skipped content", "Reads omitted by native safety bounds", [node("div", { className: "module-list" }, data.skipped.slice(0, MAX_RENDER_ROWS).map((row) => node("div", { className: "module-row" }, [node("span", { textContent: text(row.path) }), node("span", { className: "muted", textContent: text(row.reason) })])) )]) : null].filter(Boolean); }
+function duplicateExtras(scan) {
+  const data = modulePayload(moduleFor(scan, "duplicates"));
+  const paths = [];
+  for (const group of Array.isArray(data.groups) ? data.groups : []) {
+    const kept = normalizedPath(group.kept_path ?? group.keptPath ?? "");
+    for (const candidate of Array.isArray(group.extras) ? group.extras : []) {
+      const path = normalizedPath(candidate);
+      if (path !== "/" && path !== kept && !paths.includes(path)) paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function scannedOrdinaryFile(scan, path) {
+  const value = normalizedPath(path);
+  const entry = (scan.entries ?? []).find((item) => item.path === value);
+  return entry && entry.kind === "file" && entry.complete && !entry.placeholder && Boolean(scan.snapshotId) ? entry : null;
+}
+
+function duplicateStageKey(path) { return `duplicate-extra:${normalizedPath(path)}`; }
+function duplicateStagePaths(scan, localState) { return duplicateExtras(scan).filter((path) => localState.staged.has(duplicateStageKey(path)) && scannedOrdinaryFile(scan, path)); }
+
+function renderDuplicates(scan) {
+  const module = moduleFor(scan, "duplicates");
+  const request = { consent: "exact_content_read", snapshot_id: scan.snapshotId, min_size: 102400 };
+  if (!module) return moduleUnavailable(scan, "Duplicates", { label: "Inspect content for duplicates", name: "find_duplicates", payload: request }, "Duplicate detection is an explicit content-read operation. Nothing reads file content until you choose it.");
+  const data = modulePayload(module);
+  const groups = (data.groups ?? []).slice(0, MAX_RENDER_ROWS);
+  const extras = duplicateExtras(scan);
+  const selectedExtras = extras.filter((path) => bridge.review ? false : state.staged.has(duplicateStageKey(path)) && scannedOrdinaryFile(scan, path));
+  const review = selectedExtras.length ? nativeButton("Review selected extras", "review_cleanup", { paths: selectedExtras, snapshot_id: scan.snapshotId, selection_mode: "manual" }) : null;
+  const groupNodes = groups.map((group) => {
+    const kept = normalizedPath(group.kept_path ?? group.keptPath ?? "");
+    const groupExtras = (Array.isArray(group.extras) ? group.extras : []).map(normalizedPath).filter((path, index, values) => path !== "/" && path !== kept && values.indexOf(path) === index);
+    return node("div", { className: "duplicate-group" }, [
+      node("div", { className: "duplicate-head" }, [node("strong", { textContent: text(kept, "Kept item") }), node("span", { className: "number", textContent: formatBytes(group.size_bytes ?? group.sizeBytes) })]),
+      node("p", { className: "muted", textContent: `${formatCount(groupExtras.length)} duplicate${groupExtras.length === 1 ? "" : "s"} · ${pathText(groupExtras.join(" · "))}` }),
+      node("div", { className: "duplicate-extra-list" }, groupExtras.map((path) => {
+        const selectable = Boolean(scannedOrdinaryFile(scan, path));
+        const checked = state.staged.has(duplicateStageKey(path)) && selectable;
+        return node("label", { className: "duplicate-extra" }, [node("input", { type: "checkbox", checked, disabled: !selectable, dataset: { stagePath: path }, ariaLabel: selectable ? `Stage ${path}` : `Unavailable for manual review ${path}` }), node("span", {}, [node("span", { className: "path-name", textContent: pathBase(path) }), node("span", { className: "path-secondary", textContent: path })]), node("span", { className: selectable ? "tag warning" : "tag", textContent: selectable ? "Review" : "Unavailable" })]);
+      })),
+      node("div", { className: "row-actions" }, groupExtras.flatMap((path) => { const action = knownPathButton(scan, path, "Reveal", "reveal_item"); return action ? [action] : []; }))
+    ]);
+  });
+  return [pageHead("Duplicates", "Exact duplicate groups", nativeButton("Re-run content inspection", "find_duplicates", request)), actionFeedback(), review ? node("div", { className: "row-actions" }, [review]) : null, card("Duplicate groups", `${formatCount(groups.length)} groups shown · ${numberText(data.files_considered)} files considered · ${formatBytes(data.bytes_read)} read`, [node("div", { className: "duplicate-list" }, groupNodes.length ? groupNodes : [node("p", { className: "muted", textContent: "No duplicate groups were found." })])]), data.skipped?.length ? card("Skipped content", "Reads omitted by safety bounds", [node("div", { className: "module-list" }, data.skipped.slice(0, MAX_RENDER_ROWS).map((row) => node("div", { className: "module-row" }, [node("span", { textContent: text(row.path) }), node("span", { className: "muted", textContent: text(row.reason) })])) )]) : null].filter(Boolean);
+}
 function knownModulePath(value, seen = new Set(), depth = 0) { if (depth > 4 || value === null || value === undefined) return []; if (typeof value === "string") return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) ? [normalizedPath(value)] : []; if (Array.isArray(value)) return value.flatMap((item) => knownModulePath(item, seen, depth + 1)); if (typeof value !== "object" || seen.has(value)) return []; seen.add(value); return Object.entries(value).flatMap(([key, item]) => key.toLowerCase().includes("path") || key === "root" ? knownModulePath(item, seen, depth + 1) : knownModulePath(item, seen, depth + 1)); }
 function scanHasPath(scan, path) { const value = normalizedPath(path); if (value === "/" || scan.entries.some((entry) => entry.path === value) || scan.folders.some((folder) => folder.path === value)) return true; return Object.values(scan.modules ?? {}).some((module) => knownModulePath(module).includes(value)); }
 function knownPathButton(scan, path, label, action) { const value = normalizedPath(path); if (!scanHasPath(scan, value)) return ""; const reveal = node("button", { className: "button button-quiet", type: "button", dataset: { action, path: value, snapshotId: scan.snapshotId ?? "" }, textContent: label }); const preview = node("button", { className: "button button-quiet", type: "button", dataset: { action: "preview_item", path: value, snapshotId: scan.snapshotId ?? "" }, textContent: "Preview" }); return node("span", { className: "row-actions" }, [reveal, preview]); }
-function normalizeFinding(finding) { const source = objectOrEmpty(finding); const reclaim = normalizeReclaim(source.reclaim); return { raw: finding, id: text(source.id, "Finding"), path: normalizedPath(source.path ?? source.item_path ?? source.itemPath), rule: text(source.rule_id ?? source.ruleId, "Rule not reported"), eligible: Boolean(source.eligible), route: text(source.route, "Report only"), reason: text((Array.isArray(source.reasons) && source.reasons[0]) ?? source.reason, "Evidence requires review"), reclaim }; }
+function normalizeFinding(finding) { const source = objectOrEmpty(finding); const reclaim = normalizeReclaim(source.reclaim); const candidate = source.path ?? source.item_path ?? source.itemPath; return { raw: finding, id: text(source.id, "Finding"), path: candidate ? normalizedPath(candidate) : "", rule: text(source.rule_id ?? source.ruleId, "Rule not reported"), eligible: Boolean(source.eligible), route: text(source.route, "Report only"), reason: text((Array.isArray(source.reasons) && source.reasons[0]) ?? source.reason, "Evidence requires review"), reclaim }; }
 const PREF_KEY = "cockpit.dashboard.preferences.v1";
 const VIEWS = new Set(["storage", "find", "duplicates", "cleanup", "apps", "monitor", "activity", "compress"]);
 function savePreferences() { if (typeof localStorage === "undefined") return; try { localStorage.setItem(PREF_KEY, JSON.stringify({ view: state.view, filters: state.filters })); } catch { /* private mode or disabled storage */ } }
 function loadPreferences() { if (typeof localStorage === "undefined") return; try { const saved = JSON.parse(localStorage.getItem(PREF_KEY) || "{}"); if (VIEWS.has(saved.view)) state.view = saved.view; if (saved.filters && typeof saved.filters === "object") state.filters = { ...state.filters, ...saved.filters }; } catch { /* malformed preference stays ignored */ } }
-function unsafePostNativeAction(action, payload = {}) { if (bridge.pending) return false; const handler = globalThis?.webkit?.messageHandlers?.cockpitAction; if (!handler?.postMessage) { bridge.error = "Native host unavailable"; renderApp(); return false; } if ((action === "reveal_item" || action === "preview_item") && state.scan) payload = { ...payload, snapshot_id: state.scan.snapshotId }; const requestId = `cockpit-${Date.now().toString(36)}-${++bridge.sequence}`; bridge.pending = { request_id: requestId, action }; bridge.feedback = null; bridge.error = null; renderApp(); try { handler.postMessage({ version: 1, request_id: requestId, action, payload }); } catch (error) { bridge.pending = null; bridge.error = error instanceof Error ? error.message : "Native action could not be sent"; renderApp(); } return true; }
+function unsafePostNativeAction(action, payload = {}) { if (bridge.pending) return false; const handler = globalThis?.webkit?.messageHandlers?.cockpitAction; if (!handler?.postMessage) { bridge.error = "Action unavailable outside Cockpit app"; renderApp(); return false; } if ((action === "reveal_item" || action === "preview_item") && state.scan) payload = { ...payload, snapshot_id: state.scan.snapshotId }; const requestId = `cockpit-${Date.now().toString(36)}-${++bridge.sequence}`; bridge.pending = { request_id: requestId, action }; bridge.feedback = null; bridge.error = null; renderApp(); try { handler.postMessage({ version: 1, request_id: requestId, action, payload }); } catch (error) { bridge.pending = null; bridge.error = error instanceof Error ? error.message : "Action could not be sent"; renderApp(); } return true; }
 function postNativeAction(action, payload = {}) { if ((action === "reveal_item" || action === "preview_item") && state.scan && !scanHasPath(state.scan, payload.path)) return false; return unsafePostNativeAction(action, payload); }
 
 function captureCleanupHistory(data) {
@@ -356,10 +402,10 @@ function captureCleanupHistory(data) {
   return bridge.cleanupPlans;
 }
 
-function cleanupEligible(finding) {
+function cleanupEligible(finding, scan) {
   const raw = objectOrEmpty(finding.raw);
   const route = pathText(finding.route).toLowerCase().replaceAll("_", "");
-  return Boolean(finding.eligible) && raw.report_only !== true && route === "trash";
+  return Boolean(finding.eligible) && raw.report_only !== true && route === "trash" && Boolean(scannedOrdinaryFile(scan, finding.path));
 }
 
 function cleanupPlanItems(plan) {
@@ -381,19 +427,41 @@ function cleanupPlanLabel(plan) {
   return `${formatCount(count)} item${count === 1 ? "" : "s"}${shown ? ` · ${shown}${items.length > 3 ? " · …" : ""}` : ""}`;
 }
 
+function cleanupPlanRecords(plan) {
+  const source = objectOrEmpty(plan);
+  const items = source.items ?? source.paths ?? source.files ?? [];
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => typeof item === "string" ? { path: item } : objectOrEmpty(item)).filter((item) => pathText(item.path ?? item.name ?? item.filename ?? item.file_name));
+}
+
+function cleanupItemOutcome(item) {
+  const source = objectOrEmpty(item);
+  const outcome = objectOrEmpty(source.outcome ?? source.undo_outcome);
+  const status = outcome.status ?? source.status ?? source.state ?? source.undo_state ?? "Unknown outcome";
+  const moved = outcome.moved_bytes ?? outcome.movedBytes ?? source.moved_bytes ?? source.movedBytes;
+  const reason = outcome.reason ?? source.reason;
+  const undo = source.undo_outcome ? objectOrEmpty(source.undo_outcome).status ?? source.undo_state : source.undo_state;
+  return `${text(status, "Unknown outcome")}${moved === undefined || moved === null ? "" : ` · ${formatBytes(moved)}`}${reason ? ` · ${text(reason)}` : ""}${undo ? ` · undo ${text(undo)}` : ""}`;
+}
+
 function cleanupPlanHistory(data) {
   const plans = captureCleanupHistory(data);
   if (!plans.length) return card("Cleanup history", "Native cleanup journal", [node("p", { className: "muted", textContent: "No cleanup history reported." })]);
-  const rows = plans.slice(0, MAX_RENDER_ROWS).map((plan) => {
+  const rows = plans.slice(0, 512).map((plan) => {
     const source = objectOrEmpty(plan);
     const planId = source.plan_id ?? source.planId;
     const stateName = text(source.state ?? source.status, "Recorded");
     const expiry = source.expires_at ?? source.expiresAt;
-    const canUndo = Boolean(planId) && /applied|moved|complete/i.test(stateName) && !/undone|expired/i.test(stateName);
+    const hasUndoableItems = cleanupPlanRecords(source).some((item) => {
+      const outcome = objectOrEmpty(item.outcome);
+      return (outcome.status ?? item.status) === "moved" && !item.undo_state && !item.undoState && !item.undo_outcome;
+    });
+    const canUndo = Boolean(planId) && hasUndoableItems && /applied|moved|complete|interrupted/i.test(stateName) && !/undone|expired/i.test(stateName);
     const outcome = source.freed_bytes !== null && source.freed_bytes !== undefined ? `Freed ${formatBytes(source.freed_bytes)}` : source.moved_bytes !== null && source.moved_bytes !== undefined ? `Moved ${formatBytes(source.moved_bytes)}` : source.state ? stateName : "Outcome pending";
-    return node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: cleanupPlanLabel(source) }), node("div", { className: "module-detail", textContent: `${stateName} · ${outcome}${expiry ? ` · Expires ${text(expiry)}` : ""}` })]), canUndo ? nativeButton("Undo", "undo_cleanup", { plan_id: planId }, "button button-quiet") : ""]);
+    const itemRows = cleanupPlanRecords(source).map((item) => node("div", { className: "cleanup-item-row" }, [node("span", { className: "path-secondary", textContent: pathText(item.path ?? item.name ?? item.filename ?? item.file_name) }), node("span", { className: "muted", textContent: cleanupItemOutcome(item) })]));
+    return node("div", { className: "module-row cleanup-plan-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: cleanupPlanLabel(source) }), node("div", { className: "module-detail", textContent: `${stateName} · ${outcome}${expiry ? ` · Expires ${text(expiry)}` : ""}` }), itemRows.length ? node("div", { className: "cleanup-item-list" }, itemRows) : null]), canUndo ? nativeButton("Undo", "undo_cleanup", { plan_id: planId }, "button button-quiet") : ""]);
   });
-  return card("Cleanup history", "Native cleanup journal", [node("div", { className: "module-list" }, rows)]);
+  return card("Cleanup history", "System journal · per-item outcomes · bounded to retained records", [node("div", { className: "module-list" }, rows)]);
 }
 
 function reviewItems(review) {
@@ -412,11 +480,19 @@ function reviewNotice(review) {
 
 function actionResultFeedback(action, data) {
   const source = objectOrEmpty(data);
-  const items = cleanupPlanItems(source);
+  const items = cleanupPlanRecords(source);
+  const outcomes = items.map((item) => objectOrEmpty(item.outcome ?? item.undo_outcome ?? (item.status ? item : null)));
+  const moved = outcomes.filter((item) => item.status === "moved").length;
+  const restored = outcomes.filter((item) => item.status === "restored").length;
+  const failed = outcomes.filter((item) => ["failed", "indeterminate", "not_moved", "conflict"].includes(item.status)).length;
   const count = asNumber(source.item_count ?? source.itemCount) ?? items.length;
+  const stateName = pathText(source.state ?? source.status).toLowerCase();
+  const confirmed = action === "undo_cleanup" ? restored : moved;
+  const unresolved = Math.max(failed, count - confirmed);
+  const partial = unresolved > 0 || !count || /interrupted|partial|failed|indeterminate|conflict/.test(stateName);
   if (action === "review_cleanup") return `Review ready · ${formatCount(count)} file${count === 1 ? "" : "s"}`;
-  if (action === "apply_cleanup") return `Cleanup complete · ${formatCount(count)} file${count === 1 ? "" : "s"} moved to Trash`;
-  if (action === "undo_cleanup") return `Undo complete · ${formatCount(count)} file${count === 1 ? "" : "s"} restored`;
+  if (action === "apply_cleanup") return partial ? `Cleanup incomplete · ${formatCount(moved)} moved · ${formatCount(unresolved)} unresolved` : `Cleanup complete · ${formatCount(moved)} file${moved === 1 ? "" : "s"} moved to Trash`;
+  if (action === "undo_cleanup") return partial ? `Undo incomplete · ${formatCount(restored)} restored · ${formatCount(unresolved)} unresolved` : `Undo complete · ${formatCount(restored)} file${restored === 1 ? "" : "s"} restored`;
   return `${action.replaceAll("_", " ")} complete`;
 }
 
@@ -429,7 +505,7 @@ function renderInspector(scan, selectedPath) {
   const rows = [metaRow("Path", item.path), metaRow("Kind", isEntry ? item.kind : "folder"), metaRow("Logical size", formatBytes(item.logicalBytes)), metaRow("Allocation", formatBytes(item.attributedBytes)), metaRow("Volume", item.volume)];
   if (isEntry) rows.push(metaRow("Metadata", item.complete ? "Complete" : "Partial"), metaRow("Placeholder", item.placeholder ? "Yes" : "No"), metaRow("Reclaim bound", item.reclaim ? (item.reclaim.upperBytes === null ? `${formatBytes(item.reclaim.lowerBytes)}+ · unknown upper` : `${formatBytes(item.reclaim.lowerBytes)}–${formatBytes(item.reclaim.upperBytes)}`) : "Not reported"));
   else rows.push(metaRow("Accounting", item.incomplete ? "Incomplete" : "Attributed"));
-  const manual = isEntry && item.kind === "file" && item.complete && !item.placeholder && Boolean(scan.snapshotId)
+  const manual = isEntry && scannedOrdinaryFile(scan, item.path)
     ? nativeButton("Review Move to Trash", "review_cleanup", { paths: [item.path], snapshot_id: scan.snapshotId, selection_mode: "manual" }, "button button-quiet")
     : null;
   return node("section", { className: "card inspector" }, [node("div", { className: "card-header" }, [node("h3", { textContent: "Inspector" })]), node("div", { className: "inspector-body" }, [node("div", { className: "inspector-title", textContent: item.path }), node("dl", { className: "meta-list" }, rows), manual ? node("div", { className: "row-actions" }, [manual]) : null])]);
@@ -440,6 +516,8 @@ function renderActivity(scan) {
   if (!module) return moduleUnavailable(scan, "Activity", { label: "Refresh activity", name: "refresh_activity" }, "Activity totals, scan history, & cleanup history require native evidence.");
   const data = modulePayload(module);
   captureCleanupHistory(data);
+  const week = objectOrEmpty(data.week);
+  const month = objectOrEmpty(data.month);
   const totals = objectOrEmpty(data.totals ?? data.weekly ?? {});
   const historyData = data.history;
   const historyEvents = Array.isArray(historyData) ? historyData : (objectOrEmpty(historyData).events ?? objectOrEmpty(historyData).items ?? []);
@@ -448,22 +526,31 @@ function renderActivity(scan) {
   const scans = Array.isArray(scansData) ? scansData : (objectOrEmpty(scansData).scans ?? objectOrEmpty(scansData).events ?? []);
   const rows = events.map((event) => { const kind = objectOrEmpty(event.kind); return node("div", { className: "timeline-item" }, [node("div", { className: "timeline-dot", ariaHidden: "true" }), node("div", {}, [node("div", { className: "module-name", textContent: typeof event.kind === "string" ? event.kind : Object.keys(kind)[0] || "Event" }), node("div", { className: "module-detail", textContent: `${text(event.id, "Activity")} · ${text(event.occurred_at ?? event.occurredAt ?? event.created_at, "Time unknown")}` })])]); });
   const scanRows = Array.isArray(scans) ? scans.slice(0, MAX_RENDER_ROWS).map((item) => node("div", { className: "module-row" }, [node("span", { className: "module-name", textContent: text(item.snapshot_id ?? item.snapshotId ?? item.id, "Scan") }), node("span", { className: "muted", textContent: text(item.created_at ?? item.createdAt ?? item.occurred_at, "Time unknown") })])) : [];
-  return [pageHead("Activity", "Cleanup, scan, compression, & volume history", nativeButton("Refresh activity", "refresh_activity")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("Events", numberText(totals.events ?? events.length), "selected window"), statistic("Moved", formatBytes(totals.moved_bytes ?? totals.movedBytes), "moved to Trash or owner tool"), statistic("Observed reclaim", formatBytes(totals.observed_reclaimed_bytes ?? totals.observedReclaimedBytes), "volume observation"), statistic("Compression", formatBytes(totals.compression_logical_delta_bytes ?? totals.compressionLogicalDeltaBytes), "logical delta")]), card("Timeline", `${formatCount(events.length)} events shown`, [node("div", { className: "timeline" }, rows.length ? rows : [node("p", { className: "muted", textContent: "No activity events reported." })])]), card("Scan history", "Native scan records", [node("div", { className: "module-list" }, scanRows.length ? scanRows : [node("p", { className: "muted", textContent: "No scan history reported." })])]), cleanupPlanHistory(data)];
+  const compressionSummary = (period) => period && Object.keys(period).length ? `${numberText(period.compressions, "Unknown")} runs · source ${formatBytes(period.sourceBytes ?? period.source_bytes)} · saved ${formatBytes(period.measuredSavedBytes ?? period.measured_saved_bytes)}` : "No native total reported";
+  const eventCoverage = data.events ? `${formatCount(events.length)} retained · max 512` : "No event window reported";
+  return [pageHead("Activity", "Cleanup, scan, compression, & volume history", nativeButton("Refresh activity", "refresh_activity")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("7-day compression", formatBytes(week.outputBytes ?? week.output_bytes), compressionSummary(week)), statistic("30-day compression", formatBytes(month.outputBytes ?? month.output_bytes), compressionSummary(month)), statistic("Cleanup events", numberText(totals.events ?? events.length), "reported event count"), statistic("Event coverage", eventCoverage, "rolling window · bounded journal")]), card("Timeline", `${formatCount(events.length)} events shown · rolling window`, [node("div", { className: "timeline" }, rows.length ? rows : [node("p", { className: "muted", textContent: "No activity events reported." })])]), card("Scan history", "Reported scan records", [node("div", { className: "module-list" }, scanRows.length ? scanRows : [node("p", { className: "muted", textContent: "No scan history reported." })])]), cleanupPlanHistory(data)];
 }
 
 function renderCleanup(scan, localState) {
   const findings = scan.findings.map(normalizeFinding);
   const review = bridge.review;
-  const selectedCount = findings.filter((finding) => localState.staged.has(finding.id) && cleanupEligible(finding)).length;
+  const selectedFindings = findings.filter((finding) => localState.staged.has(finding.id) && cleanupEligible(finding, scan));
+  const selectedDuplicatePaths = duplicateStagePaths(scan, localState);
+  const selectedCount = selectedFindings.length + selectedDuplicatePaths.length;
   const rows = findings.slice(0, MAX_RENDER_ROWS).map((finding) => {
-    const eligible = cleanupEligible(finding);
+    const eligible = cleanupEligible(finding, scan);
     const staged = localState.staged.has(finding.id) && eligible;
     return node("div", { className: "finding" }, [node("input", { type: "checkbox", checked: staged, disabled: !eligible, dataset: { stageFinding: finding.id }, ariaLabel: eligible ? `Stage ${finding.path}` : `Report only ${finding.path}` }), node("div", {}, [node("div", { className: "finding-path", textContent: finding.path }), node("p", { className: "finding-note", textContent: `${finding.rule} · ${finding.reason}` })]), node("div", { className: "finding-right" }, [node("span", { className: eligible ? "tag warning" : "tag", textContent: eligible ? "Review" : "Report only" }), node("span", { className: "number muted", textContent: finding.reclaim.upperBytes === null ? `${formatBytes(finding.reclaim.lowerBytes)}+` : formatBytes(finding.reclaim.upperBytes) })])]);
   });
-  const selectedPaths = findings.filter((finding) => localState.staged.has(finding.id) && cleanupEligible(finding)).map((finding) => finding.path);
-  const action = review && (review.plan_id ?? review.planId) ? nativeButton("Apply cleanup", "apply_cleanup", { plan_id: review.plan_id ?? review.planId }) : selectedPaths.length ? nativeButton("Review selected files", "review_cleanup", { paths: selectedPaths, snapshot_id: scan.snapshotId }) : null;
+  const selectedPaths = [...new Set([...selectedFindings.map((finding) => finding.path), ...selectedDuplicatePaths])];
+  const action = review && (review.plan_id ?? review.planId) ? nativeButton("Apply cleanup", "apply_cleanup", { plan_id: review.plan_id ?? review.planId }) : selectedPaths.length ? nativeButton("Review selected files", "review_cleanup", { paths: selectedPaths, snapshot_id: scan.snapshotId, selection_mode: "manual" }) : null;
   const history = cleanupPlanHistory({ cleanup: { plans: bridge.cleanupPlans } });
-  return [pageHead("Cleanup", review ? "Review selected files" : "Stage & review cleanup", node("span", { className: "tag", textContent: `${formatCount(selectedCount)} selected` })), actionFeedback(), action ? node("div", { className: "row-actions" }, [action]) : null, reviewNotice(review), node("section", { className: "card" }, [node("div", { className: "card-header" }, [node("h3", { textContent: "Findings" }), node("p", { textContent: findings.length ? `${formatCount(findings.length)} reported · ${formatCount(selectedCount)} eligible selected` : "No findings reported" })]), node("div", { className: "card-body" }, [node("div", { className: "finding-list" }, rows.length ? rows : [node("p", { className: "muted", textContent: "Native scan reported no cleanup findings." })])])]), history].filter(Boolean);
+  const duplicateRows = duplicateExtras(scan).map((path) => {
+    const selectable = Boolean(scannedOrdinaryFile(scan, path));
+    const checked = localState.staged.has(duplicateStageKey(path)) && selectable;
+    return node("label", { className: "duplicate-extra" }, [node("input", { type: "checkbox", checked, disabled: !selectable, dataset: { stagePath: path }, ariaLabel: selectable ? `Stage ${path}` : `Unavailable for manual review ${path}` }), node("span", {}, [node("span", { className: "path-name", textContent: pathBase(path) }), node("span", { className: "path-secondary", textContent: path })]), node("span", { className: selectable ? "tag warning" : "tag", textContent: selectable ? "Review" : "Unavailable" })]);
+  });
+  return [pageHead("Cleanup", review ? "Review selected files" : "Stage & review cleanup", node("span", { className: "tag", textContent: `${formatCount(selectedCount)} selected` })), actionFeedback(), review ? node("p", { className: "muted", textContent: "Review returned a plan. Content hash revalidation is not reported." }) : null, action ? node("div", { className: "row-actions" }, [action]) : null, reviewNotice(review), duplicateRows.length ? card("Duplicate extras", "Keep-one groups require explicit manual selection", [node("div", { className: "duplicate-extra-list" }, duplicateRows)]) : null, node("section", { className: "card" }, [node("div", { className: "card-header" }, [node("h3", { textContent: "Findings" }), node("p", { textContent: findings.length ? `${formatCount(findings.length)} reported · ${formatCount(selectedCount)} selected for review` : "No findings reported" })]), node("div", { className: "card-body" }, [node("div", { className: "finding-list" }, rows.length ? rows : [node("p", { className: "muted", textContent: "No cleanup findings reported." })])])]), history].filter(Boolean);
 }
 
 function receiveAction(response) {
@@ -478,9 +565,10 @@ function receiveAction(response) {
   if (!source.ok) { bridge.error = text(source.error, "Native action failed"); bridge.feedback = null; renderApp(); return false; }
   bridge.error = null;
   bridge.feedback = actionResultFeedback(action, moduleData);
-  if (action === "review_cleanup") bridge.review = objectOrEmpty(moduleData);
+  if (action === "review_cleanup") { bridge.review = objectOrEmpty(moduleData); state.view = "cleanup"; savePreferences(); syncNav(); }
   if (action === "apply_cleanup") { bridge.review = null; bridge.undoPlanId = moduleData.plan_id ?? moduleData.planId ?? null; captureCleanupHistory({ cleanup: { plans: [moduleData] } }); }
   if (action === "undo_cleanup") { bridge.undoPlanId = null; captureCleanupHistory({ cleanup: { plans: [moduleData] } }); }
+  if (action === "compress_media") bridge.compressionResult = objectOrEmpty(moduleData);
   if (action === "refresh_activity") captureCleanupHistory(moduleData);
   if (moduleName && source.data !== undefined && !["review_cleanup", "apply_cleanup", "undo_cleanup"].includes(action)) applyModule(moduleName, moduleData);
   renderApp();
@@ -507,6 +595,7 @@ export function importScanJson(input, options = {}) {
   state.staged = new Set();
   bridge.review = null;
   bridge.undoPlanId = null;
+  bridge.compressionResult = null;
   captureCleanupHistory(state.scan.modules.activity ?? state.scan.modules.history ?? {});
   if (typeof document !== "undefined") { setStatus(`Loaded ${formatCount(state.scan.entries.length)} entries`, "good"); syncNav(); renderApp(); }
   return state.scan;
@@ -543,12 +632,24 @@ function renderMonitor(scan) {
     node("div", {}, [node("div", { className: "module-name", textContent: text(disk.name ?? disk.path, "Volume") }), node("div", { className: "module-detail", textContent: disk.isInternal === undefined ? "Drive type unknown" : disk.isInternal ? "Internal" : "External" })]),
     node("div", { className: "app-metrics" }, [node("span", { className: "number", textContent: `Free ${formatBytes(disk.freeBytes ?? disk.free_bytes)}` }), node("span", { className: "number", textContent: `Total ${formatBytes(disk.totalBytes ?? disk.total_bytes)}` })]),
   ]));
-  const portNodes = ports.map((port) => node("div", { className: "module-row" }, [node("span", { textContent: `${text(port.address ?? port.local_address ?? port.localAddress, "Address unknown")}:${text(port.port, "Port unknown")}` }), node("span", { className: "muted", textContent: `${text(port.process ?? port.processName, "Process unknown")} · PID ${text(port.pid, "Unknown")}` })]));
-  const interfaceRows = Array.isArray(interfaces) ? interfaces.slice(0, MAX_RENDER_ROWS).map((item) => node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: text(item.name ?? item.interface ?? item.service, "Network interface") }), node("div", { className: "module-detail", textContent: text(item.status ?? item.state, "State unknown") })]), node("span", { className: "number", textContent: `${formatBytes(item.rxBytes ?? item.receivedBytes ?? item.bytesIn)} in · ${formatBytes(item.txBytes ?? item.sentBytes ?? item.bytesOut)} out` })])) : [];
   const batteryValue = battery.percent ?? battery.chargePercent ?? battery.charge_percent;
-  return [pageHead("Monitor", "Resources, network, battery, & listening ports", nativeButton("Refresh readings", "refresh_monitor")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("CPU", cpuPercent === null || cpuPercent === undefined ? "Unknown" : `${cpuPercent}%`, text(data.observedAt ?? raw.observedAt, "Current reading")), statistic("Memory", `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`, "used / total"), statistic("Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`, "used / total"), statistic("Memory pressure", text(pressure, "Unknown"), "OS reading")]), card("Storage volumes", "Free & total space by volume", [node("div", { className: "module-list" }, diskNodes.length ? diskNodes : [node("p", { className: "muted", textContent: "No volume readings." })])]), card("Resource processes", "CPU & memory from process readings", [node("div", { className: "module-list" }, processRows.length ? processRows : [node("p", { className: "muted", textContent: "No process readings." })])]), card("Network & battery", "Current OS readings", [node("div", { className: "module-list" }, interfaceRows.length ? interfaceRows : [node("p", { className: "muted", textContent: text(network.reason, "No network interface readings.") })]), metaRow("Battery", batteryValue === undefined ? text(battery.reason, "No battery reading") : `${batteryValue}%${battery.charging === undefined ? "" : battery.charging ? " · Charging" : " · On battery"}`)]), card("Listening ports", portSource.available === false ? text(portSource.reason, "Listening ports unavailable") : portNodes.length ? node("div", { className: "module-list" }, portNodes) : node("p", { className: "muted", textContent: "No listening ports reported." }))].filter(Boolean);
+  const rateAvailable = network.ratesAvailable === true || (Array.isArray(interfaces) && interfaces.some((item) => item.ratesAvailable === true));
+  const networkNote = rateAvailable ? "Measured rate" : "First sample or rate unavailable";
+  const rateRows = Array.isArray(interfaces) ? interfaces.slice(0, MAX_RENDER_ROWS).map((item) => {
+    const inRate = item.bytesInPerSecond ?? item.bytes_in_per_second;
+    const outRate = item.bytesOutPerSecond ?? item.bytes_out_per_second;
+    return node("div", { className: "module-row" }, [node("span", { className: "module-name", textContent: text(item.name ?? item.interface ?? item.service, "Network interface") }), node("span", { className: "number", textContent: inRate === undefined || outRate === undefined ? "Rate unavailable" : `${formatBytes(inRate)}/s in · ${formatBytes(outRate)}/s out` })]);
+  }) : [];
+  const portNodes = ports.map((port) => {
+    const identity = objectOrEmpty(port.identity);
+    const verified = port.processIdentityVerified ?? port.process_identity_verified;
+    const ownerReason = port.ownerReason ?? port.owner_reason;
+    const details = [text(port.process ?? port.processName, "Process unknown"), `PID ${text(port.pid, "Unknown")}`, `Start ${text(port.startTime ?? port.start_time ?? identity.startTime, "Unknown")}`, text(port.exposure, "Exposure unknown"), verified === true ? "Identity verified" : verified === false ? `Identity unverified${ownerReason ? ` · ${text(ownerReason)}` : ""}` : "Identity unknown"];
+    return node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: `${text(port.address ?? port.local_address ?? port.localAddress, "Address unknown")}:${text(port.port, "Port unknown")}` }), node("div", { className: "module-detail", textContent: details.join(" · ") })]), node("span", { className: "muted", textContent: text(port.protocol, "Protocol unknown") })]);
+  });
+  return [pageHead("Monitor", "Resources, network, battery, & listening ports", nativeButton("Refresh readings", "refresh_monitor")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("CPU", cpuPercent === null || cpuPercent === undefined ? "Unknown" : `${cpuPercent}%`, text(data.observedAt ?? raw.observedAt, "Current reading")), statistic("Memory", `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`, "used / total"), statistic("Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`, "used / total"), statistic("Memory pressure", text(pressure, "Unknown"), "OS reading")]), card("Storage volumes", "Free & total space by volume", [node("div", { className: "module-list" }, diskNodes.length ? diskNodes : [node("p", { className: "muted", textContent: "No volume readings." })])]), card("Resource processes", "CPU & memory from process readings", [node("div", { className: "module-list" }, processRows.length ? processRows : [node("p", { className: "muted", textContent: "No process readings." })])]), card("Network & battery", "Current OS readings", [node("div", { className: "module-list" }, rateRows.length ? rateRows : [node("p", { className: "muted", textContent: text(network.reason, "No network interface readings.") })]), node("p", { className: "faint", textContent: networkNote }), metaRow("Battery", batteryValue === undefined ? text(battery.reason, "No battery reading") : `${batteryValue}%${battery.charging === undefined ? "" : battery.charging ? " · Charging" : " · On battery"}`)]), card("Listening ports", portSource.available === false ? text(portSource.reason, "Listening ports unavailable") : portNodes.length ? node("div", { className: "module-list" }, portNodes) : node("p", { className: "muted", textContent: "No listening ports reported." }))].filter(Boolean);
 }
-const bridge = { pending: null, sequence: 0, feedback: null, error: null, review: null, cleanupPlans: [], undoPlanId: null };
+const bridge = { pending: null, sequence: 0, feedback: null, error: null, review: null, cleanupPlans: [], undoPlanId: null, compressionResult: null };
 const state = { scan: null, view: "storage", path: null, selected: null, filters: { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }, staged: new Set(), error: null };
 
 function setStatus(message, tone = "neutral") { const status = document.querySelector("#scan-status"); if (!status) return; status.textContent = message; status.dataset.tone = tone; }
@@ -558,9 +659,9 @@ function formFilters(form) { const data = new FormData(form); return { name: dat
 function syncNav() { document.querySelectorAll(".nav-item").forEach((item) => { const active = item.dataset.view === state.view; item.classList.toggle("is-active", active); if (active) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current"); }); }
 function actionModule(action) { return { refresh_monitor: "monitor", refresh_apps: "apps", refresh_activity: "activity", find_duplicates: "duplicates", compress_media: "compression" }[action]; }
 function applyModule(name, data) { if (!state.scan) return; state.scan.modules = { ...state.scan.modules, [name]: data }; }
-function renderApp() { if (typeof document === "undefined") return; const view = document.querySelector("#app-view"); if (!view) return; view.replaceChildren(); if (!state.scan) { view.append(node("div", { className: "empty-state" }, [node("div", { className: "empty-state-inner" }, [node("p", { className: "eyebrow", textContent: "Local scan viewer" }), node("h2", { textContent: "Import a Cockpit scan to begin" }), node("p", { textContent: "Choose a bounded JSON export from Cockpit core. Dashboard reads reported evidence only." }), node("button", { className: "button button-primary", type: "button", dataset: { openFile: "" }, textContent: "Choose scan JSON" })])])); return; } const renderers = { storage: () => renderStorage(state.scan, state), find: () => renderFind(state.scan, state), cleanup: () => renderCleanup(state.scan, state), duplicates: () => renderDuplicates(state.scan), apps: () => renderApps(state.scan), monitor: () => renderMonitor(state.scan), activity: () => renderActivity(state.scan), compress: () => renderCompress(state.scan) }; view.append(...(renderers[state.view] ? renderers[state.view]() : renderers.storage())); }
+function renderApp() { if (typeof document === "undefined") return; const view = document.querySelector("#app-view"); if (!view) return; view.replaceChildren(); if (!state.scan) { view.append(node("div", { className: "empty-state" }, [node("div", { className: "empty-state-inner" }, [node("p", { className: "eyebrow", textContent: "Storage desk" }), node("h2", { textContent: "Choose a folder to scan" }), node("p", { textContent: "Scan a folder to see storage, find large files & review cleanup." }), node("button", { className: "button button-quiet", type: "button", dataset: { openFile: "" }, textContent: "Import saved scan" })])])); return; } const renderers = { storage: () => renderStorage(state.scan, state), find: () => renderFind(state.scan, state), cleanup: () => renderCleanup(state.scan, state), duplicates: () => renderDuplicates(state.scan), apps: () => renderApps(state.scan), monitor: () => renderMonitor(state.scan), activity: () => renderActivity(state.scan), compress: () => renderCompress(state.scan) }; view.append(...(renderers[state.view] ? renderers[state.view]() : renderers.storage())); }
 
-function boot() { loadPreferences(); document.querySelector("#import-scan")?.addEventListener("click", openFilePicker); document.querySelector("#scan-file")?.addEventListener("change", (event) => { const file = event.target.files?.[0]; event.target.value = ""; importFile(file); }); document.querySelector("#section-nav")?.addEventListener("click", (event) => { const button = event.target.closest("[data-view]"); if (!button) return; state.view = button.dataset.view; state.path = null; state.selected = null; savePreferences(); syncNav(); renderApp(); }); document.querySelector("#app-view")?.addEventListener("click", (event) => { const open = event.target.closest("[data-open-file]"); if (open) { openFilePicker(); return; } const clear = event.target.closest("[data-clear-filters]"); if (clear) { state.filters = { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }; savePreferences(); renderApp(); return; } const stage = event.target.closest("[data-stage-finding]"); if (stage) { if (stage.checked) state.staged.add(stage.dataset.stageFinding); else state.staged.delete(stage.dataset.stageFinding); renderApp(); return; } const action = event.target.closest("[data-action]"); if (action) { let payload = {}; try { payload = JSON.parse(action.dataset.payload ?? "{}"); } catch { payload = {}; } if (action.dataset.path) payload.path = action.dataset.path; if ((action.dataset.action === "reveal_item" || action.dataset.action === "preview_item") && (!state.scan || !scanHasPath(state.scan, payload.path))) return; postNativeAction(action.dataset.action, payload); return; } const navigate = event.target.closest("[data-navigate]"); if (navigate) { state.path = navigate.dataset.navigate || null; state.selected = null; renderApp(); return; } const inspect = event.target.closest("[data-inspect]"); if (inspect) { state.selected = inspect.dataset.inspect; renderApp(); return; } }); document.querySelector("#app-view")?.addEventListener("submit", (event) => { if (event.target.id !== "find-form") return; event.preventDefault(); state.filters = formFilters(event.target); savePreferences(); renderApp(); }); syncNav(); renderApp(); }
+function boot() { loadPreferences(); document.querySelector("#import-scan")?.addEventListener("click", openFilePicker); document.querySelector("#scan-file")?.addEventListener("change", (event) => { const file = event.target.files?.[0]; event.target.value = ""; importFile(file); }); document.querySelector("#section-nav")?.addEventListener("click", (event) => { const button = event.target.closest("[data-view]"); if (!button) return; state.view = button.dataset.view; state.path = null; state.selected = null; savePreferences(); syncNav(); renderApp(); }); document.querySelector("#app-view")?.addEventListener("click", (event) => { const open = event.target.closest("[data-open-file]"); if (open) { openFilePicker(); return; } const clear = event.target.closest("[data-clear-filters]"); if (clear) { state.filters = { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }; savePreferences(); renderApp(); return; } const stage = event.target.closest("[data-stage-finding]"); if (stage) { if (stage.checked) state.staged.add(stage.dataset.stageFinding); else state.staged.delete(stage.dataset.stageFinding); renderApp(); return; } const stagePath = event.target.closest("[data-stage-path]"); if (stagePath) { const key = duplicateStageKey(stagePath.dataset.stagePath); if (stagePath.checked) state.staged.add(key); else state.staged.delete(key); renderApp(); return; } const action = event.target.closest("[data-action]"); if (action) { let payload = {}; try { payload = JSON.parse(action.dataset.payload ?? "{}"); } catch { payload = {}; } if (action.dataset.path) payload.path = action.dataset.path; if ((action.dataset.action === "reveal_item" || action.dataset.action === "preview_item") && (!state.scan || !scanHasPath(state.scan, payload.path))) return; postNativeAction(action.dataset.action, payload); return; } const navigate = event.target.closest("[data-navigate]"); if (navigate) { state.path = navigate.dataset.navigate || null; state.selected = null; renderApp(); return; } const inspect = event.target.closest("[data-inspect]"); if (inspect) { state.selected = inspect.dataset.inspect; renderApp(); return; } }); document.querySelector("#app-view")?.addEventListener("submit", (event) => { if (event.target.id === "find-form") { event.preventDefault(); state.filters = formFilters(event.target); savePreferences(); renderApp(); return; } if (event.target.id === "compress-form") { event.preventDefault(); try { postNativeAction("compress_media", compressionPayload(event.target)); } catch (error) { bridge.error = error instanceof Error ? error.message : "Compression options are invalid"; bridge.feedback = null; renderApp(); } } }); syncNav(); renderApp(); }
 
 export function getDashboardState() { return { view: state.view, path: state.path, selected: state.selected, stagedFindingIds: [...state.staged], scan: state.scan, pendingAction: bridge.pending }; }
 if (typeof globalThis !== "undefined") { globalThis.CockpitDashboard = { importScan: importScanJson, importScanJson, loadScan: importScanJson, getState: getDashboardState, receiveAction, updateModule }; globalThis.loadCockpitScan = importScanJson; }
@@ -568,7 +669,7 @@ if (typeof document !== "undefined") boot();
 
 function renderApps(scan) {
   const module = moduleFor(scan, "apps");
-  if (!module) return moduleUnavailable(scan, "Apps", { label: "Refresh app inventory", name: "refresh_apps" }, "Installed applications, startup entries, & permissions require native readings.");
+  if (!module) return moduleUnavailable(scan, "Apps", { label: "Refresh app inventory", name: "refresh_apps" }, "Installed applications, startup entries, & permissions require an available reading.");
   const data = modulePayload(module);
   const apps = (data.apps ?? data.items ?? data.inventory ?? []).slice(0, MAX_RENDER_ROWS);
   const startupSource = objectOrEmpty(data.startup ?? data.startup_entries ?? data.startupEntries);
@@ -586,14 +687,43 @@ function renderApps(scan) {
   });
   const startupRows = startup.map((item) => node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: text(item.name ?? item.label ?? item.id, "Startup item") }), node("div", { className: "module-detail", textContent: text(item.path ?? item.location, "Path unavailable") })]), node("span", { className: "muted", textContent: text(item.enabled ?? item.status, "State unknown") })]));
   const missing = data.permission ?? data.permissions ?? data.incomplete_reason ?? data.incompleteReason ?? (Array.isArray(data.reasons) ? data.reasons[0] : null);
-  return [pageHead("Apps", "Installed applications & startup items", nativeButton("Refresh app inventory", "refresh_apps")), actionFeedback(), missing ? node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", textContent: "!" }), node("p", { textContent: `Some app details are unavailable: ${text(missing)}` })]) : null, card("Application inventory", `${formatCount(apps.length)} applications`, [node("div", { className: "app-list" }, appRows.length ? appRows : [node("p", { className: "muted", textContent: "No application readings." })])]), card("Startup items", "Launch items reported by native host", [node("div", { className: "module-list" }, startupRows.length ? startupRows : [node("p", { className: "muted", textContent: startupUnavailable ? text(startupSource.reason, "Startup items unavailable") : "No startup items found." })])])].filter(Boolean);
+  const inventoryIncomplete = data.inventoryIncomplete === true || data.inventory_incomplete === true;
+  const coverageReason = Array.isArray(data.reasons) && data.reasons.length ? data.reasons.join(" · ") : text(missing, "Some app metadata is unavailable.");
+  return [pageHead("Apps", "Installed applications & startup items", nativeButton("Refresh app inventory", "refresh_apps")), actionFeedback(), inventoryIncomplete || missing ? node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", textContent: "!" }), node("p", { textContent: inventoryIncomplete ? `Partial inventory · ${coverageReason}` : `Some app details are unavailable: ${coverageReason}` })]) : null, card("Application inventory", `${formatCount(apps.length)} applications · ${inventoryIncomplete ? "partial coverage" : "reported coverage"}`, [node("div", { className: "app-list" }, appRows.length ? appRows : [node("p", { className: "muted", textContent: "No application readings." })])]), card("Startup items", "Launch items reported by system", [node("div", { className: "module-list" }, startupRows.length ? startupRows : [node("p", { className: "muted", textContent: startupUnavailable ? text(startupSource.reason, "Startup items unavailable") : "No startup items found." })])])].filter(Boolean);
+}
+
+const COMPRESSION_FORMATS = ["jpeg", "png", "heic", "mp4", "mov"];
+
+function compressionForm() {
+  const disabled = Boolean(bridge.pending) || !nativeAvailable();
+  return node("form", { className: "compression-form", id: "compress-form" }, [
+    node("div", { className: "field" }, [node("label", { for: "compress-format", textContent: "Format" }), node("select", { id: "compress-format", name: "format" }, COMPRESSION_FORMATS.map((format) => node("option", { value: format, selected: format === "jpeg", textContent: format.toUpperCase() })))]),
+    node("div", { className: "field" }, [node("label", { for: "compress-quality", textContent: "Quality (0–100)" }), node("input", { id: "compress-quality", name: "quality", type: "number", min: "0", max: "100", step: "1", required: "", value: "82", inputMode: "numeric" })]),
+    node("div", { className: "field" }, [node("label", { for: "compress-pixels", textContent: "Max pixel dimension" }), node("input", { id: "compress-pixels", name: "max_pixel_dimension", type: "number", min: "1", max: "16384", step: "1", placeholder: "Optional", inputMode: "numeric" })]),
+    node("div", { className: "field" }, [node("label", { for: "compress-target", textContent: "Target size (bytes)" }), node("input", { id: "compress-target", name: "target_size_bytes", type: "number", min: "1", step: "1", placeholder: "Optional", inputMode: "numeric" })]),
+    node("button", { className: "button button-primary", type: "submit", disabled, title: nativeAvailable() ? "" : "Action unavailable outside Cockpit app", textContent: disabled && bridge.pending ? "Working…" : "Choose media & compress" })
+  ]);
+}
+
+function compressionPayload(form) {
+  const values = new FormData(form);
+  const format = pathText(values.get("format")).toLowerCase();
+  const quality = asNumber(values.get("quality"));
+  const pixel = values.get("max_pixel_dimension");
+  const target = values.get("target_size_bytes");
+  const maxPixelDimension = pixel === null || pixel === "" ? null : asNumber(pixel);
+  const targetSizeBytes = target === null || target === "" ? null : asNumber(target);
+  if (!COMPRESSION_FORMATS.includes(format) || quality === null || quality < 0 || quality > 100 || !Number.isInteger(quality)) throw new Error("Choose valid compression format & quality");
+  if (maxPixelDimension !== null && (!Number.isInteger(maxPixelDimension) || maxPixelDimension < 1 || maxPixelDimension > 16384)) throw new Error("Max pixel dimension must be 1–16384");
+  if (targetSizeBytes !== null && (!Number.isInteger(targetSizeBytes) || targetSizeBytes <= 0)) throw new Error("Target size must be positive");
+  return { format, quality: quality / 100, max_pixel_dimension: maxPixelDimension, target_size_bytes: targetSizeBytes };
 }
 
 function renderCompress(scan) {
   const module = moduleFor(scan, "compress");
-  const control = nativeButton("Choose media & compress", "compress_media", { format: "jpeg", quality: 82, max_pixel_dimension: null, target_size_bytes: null });
-  if (!module) return [pageHead("Compress", "Compress media", control), actionFeedback(), capability("Choose source & output", "Native host chooses source & output files. This panel sends format, quality, pixel limit, & target size.")];
   const data = modulePayload(module);
-  const result = objectOrEmpty(data.result ?? data);
-  return [pageHead("Compress", "Compress media", control), actionFeedback(), card("Latest result", "Measured output from native compressor", [metaRow("Status", result.lifecycle ?? result.state), metaRow("Source", result.sourceURL ?? result.sourceUrl ?? result.source), metaRow("Output", result.outputURL ?? result.outputUrl ?? result.output), metaRow("Source size", formatBytes(result.sourceBytes ?? result.source_bytes)), metaRow("Output size", formatBytes(result.outputBytes ?? result.output_bytes)), metaRow("Saved", formatBytes(result.measuredSavedBytes ?? result.measured_saved_bytes))])];
+  const result = objectOrEmpty(bridge.compressionResult ?? data.result ?? data);
+  const hasResult = Object.keys(result).length > 0;
+  const status = bridge.compressionResult ? "Completed" : hasResult ? "Recorded result" : "No result received";
+  return [pageHead("Compress", "Compress media"), actionFeedback(), card("Compression controls", "Choose source & output in file pickers", [compressionForm()]), hasResult ? card("Latest result", "Measured output from compressor", [metaRow("Status", status), metaRow("Format", result.format), metaRow("Source", result.sourceURL ?? result.sourceUrl ?? result.source), metaRow("Output", result.outputURL ?? result.outputUrl ?? result.output), metaRow("Source size", formatBytes(result.sourceBytes ?? result.source_bytes)), metaRow("Output size", formatBytes(result.outputBytes ?? result.output_bytes)), metaRow("Saved", formatBytes(result.measuredSavedBytes ?? result.measured_saved_bytes))]) : capability("Choose source & output", "Choose source & output in file pickers. Result appears after successful action.")];
 }

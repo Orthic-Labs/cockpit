@@ -14,7 +14,9 @@ fn fixture() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("cockpit-duplicates-{stamp}"));
+    let path = fs::canonicalize(std::env::temp_dir())
+        .unwrap()
+        .join(format!("cockpit-duplicates-{stamp}"));
     fs::create_dir(&path).unwrap();
     path
 }

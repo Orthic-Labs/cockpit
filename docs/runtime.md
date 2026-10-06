@@ -1,6 +1,6 @@
 # Runtime ownership
 
-Target architecture retains native always-on pills. No background webview or always-on scanner is introduced.
+Target architecture retains native always-on notches. Dashboard opens on demand; scanner runs only for requested work.
 
 | Owner | Reads/owns | Write boundary |
 | --- | --- | --- |
@@ -13,7 +13,17 @@ Implemented bootstrap storage is versioned JSON snapshots, with owner-only Unix 
 Implemented read-only IPC: the worker endpoint is opt-in (`cockpit worker serve`), never started by a notch. Versioned request IDs, 1 MiB request / 16 MiB response frames, 30 s transport waits & 60 s idle exit; non-viable limits are refused at startup. Ops are `status`, `processes` & explicit-root `scan` only; settings & every mutation op are rejected as `unsupported_operation`. Unix transport authenticates same-user peers via getpeereid/SO_PEERCRED before reading; Windows uses per-user named pipes with a user-only DACL, PIPE_REJECT_REMOTE_CLIENTS & token-SID verification. Existing Darwin sockets that refuse connection remain in use with unknown liveness: refusal can also mean a full live backlog; Cockpit preserves every existing socket. Unix frames use nonblocking I/O & readiness waits under one absolute deadline, including partial reads/writes & peer shutdown with buffered responses. No TCP.
 Each served operation runs in a killable child process: the internal, hidden verb `cockpit worker exec-op [--max-request-bytes N] [--max-response-bytes N]` reads one request body on stdin & writes one response body on stdout (exit 0 when a response was written, 2 on I/O failure; it is a leaf & never spawns children). The parent uses a 20 s operation deadline (`limits.op_deadline`) that includes child stdin/stdout exchange, followed by separately bounded reap & pipe-drain attempts. Oversize output triggers termination immediately. Unconfirmed termination is reported as failure & disables further operations until worker restart; no successful cancellation is claimed. Transport-level `Handler::handle` is synchronous & does not promise cancellation; the subprocess boundary is where forced termination exists. The `worker request` client validates both the echoed request id & the response protocol version.
 Implemented notch settings (schema_version 1): per-user `pill-settings.json` with `visible`, `cadence_seconds` (file values must be 2-10; interactive changes clamp) & per-monitor `enabled`/`anchor`. Writes are exclusive-temp + atomic rename into a verified private directory; malformed or unknown-version files are never overwritten. Single instance per user via flock (Mac) / SID-scoped session mutex `Local\Cockpit.Pill.v1.<sid>` (Windows; one instance per user per Windows session).
-No destructive jobs, plan database or shared usage-reader owner is enabled yet.
+CLI mutation commands remain disabled. Native dashboard source now owns separately reviewed ordinary-file Trash/Undo, with private durable per-item records, one-time apply claims, identity-bound destinations, restart reconciliation & no-overwrite restore. No permanent deletion or directory cleanup is offered.
+
+## Storage integration source — awaiting hosted & installed validation
+
+Native folder selection runs real CLI metadata scan/save/export into private state outside selected root, or explicitly excludes own state when scanning its ancestor. Saved exports drive browser/search, comparable folder growth & scan history. Duplicate content reads require explicit action & bounded size/file/read/time limits. Imported JSON never authorizes native effects.
+
+Native adapters provide bounded application bundle/startup inventory, network counters/rates, battery charge/time, verified process incarnations for observed listening ports & ImageIO/AVFoundation compression with native source/output pickers. Compression preserves originals, publishes unique complete output & records measured source/output bytes. Native notch resource snapshots also feed dashboard. Missing battery/permission/identity fields remain unavailable.
+
+Claude usage source supports real 5-hour & weekly windows/reset times, explicit stale/error states & a user-triggered Keychain recovery button. Each ring owns its hover detail card; resting rings retain centered icons. These changes await candidate installation & real desktop observation.
+
+Complete expansion remains open: incremental native filename index/date metadata, related app footprints/history/update feeds/uninstall, richer battery observations, per-item restore UI, video qualification & external/network volume qualification. Source modules & authored journeys do not prove installed delivery.
 
 Local IPC design: Unix-domain socket (Mac) / per-user named pipe (Windows), peer identity checked before requests; no TCP listener. Envelope carries schema version, request ID, operation & bounded payload. Each surface obtains its own per-user instance lock; later launches forward activation then exit. Worker job lifecycle emits started/progress/completed/failed events with job ID, inspected target identity & per-item outcome. Unknown or lost state cannot become completed.
 

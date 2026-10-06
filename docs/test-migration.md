@@ -12,7 +12,7 @@ Counts are declarations, not assertions:
 
 Baseline source inventory is 484 declarations: core inline 13, core tests 241, Windows 96, Mac tests 104 & Node tests 30. Dashboard helper adds one standalone assertion script outside declaration count. Current source count is 485 after adding one packaged journey; dashboard helper remains retained. [Full before/after inventory](test-inventory.json) records every name, file, hash & count. Regenerate current source inventory with `node scripts/qa/test-inventory.mjs`; it reads source without running tests.
 
-New packaged journey awaits hosted execution. It exercises real helper → native host → WKWebView → retained window state, with automated JavaScript interactions. Installed picker/accessibility journey remains separate evidence.
+New packaged journey awaits hosted execution. It exercises real helper → native host → WKWebView → retained window state, with automated JavaScript interactions. Installed picker/accessibility journeys remain separate evidence: two runner scripts are present, including new storage delivery journey awaiting execution. No retained declaration has been deleted or counted as replaced.
 
 The packaged journey builds `dashboard/app.js` and `index.html` from current source using release packaging transformation, copies `style.css`, launches `ProcessScanRunner` through `DashboardHost.verifyBundledScan` under `NSApplication.shared`, scans two real files including `subfolder/example.txt`, checks one and zero search results, closes/reopens dashboard state, and keeps persistent state outside selected scan root. It requires `COCKPIT_TEST_HELPER`; missing helper is a failure.
 

@@ -1,6 +1,6 @@
 use cockpit_core::model::{
-    Accounting, EntryKind, FileIdentity, FileMetadata, FolderAccounting,
-    ReclaimEstimate, ReclaimState, ScanReport, ScannedEntry, VolumeIdentity,
+    Accounting, EntryKind, FileIdentity, FileMetadata, FolderAccounting, ReclaimEstimate,
+    ReclaimState, ScanReport, ScannedEntry, VolumeIdentity,
 };
 use cockpit_core::storage_browser::{
     ChildrenPage, DateAvailability, SearchRequest, StorageBrowserError, drilldown_children,
