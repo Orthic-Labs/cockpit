@@ -362,6 +362,7 @@ public final class DashboardHost: NSObject {
     private let nativeServices: NativeStorageServices
     private let cleanupService: NativeCleanupService
     private let applicationDetails: NativeApplicationDetails
+    private let applicationInspection: NativeApplicationInspection
     private let filenameIndex: NativeFilenameIndex
     private var trustedApplications: [String: String] = [:]
     private var trustedSnapshotID: String?
@@ -380,6 +381,7 @@ public final class DashboardHost: NSObject {
         self.nativeServices = NativeStorageServices(stateDirectory: state)
         self.cleanupService = NativeCleanupService(stateDirectory: state)
         self.applicationDetails = NativeApplicationDetails(stateDirectory: state)
+        self.applicationInspection = NativeApplicationInspection(stateDirectory: state)
         self.filenameIndex = NativeFilenameIndex(stateDirectory: state)
         self.configuration = configuration
         self.coordinator = ScanCoordinator(configuration: configuration, runner: runner)
@@ -608,7 +610,21 @@ public final class DashboardHost: NSObject {
             guard let path = payload["path"] as? String, let bundle = trustedApplications[path] else {
                 throw ScanFailure.invalidJSON("Refresh inventory & select an application first")
             }
-            return try await applicationDetails.details(appPath: path, bundleID: bundle)
+            let before = try? await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
+            var details = try await applicationDetails.details(appPath: path, bundleID: bundle)
+            do {
+                guard let before, let gui = details["processes"] as? [String: Any],
+                      let entries = gui["entries"] as? [[String: Any]], !entries.isEmpty else {
+                    throw ScanFailure.invalidJSON("No observable running GUI process")
+                }
+                let after = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
+                let pending = try await applicationInspection.inspect(applicationPath: path, observations: ["before": before, "after": after, "gui": gui])
+                let final = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
+                details["inspection"] = try applicationInspection.confirm(applicationPath: path, inspection: pending, finalObservations: final)
+            } catch {
+                details["inspection"] = ["available": false, "reason": "Process inspection unavailable: \(error.localizedDescription)", "coverage": "unknown"]
+            }
+            return details
         case "refresh_monitor":
             let before = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
             var monitor = try await nativeServices.monitorPayload()

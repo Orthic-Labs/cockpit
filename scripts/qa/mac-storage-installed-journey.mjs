@@ -128,8 +128,8 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await click(line => line.includes(label) && /(?:pop up button|popup button|combo box|select)/i.test(line));
     await app.typeText(value);
     await app.pressKey("Return");
-    await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && line.includes(value)),
-      `AX select ${label} must retain ${value}`);
+    await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && /(?:pop up button|popup button|combo box|select)/i.test(line)),
+      `AX select ${label} must remain available after choosing ${value}`);
   };
 
   try {
@@ -298,6 +298,24 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assert.ok(!/\b(?:interrupted|indeterminate|failed|partial)\b/i.test(ax), "partial native Undo outcome cannot be reported as success");
     await phaseDone(phase, { restored: [restoredOneFile, restoredTwo, restored] });
 
+    phase = "activity-cleanup-filters-and-scan-history";
+    await navigate("Activity");
+    ax = await click(hasButton("Refresh activity"));
+    ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline") && value.includes("Cleanup history"),
+      "durable Activity refresh must render timeline and cleanup history");
+    await chooseSelectValue("Action", "Cleanup");
+    await chooseSelectValue("Period", "Last 7 days");
+    ax = await waitFor(value => value.includes(`Cleanup · move · moved`) && value.includes(`Cleanup · restore · restored`) && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC),
+      "Cleanup and restore events must remain visible for both duplicate paths");
+    assert.match(ax, /7 days: \d+ events/);
+    assert.match(ax, /30 days: \d+ events/);
+    assert.ok(/observed allocation Unknown/i.test(ax), "cleanup timeline must preserve unknown allocation");
+    assert.ok(!/\bFreed\s+\d/i.test(ax) && !/\breclaimed\s+\d/i.test(ax), "cleanup Activity must not claim freed or reclaimed bytes");
+    await chooseSelectValue("Action", "Scan");
+    ax = await waitFor(value => value.includes("Scan ·") && value.includes(fixture.root) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
+      "Scan filter must render durable fixture scan evidence with known timestamp");
+    await phaseDone(phase, { cleanupPaths: [fixture.duplicateB, fixture.duplicateC], scanRoot: fixture.root });
+
     phase = "native-compression-picker";
     const sourceBefore = await assertLiveFile(fixture.sourcePng);
     await navigate("Compress");
@@ -319,6 +337,18 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assertFingerprint(sourceAfter, sourceBefore, "compression source");
     await phaseDone(phase);
 
+    phase = "activity-compression-filter";
+    await navigate("Activity");
+    ax = await click(hasButton("Refresh activity"));
+    ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline"),
+      "post-compression Activity refresh must render durable timeline");
+    await chooseSelectValue("Action", "Compression");
+    await chooseSelectValue("Period", "Last 30 days");
+    ax = await waitFor(value => value.includes("Compression · compress · completed") && value.includes(encodedPath) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
+      "Compression filter must render persisted completed output event");
+    assert.match(ax, /30 days: \d+ events/);
+    await phaseDone(phase, { compressionOutput: encodedPath });
+
     for (const view of ["Apps", "Monitor", "Activity"]) {
       phase = `native-${view.toLowerCase()}`;
       await navigate(view);
@@ -337,6 +367,13 @@ export async function runInstalledStorageJourney(initialApp, options) {
           assert.ok(ax.includes(related), `app details must render exact related path family ${related}`);
         }
         assert.ok(ax.includes("report only"), "related app paths must remain report only");
+        ax = await waitFor(value => value.includes("app details complete") && value.includes("Verified app inspection") && value.includes("Resource history"), "current running app must expose verified native inspection & confirmed persisted history");
+        assert.ok(/Verified process · PID \d+ · start \d+/.test(ax), "native inspection must expose verified incarnation");
+        assert.ok(ax.includes("Disk I/O") && ax.includes("Open files") && ax.includes("Network endpoints"), "app inspection must render bounded native I/O observations");
+        const previousSamples = Number(ax.match(/(\d+) retained samples/)?.[1] ?? 0);
+        assert.ok(previousSamples > 0 && previousSamples <= 256, "confirmed native history must contain bounded samples");
+        await click(hasButton(`Details for ${appName}`));
+        ax = await waitFor(value => value.includes("app details complete") && Number(value.match(/(\d+) retained samples/)?.[1]) === Math.min(256, previousSamples + 1), "second verified inspection must append bounded resource history");
         assert.ok(ax.includes("Application history") && /partial|unknown/i.test(ax), "app history must expose partial or unknown coverage");
         await phaseDone(phase);
       }

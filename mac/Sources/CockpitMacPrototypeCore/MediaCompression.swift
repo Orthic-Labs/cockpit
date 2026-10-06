@@ -218,7 +218,7 @@ public final class MediaCompressionJob {
             }
             entryIdentities[tempName] = try outputFingerprint(temporary)
             try checkCancellation()
-            guard pinned.fingerprint == try fingerprint(fd: pinned.fd) else {
+            guard pinned.fingerprint == (try fingerprint(fd: pinned.fd)) else {
                 throw MediaCompressionError.sourceChanged
             }
             let temporaryFingerprint = try outputFingerprint(temporary)
@@ -237,7 +237,7 @@ public final class MediaCompressionJob {
             // Cancellation or source mutation after publication is terminal;
             // retain our published file rather than deleting by pathname.
             if isCancelled() { throw MediaCompressionError.cancelled }
-            guard pinned.fingerprint == try fingerprint(fd: pinned.fd) else {
+            guard pinned.fingerprint == (try fingerprint(fd: pinned.fd)) else {
                 throw MediaCompressionError.sourceChanged
             }
             setPhase(.completed)
@@ -285,10 +285,10 @@ public final class MediaCompressionJob {
         guard st.st_size > 0 else { throw MediaCompressionError.sourceMissing }
         guard (st.st_flags & dataLessFlag) == 0 else { throw MediaCompressionError.sourcePlaceholder }
         let values = try? request.sourceURL.resourceValues(forKeys: [
-            .isUbiquitousItemKey, .ubiquitousItemIsDownloadedKey, .fileResourceIdentifierKey
+            .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .fileResourceIdentifierKey
         ])
         if values?.isUbiquitousItem == true {
-            guard values?.ubiquitousItemIsDownloaded == true else {
+            guard values?.ubiquitousItemDownloadingStatus == .current else {
                 throw MediaCompressionError.sourcePlaceholder
             }
         }

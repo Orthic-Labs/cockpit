@@ -322,8 +322,8 @@ public final class NativeFilenameIndex {
         let creationAvailable = !rows.isEmpty && rows.allSatisfy { $0.createdAt != nil }
         let modificationAvailable = !rows.isEmpty && rows.allSatisfy { $0.modifiedAt != nil }
         return [
-            "creation": ["available": creationAvailable, "reason": creationAvailable ? NSNull() : "metadata_unavailable_or_empty"],
-            "modification": ["available": modificationAvailable, "reason": modificationAvailable ? NSNull() : "metadata_unavailable_or_empty"]
+            "creation": ["available": creationAvailable, "reason": creationAvailable ? NSNull() as Any : "metadata_unavailable_or_empty"],
+            "modification": ["available": modificationAvailable, "reason": modificationAvailable ? NSNull() as Any : "metadata_unavailable_or_empty"]
         ]
     }
 
@@ -743,7 +743,7 @@ public final class NativeFilenameIndex {
 
     nonisolated private static func enumerate(root: URL, stateDirectory: URL, deadline: TimeInterval,
                                               cursor: FSEventStreamEventId,
-                                              entryLimit: Int = Self.maxEntries) throws -> EnumerationResult {
+                                              entryLimit: Int = NativeFilenameIndex.maxEntries) throws -> EnumerationResult {
         var rootStat = stat()
         guard lstat(root.path, &rootStat) == 0, (rootStat.st_mode & S_IFMT) == S_IFDIR else {
             throw NativeFilenameIndexError.rootUnavailable
@@ -806,8 +806,8 @@ public final class NativeFilenameIndex {
         else if mode == S_IFLNK { kind = "symlink" }
         else { kind = "other" }
         let size: Int64? = !dataLess && value.st_size >= 0 ? Int64(value.st_size) : nil
-        let creation = !dataLess && value.st_birthtimespec.tv_sec > 0 ? date(seconds: value.st_birthtimespec.tv_sec, nanoseconds: value.st_birthtimespec.tv_nsec) : nil
-        let modified = !dataLess && value.st_mtimespec.tv_sec >= 0 ? date(seconds: value.st_mtimespec.tv_sec, nanoseconds: value.st_mtimespec.tv_nsec) : nil
+        let creation = !dataLess && value.st_birthtimespec.tv_sec > 0 ? date(seconds: Int64(value.st_birthtimespec.tv_sec), nanoseconds: Int64(value.st_birthtimespec.tv_nsec)) : nil
+        let modified = !dataLess && value.st_mtimespec.tv_sec >= 0 ? date(seconds: Int64(value.st_mtimespec.tv_sec), nanoseconds: Int64(value.st_mtimespec.tv_nsec)) : nil
         return IndexedRow(path: url.standardizedFileURL.path, name: url.lastPathComponent, kind: kind,
                           sizeBytes: size, sizeReason: size == nil ? (dataLess ? "placeholder_unavailable" : "metadata_unavailable") : nil,
                           createdAt: creation, creationDateReason: creation == nil ? (dataLess ? "placeholder_unavailable" : "metadata_unavailable") : nil,

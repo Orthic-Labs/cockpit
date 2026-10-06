@@ -157,15 +157,21 @@ fn read_budget_and_deadline_truncate_before_unbounded_content_reads() {
     fs::write(root.join("two"), b"same").unwrap();
     let mut bounded = options();
     bounded.max_total_read_bytes = 1;
-    let budget =
-        find_duplicates_with_reader(std::slice::from_ref(&root), &bounded, &FixtureReader { partial: false });
+    let budget = find_duplicates_with_reader(
+        std::slice::from_ref(&root),
+        &bounded,
+        &FixtureReader { partial: false },
+    );
     assert!(budget.truncated);
     assert!(budget.bytes_read <= 1);
 
     let mut expired = options();
     expired.deadline = Duration::ZERO;
-    let deadline =
-        find_duplicates_with_reader(std::slice::from_ref(&root), &expired, &FixtureReader { partial: false });
+    let deadline = find_duplicates_with_reader(
+        std::slice::from_ref(&root),
+        &expired,
+        &FixtureReader { partial: false },
+    );
     assert!(deadline.truncated);
     assert!(deadline.groups.is_empty());
     fs::remove_dir_all(root).unwrap();

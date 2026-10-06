@@ -14,7 +14,7 @@ public enum NativeActivityProjection {
         let id: String
         let action: String
         let operation: String
-        let status: String
+        var status: String
         let source: String
         let occurredAt: Int64?
         let logicalBytes: UInt64?
@@ -27,7 +27,7 @@ public enum NativeActivityProjection {
         let observedVolumeDeltaBytes: Int64?
         let bytesState: String
         let rawKind: String?
-        let path: String?
+        var path: String?
 
         var timeState: String { occurredAt == nil ? "unknown" : "known" }
 
@@ -347,8 +347,13 @@ public enum NativeActivityProjection {
 
     private static func insert(_ event: Event, into result: inout [String: Event]) {
         guard !event.id.isEmpty else { return }
-        guard let existing = result[event.id] else { result[event.id] = event; return }
+        guard var existing = result[event.id] else { result[event.id] = event; return }
         if eventQuality(event) > eventQuality(existing) { result[event.id] = event }
+        else {
+            if existing.path == nil { existing.path = event.path }
+            if event.action == "scan", event.status == "partial" { existing.status = "partial" }
+            result[event.id] = existing
+        }
     }
 
     private static func eventQuality(_ event: Event) -> Int {

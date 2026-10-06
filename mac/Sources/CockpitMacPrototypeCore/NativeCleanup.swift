@@ -488,8 +488,8 @@ public final class NativeCleanupService {
         try validateNoPlaceholder(path: path, parentFD: parentFD, name: path.lastPathComponent)
         let fingerprint = try regularFileFingerprint(parentFD: parentFD, name: path.lastPathComponent)
         guard fingerprint.owner == UInt32(getuid()) else { throw Error.untrustedPath }
-        let values = try path.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsDownloadedKey])
-        if values.isUbiquitousItem == true && values.ubiquitousItemIsDownloaded == false { throw Error.unsupported("placeholder") }
+        let values = try path.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        if values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current { throw Error.unsupported("placeholder") }
         let (trashFD, trashID) = try openDirectory(trash, create: injectedTrashDirectory, purpose: "trash")
         defer { close(trashFD) }
         return ReviewedItem(path: path.path, parent: parentID, volume: fingerprint.volume, trashVolume: trashID.volume,
@@ -589,8 +589,8 @@ public final class NativeCleanupService {
 
     private func validateNoPlaceholder(path: URL, parentFD: Int32, name: String) throws {
         try validateNoPlaceholderMetadata(parentFD: parentFD, name: name)
-        let values = try path.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsDownloadedKey])
-        if values.isUbiquitousItem == true && values.ubiquitousItemIsDownloaded == false { throw Error.unsupported("placeholder") }
+        let values = try path.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        if values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current { throw Error.unsupported("placeholder") }
     }
 
     private func validateNoPlaceholderMetadata(parentFD: Int32, name: String) throws {

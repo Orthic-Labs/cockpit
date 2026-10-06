@@ -513,15 +513,7 @@ public final class NativeApplicationDetails {
             guard let runningURL = application.bundleURL?.standardizedFileURL,
                   runningURL.path == appURL.path else { continue }
             guard application.processIdentifier > 0 else { continue }
-            guard let launchDate = application.launchDate,
-                  launchDate.timeIntervalSince1970 >= 0 else {
-                reasons.append("process_start_time_unavailable")
-                continue
-            }
-            let identity: [String: Any] = [
-                "pid": application.processIdentifier,
-                "start_time": Int64(launchDate.timeIntervalSince1970)
-            ]
+            let identity: [String: Any] = ["pid": application.processIdentifier]
             rows.append([
                 "name": application.localizedName ?? bundleID,
                 "bundleID": bundleID,
@@ -539,7 +531,7 @@ public final class NativeApplicationDetails {
             "available": true,
             "coverage": coverage,
             "entries": rows,
-            "identityBasis": "bundle_path_and_pid_NSWorkspace_launchDate",
+            "identityBasis": "bundle_path_and_pid_only",
             "excludedProcessKinds": ["command_line_agents"],
             "reasons": reasons
         ]
@@ -603,9 +595,9 @@ public final class NativeApplicationDetails {
     }
 
     private func isCloudPlaceholder(_ url: URL) -> Bool {
-        guard let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsDownloadedKey]),
+        guard let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
               values.isUbiquitousItem == true else { return false }
-        return values.ubiquitousItemIsDownloaded != true
+        return values.ubiquitousItemDownloadingStatus != .current
     }
 
     private func loadHistory() throws -> [String: [String: Any]] {
