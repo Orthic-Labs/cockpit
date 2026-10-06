@@ -27,6 +27,8 @@ public final class NativeStorageServices {
     private var previousCPU: CPUSample?
     private var previousNetwork: [String: NetworkSample] = [:]
     private var sharedResources: [String: Any]?
+    private var activeCompressionJob: MediaCompressionJob?
+    private var lastCompressionOutput: CompressionOutputIdentity?
 
     private let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -36,6 +38,31 @@ public final class NativeStorageServices {
 
     public init(stateDirectory: URL) {
         self.stateDirectory = stateDirectory.standardizedFileURL
+    }
+
+    /// Cancel only compression owned by this adapter. No process or unrelated
+    /// operation is touched.
+    public func cancelCompression() -> [String: Any] {
+        guard let job = activeCompressionJob else {
+            return ["state": "no-active", "status": "no-active", "phase": NSNull()]
+        }
+        let phase = job.phase.rawValue
+        job.cancel()
+        return ["state": "cancel-requested", "status": "cancel-requested", "phase": phase]
+    }
+
+    /// Stop adapter-owned work when its host is shutting down.
+    public func stop() {
+        _ = cancelCompression()
+    }
+
+    /// Return last measured compression output only while its parent chain,
+    /// leaf identity, size, & modification time still match.
+    public func verifiedCompressionOutput() throws -> URL {
+        guard let expected = lastCompressionOutput else { throw MediaCompressionError.outputMetadataUnavailable }
+        let actual = try compressionOutputIdentity(at: expected.url)
+        guard actual == expected else { throw MediaCompressionError.outputMetadataUnavailable }
+        return expected.url
     }
 
     public func updateResources(_ reading: [String: Any]) {
@@ -135,6 +162,7 @@ public final class NativeStorageServices {
 
     public func compress(format: String, quality: Double, maxPixelDimension: Int?,
                          targetSizeBytes: Int64?, presenting: NSWindow?) async throws -> [String: Any] {
+        guard activeCompressionJob == nil else { throw MediaCompressionError.invalidRequest }
         guard let mediaFormat = MediaCompressionFormat(rawValue: format.lowercased()) else {
             throw MediaCompressionError.unsupportedCodec
         }
@@ -151,14 +179,23 @@ public final class NativeStorageServices {
             maxPixelDimension: maxPixelDimension,
             targetSizeBytes: targetSizeBytes
         )
-        let result = await MediaCompressionJob(request: request).run()
+        let job = MediaCompressionJob(request: request)
+        activeCompressionJob = job
+        defer {
+            if activeCompressionJob === job { activeCompressionJob = nil }
+        }
+        let result = await job.run()
         guard case .success(let result) = result else {
             if case .failure(let error) = result { throw error }
             throw MediaCompressionError.encodeFailed
         }
+        guard job.phase == .completed else { throw MediaCompressionError.outputMetadataUnavailable }
+        let outputIdentity = try compressionOutputIdentity(at: result.outputURL)
+        guard outputIdentity.size == result.outputBytes else { throw MediaCompressionError.outputMetadataUnavailable }
         try recordCompressionObservation(result, format: mediaFormat.rawValue)
         _ = try activityPayload()
-        return compressionPayload(result, format: mediaFormat.rawValue)
+        lastCompressionOutput = outputIdentity
+        return compressionPayload(result, format: mediaFormat.rawValue, outputIdentity: outputIdentity)
     }
 
     /// Records a completed adapter result. Kept internal so fixture journeys
@@ -179,8 +216,9 @@ public final class NativeStorageServices {
         try persist(["schemaVersion": 1, "events": events], fileName: "activity-events.json")
     }
 
-    private func compressionPayload(_ result: MediaCompressionResult, format: String) -> [String: Any] {
-        [
+    private func compressionPayload(_ result: MediaCompressionResult, format: String,
+                                    outputIdentity: CompressionOutputIdentity? = nil) -> [String: Any] {
+        var payload: [String: Any] = [
             "schemaVersion": 1,
             "format": format,
             "sourceURL": result.sourceURL.path,
@@ -189,6 +227,8 @@ public final class NativeStorageServices {
             "outputBytes": result.outputBytes,
             "measuredSavedBytes": result.measuredSavedBytes
         ]
+        if let outputIdentity { payload["outputIdentity"] = outputIdentity.dictionary }
+        return payload
     }
 
     private func validateCompressionOptions(quality: Double, maxPixelDimension: Int?, targetSizeBytes: Int64?) throws {
@@ -633,6 +673,83 @@ public final class NativeStorageServices {
             data.append(buffer, count: bytes)
         }
         return data
+    }
+
+    private func compressionOutputIdentity(at url: URL) throws -> CompressionOutputIdentity {
+        guard url.isFileURL, url.path.hasPrefix("/"),
+              !url.pathComponents.contains("."), !url.pathComponents.contains(".."),
+              !url.lastPathComponent.isEmpty else {
+            throw MediaCompressionError.invalidRequest
+        }
+        let parent = url.deletingLastPathComponent()
+        let parentFD = try openPreviewDirectory(parent)
+        defer { close(parentFD) }
+        var value = stat()
+        let result = url.lastPathComponent.withCString {
+            fstatat(parentFD, $0, &value, AT_SYMLINK_NOFOLLOW)
+        }
+        guard result == 0 else { throw MediaCompressionError.outputMetadataUnavailable }
+        guard (value.st_mode & S_IFMT) == S_IFREG,
+              value.st_size > 0, value.st_dev != 0, value.st_ino != 0,
+              value.st_flags & UInt32(SF_DATALESS) == 0 else {
+            throw MediaCompressionError.outputNotRegular
+        }
+        return CompressionOutputIdentity(
+            url: url.standardizedFileURL,
+            device: UInt64(UInt32(bitPattern: value.st_dev)),
+            inode: UInt64(value.st_ino),
+            size: Int64(value.st_size),
+            modifiedSeconds: Int64(value.st_mtimespec.tv_sec),
+            modifiedNanoseconds: Int64(value.st_mtimespec.tv_nsec),
+            changedSeconds: Int64(value.st_ctimespec.tv_sec),
+            changedNanoseconds: Int64(value.st_ctimespec.tv_nsec)
+        )
+    }
+
+    private func openPreviewDirectory(_ url: URL) throws -> Int32 {
+        guard url.isFileURL, url.path.hasPrefix("/"),
+              !url.pathComponents.contains("."), !url.pathComponents.contains("..") else {
+            throw MediaCompressionError.invalidRequest
+        }
+        var descriptor = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw MediaCompressionError.outputMetadataUnavailable }
+        for component in url.path.split(separator: "/", omittingEmptySubsequences: true) {
+            let name = String(component)
+            let next = name.withCString {
+                openat(descriptor, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            }
+            guard next >= 0 else {
+                let error = errno
+                close(descriptor)
+                throw error == ELOOP ? MediaCompressionError.unsafeAncestor : MediaCompressionError.outputMetadataUnavailable
+            }
+            close(descriptor)
+            descriptor = next
+        }
+        return descriptor
+    }
+}
+
+private struct CompressionOutputIdentity: Equatable {
+    let url: URL
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let modifiedSeconds: Int64
+    let modifiedNanoseconds: Int64
+    let changedSeconds: Int64
+    let changedNanoseconds: Int64
+
+    var dictionary: [String: Any] {
+        [
+            "device": device,
+            "inode": inode,
+            "size": size,
+            "modifiedSeconds": modifiedSeconds,
+            "modifiedNanoseconds": modifiedNanoseconds,
+            "changedSeconds": changedSeconds,
+            "changedNanoseconds": changedNanoseconds
+        ]
     }
 }
 

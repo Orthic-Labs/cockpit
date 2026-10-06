@@ -79,7 +79,7 @@ private final class NotchAccessibilityElement: NSAccessibilityElement {
         super.init()
     }
 
-    @objc func accessibilityPerformPress() -> Bool {
+    @objc override func accessibilityPerformPress() -> Bool {
         guard let owner else { return false }
         switch action {
         case .metric:
@@ -255,7 +255,7 @@ final class NotchSurfaceView: NSView {
         return formatter.string(from: date)
     }
 
-    fileprivate func refreshAccessibilityChildren() {
+    func refreshAccessibilityChildren() {
         let depth = expanded ? NotchPresentationLayout.expandedDepth : NotchPresentationLayout.restingDepth(for: edge)
         let length = NotchPresentationLayout.stackLength(count: metricCount)
         let alongOffset = edge == .right || edge == .left ? (bounds.height - length) / 2 : (bounds.width - length) / 2
@@ -267,7 +267,7 @@ final class NotchSurfaceView: NSView {
             element.setAccessibilityValue(metric.detailLines.joined(separator: ", "))
             element.setAccessibilityHelp("Hover for live \(metric.title) details; click to open Cockpit dashboard")
             element.setAccessibilityParent(self)
-            element.accessibilityFrameInParentSpace = metricRect(index: index, depth: depth, alongOffset: alongOffset)
+            element.setAccessibilityFrameInParentSpace(metricRect(index: index, depth: depth, alongOffset: alongOffset))
             return element
         }
         var children: [NSAccessibilityElement] = elements
@@ -279,7 +279,7 @@ final class NotchSurfaceView: NSView {
             details.setAccessibilityLabel("\(metric.title) details")
             details.setAccessibilityValue(metric.detailLines.joined(separator: ", "))
             details.setAccessibilityParent(self)
-            details.accessibilityFrameInParentSpace = detailRect(depth: depth, alongOffset: alongOffset)
+            details.setAccessibilityFrameInParentSpace(detailRect(depth: depth, alongOffset: alongOffset))
             children.append(details)
         }
         if expanded, let selectedMetric, metrics.indices.contains(selectedMetric),
@@ -292,7 +292,7 @@ final class NotchSurfaceView: NSView {
             recovery.setAccessibilityValue("Explicit user action; opens Keychain access prompt")
             recovery.setAccessibilityHelp("Allow Cockpit to read Claude usage. This prompt appears only after this action.")
             recovery.setAccessibilityParent(self)
-            recovery.accessibilityFrameInParentSpace = recoveryButtonRect(depth: depth, alongOffset: alongOffset)
+            recovery.setAccessibilityFrameInParentSpace(recoveryButtonRect(depth: depth, alongOffset: alongOffset))
             children.append(recovery)
         }
         accessibilityChildrenElements = children

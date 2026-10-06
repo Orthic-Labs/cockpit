@@ -337,6 +337,17 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assertFingerprint(sourceAfter, sourceBefore, "compression source");
     await phaseDone(phase);
 
+    phase = "compression-quick-look-preview";
+    ax = await click(hasButton("Preview output"));
+    ax = await waitFor(value => value.includes(path.basename(encodedPath)) && /Quick Look|Close/i.test(value),
+      "Preview output must open observed native Quick Look for exact output path");
+    assert.ok(ax.includes(path.basename(encodedPath)), "Quick Look AX must identify exact compressed output");
+    await checkpoint(`${phase}-open`);
+    await app.pressKey("Escape");
+    ax = await waitFor(value => value.includes("Latest result") && value.includes(encodedPath) && value.includes("Preview output"),
+      "Escape must close Quick Look and restore compression result controls");
+    await phaseDone(phase, { previewPath: encodedPath, closedWith: "Escape" });
+
     phase = "activity-compression-filter";
     await navigate("Activity");
     ax = await click(hasButton("Refresh activity"));

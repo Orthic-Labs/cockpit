@@ -357,6 +357,8 @@ public final class DashboardHost: NSObject {
     private var webView: WKWebView?
     private var scanTask: Task<Void, Never>?
     private var actionTask: Task<Void, Never>?
+    private var activeAction: String?
+    private var activeRequestID: String?
     private var busy = false
     private let stateDirectory: URL
     private let nativeServices: NativeStorageServices
@@ -439,6 +441,7 @@ public final class DashboardHost: NSObject {
 
     /// Full app shutdown: cancels scanning & releases retained dashboard state.
     public func stop() {
+        nativeServices.stop()
         filenameIndex.stop()
         scanTask?.cancel()
         actionTask?.cancel()
@@ -564,14 +567,22 @@ public final class DashboardHost: NSObject {
               let action = body["action"] as? String, action.utf8.count <= 64,
               let bytes = try? JSONSerialization.data(withJSONObject: body), bytes.count <= 64 * 1024 else { return }
         let payload = body["payload"] as? [String: Any] ?? [:]
+        if action == "cancel_compress" {
+            let result = activeAction == "compress_media" && payload["compression_request_id"] as? String == activeRequestID ? nativeServices.cancelCompression()
+                : ["state": "no-active", "status": "no-active", "phase": NSNull()]
+            respond(id: id, action: action, result: .success(result))
+            return
+        }
         guard !busy else {
             respond(id: id, action: action, result: .failure(ScanFailure.invalidJSON("Another operation is running")))
             return
         }
         busy = true
+        activeAction = action
+        activeRequestID = id
         actionTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.busy = false; self.actionTask = nil }
+            defer { self.busy = false; self.actionTask = nil; self.activeAction = nil; self.activeRequestID = nil }
             do {
                 let data = try await self.performAction(action, payload: payload)
                 try Task.checkCancellation()
@@ -676,6 +687,19 @@ public final class DashboardHost: NSObject {
                                                       maxPixelDimension: payload["max_pixel_dimension"] as? Int,
                                                       targetSizeBytes: payload["target_size_bytes"] as? Int64,
                                                       presenting: window)
+        case "preview_compressed_output":
+            let url = try nativeServices.verifiedCompressionOutput()
+            guard payload["path"] as? String == url.path else {
+                throw ScanFailure.invalidJSON("Compression output no longer matches this result")
+            }
+            previewURL = url
+            guard let panel = QLPreviewPanel.shared() else {
+                throw ScanFailure.invalidJSON("Quick Look is unavailable")
+            }
+            panel.dataSource = self
+            panel.makeKeyAndOrderFront(nil)
+            panel.reloadData()
+            return ["path": url.path, "state": "opened"]
         case "reveal_item", "preview_item":
             _ = try requireNativeScan(payload)
             guard let path = payload["path"] as? String, trustedEntries[path] != nil else {
