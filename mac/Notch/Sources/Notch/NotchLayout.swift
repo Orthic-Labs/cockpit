@@ -6,7 +6,8 @@ enum NotchLayout {
     // The notch body
     /// The depth the design frame fixes: a 44pt ring with an even margin
     /// either side of it.
-    static let sideBodyDepth = Design.px(186)
+    // Cockpit fork: hugs the rings — 22px either side of a ring, not 34.5.
+    static let sideBodyDepth = Design.px(161)
 
     /// How deep the notch is, which is **not** the same on every edge.
     ///
@@ -37,10 +38,11 @@ enum NotchLayout {
     /// way. Deliberately a fraction of `curlRadius`: enough to round the join,
     /// nowhere near enough to taper the bar the way a full flare would.
     static let bezelFillet  = Design.px(28)
-    static let cornerRadius = Design.px(78.8)
-    static let padTop       = Design.px(69.5)   // body top -> first ring
-    static let padBottom    = Design.px(50.1)   // last label -> body bottom
-    static let cellSpacing  = Design.px(83.5)   // label bottom -> next ring top
+    static let cornerRadius = Design.px(70)
+    // Cockpit fork: compact body that hugs the rings.
+    static let padTop       = Design.px(30)     // body top -> first ring
+    static let padBottom    = Design.px(24)     // last label -> body bottom
+    static let cellSpacing  = Design.px(36)     // label bottom -> next ring top
 
     // The resting pill. Not in the design frame — it is the notch folded away,
     // sized to read as a deliberate handle rather than a sliver of chrome.
@@ -96,7 +98,9 @@ enum NotchLayout {
     static let weeklyRingStroke = Design.px(5)
     /// Inside: centred in the gap between the glyph and the working
     /// indicator's own arc, which is the only clear band left in there.
-    static let weeklyInsideRadius = Design.px(28)
+    /// Cockpit fork: hugs the inside of the main track (inner edge at 43px)
+    /// with a 3px gap, leaving ~12px of air around the glyph.
+    static let weeklyInsideRadius = Design.px(37.5)
     /// Outside: past the track, into the margin the notch keeps between a ring
     /// and its bezel. Far enough out not to crowd the track, far enough in that
     /// the bezel is never touched — `NotchLayoutTests` pins both.
