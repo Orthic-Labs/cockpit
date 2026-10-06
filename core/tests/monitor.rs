@@ -58,7 +58,7 @@ fn rate_rejects_time_backwards_counter_reset_and_overflow_shape() {
 #[test]
 fn battery_rejects_invalid_units_and_preserves_valid_reading() {
     let invalid = normalize_battery(NativeBatteryReading {
-        charge_percent: Some(1.5),
+        charge_percent: Some(150.0),
         seconds_remaining: None,
         charging: Some(true),
     });

@@ -1140,7 +1140,7 @@
       },
       {
         "file": "core/tests/monitor.rs",
-        "sha256": "2a5d7c80eccef748f7361351ebb082a9336babc3607b93eb5f1dc47cbe245949",
+        "sha256": "ad5d0fb68ae16545febf4139d9840a76d41a6cdb5deaece61b0fb56ae5f045b3",
         "declared_test_names": [
           "rate_requires_interval_and_handles_zero_time",
           "rate_rejects_time_backwards_counter_reset_and_overflow_shape",
