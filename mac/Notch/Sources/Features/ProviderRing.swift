@@ -232,7 +232,9 @@ private struct ActivityArc: View {
     var body: some View {
         Group {
             switch summary.state {
-            case .working: spinner
+            // Cockpit fork: no spinner while an agent works — constant motion
+            // at the screen edge is noise. The hover card still lists sessions.
+            case .working: EmptyView()
             case .waiting, .success: pulse
             case .idle:    EmptyView()
             }
