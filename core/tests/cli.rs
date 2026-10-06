@@ -403,7 +403,10 @@ fn storage_cli_journey_is_bounded_opt_in_and_preserves_fixture_bytes() {
         parent_snapshot["snapshot"]["report"]["accounting"]["logical_bytes"],
         7
     );
-    assert!(parent_snapshot["snapshot"]["report"]["accounting"]["incomplete"]);
+    assert_eq!(
+        parent_snapshot["snapshot"]["report"]["accounting"]["incomplete"],
+        true
+    );
     assert!(
         parent_snapshot["snapshot"]["report"]["incomplete_reasons"]
             .as_array()

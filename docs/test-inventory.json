@@ -994,7 +994,7 @@
       },
       {
         "file": "core/tests/cli.rs",
-        "sha256": "6c23fbf312c0b3809653b9a9c635ce096b7817844a00b9575c3b0be59f4e1008",
+        "sha256": "839781533ee64998857728ff40b229578f281444f9c396f997ae2e5976d344ed",
         "declared_test_names": [
           "apply_never_accepts_paths_or_unissued_ids",
           "missing_usage_is_unavailable_not_zero",

@@ -2,7 +2,6 @@ import AppKit
 import Darwin
 import Foundation
 import IOKit.ps
-import Mach
 import UniformTypeIdentifiers
 
 /// Native, on-demand observations used by dashboard adapters.
@@ -27,6 +26,7 @@ public final class NativeStorageServices {
     private let stateDirectory: URL
     private var previousCPU: CPUSample?
     private var previousNetwork: [String: NetworkSample] = [:]
+    private var sharedResources: [String: Any]?
 
     private let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -36,6 +36,10 @@ public final class NativeStorageServices {
 
     public init(stateDirectory: URL) {
         self.stateDirectory = stateDirectory.standardizedFileURL
+    }
+
+    public func updateResources(_ reading: [String: Any]) {
+        sharedResources = reading
     }
 
     public func appsPayload() async throws -> [String: Any] {
@@ -294,6 +298,7 @@ public final class NativeStorageServices {
     }
 
     private func resourcePayload(reasons: inout [String]) -> [String: Any] {
+        if let sharedResources { return sharedResources }
         var resources: [String: Any] = ["available": true]
         if let cpu = cpuLoad() {
             resources["cpuPercent"] = cpu
@@ -340,8 +345,8 @@ public final class NativeStorageServices {
         var idle: UInt64 = 0
         for index in 0..<Int(cpuCount) {
             let offset = index * stride
-            total += (0..<stride).reduce(UInt64(0)) { $0 + UInt64(info[offset + $1]) }
-            idle += UInt64(info[offset + Int(CPU_STATE_IDLE)])
+            total += (0..<stride).reduce(UInt64(0)) { $0 + UInt64(UInt32(bitPattern: info[offset + $1])) }
+            idle += UInt64(UInt32(bitPattern: info[offset + Int(CPU_STATE_IDLE)]))
         }
         let sample = CPUSample(total: total, idle: idle)
         defer { previousCPU = sample }
@@ -376,10 +381,13 @@ public final class NativeStorageServices {
                                       "packetsIn": Int64(sample.packetsIn), "packetsOut": Int64(sample.packetsOut)]
             if let previous = previousNetwork[name], sample.timestamp > previous.timestamp {
                 let seconds = sample.timestamp - previous.timestamp
-                if seconds > 0 {
-                    row["bytesInPerSecond"] = Double(max(0, Int64(sample.bytesIn) - Int64(previous.bytesIn))) / seconds
-                    row["bytesOutPerSecond"] = Double(max(0, Int64(sample.bytesOut) - Int64(previous.bytesOut))) / seconds
+                if seconds > 0 && sample.bytesIn >= previous.bytesIn && sample.bytesOut >= previous.bytesOut {
+                    row["bytesInPerSecond"] = Double(sample.bytesIn - previous.bytesIn) / seconds
+                    row["bytesOutPerSecond"] = Double(sample.bytesOut - previous.bytesOut) / seconds
                     row["ratesAvailable"] = true
+                } else {
+                    row["ratesAvailable"] = false
+                    row["reason"] = "counter_reset_or_invalid_interval"
                 }
             }
             rows.append(row)
@@ -397,9 +405,9 @@ public final class NativeStorageServices {
             guard let description = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any],
                   let current = description[kIOPSCurrentCapacityKey] as? Int,
                   let maximum = description[kIOPSMaxCapacityKey] as? Int,
-                  maximum > 0 else { continue }
-            var result: [String: Any] = ["available": true, "percent": (Double(current) / Double(maximum)) * 100,
-                                         "charging": description[kIOPSIsChargingKey] as? Bool ?? false]
+                  maximum > 0, current >= 0, current <= maximum else { continue }
+            var result: [String: Any] = ["available": true, "percent": (Double(current) / Double(maximum)) * 100]
+            if let charging = description[kIOPSIsChargingKey] as? Bool { result["charging"] = charging }
             if let remaining = description[kIOPSTimeToEmptyKey] as? Int, remaining >= 0 { result["timeRemainingSeconds"] = remaining * 60 }
             return result
         }

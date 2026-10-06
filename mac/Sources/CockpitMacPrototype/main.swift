@@ -475,6 +475,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !shuttingDown else { return }
         var reading = reader.read()
         reading.ai = aiReadings
+        var resources: [String: Any] = ["available": true, "observedAt": ISO8601DateFormatter().string(from: Date())]
+        if let cpu = reading.cpu { resources["cpuPercent"] = cpu * 100 }
+        if let used = reading.memoryUsedBytes { resources["memoryUsedBytes"] = used }
+        if let total = reading.memoryTotalBytes { resources["memoryTotalBytes"] = total }
+        if let swap = reading.swapUsedBytes { resources["swapUsedBytes"] = swap }
+        if let swap = reading.swapTotalBytes { resources["swapTotalBytes"] = swap }
+        if let pressure = reading.memoryPressure { resources["memoryPressure"] = pressure.label }
+        resources["disks"] = reading.disks.map { disk -> [String: Any] in
+            var row: [String: Any] = ["name": disk.name, "isInternal": disk.isInternal]
+            if let free = disk.freeBytes { row["freeBytes"] = free }
+            if let total = disk.totalBytes { row["totalBytes"] = total }
+            return row
+        }
+        dashboard.updateResources(resources)
         diskCount = reading.disks.count
         let change = failures.update(failing: reading.failures)
         for name in change.failed { emit("sampling_failed", level: "error", ["counter": name]) }

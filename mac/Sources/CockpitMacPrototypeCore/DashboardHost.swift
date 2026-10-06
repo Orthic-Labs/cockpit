@@ -386,6 +386,10 @@ public final class DashboardHost: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    public func updateResources(_ reading: [String: Any]) {
+        nativeServices.updateResources(reading)
+    }
+
     /// Hosted package smoke: verify bundled page scripts & real scanner exchange.
     public func verifyBundledScan(root: URL) async throws {
         restoreEnabled = false
@@ -574,10 +578,32 @@ public final class DashboardHost: NSObject {
         switch action {
         case "refresh_apps": return try await nativeServices.appsPayload()
         case "refresh_monitor":
+            let before = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
             var monitor = try await nativeServices.monitorPayload()
             let processes = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--groups", "--json"])
             monitor["processes"] = processes["processes"]
             monitor["process_groups"] = processes["process_groups"]
+            if var ports = monitor["listeningPorts"] as? [String: Any],
+               let rows = ports["ports"] as? [[String: Any]] {
+                let beforeIDs = processIncarnations(before)
+                let afterIDs = processIncarnations(processes)
+                ports["ports"] = rows.map { row -> [String: Any] in
+                    var observed = row
+                    if let pid = (row["pid"] as? NSNumber)?.intValue,
+                       let start = beforeIDs[pid], start > 0, afterIDs[pid] == start {
+                        observed["startTime"] = start
+                        observed["processIdentityVerified"] = true
+                    } else {
+                        observed["processIdentityVerified"] = false
+                        observed["ownerReason"] = "process_incarnation_not_verified"
+                    }
+                    observed["protocol"] = "TCP"
+                    let address = row["address"] as? String ?? ""
+                    observed["exposure"] = address == "127.0.0.1" || address == "[::1]" || address == "::1" ? "Loopback" : "Network interface"
+                    return observed
+                }
+                monitor["listeningPorts"] = ports
+            }
             return monitor
         case "refresh_activity":
             var activity = try await nativeServices.activityPayload()
@@ -638,6 +664,17 @@ public final class DashboardHost: NSObject {
             return try cleanupService.undo(planID: plan)
         default: throw ScanFailure.invalidJSON("Unsupported native action")
         }
+    }
+
+    private func processIncarnations(_ payload: [String: Any]) -> [Int: UInt64] {
+        var result: [Int: UInt64] = [:]
+        for process in payload["processes"] as? [[String: Any]] ?? [] {
+            guard let identity = process["identity"] as? [String: Any],
+                  let pid = identity["pid"] as? NSNumber,
+                  let start = identity["start_time"] as? NSNumber else { continue }
+            result[pid.intValue] = start.uint64Value
+        }
+        return result
     }
 
     private func respond(id: String, action: String, result: Result<[String: Any], Error>) {
