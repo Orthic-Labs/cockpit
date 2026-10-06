@@ -407,11 +407,15 @@ pub struct Journal {
 
 impl Journal {
     pub fn claim(&mut self, plan: &CleanupPlan, now: u64) -> Result<(), ClaimError> {
+        if self
+            .entries
+            .get(&plan.id)
+            .is_some_and(|existing| existing.effect != plan.effect)
+        {
+            return Err(ClaimError::EffectChanged);
+        }
         plan.ensure_executable(now)?;
         if let Some(existing) = self.entries.get(&plan.id) {
-            if existing.effect != plan.effect {
-                return Err(ClaimError::EffectChanged);
-            }
             return match existing.state {
                 JournalState::Interrupted => Err(ClaimError::Interrupted),
                 JournalState::Claimed | JournalState::Completed => Err(ClaimError::AlreadyClaimed),

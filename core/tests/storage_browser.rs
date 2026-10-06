@@ -1,5 +1,5 @@
 use cockpit_core::model::{
-    Accounting, CloneIdentity, EntryKind, FileIdentity, FileMetadata, FolderAccounting,
+    Accounting, EntryKind, FileIdentity, FileMetadata, FolderAccounting,
     ReclaimEstimate, ReclaimState, ScanReport, ScannedEntry, VolumeIdentity,
 };
 use cockpit_core::storage_browser::{
@@ -13,7 +13,6 @@ fn report(
     folders: Vec<FolderAccounting>,
     incomplete: bool,
 ) -> ScanReport {
-    let volume = VolumeIdentity::new("fixture");
     ScanReport {
         roots: vec![PathBuf::from("/scope")],
         entries,
