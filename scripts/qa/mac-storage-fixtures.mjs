@@ -106,6 +106,7 @@ export async function createStorageFixture({ destination }) {
     duplicateC: path.join(nested, "duplicate-c.bin"),
     discard: path.join(destination, "discard-me.txt"),
     sourcePng: path.join(destination, "source-image.png"),
+    sourceVideo: path.join(destination, "source-video.mp4"),
     growthFile: path.join(destination, "growth-after-first-scan.bin"),
     hiddenFile: path.join(destination, ".fixture-hidden.txt"),
     replayFile: path.join(destination, "fixture-replay-after-relaunch.txt"),
@@ -117,9 +118,11 @@ export async function createStorageFixture({ destination }) {
   await exclusiveWrite(paths.duplicateC, duplicate);
   await exclusiveWrite(paths.discard, Buffer.from("Cockpit installed journey discard fixture\n", "utf8"));
   await exclusiveWrite(paths.sourcePng, makePng());
+  // Synthetic 96x64, two-second H.264 fixture; no user media or codec dependency.
+  await exclusiveWrite(paths.sourceVideo, await readFile(new URL("./fixtures/storage-source-video.mp4", import.meta.url)));
   await exclusiveWrite(paths.hiddenFile, Buffer.from("Hidden filename-index fixture\n", "utf8"));
   await Promise.all(paths.indexFiles.map((file, index) => exclusiveWrite(file, Buffer.from(`Filename index fixture ${index + 1}\n`, "utf8"))));
-  await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng, paths.hiddenFile, ...paths.indexFiles].map(async file => {
+  await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng, paths.sourceVideo, paths.hiddenFile, ...paths.indexFiles].map(async file => {
     const info = await lstat(file);
     assert.equal(info.isSymbolicLink(), false, `Fixture child cannot be a symlink: ${file}`);
     assert.equal(info.isFile(), true, `Fixture child must be a regular file: ${file}`);
@@ -127,7 +130,7 @@ export async function createStorageFixture({ destination }) {
 
   const names = await readdir(destination);
   assert.deepEqual(new Set(names), new Set([
-    "compression-output", "discard-me.txt", "duplicate-a.bin", "nested-folder", "source-image.png", ".fixture-hidden.txt",
+    "compression-output", "discard-me.txt", "duplicate-a.bin", "nested-folder", "source-image.png", "source-video.mp4", ".fixture-hidden.txt",
     ...paths.indexFiles.map(file => path.basename(file)),
   ]));
   const fingerprint = async file => ({
@@ -137,7 +140,7 @@ export async function createStorageFixture({ destination }) {
   });
   return {
     ...paths,
-    files: await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng, paths.hiddenFile, ...paths.indexFiles].map(fingerprint)),
+    files: await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng, paths.sourceVideo, paths.hiddenFile, ...paths.indexFiles].map(fingerprint)),
     duplicateBytes: DUPLICATE_BYTES,
     trash,
   };

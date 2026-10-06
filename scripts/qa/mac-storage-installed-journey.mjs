@@ -87,7 +87,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
   const { appBundle, fixture, output, onRelaunch, onCheckpoint = () => {}, onRingHover } = options;
   assert.ok(initialApp && typeof initialApp.getAXState === "function", "CUA app is required");
   assert.ok(path.isAbsolute(appBundle) && path.isAbsolute(output), "appBundle/output must be absolute");
-  assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.growthFile && fixture?.hiddenFile && fixture?.replayFile,
+  assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.sourceVideo && fixture?.growthFile && fixture?.hiddenFile && fixture?.replayFile,
     "fixture must include root, discard, duplicateA, duplicateB, duplicateC, sourcePng, growthFile, hiddenFile, replayFile");
   assert.ok(Array.isArray(fixture.indexFiles) && fixture.indexFiles.length >= 6, "fixture must include six filename-index files for pagination");
   assert.ok(fixture?.disposableApp?.path && fixture?.disposableApp?.bundleID && fixture?.disposableApp?.infoPlist && fixture?.disposableApp?.marker,
@@ -96,7 +96,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
   await mkdir(output, { recursive: true });
   let app = initialApp;
   const report = { status: "running", appBundle, startedAt: new Date().toISOString(), phases: [], checkpoints: [] };
-  const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC, fixture.discard, fixture.sourcePng, fixture.hiddenFile, ...fixture.indexFiles];
+  const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC, fixture.discard, fixture.sourcePng, fixture.sourceVideo, fixture.hiddenFile, ...fixture.indexFiles];
   const appFixture = fixture.disposableApp;
   const bundleFingerprint = async bundle => {
     const info = await stat(bundle.path);
@@ -499,6 +499,36 @@ export async function runInstalledStorageJourney(initialApp, options) {
       "Compression filter must render persisted completed output event");
     assert.match(ax, /30 days: \d+ events/);
     await phaseDone(phase, { compressionOutput: encodedPath });
+
+    phase = "native-video-compression-and-preview";
+    await navigate("Compress");
+    await chooseSelectValue("Format", "MP4");
+    await replaceText("Quality (0–100)", "60");
+    await click(hasButton("Choose media & compress"));
+    await pickerChoose(fixture.sourceVideo);
+    await pickerChoose(outputDirectory);
+    ax = await waitFor(value => value.includes("Latest result") && value.includes(fixture.sourceVideo) && value.includes("source-video-compressed-"),
+      "native AVFoundation encoding must report exact video source & unique output", 60_000);
+    const videos = (await readdir(outputDirectory)).filter(name => name.startsWith("source-video-compressed-") && name.endsWith(".mp4"));
+    assert.equal(videos.length, 1, "Video compression must publish one complete output");
+    const videoPath = path.join(outputDirectory, videos[0]);
+    const videoBytes = await readFile(videoPath);
+    assert.ok(videoBytes.includes(Buffer.from("ftyp")) && videoBytes.includes(Buffer.from("moov")) && videoBytes.includes(Buffer.from("mdat")),
+      "Native video output must contain completed MP4 metadata & media");
+    assertFingerprint(await fingerprint(fixture.sourceVideo), before[originalFixtureFiles.indexOf(fixture.sourceVideo)], "video compression preserves original");
+    report.videoCompressionOutput = await fingerprint(videoPath);
+    await click(hasButton("Preview output"));
+    await waitFor(value => value.includes(path.basename(videoPath)) && /Quick Look|Close/i.test(value),
+      "Native Quick Look must identify compressed video");
+    await checkpoint(`${phase}-open`);
+    await app.pressKey("Escape");
+    await waitFor(value => value.includes("Latest result") && value.includes(videoPath), "video preview must return to exact result");
+    await navigate("Activity");
+    await click(hasButton("Refresh activity"));
+    await chooseSelectValue("Action", "Compression");
+    await waitFor(value => value.includes("Compression · compress · completed") && value.includes(videoPath),
+      "video completion must appear in durable Activity");
+    await phaseDone(phase, { output: videoPath });
 
     for (const view of ["Apps", "Monitor", "Activity"]) {
       phase = `native-${view.toLowerCase()}`;
