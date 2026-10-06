@@ -51,6 +51,12 @@ pub struct FileMetadata {
     pub allocation_size: Option<u64>,
     pub file_id: Option<FileIdentity>,
     pub clone_id: Option<CloneIdentity>,
+    /// Unix epoch seconds observed from filesystem metadata. Values before
+    /// Unix epoch or unsupported providers remain unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<u64>,
     /// True means the item is a cloud/dataless placeholder and must not be
     /// hydrated as part of inspection.
     pub is_placeholder: bool,

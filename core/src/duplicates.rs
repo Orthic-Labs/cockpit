@@ -8,7 +8,7 @@ use crate::platform;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const DEFAULT_MIN_DUPLICATE_BYTES: u64 = 100 * 1024;
 pub const DEFAULT_MAX_FILES: usize = 100_000;
@@ -460,6 +460,16 @@ fn collect_candidates<R: ContentReader>(
             allocation_size: native.allocation_size,
             file_id: Some(file_id.clone()),
             clone_id: None,
+            created_at: metadata
+                .created()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs()),
+            modified_at: metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs()),
             is_placeholder: native.is_placeholder,
             metadata_complete: complete,
         };

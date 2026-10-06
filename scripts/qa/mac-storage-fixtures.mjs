@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -156,4 +157,44 @@ export async function addStorageReplayFile(fixture) {
   const bytes = Buffer.from("Filename index replay fixture after relaunch\n", "utf8");
   await exclusiveWrite(fixture.replayFile, bytes);
   return { path: fixture.replayFile, bytes: bytes.length };
+}
+
+/** Create one private, valid, no-process app bundle at caller-selected ~/Applications path. */
+export async function createDisposableAppBundle({ destination }) {
+  assert.ok(typeof destination === "string" && path.isAbsolute(destination), "application destination must be absolute");
+  const applications = path.join(os.homedir(), "Applications");
+  assert.ok(under(applications, destination) && path.extname(destination).toLowerCase() === ".app",
+    "application destination must be a new .app path below ~/Applications");
+  const applicationsInfo = await lstat(applications).catch(() => null);
+  if (!applicationsInfo) await mkdir(applications, { mode: 0o700 });
+  const [applicationsReal, trashInfo] = await Promise.all([
+    realpath(applications),
+    stat(path.join(os.homedir(), ".Trash")).catch(() => stat(os.homedir())),
+  ]);
+  const destinationParent = path.dirname(path.resolve(destination));
+  const destinationParentReal = await realpath(destinationParent);
+  const canonicalDestination = path.join(destinationParentReal, path.basename(destination));
+  assert.ok(under(applicationsReal, canonicalDestination), "canonical application path must remain below ~/Applications");
+  const parentInfo = await stat(destinationParent);
+  assert.equal(parentInfo.dev, trashInfo.dev, "application fixture must share volume with ~/.Trash");
+  await mkdir(destination, { recursive: false, mode: 0o700 });
+  const contents = path.join(destination, "Contents");
+  const resources = path.join(contents, "Resources");
+  await mkdir(contents, { mode: 0o700 });
+  await mkdir(resources, { mode: 0o700 });
+  await Promise.all([destination, contents, resources].map(assertPrivateDirectory));
+
+  const uuid = randomUUID();
+  const bundleID = `com.cockpit.fixture.${uuid.replaceAll("-", "")}`;
+  const infoPlist = path.join(contents, "Info.plist");
+  const marker = path.join(resources, "journey-marker.txt");
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleName</key><string>${path.basename(destination, ".app")}</string><key>CFBundleDisplayName</key><string>${path.basename(destination, ".app")}</string><key>CFBundleVersion</key><string>1</string><key>CFBundleShortVersionString</key><string>1.0</string></dict></plist>\n`;
+  await exclusiveWrite(infoPlist, Buffer.from(plist, "utf8"));
+  await exclusiveWrite(marker, Buffer.from(`Cockpit installed app fixture ${uuid}\n`, "utf8"));
+  for (const file of [infoPlist, marker]) {
+    const info = await lstat(file);
+    assert.equal(info.isSymbolicLink(), false, `Application fixture child cannot be a symlink: ${file}`);
+    assert.equal(info.isFile(), true, `Application fixture child must be a regular file: ${file}`);
+  }
+  return { path: destination, bundleID, name: path.basename(destination, ".app"), infoPlist, marker, uuid };
 }

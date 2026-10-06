@@ -35,6 +35,8 @@ fn dir(v: &str) -> FileMetadata {
         allocation_size: Some(0),
         file_id: None,
         clone_id: None,
+        created_at: None,
+        modified_at: None,
         is_placeholder: false,
         metadata_complete: true,
     }
@@ -51,6 +53,8 @@ fn file(v: &str, id: &str, size: u64) -> FileMetadata {
             id: id.into(),
         }),
         clone_id: None,
+        created_at: None,
+        modified_at: None,
         is_placeholder: false,
         metadata_complete: true,
     }

@@ -318,6 +318,8 @@ fn empty_folder_coverage_for_nonempty_report_is_rejected() {
             allocation_size: Some(0),
             file_id: None,
             clone_id: None,
+            created_at: None,
+            modified_at: None,
             is_placeholder: false,
             metadata_complete: true,
         },

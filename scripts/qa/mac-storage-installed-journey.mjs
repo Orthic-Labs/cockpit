@@ -71,15 +71,25 @@ export async function runInstalledStorageJourney(initialApp, options) {
   assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.growthFile && fixture?.hiddenFile && fixture?.replayFile,
     "fixture must include root, discard, duplicateA, duplicateB, duplicateC, sourcePng, growthFile, hiddenFile, replayFile");
   assert.ok(Array.isArray(fixture.indexFiles) && fixture.indexFiles.length >= 6, "fixture must include six filename-index files for pagination");
+  assert.ok(fixture?.disposableApp?.path && fixture?.disposableApp?.bundleID && fixture?.disposableApp?.infoPlist && fixture?.disposableApp?.marker,
+    "fixture must include disposableApp path, bundleID, infoPlist, marker");
   assert.equal(typeof onRelaunch, "function", "onRelaunch callback is required for restart coverage");
   await mkdir(output, { recursive: true });
   let app = initialApp;
   const report = { status: "running", appBundle, startedAt: new Date().toISOString(), phases: [], checkpoints: [] };
   const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC, fixture.discard, fixture.sourcePng, fixture.hiddenFile, ...fixture.indexFiles];
+  const appFixture = fixture.disposableApp;
+  const bundleFingerprint = async bundle => {
+    const info = await stat(bundle.path);
+    assert.equal(info.isDirectory(), true, `application bundle must remain a directory: ${bundle.path}`);
+    return { path: bundle.path, dev: info.dev, ino: info.ino, files: await Promise.all([bundle.infoPlist, bundle.marker].map(fingerprint)) };
+  };
   const bundleFiles = ["Contents/MacOS/Cockpit", "Contents/Helpers/cockpit", "Contents/Resources/dashboard/app.js", "Contents/Resources/dashboard/index.html"]
     .map(file => path.join(appBundle, file));
   const before = await Promise.all([...originalFixtureFiles, ...bundleFiles].map(fingerprint));
+  const beforeApp = await bundleFingerprint(appFixture);
   report.inputs = before;
+  report.applicationInput = beforeApp;
   let phase = "launch-and-native-scan";
 
   const state = () => app.getAXState({ emit: false, disableDiffing: true });
@@ -107,10 +117,29 @@ export async function runInstalledStorageJourney(initialApp, options) {
   const phaseDone = async (name, detail = {}) => { report.phases.push({ name, status: "passed", at: new Date().toISOString(), ...detail }); await checkpoint(name); };
 
   const pickerChoose = async (target) => {
-    await app.pressKey("super+shift+g");
-    await app.typeText(target);
-    await app.pressKey("Return");
-    const picker = await waitFor(ax => ax.includes(path.basename(target)), `native picker must show ${target}`);
+    // Navigate observed native file rows. Go to Folder's AX value can change
+    // without committing its path, so it is not sufficient picker evidence.
+    const home = (await import("node:os")).homedir();
+    assert.ok(target.startsWith(home + "/"), "picker fixture must belong to user home");
+    await app.pressKey("super+shift+h");
+    let picker = await state();
+    let current = home;
+    const components = target.slice(home.length + 1).split("/");
+    const targetInfo = await stat(target);
+    for (let index = 0; index < components.length; index += 1) {
+      current = path.join(current, components[index]);
+      const expected = current;
+      picker = await waitFor(ax => controlLines(ax).some(line => {
+        const url = line.match(/URL: (file:\/\/[^,]+),/);
+        return url && decodeURIComponent(new URL(url[1]).pathname).replace(/\/$/, "") === expected;
+      }), `native chooser must expose fixture row ${expected}`);
+      const row = locate(picker, line => {
+        const url = line.match(/URL: (file:\/\/[^,]+),/);
+        return url && decodeURIComponent(new URL(url[1]).pathname).replace(/\/$/, "") === expected;
+      }, phase);
+      await app.click(row, { clickCount: index === components.length - 1 && !targetInfo.isDirectory() ? 1 : 2 });
+      picker = await state();
+    }
     const buttons = controlLines(picker).filter(line => /^\s*\d+ (?:button|toolbar item) (?:Open|Choose|Select)(?:,|$)/.test(line));
     assert.equal(buttons.length, 1, `${phase}: native picker must expose one observed acceptance button`);
     await app.click(Number(buttons[0].trim().split(" ")[0]));
@@ -383,12 +412,78 @@ export async function runInstalledStorageJourney(initialApp, options) {
         assert.ok(ax.includes("Disk I/O") && ax.includes("Open files") && ax.includes("Network endpoints"), "app inspection must render bounded native I/O observations");
         const previousSamples = Number(ax.match(/(\d+) retained samples/)?.[1] ?? 0);
         assert.ok(previousSamples > 0 && previousSamples <= 256, "confirmed native history must contain bounded samples");
+        ax = await click(hasButton("Check app feed"));
+        ax = await waitFor(value => value.includes("App feed result") && value.includes(appBundle) && /(?:unavailable|unsupported)/i.test(value) && /(?:Not performed|false)/i.test(value),
+          "selected Cockpit feed check must report real unsupported state without network");
+        assert.ok(/SUFeedURL|feed_url_not_declared|bundle_feed_url_not_declared/i.test(ax), "Cockpit feed result must explain missing SUFeedURL");
+        const cockpitBefore = await stat(appBundle);
+        ax = await click(hasButton("Review app uninstall"));
+        ax = await waitFor(value => /Action failed:/i.test(value) && /running|liveness|process/i.test(value),
+          "running Cockpit uninstall review must fail before any effect");
+        const cockpitAfter = await stat(appBundle);
+        assert.equal(cockpitAfter.dev, cockpitBefore.dev, "running Cockpit uninstall failure changed volume identity");
+        assert.equal(cockpitAfter.ino, cockpitBefore.ino, "running Cockpit uninstall failure changed bundle identity");
         await click(hasButton(`Details for ${appName}`));
         ax = await waitFor(value => value.includes("app details complete") && Number(value.match(/(\d+) retained samples/)?.[1]) === Math.min(256, previousSamples + 1), "second verified inspection must append bounded resource history");
         assert.ok(ax.includes("Application history") && /partial|unknown/i.test(ax), "app history must expose partial or unknown coverage");
         await phaseDone(phase);
+
+        phase = "disposable-app-inventory-and-details";
+        ax = await waitFor(value => value.includes(appFixture.path) && value.includes(appFixture.bundleID),
+          "fresh app inventory must include disposable fixture bundle and bundle ID");
+        ax = await click(hasButton(`Details for ${appFixture.name}`));
+        ax = await waitFor(value => value.includes(`Details · ${appFixture.name}`) && value.includes(appFixture.path) && value.includes(appFixture.bundleID),
+          "disposable app Details must render exact path and bundle identity");
+        assert.ok(ax.includes("Unknown") && ax.includes("report only"), "disposable app metadata must preserve unknown bytes and report-only related paths");
+        await phaseDone(phase);
+
+        phase = "disposable-app-uninstall-cancel-and-apply";
+        ax = await click(hasButton("Review app uninstall"));
+        ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
+          "disposable app uninstall review must show native confirmation");
+        await app.click(locate(ax, hasButton("Cancel"), phase));
+        ax = await waitFor(value => /Action failed:/i.test(value) && /cancel/i.test(value),
+          "disposable app uninstall review cancel must return explicit cancellation");
+        const canceledBundle = await bundleFingerprint(appFixture);
+        assert.equal(canceledBundle.ino, beforeApp.ino, "canceled app review changed bundle identity");
+        ax = await click(hasButton("Review app uninstall"));
+        ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
+          "disposable app uninstall retry must show native confirmation");
+        await app.click(locate(ax, hasButton("Move App to Trash"), phase));
+        ax = await waitFor(value => value.includes("Review ready · app uninstall") && value.includes("Apply app uninstall"),
+          "accepted app uninstall review must expose native apply action");
+        ax = await click(hasButton("Apply app uninstall"));
+        ax = await waitFor(value => value.includes("App uninstall complete") && /1 app moved to Trash/.test(value),
+          "app uninstall apply must report one moved bundle");
+        await assert.rejects(() => access(appFixture.path), /ENOENT/, "app bundle must be absent after uninstall apply");
+        await phaseDone(phase, { appPath: appFixture.path, bundleID: appFixture.bundleID });
       }
     }
+
+    phase = "activity-app-uninstall-and-relaunch-undo";
+    await navigate("Activity");
+    ax = await click(hasButton("Refresh activity"));
+    ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline"),
+      "Activity refresh must expose durable app uninstall timeline");
+    await chooseSelectValue("Action", "Uninstall");
+    await chooseSelectValue("Period", "Last 30 days");
+    ax = await waitFor(value => value.includes("Uninstall · remove · moved") && value.includes(appFixture.path) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
+      "Uninstall filter must render durable moved bundle event");
+    const appRelaunched = await onRelaunch({ app, phase, fixture, report });
+    assert.ok(appRelaunched?.restarted === true, "app uninstall restart must report observed quit/relaunch completion");
+    app = appRelaunched.app;
+    assert.ok(app && typeof app.getAXState === "function", "app uninstall restart must return fresh CUA app");
+    ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "app uninstall relaunch must return to native dashboard");
+    await navigate("Activity");
+    ax = await click(hasButton("Refresh activity"));
+    ax = await waitFor(value => value.includes("Cleanup history") && value.includes(appFixture.path), "relaunch must retain app uninstall cleanup journal");
+    ax = await click(hasButton(`Restore ${appFixture.name}`));
+    ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "app bundle Undo must complete after relaunch");
+    const restoredApp = await bundleFingerprint(appFixture);
+    assert.equal(restoredApp.dev, beforeApp.dev, "restored app bundle volume changed");
+    assert.equal(restoredApp.ino, beforeApp.ino, "restored app bundle identity changed");
+    for (let index = 0; index < beforeApp.files.length; index += 1) assertFingerprint(restoredApp.files[index], beforeApp.files[index], `app Undo file ${beforeApp.files[index].path}`);
+    await phaseDone(phase, { appPath: appFixture.path, restored: restoredApp });
 
     phase = "per-ring-hover";
     if (typeof onRingHover === "function") {
@@ -414,6 +509,11 @@ export async function runInstalledStorageJourney(initialApp, options) {
       assertFingerprint(after[finalFixtureFiles.length + index], before[originalFixtureFiles.length + index], `bundle integrity ${bundleFiles[index]}`);
     }
     report.finalFingerprints = after.slice(0, finalFixtureFiles.length);
+    const afterApp = await bundleFingerprint(appFixture);
+    assert.equal(afterApp.dev, beforeApp.dev, "restored app bundle volume changed");
+    assert.equal(afterApp.ino, beforeApp.ino, "restored app bundle identity changed");
+    for (let index = 0; index < beforeApp.files.length; index += 1) assertFingerprint(afterApp.files[index], beforeApp.files[index], `restored app bundle file ${beforeApp.files[index].path}`);
+    report.finalApplication = afterApp;
     report.status = "passed";
     report.finishedAt = new Date().toISOString();
     await writeFile(path.join(output, "result.json"), `${JSON.stringify(report, null, 2)}\n`);

@@ -96,12 +96,75 @@ public final class NativeCleanupService {
         reviewedPlans.removeAll(keepingCapacity: false)
     }
 
-    public func apply(planID: String) throws -> [String: Any] {
+    /// Reviews one app bundle root.  Related paths are deliberately report-only;
+    /// only exact bundle root is admitted into durable cleanup claim.
+    public func reviewApplication(bundle: URL, bundleID: String, presenting: NSWindow?) throws -> [String: Any] {
+        guard let presenting else { throw Error.presentationRequired }
         try loadStateIfNeeded()
-        guard let reviewed = reviewedPlans.removeValue(forKey: planID) else { throw Error.reviewRequired }
-        guard reviewed.plan.id == planID else { throw Error.reviewRequired }
+        try ensureJournalCapacity(journal)
+        guard !bundleID.isEmpty, bundleID.utf8.count <= 512 else { throw Error.invalidPath }
+        let normalized = try normalizedApplicationBundlePath(bundle)
+        let trashURL = try trustedDirectory(trashDirectory, create: injectedTrashDirectory, purpose: "trash")
+        let item = try inspectApplication(path: normalized, bundleID: bundleID, trash: trashURL)
+        guard item.volume == item.trashVolume else { throw Error.unsupported("different_volume") }
+        let now = Date().timeIntervalSince1970
+        let expires = now + Self.reviewLifetime
+        let plan = ReviewedPlanData(id: Self.randomID(), createdAt: UInt64(now), expiresAt: UInt64(expires), operation: "app_uninstall", bundleID: bundleID, items: [ItemData(item, targetKind: "application_bundle")])
+
+        let alert = NSAlert()
+        alert.messageText = "Uninstall \(bundleID)?"
+        alert.informativeText = "Bundle: \(bundleID)\nPath: \(normalized.path)\nTrash: \(trashURL.path)\nUndo: restore exact bundle root from Trash.\nReview expires \(Date(timeIntervalSince1970: expires))."
+        alert.addButton(withTitle: "Move App to Trash")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { throw Error.cancelled }
+        _ = presenting
+
+        let token = Self.randomID()
+        reviewedPlans[plan.id] = ReviewedPlan(plan: plan, token: token)
+        return [
+            "plan_id": plan.id,
+            "reviewed_token": token,
+            "reviewed": true,
+            "operation": "app_uninstall",
+            "bundle_id": bundleID,
+            "bundle_path": normalized.path,
+            "trash_path": trashURL.path,
+            "undo": true,
+            "related_paths": [],
+            "related_paths_status": "report_only_not_admitted",
+            "created_at": plan.createdAt,
+            "expires_at": plan.expiresAt,
+            "items": [["path": normalized.path, "target_kind": "application_bundle"]]
+        ]
+    }
+
+    /// Applies an application plan only after caller-owned fresh admission and
+    /// process verification.  Closure runs immediately before durable claim.
+    public func applyApplication(planID: String, revalidate: () throws -> Void) throws -> [String: Any] {
+        try loadStateIfNeeded()
+        guard let reviewed = reviewedPlans[planID], reviewed.plan.id == planID else { throw Error.reviewRequired }
+        guard reviewed.plan.operation == "app_uninstall", reviewed.plan.bundleID != nil else { throw Error.unsupported("not_application_plan") }
+        try revalidate()
+        reviewedPlans.removeValue(forKey: planID)
         guard Date().timeIntervalSince1970 < Double(reviewed.plan.expiresAt) else { throw Error.expired }
         guard journal.plans[planID] == nil else { throw Error.planAlreadyClaimed }
+        return try applyReviewedPlan(reviewed)
+    }
+
+    public func apply(planID: String) throws -> [String: Any] {
+        try loadStateIfNeeded()
+        guard let reviewed = reviewedPlans[planID] else { throw Error.reviewRequired }
+        guard reviewed.plan.id == planID else { throw Error.reviewRequired }
+        guard reviewed.plan.operation != "app_uninstall" else { throw Error.unsupported("application_plan_requires_revalidation") }
+        reviewedPlans.removeValue(forKey: planID)
+        guard Date().timeIntervalSince1970 < Double(reviewed.plan.expiresAt) else { throw Error.expired }
+        guard journal.plans[planID] == nil else { throw Error.planAlreadyClaimed }
+
+        return try applyReviewedPlan(reviewed)
+    }
+
+    private func applyReviewedPlan(_ reviewed: ReviewedPlan) throws -> [String: Any] {
+        let planID = reviewed.plan.id
 
         let claimID = Self.randomID()
         var record = PlanRecord(plan: reviewed.plan, claimID: claimID, state: "claimed", undoClaimID: nil, items: reviewed.plan.items.map { ItemRecord(item: $0) })
@@ -114,6 +177,8 @@ public final class NativeCleanupService {
         var outcomes: [[String: Any]] = []
         var logicalBytes: UInt64 = 0
         var movedBytes: UInt64 = 0
+        var logicalBytesKnown = false
+        var movedBytesKnown = false
         for index in record.items.indices {
             let destination: String
             let trashID: DirectoryID
@@ -138,8 +203,8 @@ public final class NativeCleanupService {
                 record.items[index].trashName = result.trashName
                 record.items[index].trashPath = result.trashPath
                 record.items[index].movedBytes = result.movedBytes
-                logicalBytes &+= item.logicalBytes
-                movedBytes &+= result.movedBytes
+                if let bytes = item.logicalBytes { logicalBytes &+= bytes; logicalBytesKnown = true }
+                if let bytes = result.movedBytes { movedBytes &+= bytes; movedBytesKnown = true }
                 outcomes.append(result.dictionary)
             } catch let failure as MoveAttemptError {
                 switch failure {
@@ -153,20 +218,23 @@ public final class NativeCleanupService {
                     journal.plans[planID] = record
                     try persistState()
                     outcomes.append(result.dictionary)
-                    return ["plan_id": planID, "state": "interrupted", "items": outcomes, "outcomes": outcomes, "logical_bytes": logicalBytes, "moved_bytes": movedBytes]
+                    var response: [String: Any] = ["plan_id": planID, "state": "interrupted", "items": outcomes, "outcomes": outcomes]
+                    if logicalBytesKnown { response["logical_bytes"] = logicalBytes }
+                    if movedBytesKnown { response["moved_bytes"] = movedBytes }
+                    return response
                 case .ordinary(let failure):
-                    let result = MoveResult(item: item, status: "failed", reason: failure.localizedDescription, trashName: nil, trashPath: nil, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: nil, movedBytes: 0)
+                    let result = MoveResult(item: item, status: "failed", reason: failure.localizedDescription, trashName: nil, trashPath: nil, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: nil, movedBytes: Self.knownMovedBytes(for: item))
                     record.items[index].state = "completed"
                     record.items[index].outcome = result
                     outcomes.append(result.dictionary)
                 }
             } catch let failure as Error {
-                let result = MoveResult(item: item, status: "failed", reason: failure.localizedDescription, trashName: nil, trashPath: nil, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: nil, movedBytes: 0)
+                let result = MoveResult(item: item, status: "failed", reason: failure.localizedDescription, trashName: nil, trashPath: nil, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: nil, movedBytes: Self.knownMovedBytes(for: item))
                 record.items[index].state = "completed"
                 record.items[index].outcome = result
                 outcomes.append(result.dictionary)
             } catch {
-                let result = MoveResult(item: item, status: "failed", reason: "io", trashName: nil, trashPath: nil, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: nil, movedBytes: 0)
+                let result = MoveResult(item: item, status: "failed", reason: "io", trashName: nil, trashPath: nil, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: nil, movedBytes: Self.knownMovedBytes(for: item))
                 record.items[index].state = "completed"
                 record.items[index].outcome = result
                 outcomes.append(result.dictionary)
@@ -178,14 +246,15 @@ public final class NativeCleanupService {
         record.state = "completed"
         journal.plans[planID] = record
         try persistState()
-        return [
+        var response: [String: Any] = [
             "plan_id": planID,
             "state": "completed",
             "items": outcomes,
-            "outcomes": outcomes,
-            "logical_bytes": logicalBytes,
-            "moved_bytes": movedBytes
+            "outcomes": outcomes
         ]
+        if logicalBytesKnown { response["logical_bytes"] = logicalBytes }
+        if movedBytesKnown { response["moved_bytes"] = movedBytes }
+        return response
     }
 
     public func undo(planID: String, paths: [String]? = nil) throws -> [String: Any] {
@@ -243,14 +312,16 @@ public final class NativeCleanupService {
     public func historyPayload() throws -> [String: Any] {
         try loadStateIfNeeded()
         let plans = journal.plans.values.sorted { $0.plan.createdAt < $1.plan.createdAt }.map { record in
-            [
+            var planValue: [String: Any] = [
                 "plan_id": record.plan.id,
                 "created_at": record.plan.createdAt,
                 "expires_at": record.plan.expiresAt,
                 "state": record.state,
                 "claim_id": record.claimID,
+                "operation": record.plan.operation ?? "file_cleanup",
                 "items": record.items.map { item in
-                    var value: [String: Any] = ["path": item.item.path, "state": item.state, "logical_bytes": item.item.logicalBytes]
+                    var value: [String: Any] = ["path": item.item.path, "state": item.state, "target_kind": item.item.effectiveTargetKind]
+                    if let logicalBytes = item.item.logicalBytes { value["logical_bytes"] = logicalBytes }
                     if let outcome = item.outcome {
                         var observed = outcome.dictionary
                         if let at = item.completedAt {
@@ -270,7 +341,9 @@ public final class NativeCleanupService {
                     }
                     return value
                 }
-            ] as [String: Any]
+            ]
+            if let bundleID = record.plan.bundleID { planValue["bundle_id"] = bundleID }
+            return planValue
         }
         return ["schema": Self.journalSchema, "plans": plans]
     }
@@ -300,7 +373,7 @@ public final class NativeCleanupService {
         if let presenting {
             let alert = NSAlert()
             alert.messageText = "Move selected files to Trash?"
-            let bytes = items.reduce(UInt64(0)) { $0 &+ $1.logicalBytes }
+            let bytes = items.compactMap(\.logicalBytes).reduce(UInt64(0)) { $0 &+ $1 }
             let listing = names.prefix(40).joined(separator: "\n")
             alert.informativeText = "\(items.count) file\(items.count == 1 ? "" : "s") • \(Self.byteDescription(bytes))\nReview expires \(Date(timeIntervalSince1970: expires)).\n\n\(listing)"
             alert.addButton(withTitle: "Move to Trash")
@@ -311,7 +384,9 @@ public final class NativeCleanupService {
         let token = Self.randomID()
         reviewedPlans[plan.id] = ReviewedPlan(plan: plan, token: token)
         let publicItems: [[String: Any]] = items.map {
-            ["path": $0.path, "filename": URL(fileURLWithPath: $0.path).lastPathComponent, "logical_bytes": $0.logicalBytes]
+            var value: [String: Any] = ["path": $0.path, "filename": URL(fileURLWithPath: $0.path).lastPathComponent]
+            if let logicalBytes = $0.logicalBytes { value["logical_bytes"] = logicalBytes }
+            return value
         }
         return [
             "plan_id": plan.id,
@@ -320,7 +395,7 @@ public final class NativeCleanupService {
             "created_at": plan.createdAt,
             "expires_at": plan.expiresAt,
             "items": publicItems,
-            "logical_bytes": items.reduce(UInt64(0)) { $0 &+ $1.logicalBytes }
+            "logical_bytes": items.compactMap(\.logicalBytes).reduce(UInt64(0)) { $0 &+ $1 }
         ]
     }
 
@@ -336,17 +411,28 @@ public final class NativeCleanupService {
     }
 
     private func move(item: ItemData, destination: String, trashID: DirectoryID) throws -> MoveResult {
-        let (sourceParentFD, sourceParentID) = try openParent(URL(fileURLWithPath: item.path))
+        let (sourceParentFD, sourceParentID) = item.effectiveTargetKind == "application_bundle"
+            ? try openApplicationParent(URL(fileURLWithPath: item.path))
+            : try openParent(URL(fileURLWithPath: item.path))
         defer { close(sourceParentFD) }
         guard sourceParentID == item.parent else { throw Error.unsupported("ancestor_replaced") }
         let (trashFD, openedTrashID) = try openDirectory(trashDirectory, create: injectedTrashDirectory, purpose: "trash")
         defer { close(trashFD) }
         guard openedTrashID == trashID, trashID.volume == item.volume else { throw Error.unsupported("trash_directory_changed") }
         let sourceName = URL(fileURLWithPath: item.path).lastPathComponent
-        try validateNoPlaceholder(path: URL(fileURLWithPath: item.path), parentFD: sourceParentFD, name: sourceName)
-        let (sourceLeafFD, current) = try openRegularFile(parentFD: sourceParentFD, name: sourceName)
+        if item.effectiveTargetKind == "application_bundle" {
+            try validateNoPlaceholderDirectory(path: URL(fileURLWithPath: item.path), parentFD: sourceParentFD, name: sourceName)
+        } else {
+            try validateNoPlaceholder(path: URL(fileURLWithPath: item.path), parentFD: sourceParentFD, name: sourceName)
+        }
+        let (sourceLeafFD, current): (Int32, FileFingerprint)
+        if item.effectiveTargetKind == "application_bundle" {
+            (sourceLeafFD, current) = try openDirectoryLeaf(parentFD: sourceParentFD, name: sourceName)
+        } else {
+            (sourceLeafFD, current) = try openRegularFile(parentFD: sourceParentFD, name: sourceName)
+        }
         defer { close(sourceLeafFD) }
-        guard current == item.fingerprint else { throw Error.unsupported("source_changed") }
+        guard Self.exactPreEffectMatches(current, item.fingerprint) else { throw Error.unsupported("source_changed") }
         let destinationPath = trashDirectory.appendingPathComponent(destination).path
         let result = sourceName.withCString { sourceCString in
             destination.withCString { destinationCString in
@@ -354,19 +440,19 @@ public final class NativeCleanupService {
             }
         }
         guard result == 0 else { throw errno == EEXIST ? Error.unsupported("trash_name_collision") : Error.io(errno) }
-        let provenance = MoveResult(item: item, status: "indeterminate", reason: "postrename_verification", trashName: destination, trashPath: destinationPath, trashFingerprint: nil, trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: destination), trashDirectory: trashID, movedBytes: 0)
+        let provenance = MoveResult(item: item, status: "indeterminate", reason: "postrename_verification", trashName: destination, trashPath: destinationPath, trashFingerprint: nil, trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: destination), trashDirectory: trashID, movedBytes: Self.knownMovedBytes(for: item))
         if crashAfterRenameForTesting {
             crashAfterRenameForTesting = false
             throw MoveAttemptError.indeterminate(provenance)
         }
         do {
             let actualEntry = try entryIdentity(parentFD: trashFD, name: destination)
-            let trashed = try regularFileFingerprint(parentFD: trashFD, name: destination)
+            let trashed = try targetFingerprint(parentFD: trashFD, name: destination, targetKind: item.effectiveTargetKind)
             guard Self.stableMatches(trashed, item.fingerprint) else {
                 if rollbackUnexpectedMove(trashFD: trashFD, trashName: destination, sourceParentFD: sourceParentFD, sourceName: sourceName, unexpected: actualEntry) {
                     throw MoveAttemptError.ordinary(.unsupported("source_changed"))
                 }
-                throw MoveAttemptError.indeterminate(MoveResult(item: item, status: "indeterminate", reason: "unexpected_entry_retained", trashName: destination, trashPath: destinationPath, trashFingerprint: trashed, trashEntryIdentity: actualEntry, trashDirectory: trashID, movedBytes: 0))
+                throw MoveAttemptError.indeterminate(MoveResult(item: item, status: "indeterminate", reason: "unexpected_entry_retained", trashName: destination, trashPath: destinationPath, trashFingerprint: trashed, trashEntryIdentity: actualEntry, trashDirectory: trashID, movedBytes: Self.knownMovedBytes(for: item)))
             }
             var sourceAfter = stat()
             guard fstat(sourceLeafFD, &sourceAfter) == 0 else { throw Error.io(errno) }
@@ -383,7 +469,7 @@ public final class NativeCleanupService {
                rollbackUnexpectedMove(trashFD: trashFD, trashName: destination, sourceParentFD: sourceParentFD, sourceName: sourceName, unexpected: unexpected) {
                 throw MoveAttemptError.ordinary(.unsupported("source_changed"))
             }
-            throw MoveAttemptError.indeterminate(MoveResult(item: item, status: "indeterminate", reason: failure.localizedDescription, trashName: provenance.trashName, trashPath: provenance.trashPath, trashFingerprint: try? regularFileFingerprint(parentFD: trashFD, name: destination), trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: destination), trashDirectory: trashID, movedBytes: 0))
+            throw MoveAttemptError.indeterminate(MoveResult(item: item, status: "indeterminate", reason: failure.localizedDescription, trashName: provenance.trashName, trashPath: provenance.trashPath, trashFingerprint: try? targetFingerprint(parentFD: trashFD, name: destination, targetKind: item.effectiveTargetKind), trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: destination), trashDirectory: trashID, movedBytes: Self.knownMovedBytes(for: item)))
         } catch {
             throw MoveAttemptError.indeterminate(provenance)
         }
@@ -410,7 +496,7 @@ public final class NativeCleanupService {
     private func entryIdentity(parentFD: Int32, name: String) throws -> EntryIdentity {
         var value = stat()
         guard fstatat(parentFD, name, &value, AT_SYMLINK_NOFOLLOW) == 0 else { throw Error.io(errno) }
-        return EntryIdentity(volume: UInt64(value.st_dev), inode: UInt64(value.st_ino), mode: UInt32(value.st_mode))
+        return EntryIdentity(volume: UInt64(UInt32(bitPattern: value.st_dev)), inode: UInt64(value.st_ino), mode: UInt32(value.st_mode))
     }
 
     private func restore(item: ItemRecord) -> RestoreResult {
@@ -421,10 +507,17 @@ public final class NativeCleanupService {
             let (trashFD, trashID) = try openDirectory(trashDirectory, create: false, purpose: "trash")
             defer { close(trashFD) }
             guard trashID.volume == item.item.volume, trashID == outcome.trashDirectory else { throw Error.unsupported("trash_directory_changed") }
-            let (trashLeafFD, current) = try openRegularFile(parentFD: trashFD, name: trashName)
+            let (trashLeafFD, current): (Int32, FileFingerprint)
+            if item.item.effectiveTargetKind == "application_bundle" {
+                (trashLeafFD, current) = try openDirectoryLeaf(parentFD: trashFD, name: trashName)
+            } else {
+                (trashLeafFD, current) = try openRegularFile(parentFD: trashFD, name: trashName)
+            }
             defer { close(trashLeafFD) }
             guard let saved = outcome.trashFingerprint, Self.stableMatches(current, saved) else { throw Error.unsupported("trash_identity_changed") }
-            let (originalParentFD, parentID) = try openParent(URL(fileURLWithPath: item.item.path))
+            let (originalParentFD, parentID) = item.item.effectiveTargetKind == "application_bundle"
+                ? try openApplicationParent(URL(fileURLWithPath: item.item.path))
+                : try openParent(URL(fileURLWithPath: item.item.path))
             defer { close(originalParentFD) }
             guard parentID == item.item.parent else { throw Error.unsupported("ancestor_replaced") }
             let originalName = URL(fileURLWithPath: item.item.path).lastPathComponent
@@ -447,7 +540,7 @@ public final class NativeCleanupService {
                     crashAfterUndoRenameForTesting = false
                     throw Error.indeterminate("checkpoint_after_restore_rename")
                 }
-                let restored = try regularFileFingerprint(parentFD: originalParentFD, name: originalName)
+                let restored = try targetFingerprint(parentFD: originalParentFD, name: originalName, targetKind: item.item.effectiveTargetKind)
                 guard Self.stableMatches(restored, item.item.fingerprint) else {
                     let unexpected = try entryIdentity(parentFD: originalParentFD, name: originalName)
                     if rollbackUnexpectedRestore(trashFD: trashFD, trashName: trashName, originalParentFD: originalParentFD, originalName: originalName, unexpected: unexpected) {
@@ -496,6 +589,74 @@ public final class NativeCleanupService {
                             fingerprint: fingerprint, logicalBytes: fingerprint.size)
     }
 
+    private func normalizedApplicationBundlePath(_ path: URL) throws -> URL {
+        guard path.isFileURL, path.path.hasPrefix("/") else { throw Error.invalidPath }
+        let normalized = path.standardizedFileURL
+        let parent = normalized.deletingLastPathComponent().path
+        let homeApplications = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true).standardizedFileURL.path
+        guard parent == "/Applications" || parent == homeApplications else { throw Error.protectedPath }
+        guard normalized.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
+              !normalized.lastPathComponent.isEmpty,
+              normalized.lastPathComponent != ".app" else { throw Error.invalidPath }
+        return normalized
+    }
+
+    private func inspectApplication(path: URL, bundleID: String, trash: URL) throws -> ReviewedItem {
+        let (parentFD, parentID) = try openApplicationParent(path)
+        defer { close(parentFD) }
+        let name = path.lastPathComponent
+        let fingerprint = try directoryFingerprint(parentFD: parentFD, name: name)
+        guard fingerprint.owner == 0 || fingerprint.owner == UInt32(getuid()) else { throw Error.untrustedPath }
+        try validateNoPlaceholderDirectory(path: path, parentFD: parentFD, name: name)
+        let appFD = name.withCString { openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard appFD >= 0 else { throw Error.io(errno) }
+        defer { close(appFD) }
+        var openedRoot = stat()
+        guard fstat(appFD, &openedRoot) == 0 else { throw Error.io(errno) }
+        guard UInt64(UInt32(bitPattern: openedRoot.st_dev)) == fingerprint.volume, UInt64(openedRoot.st_ino) == fingerprint.inode else { throw Error.unsupported("source_changed") }
+        let contentsName = "Contents"
+        let contentsFD = contentsName.withCString { openat(appFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard contentsFD >= 0 else { throw Error.io(errno) }
+        defer { close(contentsFD) }
+        var contentsStat = stat()
+        guard fstat(contentsFD, &contentsStat) == 0, (contentsStat.st_mode & S_IFMT) == S_IFDIR else { throw Error.unsupported("invalid_bundle_contents") }
+        if (UInt32(contentsStat.st_flags) & 0x4000_0000) != 0 { throw Error.unsupported("placeholder") }
+        let infoName = "Info.plist"
+        var infoStat = stat()
+        guard fstatat(contentsFD, infoName, &infoStat, AT_SYMLINK_NOFOLLOW) == 0 else { throw Error.io(errno) }
+        guard (infoStat.st_mode & S_IFMT) == S_IFREG,
+              (UInt32(infoStat.st_flags) & 0x4000_0000) == 0,
+              infoStat.st_size >= 0,
+              infoStat.st_size <= 256 * 1024 else { throw Error.unsupported("bounded_info_plist") }
+        let infoFD = infoName.withCString { openat(contentsFD, $0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC) }
+        guard infoFD >= 0 else { throw Error.io(errno) }
+        defer { close(infoFD) }
+        var openedInfo = stat()
+        guard fstat(infoFD, &openedInfo) == 0,
+              (openedInfo.st_mode & S_IFMT) == S_IFREG,
+              Self.exactPreEffectMatches(Self.fingerprint(from: openedInfo), Self.fingerprint(from: infoStat)) else { throw Error.unsupported("info_plist_changed") }
+        var data = Data(capacity: Int(infoStat.st_size))
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+        while data.count < Int(infoStat.st_size) {
+            let wanted = min(buffer.count, Int(infoStat.st_size) - data.count)
+            let count = read(infoFD, &buffer, wanted)
+            if count < 0 { if errno == EINTR { continue }; throw Error.io(errno) }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        var finalInfo = stat()
+        guard fstat(infoFD, &finalInfo) == 0,
+              Self.exactPreEffectMatches(Self.fingerprint(from: finalInfo), Self.fingerprint(from: openedInfo)),
+              data.count == Int(infoStat.st_size),
+              let plistValue = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let plist = plistValue as? [String: Any],
+              let identifier = plist["CFBundleIdentifier"] as? String,
+              identifier == bundleID else { throw Error.unsupported("bundle_identifier_mismatch") }
+        let (trashFD, trashID) = try openDirectory(trash, create: injectedTrashDirectory, purpose: "trash")
+        close(trashFD)
+        return ReviewedItem(path: path.path, parent: parentID, volume: fingerprint.volume, trashVolume: trashID.volume, fingerprint: fingerprint, logicalBytes: nil)
+    }
+
     private func normalizedFilePath(_ path: URL) throws -> URL {
         guard path.isFileURL, path.path.hasPrefix("/") else { throw Error.invalidPath }
         let normalized = path.standardizedFileURL
@@ -527,6 +688,37 @@ public final class NativeCleanupService {
         return try openDirectory(parent, create: false, purpose: "source_parent")
     }
 
+    /// Application admission permits standard macOS `/Applications` ownership
+    /// (`root`) while retaining strict nofollow traversal. Ordinary-file callers
+    /// continue through `openParent` and its current owner/mode guard.
+    private func openApplicationParent(_ path: URL) throws -> (Int32, DirectoryID) {
+        let parent = path.deletingLastPathComponent().standardizedFileURL
+        let homeApplications = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true).standardizedFileURL
+        let expectedOwner: UInt32
+        if parent.path == "/Applications" {
+            expectedOwner = 0
+        } else if parent.path == homeApplications.path {
+            expectedOwner = UInt32(getuid())
+        } else {
+            throw Error.protectedPath
+        }
+        let components = parent.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var fd = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw Error.io(errno) }
+        for component in components {
+            let next = openat(fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else { let code = errno; close(fd); throw code == ELOOP ? Error.untrustedPath : Error.io(code) }
+            close(fd)
+            fd = next
+        }
+        var value = stat()
+        guard fstat(fd, &value) == 0 else { let code = errno; close(fd); throw Error.io(code) }
+        guard (value.st_mode & S_IFMT) == S_IFDIR, UInt32(value.st_uid) == expectedOwner else {
+            close(fd); throw Error.untrustedPath
+        }
+        return (fd, DirectoryID(volume: UInt64(UInt32(bitPattern: value.st_dev)), inode: UInt64(value.st_ino)))
+    }
+
     private func openDirectory(_ url: URL, create: Bool, purpose: String) throws -> (Int32, DirectoryID) {
         let normalized = try normalizedDirectoryPath(url)
         let components = normalized.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -548,7 +740,7 @@ public final class NativeCleanupService {
             close(fd); throw Error.untrustedPath
         }
         _ = purpose
-        return (fd, DirectoryID(volume: UInt64(value.st_dev), inode: UInt64(value.st_ino)))
+        return (fd, DirectoryID(volume: UInt64(UInt32(bitPattern: value.st_dev)), inode: UInt64(value.st_ino)))
     }
 
     private func regularFileFingerprint(parentFD: Int32, name: String) throws -> FileFingerprint {
@@ -570,6 +762,48 @@ public final class NativeCleanupService {
     private func nonHydratingRegularFileFingerprint(parentFD: Int32, name: String) throws -> FileFingerprint {
         try validateNoPlaceholderMetadata(parentFD: parentFD, name: name)
         return try regularFileFingerprint(parentFD: parentFD, name: name)
+    }
+
+    private func nonHydratingTargetFingerprint(parentFD: Int32, name: String, targetKind: String) throws -> FileFingerprint {
+        if targetKind == "application_bundle" {
+            try validateNoPlaceholderDirectoryMetadata(parentFD: parentFD, name: name)
+            return try directoryFingerprint(parentFD: parentFD, name: name)
+        }
+        return try nonHydratingRegularFileFingerprint(parentFD: parentFD, name: name)
+    }
+
+    private func targetFingerprint(parentFD: Int32, name: String, targetKind: String) throws -> FileFingerprint {
+        targetKind == "application_bundle"
+            ? try directoryFingerprint(parentFD: parentFD, name: name)
+            : try regularFileFingerprint(parentFD: parentFD, name: name)
+    }
+
+    private func directoryFingerprint(parentFD: Int32, name: String) throws -> FileFingerprint {
+        var value = stat()
+        guard fstatat(parentFD, name, &value, AT_SYMLINK_NOFOLLOW) == 0 else { throw Error.io(errno) }
+        guard (value.st_mode & S_IFMT) == S_IFDIR else {
+            if (value.st_mode & S_IFMT) == S_IFLNK { throw Error.unsupported("symlink") }
+            throw Error.unsupported("not_directory")
+        }
+        let fd = name.withCString { openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard fd >= 0 else { throw Error.io(errno) }
+        defer { close(fd) }
+        var opened = stat()
+        guard fstat(fd, &opened) == 0 else { throw Error.io(errno) }
+        guard opened.st_dev == value.st_dev, opened.st_ino == value.st_ino else { throw Error.unsupported("source_changed") }
+        return Self.fingerprint(from: opened)
+    }
+
+    private func openDirectoryLeaf(parentFD: Int32, name: String) throws -> (Int32, FileFingerprint) {
+        let fd = name.withCString { openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard fd >= 0 else { throw Error.io(errno) }
+        do {
+            let fingerprint = try directoryFingerprint(parentFD: parentFD, name: name)
+            return (fd, fingerprint)
+        } catch {
+            close(fd)
+            throw error
+        }
     }
 
     private func openRegularFile(parentFD: Int32, name: String) throws -> (Int32, FileFingerprint) {
@@ -602,6 +836,22 @@ public final class NativeCleanupService {
         }
         // SF_DATALESS is intentionally read from lstat metadata before O_RDONLY;
         // opening a dataless File Provider item can hydrate it.
+        if (UInt32(value.st_flags) & 0x4000_0000) != 0 { throw Error.unsupported("placeholder") }
+    }
+
+    private func validateNoPlaceholderDirectory(path: URL, parentFD: Int32, name: String) throws {
+        try validateNoPlaceholderDirectoryMetadata(parentFD: parentFD, name: name)
+        let values = try path.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        if values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current { throw Error.unsupported("placeholder") }
+    }
+
+    private func validateNoPlaceholderDirectoryMetadata(parentFD: Int32, name: String) throws {
+        var value = stat()
+        guard fstatat(parentFD, name, &value, AT_SYMLINK_NOFOLLOW) == 0 else { throw Error.io(errno) }
+        guard (value.st_mode & S_IFMT) == S_IFDIR else {
+            if (value.st_mode & S_IFMT) == S_IFLNK { throw Error.unsupported("symlink") }
+            throw Error.unsupported("not_directory")
+        }
         if (UInt32(value.st_flags) & 0x4000_0000) != 0 { throw Error.unsupported("placeholder") }
     }
 
@@ -657,22 +907,22 @@ public final class NativeCleanupService {
                 hasStarted = true
                 let item = record.items[index]
                 guard let plannedName = item.plannedTrashName, let plannedDirectory = item.plannedTrashDirectory, plannedDirectory == trashID else {
-                    record.items[index].outcome = MoveResult(item: item.item, status: "indeterminate", reason: "missing_destination_provenance", trashName: item.plannedTrashName, trashPath: item.plannedTrashPath, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: item.plannedTrashDirectory, movedBytes: 0)
+                    record.items[index].outcome = MoveResult(item: item.item, status: "indeterminate", reason: "missing_destination_provenance", trashName: item.plannedTrashName, trashPath: item.plannedTrashPath, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: item.plannedTrashDirectory, movedBytes: Self.knownMovedBytes(for: item.item))
                     changed = true
                     continue
                 }
-                let source = try? existingFingerprint(path: item.item.path)
-                let trash = try? nonHydratingRegularFileFingerprint(parentFD: trashFD, name: plannedName)
+                let source = try? existingFingerprint(path: item.item.path, targetKind: item.item.effectiveTargetKind)
+                let trash = try? nonHydratingTargetFingerprint(parentFD: trashFD, name: plannedName, targetKind: item.item.effectiveTargetKind)
                 if let source, source.parent == item.item.parent, Self.stableMatches(source.fingerprint, item.item.fingerprint), trash == nil {
                     record.items[index].state = "completed"
-                    record.items[index].outcome = MoveResult(item: item.item, status: "not_moved", reason: "source_retained", trashName: plannedName, trashPath: item.plannedTrashPath, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: trashID, movedBytes: 0)
+                    record.items[index].outcome = MoveResult(item: item.item, status: "not_moved", reason: "source_retained", trashName: plannedName, trashPath: item.plannedTrashPath, trashFingerprint: nil, trashEntryIdentity: nil, trashDirectory: trashID, movedBytes: Self.knownMovedBytes(for: item.item))
                     changed = true
                 } else if source == nil, let trash, Self.stableMatches(trash, item.item.fingerprint) {
                     record.items[index].state = "completed"
                     record.items[index].outcome = MoveResult(item: item.item, status: "moved", reason: "recovered_after_restart", trashName: plannedName, trashPath: item.plannedTrashPath, trashFingerprint: trash, trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: plannedName), trashDirectory: trashID, movedBytes: item.item.logicalBytes)
                     changed = true
                 } else {
-                    record.items[index].outcome = MoveResult(item: item.item, status: "indeterminate", reason: "restart_reconciliation_failed", trashName: plannedName, trashPath: item.plannedTrashPath, trashFingerprint: trash, trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: plannedName), trashDirectory: trashID, movedBytes: 0)
+                    record.items[index].outcome = MoveResult(item: item.item, status: "indeterminate", reason: "restart_reconciliation_failed", trashName: plannedName, trashPath: item.plannedTrashPath, trashFingerprint: trash, trashEntryIdentity: try? entryIdentity(parentFD: trashFD, name: plannedName), trashDirectory: trashID, movedBytes: Self.knownMovedBytes(for: item.item))
                     changed = true
                 }
             }
@@ -690,11 +940,11 @@ public final class NativeCleanupService {
         if changed { try persistState() }
     }
 
-    private func existingFingerprint(path: String) throws -> (parent: DirectoryID, fingerprint: FileFingerprint) {
+    private func existingFingerprint(path: String, targetKind: String = "regular_file") throws -> (parent: DirectoryID, fingerprint: FileFingerprint) {
         let url = URL(fileURLWithPath: path)
-        let (parentFD, parentID) = try openParent(url)
+        let (parentFD, parentID) = targetKind == "application_bundle" ? try openApplicationParent(url) : try openParent(url)
         defer { close(parentFD) }
-        let fingerprint = try nonHydratingRegularFileFingerprint(parentFD: parentFD, name: url.lastPathComponent)
+        let fingerprint = try nonHydratingTargetFingerprint(parentFD: parentFD, name: url.lastPathComponent, targetKind: targetKind)
         return (parentID, fingerprint)
     }
 
@@ -714,7 +964,7 @@ public final class NativeCleanupService {
                     changed = true
                     continue
                 }
-                let original = try? existingFingerprint(path: item.item.path)
+                let original = try? existingFingerprint(path: item.item.path, targetKind: item.item.effectiveTargetKind)
                 var trashEntry = stat()
                 let trashResult = fstatat(trashFD, trashName, &trashEntry, AT_SYMLINK_NOFOLLOW)
                 let trashAbsent = trashResult != 0 && errno == ENOENT
@@ -792,12 +1042,22 @@ public final class NativeCleanupService {
         ByteCountFormatter.string(fromByteCount: Int64(min(bytes, UInt64(Int64.max))), countStyle: .file)
     }
 
+    private static func knownMovedBytes(for item: ItemData) -> UInt64? {
+        item.effectiveTargetKind == "application_bundle" ? nil : 0
+    }
+
     private static func stableMatches(_ lhs: FileFingerprint, _ rhs: FileFingerprint) -> Bool {
+        // Rename changes ctime. This identity/metadata set is stable across the
+        // source↔Trash rename and is used for post-effect verification/recovery.
         lhs.volume == rhs.volume && lhs.inode == rhs.inode && lhs.owner == rhs.owner && lhs.size == rhs.size && lhs.mode == rhs.mode && lhs.flags == rhs.flags && lhs.mtimeSeconds == rhs.mtimeSeconds && lhs.mtimeNanoseconds == rhs.mtimeNanoseconds
     }
 
+    private static func exactPreEffectMatches(_ lhs: FileFingerprint, _ rhs: FileFingerprint) -> Bool {
+        stableMatches(lhs, rhs) && lhs.ctimeSeconds == rhs.ctimeSeconds && lhs.ctimeNanoseconds == rhs.ctimeNanoseconds
+    }
+
     private static func fingerprint(from value: stat) -> FileFingerprint {
-        FileFingerprint(volume: UInt64(value.st_dev), inode: UInt64(value.st_ino), owner: UInt32(value.st_uid), size: UInt64(value.st_size), mode: UInt32(value.st_mode), flags: UInt32(value.st_flags), mtimeSeconds: Int64(value.st_mtimespec.tv_sec), mtimeNanoseconds: Int64(value.st_mtimespec.tv_nsec), ctimeSeconds: Int64(value.st_ctimespec.tv_sec), ctimeNanoseconds: Int64(value.st_ctimespec.tv_nsec))
+        FileFingerprint(volume: UInt64(UInt32(bitPattern: value.st_dev)), inode: UInt64(value.st_ino), owner: UInt32(value.st_uid), size: UInt64(value.st_size), mode: UInt32(value.st_mode), flags: UInt32(value.st_flags), mtimeSeconds: Int64(value.st_mtimespec.tv_sec), mtimeNanoseconds: Int64(value.st_mtimespec.tv_nsec), ctimeSeconds: Int64(value.st_ctimespec.tv_sec), ctimeNanoseconds: Int64(value.st_ctimespec.tv_nsec))
     }
 
     private static func canonicalFixtureLeaf(_ url: URL) -> URL {
@@ -829,7 +1089,18 @@ private struct ReviewedPlanData: Codable {
     let id: String
     let createdAt: UInt64
     let expiresAt: UInt64
+    let operation: String?
+    let bundleID: String?
     let items: [ItemData]
+
+    init(id: String, createdAt: UInt64, expiresAt: UInt64, operation: String? = nil, bundleID: String? = nil, items: [ItemData]) {
+        self.id = id
+        self.createdAt = createdAt
+        self.expiresAt = expiresAt
+        self.operation = operation
+        self.bundleID = bundleID
+        self.items = items
+    }
 }
 
 private struct PlanRecord: Codable {
@@ -864,15 +1135,19 @@ private struct ItemData: Codable, Equatable {
     let parent: DirectoryID
     let volume: UInt64
     let fingerprint: FileFingerprint
-    let logicalBytes: UInt64
+    let logicalBytes: UInt64?
+    let targetKind: String?
 
-    init(_ item: ReviewedItem) {
+    init(_ item: ReviewedItem, targetKind: String? = nil) {
         self.path = item.path
         self.parent = item.parent
         self.volume = item.volume
         self.fingerprint = item.fingerprint
         self.logicalBytes = item.logicalBytes
+        self.targetKind = targetKind
     }
+
+    var effectiveTargetKind: String { targetKind ?? "regular_file" }
 }
 
 private struct DirectoryID: Codable, Equatable {
@@ -905,9 +1180,9 @@ private struct ReviewedItem {
     let volume: UInt64
     let trashVolume: UInt64
     let fingerprint: FileFingerprint
-    let logicalBytes: UInt64
+    let logicalBytes: UInt64?
 
-    init(path: String, parent: DirectoryID, volume: UInt64, trashVolume: UInt64, fingerprint: FileFingerprint, logicalBytes: UInt64) {
+    init(path: String, parent: DirectoryID, volume: UInt64, trashVolume: UInt64, fingerprint: FileFingerprint, logicalBytes: UInt64?) {
         self.path = path; self.parent = parent; self.volume = volume; self.trashVolume = trashVolume; self.fingerprint = fingerprint; self.logicalBytes = logicalBytes
     }
 }
@@ -921,10 +1196,12 @@ private struct MoveResult: Codable {
     let trashFingerprint: FileFingerprint?
     let trashEntryIdentity: EntryIdentity?
     let trashDirectory: DirectoryID?
-    let movedBytes: UInt64
+    let movedBytes: UInt64?
 
     var dictionary: [String: Any] {
-        var value: [String: Any] = ["path": item.path, "status": status, "logical_bytes": item.logicalBytes, "moved_bytes": movedBytes]
+        var value: [String: Any] = ["path": item.path, "status": status, "target_kind": item.effectiveTargetKind]
+        if let logicalBytes = item.logicalBytes { value["logical_bytes"] = logicalBytes }
+        if let movedBytes { value["moved_bytes"] = movedBytes }
         if let reason { value["reason"] = reason }
         if let trashPath { value["trash_path"] = trashPath }
         return value

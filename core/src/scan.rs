@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::UNIX_EPOCH;
 
 use crate::platform;
 
@@ -137,6 +138,22 @@ fn inspect_with(
     };
     let native = native(path, &metadata, kind);
     let mut reasons = Vec::new();
+    let created_at = metadata
+        .created()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    if created_at.is_none() {
+        reasons.push("created_at unavailable or before Unix epoch".to_owned());
+    }
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    if modified_at.is_none() {
+        reasons.push("modified_at unavailable or before Unix epoch".to_owned());
+    }
     let (logical_size, allocation_size, file_id) = match kind {
         EntryKind::File => {
             let logical = if native.is_placeholder {
@@ -198,6 +215,8 @@ fn inspect_with(
             allocation_size,
             file_id,
             clone_id: None,
+            created_at,
+            modified_at,
             is_placeholder: native.is_placeholder,
             metadata_complete,
         },

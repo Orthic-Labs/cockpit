@@ -30,6 +30,8 @@ fn meta(kind: EntryKind, volume: &str, id: Option<&str>, size: Option<u64>) -> F
             id: id.into(),
         }),
         clone_id: None,
+        created_at: None,
+        modified_at: None,
         is_placeholder: false,
         metadata_complete: true,
     }

@@ -941,7 +941,7 @@
       },
       {
         "file": "core/src/scan.rs",
-        "sha256": "1d8620832f984e23ecd878fc2e34deb7a1c26f492efec42589175c004a6cd423",
+        "sha256": "e1e1885c8e1505236c8db26721e5cb9ee609654bb2f3c8b9056f21cb6b1ec77c",
         "declared_test_names": [
           "swapped_directory_is_refused_before_listing"
         ],
@@ -967,7 +967,7 @@
       },
       {
         "file": "core/tests/apps.rs",
-        "sha256": "70a74d4fd2c8a62d1390d6dcbbbdf435a2a6e207afa40354332fc3a595672121",
+        "sha256": "ec38ab5ab38f9230f4a5f5fac1cbb20378ab5f0441d66b7907d8ad02bb36fd05",
         "declared_test_names": [
           "ownership_requires_exact_identity_and_excludes_shared_user_data",
           "projector_uses_supplied_records_and_deduplicates_overlap_and_hardlinks",
@@ -1062,7 +1062,7 @@
       },
       {
         "file": "core/tests/folder_growth.rs",
-        "sha256": "44a28423ab65a5f02a3eee2611f1553b5bd79607ef7e2a15d7be83136372352d",
+        "sha256": "916c0837425c339ac9dae21374b9d90b87e4419cbe4f33ca2e9d0a38f012168f",
         "declared_test_names": [
           "signed_changes_added_removed_and_deterministic_order_are_reported",
           "incomplete_snapshot_refuses_folder_totals",
@@ -1162,7 +1162,7 @@
       },
       {
         "file": "core/tests/platform_metadata.rs",
-        "sha256": "592b74c86dd146fe249b72759bcf550a846f66a84a9a1b402b58b243a81fc5de",
+        "sha256": "2f31e634a17f3bd4df36ef0942eb8d311cfbd029fc233f5bb1784969d71c7271",
         "declared_test_names": [
           "same_inode_text_on_different_volumes_is_not_a_hard_link",
           "missing_native_fields_are_reported_with_reasons",
@@ -1248,7 +1248,7 @@
       },
       {
         "file": "core/tests/scan_safety.rs",
-        "sha256": "8f2eeb27362c611ccd032220c955fc35a1c375f3526dbb65b0d688919d5de5d9",
+        "sha256": "e0a4973534174076b454aca7044468507d621790ca3b1ce507aafe21edb2c643",
         "declared_test_names": [
           "denied_ancestor_blocks_root_and_is_not_reported_as_symlink",
           "placeholder_ancestor_blocks_root",
@@ -1274,7 +1274,7 @@
       },
       {
         "file": "core/tests/storage_browser.rs",
-        "sha256": "7ad2cc6dda5e9d80e77676bdf2e082be3a23be2d08cc11e111992e4c2ae1c105",
+        "sha256": "937c7b14e33ef5561aebd825dd92a4f3ef4b4fbc3cf00727f782b161327f2311",
         "declared_test_names": [
           "search_includes_hidden_files_filters_extension_and_paginates",
           "malformed_query_and_limits_are_rejected",
@@ -1287,7 +1287,7 @@
       },
       {
         "file": "core/tests/storage.rs",
-        "sha256": "410f880eb0a5c1161caa68d4c6d1219ee19960b498e3b2f67b9067507fbc2e5f",
+        "sha256": "d5af0facebdc03c0190386f38f6c18e76c27cf71662e39c6b6d8bdbafc6f14ae",
         "declared_test_names": [
           "hardlinks_are_attributed_once_in_lexical_order",
           "entry_limit_is_explicitly_incomplete",

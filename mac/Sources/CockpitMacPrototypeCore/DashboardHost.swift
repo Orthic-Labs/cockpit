@@ -365,8 +365,10 @@ public final class DashboardHost: NSObject {
     private let cleanupService: NativeCleanupService
     private let applicationDetails: NativeApplicationDetails
     private let applicationInspection: NativeApplicationInspection
+    private let applicationUpdates = NativeApplicationUpdates()
     private let filenameIndex: NativeFilenameIndex
     private var trustedApplications: [String: String] = [:]
+    private var reviewedApplications: [String: (path: String, bundleID: String)] = [:]
     private var trustedSnapshotID: String?
     private var trustedRoot: URL?
     private var trustedEntries: [String: [String: Any]] = [:]
@@ -610,6 +612,8 @@ public final class DashboardHost: NSObject {
             if action == "filename_index_status" { return filenameIndex.statusPayload() }
             return try filenameIndex.query(payload: payload)
         case "refresh_apps":
+            reviewedApplications.removeAll()
+            cleanupService.revokeReviewedPlans()
             var apps = try await nativeServices.appsPayload()
             let rows = apps["apps"] as? [[String: Any]] ?? []
             trustedApplications = Dictionary(rows.compactMap { row in
@@ -640,6 +644,42 @@ public final class DashboardHost: NSObject {
                 details["inspection"] = ["available": false, "reason": "Process inspection unavailable: \(error.localizedDescription)", "coverage": "unknown"]
             }
             return details
+        case "check_app_updates":
+            guard let path = payload["path"] as? String, let bundle = trustedApplications[path] else {
+                throw ScanFailure.invalidJSON("Refresh inventory & select an application first")
+            }
+            var result = try await applicationUpdates.check(applicationPath: URL(fileURLWithPath: path), expectedBundleID: bundle)
+            result["path"] = path
+            return result
+        case "review_app_uninstall":
+            guard let path = payload["path"] as? String, let bundle = trustedApplications[path] else {
+                throw ScanFailure.invalidJSON("Refresh inventory & select an application first")
+            }
+            let url = URL(fileURLWithPath: path)
+            try NativeApplicationLiveness.requireNotRunning(bundle: url)
+            let result = try cleanupService.reviewApplication(bundle: url, bundleID: bundle, presenting: window)
+            // Native confirmation can stay open while another process starts.
+            // Repeat complete admission after confirmation & again at claim.
+            try NativeApplicationLiveness.requireNotRunning(bundle: url)
+            guard let plan = result["plan_id"] as? String else {
+                throw ScanFailure.invalidJSON("Application review did not return a plan")
+            }
+            reviewedApplications[plan] = (path, bundle)
+            return result
+        case "apply_app_uninstall":
+            guard let plan = payload["plan_id"] as? String,
+                  let reviewed = reviewedApplications[plan],
+                  trustedApplications[reviewed.path] == reviewed.bundleID else {
+                throw ScanFailure.invalidJSON("Review selected application again")
+            }
+            let result = try cleanupService.applyApplication(planID: plan) {
+                try NativeApplicationLiveness.requireNotRunning(bundle: URL(fileURLWithPath: reviewed.path))
+            }
+            reviewedApplications.removeValue(forKey: plan)
+            var response = result
+            response["cleanup"] = try cleanupService.historyPayload()
+            trustedApplications.removeValue(forKey: reviewed.path)
+            return response
         case "refresh_monitor":
             let before = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
             var monitor = try await nativeServices.monitorPayload()

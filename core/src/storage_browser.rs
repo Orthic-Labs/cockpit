@@ -23,20 +23,25 @@ pub const MAX_PAGE_LIMIT: usize = 1_000;
 /// Maximum offset accepted by a browser operation.
 pub const MAX_PAGE_OFFSET: usize = 1_000_000;
 
-/// Dates are deliberately represented as unavailable: ScanReport has no date
-/// fields, and this adapter must not inspect paths or file contents to invent
-/// them.
+/// Filesystem timestamps carried by scan metadata. Missing or pre-Unix values
+/// remain explicit unknowns; browser code never rereads paths.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DateAvailability {
     pub available: bool,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<u64>,
 }
 
 impl Default for DateAvailability {
     fn default() -> Self {
         Self {
             available: false,
-            reason: "dates are unavailable in ScanReport metadata".into(),
+            reason: "dates are unavailable in filesystem metadata".into(),
+            created_at: None,
+            modified_at: None,
         }
     }
 }
@@ -289,7 +294,23 @@ fn item_from_entry(entry: &ScannedEntry) -> StorageItem {
         is_placeholder: entry.metadata.is_placeholder,
         accounting_owner: entry.accounting_owner.clone(),
         reclaim: entry.reclaim.clone(),
-        dates: DateAvailability::default(),
+        dates: dates_from_metadata(&entry.metadata),
+    }
+}
+
+fn dates_from_metadata(metadata: &crate::model::FileMetadata) -> DateAvailability {
+    let (available, reason) = match (metadata.created_at, metadata.modified_at) {
+        (Some(_), Some(_)) => (true, "filesystem metadata".to_owned()),
+        (Some(_), None) | (None, Some(_)) => {
+            (true, "one filesystem timestamp unavailable".to_owned())
+        }
+        (None, None) => (false, "dates are unavailable in filesystem metadata".to_owned()),
+    };
+    DateAvailability {
+        available,
+        reason,
+        created_at: metadata.created_at,
+        modified_at: metadata.modified_at,
     }
 }
 
@@ -623,6 +644,9 @@ pub fn inspect(report: &ScanReport, path: &Path) -> Result<StorageInspection, St
     let share = entry
         .map(|entry| share_info(entry, &entries))
         .unwrap_or_default();
+    let dates = entry
+        .map(|entry| dates_from_metadata(&entry.metadata))
+        .unwrap_or_default();
     Ok(StorageInspection {
         path: path.to_path_buf(),
         name: basename(path),
@@ -635,7 +659,7 @@ pub fn inspect(report: &ScanReport, path: &Path) -> Result<StorageInspection, St
         incomplete: report_incomplete(report) || metadata_incomplete,
         counts,
         share,
-        dates: DateAvailability::default(),
+        dates,
     })
 }
 

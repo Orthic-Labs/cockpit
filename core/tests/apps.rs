@@ -38,6 +38,8 @@ fn entry(path: &str, id: &str, logical: u64, allocation: u64) -> ScannedEntry {
                 id: id.into(),
             }),
             clone_id: None,
+            created_at: None,
+            modified_at: None,
             is_placeholder: false,
             metadata_complete: true,
         },

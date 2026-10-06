@@ -6,6 +6,7 @@ import Foundation
 public enum NativeFilenameIndexError: Error, LocalizedError {
     case invalidRoot
     case rootUnavailable
+    case unsupportedNetwork
     case invalidQuery(String)
     case invalidStatePath
     case persistence
@@ -14,6 +15,7 @@ public enum NativeFilenameIndexError: Error, LocalizedError {
         switch self {
         case .invalidRoot: return "Selected root must be an absolute local directory"
         case .rootUnavailable: return "Selected root is unavailable or unreadable"
+        case .unsupportedNetwork: return "Filename index is unavailable for network filesystems"
         case .invalidQuery(let message): return message
         case .invalidStatePath: return "Filename-index state path is unsafe"
         case .persistence: return "Filename-index state could not be read or written"
@@ -173,6 +175,11 @@ public final class NativeFilenameIndex {
         persistenceReason = nil
         do {
             try persistState()
+        } catch NativeFilenameIndexError.unsupportedNetwork {
+            markUnsupportedNetwork()
+            var payload = statusPayload()
+            payload["refreshed"] = false
+            return payload
         } catch {
             persistenceReason = "state_persistence_unavailable"
         }
@@ -180,7 +187,13 @@ public final class NativeFilenameIndex {
         if stream == nil {
             appendReason("change_journal_unavailable")
         }
-        try? persistState()
+        do {
+            try persistState()
+        } catch NativeFilenameIndexError.unsupportedNetwork {
+            markUnsupportedNetwork()
+        } catch {
+            persistenceReason = "state_persistence_unavailable"
+        }
         var payload = statusPayload()
         payload["refreshed"] = true
         return payload
@@ -291,7 +304,8 @@ public final class NativeFilenameIndex {
     public func statusPayload() -> [String: Any] {
         var result: [String: Any] = [
             "schema_version": Self.schemaVersion,
-            "available": rootPath != nil,
+            "available": rootPath != nil && staleReason != "unsupported_network"
+                && !incompleteReasons.contains("unsupported_network"),
             "root": rootPath ?? NSNull(),
             "entry_count": rows.count,
             "incomplete": isIncomplete,
@@ -316,6 +330,15 @@ public final class NativeFilenameIndex {
 
     private func appendReason(_ reason: String) {
         if !incompleteReasons.contains(reason) { incompleteReasons.append(reason) }
+    }
+
+    private func markUnsupportedNetwork() {
+        stopStream()
+        staleReason = "unsupported_network"
+        rescanRequired = true
+        persistedReplayPending = false
+        persistedStateResumeEligible = false
+        appendReason("unsupported_network")
     }
 
     private func dateAvailabilityPayload() -> [String: Any] {
@@ -349,6 +372,17 @@ public final class NativeFilenameIndex {
     private func startStream(from cursor: FSEventStreamEventId) {
         guard let rootPath else { return }
         stopStream()
+        do {
+            _ = try Self.validateRoot(URL(fileURLWithPath: rootPath))
+        } catch NativeFilenameIndexError.unsupportedNetwork {
+            markUnsupportedNetwork()
+            return
+        } catch {
+            appendReason("root_unavailable")
+            staleReason = "root_unavailable"
+            rescanRequired = true
+            return
+        }
         let contextObject = StreamContext(owner: self, generation: lifecycleToken)
         streamContext = contextObject
         var context = FSEventStreamContext(
@@ -410,7 +444,21 @@ public final class NativeFilenameIndex {
 
     private func consume(events: [Event], generation: UInt64) {
         guard generation == lifecycleToken, stream != nil, let rootPath, !events.isEmpty else { return }
-        guard Self.rootIdentity(path: rootPath).map({ $0.device == rootDevice && $0.fileID == rootFileID }) == true else {
+        let currentRoot: RootInfo
+        do {
+            currentRoot = try Self.validateRoot(URL(fileURLWithPath: rootPath))
+        } catch NativeFilenameIndexError.unsupportedNetwork {
+            markUnsupportedNetwork()
+            return
+        } catch {
+            staleReason = "root_changed"
+            rescanRequired = true
+            persistedReplayPending = false
+            appendReason("root_changed")
+            try? persistState()
+            return
+        }
+        guard currentRoot.device == rootDevice, currentRoot.fileID == rootFileID else {
             staleReason = "root_changed"
             rescanRequired = true
             persistedReplayPending = false
@@ -464,6 +512,10 @@ public final class NativeFilenameIndex {
         }
         staleReason = "change_journal_update_pending"
         let result = applyIncremental(paths: affected, root: URL(fileURLWithPath: rootPath))
+        if result.incompleteReasons.contains("unsupported_network") {
+            markUnsupportedNetwork()
+            return
+        }
         rows = result.rows
         incompleteReasons = Array(Set(incompleteReasons + result.incompleteReasons)).sorted()
         if historyDone && persistedReplayPending {
@@ -483,6 +535,15 @@ public final class NativeFilenameIndex {
     private func applyIncremental(paths: Set<String>, root: URL) -> EnumerationResult {
         var next = rows
         var reasons: [String] = []
+        do {
+            _ = try Self.validateRoot(root)
+        } catch NativeFilenameIndexError.unsupportedNetwork {
+            return EnumerationResult(rows: next, cursor: cursor ?? 0,
+                                     incompleteReasons: ["unsupported_network"])
+        } catch {
+            return EnumerationResult(rows: next, cursor: cursor ?? 0,
+                                     incompleteReasons: ["root_unavailable"])
+        }
         let deadline = ProcessInfo.processInfo.systemUptime + Self.maxScanSeconds
         for path in paths.sorted() {
             if ProcessInfo.processInfo.systemUptime >= deadline {
@@ -490,8 +551,17 @@ public final class NativeFilenameIndex {
                 break
             }
             guard isWithinRoot(path, root: root.path) else { continue }
-            do { try Self.validateNoFollowAncestors(URL(fileURLWithPath: path).deletingLastPathComponent().path) }
-            catch { reasons.append("ancestor_unavailable_or_replaced"); continue }
+            do {
+                let ancestor = try Self.validateNoFollowAncestors(
+                    URL(fileURLWithPath: path).deletingLastPathComponent().path)
+                let local = Self.isLocalFileSystem(ancestor)
+                close(ancestor)
+                guard local else { reasons.append("unsupported_network"); continue }
+            } catch { reasons.append("ancestor_unavailable_or_replaced"); continue }
+            if let localDirectory = Self.localDirectoryStatus(path), !localDirectory {
+                reasons.append("unsupported_network")
+                continue
+            }
             let url = URL(fileURLWithPath: path)
             var value = stat()
             if lstat(path, &value) != 0 {
@@ -544,6 +614,21 @@ public final class NativeFilenameIndex {
             let state = try decoder.decode(PersistedState.self, from: data)
             guard state.schemaVersion == Self.schemaVersion, state.rows.count <= Self.maxEntries,
                   Self.validatePersistedState(state) else { throw NativeFilenameIndexError.persistence }
+            do {
+                _ = try Self.validateRoot(URL(fileURLWithPath: state.root))
+            } catch NativeFilenameIndexError.unsupportedNetwork {
+                rows = state.rows
+                rootPath = state.root
+                rootDevice = state.rootDevice
+                rootFileID = state.rootFileID
+                cursor = state.cursor
+                incompleteReasons = Array(Set(state.incompleteReasons + ["unsupported_network"])).sorted()
+                staleReason = "unsupported_network"
+                rescanRequired = true
+                persistedReplayPending = false
+                persistedStateResumeEligible = false
+                return
+            }
             rows = state.rows
             rootPath = state.root
             rootDevice = state.rootDevice
@@ -566,6 +651,13 @@ public final class NativeFilenameIndex {
 
     private func persistState() throws {
         guard let rootPath else { return }
+        do {
+            _ = try Self.validateRoot(URL(fileURLWithPath: rootPath))
+        } catch NativeFilenameIndexError.unsupportedNetwork {
+            throw NativeFilenameIndexError.unsupportedNetwork
+        } catch {
+            // Preserve stale/root-changed state even after local root disappearance.
+        }
         let state = PersistedState(schemaVersion: Self.schemaVersion, root: rootPath,
                                    cursor: cursor ?? 0, rootDevice: rootDevice, rootFileID: rootFileID,
                                    rows: Array(rows.prefix(Self.maxEntries)),
@@ -707,7 +799,9 @@ public final class NativeFilenameIndex {
         guard root.isFileURL, root.path.hasPrefix("/"), root.path != "/",
               !root.path.contains("\0") else { throw NativeFilenameIndexError.invalidRoot }
         let selected = root.standardizedFileURL
-        try validateNoFollowAncestors(selected.path)
+        let descriptor = try validateNoFollowAncestors(selected.path)
+        defer { close(descriptor) }
+        guard isLocalFileSystem(descriptor) else { throw NativeFilenameIndexError.unsupportedNetwork }
         var value = stat()
         guard lstat(selected.path, &value) == 0, (value.st_mode & S_IFMT) == S_IFDIR else {
             throw NativeFilenameIndexError.rootUnavailable
@@ -718,14 +812,7 @@ public final class NativeFilenameIndex {
         return RootInfo(url: selected, device: UInt64(UInt32(bitPattern: value.st_dev)), fileID: UInt64(value.st_ino))
     }
 
-    nonisolated private static func rootIdentity(path: String) -> (device: UInt64, fileID: UInt64)? {
-        var value = stat()
-        guard lstat(path, &value) == 0, (value.st_mode & S_IFMT) == S_IFDIR,
-              (UInt32(value.st_flags) & dataLessFlag) == 0 else { return nil }
-        return (UInt64(UInt32(bitPattern: value.st_dev)), UInt64(value.st_ino))
-    }
-
-    nonisolated private static func validateNoFollowAncestors(_ path: String) throws {
+    nonisolated private static func validateNoFollowAncestors(_ path: String) throws -> Int32 {
         var descriptor = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else { throw NativeFilenameIndexError.rootUnavailable }
         for component in path.split(separator: "/", omittingEmptySubsequences: true) {
@@ -738,12 +825,27 @@ public final class NativeFilenameIndex {
             close(descriptor)
             descriptor = next
         }
-        close(descriptor)
+        return descriptor
+    }
+
+    nonisolated private static func isLocalFileSystem(_ descriptor: Int32) -> Bool {
+        var fileSystem = statfs()
+        guard fstatfs(descriptor, &fileSystem) == 0 else { return false }
+        return (fileSystem.f_flags & UInt32(MNT_LOCAL)) != 0
+    }
+
+    nonisolated private static func localDirectoryStatus(_ path: String) -> Bool? {
+        guard let descriptor = try? validateNoFollowAncestors(path) else { return nil }
+        defer { close(descriptor) }
+        return isLocalFileSystem(descriptor)
     }
 
     nonisolated private static func enumerate(root: URL, stateDirectory: URL, deadline: TimeInterval,
                                               cursor: FSEventStreamEventId,
                                               entryLimit: Int = NativeFilenameIndex.maxEntries) throws -> EnumerationResult {
+        let rootDescriptor = try validateNoFollowAncestors(root.path)
+        defer { close(rootDescriptor) }
+        guard isLocalFileSystem(rootDescriptor) else { throw NativeFilenameIndexError.unsupportedNetwork }
         var rootStat = stat()
         guard lstat(root.path, &rootStat) == 0, (rootStat.st_mode & S_IFMT) == S_IFDIR else {
             throw NativeFilenameIndexError.rootUnavailable
@@ -772,8 +874,25 @@ public final class NativeFilenameIndex {
                 enumerator.skipDescendants()
                 continue
             }
-            do { try validateNoFollowAncestors(url.deletingLastPathComponent().path) }
-            catch { reasons.append("ancestor_unavailable_or_replaced"); enumerator.skipDescendants(); continue }
+            do {
+                let ancestor = try validateNoFollowAncestors(url.deletingLastPathComponent().path)
+                let local = isLocalFileSystem(ancestor)
+                close(ancestor)
+                guard local else {
+                    reasons.append("unsupported_network")
+                    enumerator.skipDescendants()
+                    continue
+                }
+            } catch {
+                reasons.append("ancestor_unavailable_or_replaced")
+                enumerator.skipDescendants()
+                continue
+            }
+            if let localDirectory = localDirectoryStatus(path), !localDirectory {
+                reasons.append("unsupported_network")
+                enumerator.skipDescendants()
+                continue
+            }
             var value = stat()
             guard lstat(path, &value) == 0 else {
                 reasons.append(errno == EACCES ? "permission_denied" : "metadata_unavailable")

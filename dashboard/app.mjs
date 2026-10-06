@@ -96,8 +96,13 @@ function normalizeDates(source) {
   const dates = objectOrEmpty(source.dates ?? source.dateAvailability);
   const created = source.created_at ?? source.createdAt ?? source.creation_date ?? source.creationDate ?? dates.created_at ?? dates.createdAt ?? dates.creation_date ?? dates.creationDate;
   const modified = source.modified_at ?? source.modifiedAt ?? source.modification_date ?? source.modificationDate ?? dates.modified_at ?? dates.modifiedAt ?? dates.modification_date ?? dates.modificationDate;
-  const createdDate = normalizeDate(created);
-  const modifiedDate = normalizeDate(modified);
+  // Core's snake-case timestamp keys carry nonnegative Unix seconds. Other
+  // aliases retain ISO-only admission, so booleans or arbitrary numbers never
+  // become plausible timestamps through Date coercion.
+  const coreDate = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 8_640_000_000_000
+    ? new Date(value * 1000) : normalizeDate(value);
+  const createdDate = coreDate(source.created_at ?? dates.created_at) ?? normalizeDate(created);
+  const modifiedDate = coreDate(source.modified_at ?? dates.modified_at) ?? normalizeDate(modified);
   return {
     created: createdDate,
     modified: modifiedDate,
@@ -696,7 +701,27 @@ function actionResultFeedback(action, data) {
   if (action === "review_cleanup") return `Review ready · ${formatCount(count)} file${count === 1 ? "" : "s"}`;
   if (action === "apply_cleanup") return partial ? `Cleanup incomplete · ${formatCount(moved)} moved · ${formatCount(unresolved)} unresolved` : `Cleanup complete · ${formatCount(moved)} file${moved === 1 ? "" : "s"} moved to Trash`;
   if (action === "undo_cleanup") return partial ? `Undo incomplete · ${formatCount(restored)} restored · ${formatCount(unresolved)} unresolved` : `Undo complete · ${formatCount(restored)} file${restored === 1 ? "" : "s"} restored`;
+  if (action === "review_app_uninstall") return source.reviewed === true ? "Review ready · app uninstall" : "App uninstall review returned no plan";
+  if (action === "apply_app_uninstall") return partial ? `App uninstall incomplete · ${formatCount(moved)} moved · ${formatCount(unresolved)} unresolved` : `App uninstall complete · ${formatCount(moved)} app${moved === 1 ? "" : "s"} moved to Trash`;
   return `${action.replaceAll("_", " ")} complete`;
+}
+
+function appUpdateFeedback(result) {
+  const source = objectOrEmpty(result);
+  const status = pathText(source.status ?? source.state).toLowerCase().replaceAll("_", "-");
+  const label = { available: "Update available", "no-update": "No update available", unsupported: "Update feed unsupported", unavailable: "Update feed unavailable", malformed: "Update feed response malformed" }[status] ?? "Update feed checked";
+  return `${label}${source.candidateVersion ? ` · ${text(source.candidateVersion)}` : ""}`;
+}
+
+function appUninstallPlan(data) {
+  const source = objectOrEmpty(data);
+  const cleanup = objectOrEmpty(source.cleanup);
+  const result = objectOrEmpty(cleanup.result ?? cleanup.plan ?? (Array.isArray(cleanup.plans) ? cleanup.plans[0] : Array.isArray(cleanup.history) ? cleanup.history[0] : null));
+  return Object.keys(result).length ? result : source;
+}
+
+function appUninstallFeedback(data) {
+  return `${actionResultFeedback("apply_app_uninstall", data)} · Refresh Apps to confirm inventory`;
 }
 
 function compressionCancelFeedback(data) {
@@ -806,13 +831,53 @@ function receiveAction(response) {
   if (action === "review_cleanup") { bridge.review = objectOrEmpty(moduleData); state.view = "cleanup"; savePreferences(); syncNav(); }
   if (action === "apply_cleanup") { bridge.review = null; bridge.undoPlanId = moduleData.plan_id ?? moduleData.planId ?? null; captureCleanupHistory({ cleanup: { plans: [moduleData] } }); }
   if (action === "undo_cleanup") { bridge.undoPlanId = moduleData.remaining_items > 0 ? moduleData.plan_id : null; captureCleanupHistory(moduleData.cleanup ? moduleData : { cleanup: { plans: [moduleData] } }); }
-  if (action === "app_details") bridge.appDetails = moduleData;
+  if (action === "app_details") {
+    bridge.appDetails = moduleData;
+    bridge.appUpdateResult = null;
+    bridge.appUninstallReview = null;
+    bridge.appUninstallResult = null;
+  }
+  if (action === "check_app_updates") {
+    const selectedPath = pathText(bridge.appDetails?.path ?? bridge.appDetails?.bundle_path ?? bridge.appDetails?.bundlePath);
+    const resultPath = pathText(moduleData.path ?? moduleData.app_path ?? moduleData.appPath ?? moduleData.bundle_path ?? moduleData.bundlePath);
+    if (!selectedPath || !resultPath || normalizedPath(selectedPath) !== normalizedPath(resultPath)) {
+      bridge.error = "Update result does not match selected app";
+      bridge.feedback = null;
+      renderApp();
+      return false;
+    }
+    bridge.appUpdateResult = moduleData;
+    bridge.feedback = appUpdateFeedback(moduleData);
+  }
+  if (action === "review_app_uninstall") {
+    const selectedPath = pathText(bridge.appDetails?.path ?? bridge.appDetails?.bundle_path ?? bridge.appDetails?.bundlePath);
+    const bundlePath = pathText(moduleData.bundle_path ?? moduleData.bundlePath);
+    const planId = moduleData.plan_id ?? moduleData.planId;
+    if (moduleData.operation !== "app_uninstall" || !planId || !selectedPath || !bundlePath || normalizedPath(selectedPath) !== normalizedPath(bundlePath)) {
+      bridge.error = "App uninstall review was not accepted";
+      bridge.feedback = null;
+      renderApp();
+      return false;
+    }
+    bridge.appUninstallReview = moduleData;
+    bridge.feedback = "App uninstall review ready · bundle only · related paths report only";
+  }
+  if (action === "apply_app_uninstall") {
+    bridge.appUninstallReview = null;
+    bridge.appUninstallResult = moduleData;
+    bridge.appDetails = null;
+    const plan = appUninstallPlan(moduleData);
+    bridge.undoPlanId = plan.plan_id ?? plan.planId ?? null;
+    const cleanup = objectOrEmpty(moduleData.cleanup);
+    captureCleanupHistory(Array.isArray(cleanup.plans) || Array.isArray(cleanup.history) ? moduleData : { cleanup: { plans: [plan] } });
+    bridge.feedback = appUninstallFeedback(moduleData);
+  }
   if (action === "refresh_filename_index" || action === "filename_index_status") { bridge.filenameIndexStatus = moduleData; state.indexMode = true; if (action === "refresh_filename_index") bridge.filenameIndexResults = null; }
   if (action === "query_filename_index") bridge.filenameIndexResults = moduleData;
-  if (action === "refresh_apps") bridge.appDetails = null;
+  if (action === "refresh_apps") { bridge.appDetails = null; bridge.appUpdateResult = null; bridge.appUninstallReview = null; bridge.appUninstallResult = null; }
   if (action === "compress_media") bridge.compressionResult = objectOrEmpty(moduleData);
   if (action === "refresh_activity") captureCleanupHistory(moduleData);
-  if (moduleName && source.data !== undefined && !["review_cleanup", "apply_cleanup", "undo_cleanup", "cancel_compress", "preview_compressed_output"].includes(action)) applyModule(moduleName, moduleData);
+  if (moduleName && source.data !== undefined && !["review_cleanup", "apply_cleanup", "undo_cleanup", "cancel_compress", "preview_compressed_output", "check_app_updates", "review_app_uninstall", "apply_app_uninstall"].includes(action)) applyModule(moduleName, moduleData);
   renderApp();
   return true;
 }
@@ -844,6 +909,9 @@ export function importScanJson(input, options = {}) {
   bridge.compressionResult = null;
   bridge.cancelPending = null;
   bridge.cancelResult = null;
+  bridge.appUpdateResult = null;
+  bridge.appUninstallReview = null;
+  bridge.appUninstallResult = null;
   captureCleanupHistory(state.scan.modules.activity ?? state.scan.modules.history ?? {});
   if (typeof document !== "undefined") { setStatus(`Loaded ${formatCount(state.scan.entries.length)} entries`, "good"); syncNav(); renderApp(); }
   return state.scan;
@@ -897,7 +965,7 @@ function renderMonitor(scan) {
   });
   return [pageHead("Monitor", "Resources, network, battery, & listening ports", nativeButton("Refresh readings", "refresh_monitor")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("CPU", cpuPercent === null || cpuPercent === undefined ? "Unknown" : `${cpuPercent}%`, text(data.observedAt ?? raw.observedAt, "Current reading")), statistic("Memory", `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`, "used / total"), statistic("Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`, "used / total"), statistic("Memory pressure", text(pressure, "Unknown"), "OS reading")]), card("Storage volumes", "Free & total space by volume", [node("div", { className: "module-list" }, diskNodes.length ? diskNodes : [node("p", { className: "muted", textContent: "No volume readings." })])]), card("Resource processes", "CPU & memory from process readings", [node("div", { className: "module-list" }, processRows.length ? processRows : [node("p", { className: "muted", textContent: "No process readings." })])]), card("Network & battery", "Current OS readings", [node("div", { className: "module-list" }, rateRows.length ? rateRows : [node("p", { className: "muted", textContent: text(network.reason, "No network interface readings.") })]), node("p", { className: "faint", textContent: networkNote }), metaRow("Battery", batteryValue === undefined ? text(battery.reason, "No battery reading") : `${batteryValue}%${battery.charging === undefined ? "" : battery.charging ? " · Charging" : " · On battery"}`), metaRow("Capacity health", battery.healthPercent === undefined ? text(objectOrEmpty(battery.health).condition ?? objectOrEmpty(battery.health).reason, "Unknown") : `${Number(battery.healthPercent).toFixed(1)}% · capacity estimate`), metaRow("Cycles", battery.cycles ?? text(objectOrEmpty(battery.cycleCount).reason, "Unknown")), metaRow("Temperature", battery.temperatureC === undefined ? text(objectOrEmpty(battery.temperature).reason, "Unknown") : `${battery.temperatureC} °C`), metaRow("Battery power", battery.batteryWatts === undefined ? text(objectOrEmpty(battery.batteryPower).reason, "Unknown") : `${Number(battery.batteryWatts).toFixed(1)} W`), metaRow("Adapter rating", battery.adapterWatts === undefined ? text(objectOrEmpty(battery.powerAdapter).reason, "Unknown") : `${battery.adapterWatts} W`), metaRow("Time remaining", battery.timeRemainingSeconds === undefined ? "Unknown" : `${Math.round(battery.timeRemainingSeconds / 60)} min`)]), card("Listening ports", portSource.available === false ? text(portSource.reason, "Listening ports unavailable") : portNodes.length ? node("div", { className: "module-list" }, portNodes) : node("p", { className: "muted", textContent: "No listening ports reported." }))].filter(Boolean);
 }
-const bridge = { pending: null, cancelPending: null, cancelResult: null, sequence: 0, feedback: null, error: null, review: null, cleanupPlans: [], undoPlanId: null, compressionResult: null, appDetails: null, filenameIndexStatus: null, filenameIndexResults: null };
+const bridge = { pending: null, cancelPending: null, cancelResult: null, sequence: 0, feedback: null, error: null, review: null, cleanupPlans: [], undoPlanId: null, compressionResult: null, appDetails: null, appUpdateResult: null, appUninstallReview: null, appUninstallResult: null, filenameIndexStatus: null, filenameIndexResults: null };
 const state = { scan: null, view: "storage", path: null, selected: null, indexMode: false, indexSelected: null, activityAction: "", activityPeriod: "", filters: { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }, staged: new Set(), error: null };
 
 function setStatus(message, tone = "neutral") { const status = document.querySelector("#scan-status"); if (!status) return; status.textContent = message; status.dataset.tone = tone; }
@@ -905,7 +973,7 @@ function openFilePicker() { document.querySelector("#scan-file")?.click(); }
 async function importFile(file) { if (!file) return; if (file.size > MAX_FILE_BYTES) { setStatus("File exceeds 10 MB limit", "danger"); return; } setStatus("Reading scan…", "warning"); try { importScanJson(JSON.parse(await file.text()), { loadedBytes: file.size }); } catch (error) { setStatus("Could not load scan JSON", "danger"); const view = document.querySelector("#app-view"); if (view) view.replaceChildren(node("div", { className: "empty-state" }, [node("div", { className: "empty-state-inner" }, [node("p", { className: "eyebrow", textContent: "Import error" }), node("h2", { textContent: "Scan JSON was not accepted" }), node("p", { className: "error-text", textContent: error instanceof Error ? error.message : "Invalid JSON" }), node("button", { className: "button button-primary", type: "button", dataset: { openFile: "" }, textContent: "Choose another file" })])])); } }
 function formFilters(form) { const data = new FormData(form); return Object.fromEntries(["name", "extension", "kind", "minBytes", "maxBytes", "createdAfter", "createdBefore", "modifiedAfter", "modifiedBefore", "pageSize"].map(key => [key, data.get(key) ?? (key === "pageSize" ? "100" : "")])); }
 function syncNav() { document.querySelectorAll(".nav-item").forEach((item) => { const active = item.dataset.view === state.view; item.classList.toggle("is-active", active); if (active) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current"); }); }
-function actionModule(action) { return { refresh_monitor: "monitor", refresh_apps: "apps", refresh_activity: "activity", find_duplicates: "duplicates", compress_media: "compression", cancel_compress: null, preview_compressed_output: null }[action]; }
+function actionModule(action) { return { refresh_monitor: "monitor", refresh_apps: "apps", refresh_activity: "activity", find_duplicates: "duplicates", compress_media: "compression", cancel_compress: null, preview_compressed_output: null, check_app_updates: null, review_app_uninstall: null, apply_app_uninstall: null }[action]; }
 function applyModule(name, data) { if (!state.scan) return; state.scan.modules = { ...state.scan.modules, [name]: data }; }
 function renderApp() { if (typeof document === "undefined") return; const view = document.querySelector("#app-view"); if (!view) return; view.replaceChildren(); if (!state.scan) { view.append(node("div", { className: "empty-state" }, [node("div", { className: "empty-state-inner" }, [node("p", { className: "eyebrow", textContent: "Storage desk" }), node("h2", { textContent: "Choose a folder to scan" }), node("p", { textContent: "Scan a folder to see storage, find large files & review cleanup." }), node("button", { className: "button button-quiet", type: "button", dataset: { openFile: "" }, textContent: "Import saved scan" })])])); return; } const renderers = { storage: () => renderStorage(state.scan, state), find: () => renderFind(state.scan, state), cleanup: () => renderCleanup(state.scan, state), duplicates: () => renderDuplicates(state.scan), apps: () => renderApps(state.scan), monitor: () => renderMonitor(state.scan), activity: () => renderActivity(state.scan), compress: () => renderCompress(state.scan) }; view.append(...(renderers[state.view] ? renderers[state.view]() : renderers.storage())); }
 
@@ -937,18 +1005,30 @@ function renderApps(scan) {
   const missing = data.permission ?? data.permissions ?? data.incomplete_reason ?? data.incompleteReason ?? (Array.isArray(data.reasons) ? data.reasons[0] : null);
   const inventoryIncomplete = data.inventoryIncomplete === true || data.inventory_incomplete === true;
   const coverageReason = Array.isArray(data.reasons) && data.reasons.length ? data.reasons.join(" · ") : text(missing, "Some app metadata is unavailable.");
-  return [pageHead("Apps", "Installed applications & startup items", nativeButton("Refresh app inventory", "refresh_apps")), actionFeedback(), inventoryIncomplete || missing ? node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", textContent: "!" }), node("p", { textContent: inventoryIncomplete ? `Partial inventory · ${coverageReason}` : `Some app details are unavailable: ${coverageReason}` })]) : null, renderApplicationDetails(bridge.appDetails), card("Application inventory", `${formatCount(apps.length)} applications · ${inventoryIncomplete ? "partial coverage" : "reported coverage"}`, [node("div", { className: "app-list" }, appRows.length ? appRows : [node("p", { className: "muted", textContent: "No application readings." })])]), renderApplicationHistory(data.history), card("Startup items", "Launch items reported by system", [node("div", { className: "module-list" }, startupRows.length ? startupRows : [node("p", { className: "muted", textContent: startupUnavailable ? text(startupSource.reason, "Startup items unavailable") : "No startup items found." })])])].filter(Boolean);
+  const uninstallHistory = bridge.appUninstallResult ? cleanupPlanHistory(bridge.appUninstallResult) : null;
+  return [pageHead("Apps", "Installed applications & startup items", nativeButton("Refresh app inventory", "refresh_apps")), actionFeedback(), inventoryIncomplete || missing ? node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", textContent: "!" }), node("p", { textContent: inventoryIncomplete ? `Partial inventory · ${coverageReason}` : `Some app details are unavailable: ${coverageReason}` })]) : null, renderApplicationDetails(bridge.appDetails), uninstallHistory, card("Application inventory", `${formatCount(apps.length)} applications · ${inventoryIncomplete ? "partial coverage" : "reported coverage"}`, [node("div", { className: "app-list" }, appRows.length ? appRows : [node("p", { className: "muted", textContent: "No application readings." })])]), renderApplicationHistory(data.history), card("Startup items", "Launch items reported by system", [node("div", { className: "module-list" }, startupRows.length ? startupRows : [node("p", { className: "muted", textContent: startupUnavailable ? text(startupSource.reason, "Startup items unavailable") : "No startup items found." })])])].filter(Boolean);
 }
 
 function renderApplicationDetails(details) {
   if (!details) return null;
+  const detailsPath = pathText(details.path ?? details.bundle_path ?? details.bundlePath);
   const footprint = objectOrEmpty(details.footprint);
   const totals = objectOrEmpty(footprint.totals);
-  const paths = (footprint.paths ?? []).slice(0, 16).map(item => node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: text(item.kind) }), node("div", { className: "module-detail", textContent: text(item.path) })]), node("span", { className: "muted", textContent: `${formatBytes(item.logicalBytes)} · ${text(item.status)} · report only` })]));
+  const footprintPaths = Array.isArray(footprint.paths) ? footprint.paths : [];
+  const paths = footprintPaths.slice(0, 16).map(item => node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: text(item.kind) }), node("div", { className: "module-detail app-path", textContent: text(item.path) })]), node("span", { className: "muted", textContent: `${formatBytes(item.logicalBytes ?? item.logical_bytes)} · ${text(item.status)} · report only` })]));
   const processes = objectOrEmpty(details.processes);
   const feed = objectOrEmpty(details.updateFeed);
   const inspection = renderApplicationInspection(details.inspection);
-  return card(`Details · ${text(details.name)}`, "Bundle & exact related paths", [metaRow("Logical size", `${formatBytes(totals.logicalBytes)}${totals.incomplete ? " · partial" : ""}`), metaRow("Observed allocation", `${formatBytes(totals.observedAllocationBytes)} · shared blocks may overlap`), node("div", { className: "module-list" }, paths), metaRow("Running GUI processes", `${formatCount((processes.entries ?? []).length)} · ${text(processes.coverage, "Unknown coverage")}`), inspection, metaRow("Update feed", feed.available ? `${text(feed.feedURL)} · candidate not checked` : text(feed.reason, "Unavailable")), node("p", { className: "faint", textContent: "Related paths are observations. Nothing is selected for removal." })]);
+  const feedResult = objectOrEmpty(bridge.appUpdateResult);
+  const feedPath = pathText(feedResult.path ?? feedResult.app_path ?? feedResult.appPath ?? feedResult.bundle_path ?? feedResult.bundlePath);
+  const correlatedFeed = bridge.appUpdateResult && detailsPath && normalizedPath(feedPath) === normalizedPath(detailsPath) ? feedResult : null;
+  const review = objectOrEmpty(bridge.appUninstallReview);
+  const reviewPath = pathText(review.bundle_path ?? review.bundlePath);
+  const correlatedReview = bridge.appUninstallReview && detailsPath && normalizedPath(reviewPath) === normalizedPath(detailsPath) ? review : null;
+  const feedCard = correlatedFeed ? card("App feed result", "Explicit HTTPS metadata check · no install", [metaRow("Path", feedPath), metaRow("State", correlatedFeed.state ?? correlatedFeed.status), metaRow("Current version", correlatedFeed.currentVersion ?? correlatedFeed.current_version), metaRow("Candidate version", correlatedFeed.candidateVersion ?? correlatedFeed.candidate_version), metaRow("Feed URL", correlatedFeed.feedURL ?? correlatedFeed.feed_url), metaRow("Checked at", correlatedFeed.checkedAt ?? correlatedFeed.checked_at), metaRow("Network", correlatedFeed.networkPerformed === true ? "Performed" : correlatedFeed.networkPerformed === false ? "Not performed" : "Unknown"), metaRow("Reason", correlatedFeed.reason)]) : null;
+  const reviewCard = correlatedReview ? card("App uninstall review", "Bundle-only Trash review · related paths report only", [metaRow("Bundle path", correlatedReview.bundle_path ?? correlatedReview.bundlePath), metaRow("Bundle ID", correlatedReview.bundle_id ?? correlatedReview.bundleId), metaRow("Operation", correlatedReview.operation), metaRow("App content", formatBytes(correlatedReview.content_bytes ?? correlatedReview.contentBytes)), node("p", { className: "faint", textContent: "Related paths stay report-only & are excluded from this plan." }), nativeButton("Apply app uninstall", "apply_app_uninstall", { plan_id: correlatedReview.plan_id ?? correlatedReview.planId })]) : null;
+  const actions = node("div", {}, [node("div", { className: "row-actions" }, [nativeButton("Check app feed", "check_app_updates", { path: detailsPath }, "button button-quiet"), nativeButton("Review app uninstall", "review_app_uninstall", { path: detailsPath }, "button button-quiet")]), node("p", { className: "faint", textContent: "Feed check performs an explicit HTTPS metadata request only; it never installs updates." })]);
+  return card(`Details · ${text(details.name)}`, "Bundle & exact related paths", [metaRow("App path", detailsPath), actions, metaRow("Logical size", `${formatBytes(totals.logicalBytes)}${totals.incomplete ? " · partial" : ""}`), metaRow("Observed allocation", `${formatBytes(totals.observedAllocationBytes)} · shared blocks may overlap`), node("div", { className: "module-list" }, paths), metaRow("Running GUI processes", `${formatCount((processes.entries ?? []).length)} · ${text(processes.coverage, "Unknown coverage")}`), inspection, metaRow("Declared update feed", feed.available ? text(feed.feedURL ?? feed.feed_url) : text(feed.reason, "Unavailable")), feedCard, reviewCard, node("p", { className: "faint", textContent: "Related paths are observations. Nothing is selected for removal." })]);
 }
 function renderApplicationInspection(value) {
   const inspection = objectOrEmpty(value);
