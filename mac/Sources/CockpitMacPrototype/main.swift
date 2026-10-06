@@ -283,6 +283,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenuItem()
         appMenu.submenu = menu.copy() as? NSMenu
         mainMenu.addItem(appMenu)
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"),
+                                     ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
+                                     ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+            editMenu.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: key))
+        }
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
         NSApp.mainMenu = mainMenu
         dashboard.show()
         let args = ProcessInfo.processInfo.arguments

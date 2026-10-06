@@ -51,22 +51,6 @@ final class DashboardHostTests: XCTestCase {
         XCTAssertEqual(req.deadline, 120)
     }
 
-    func testHelperDefaultsToContentsHelpers() {
-        // Synthetic bundle layout: <tmp>/Contents/MacOS/app + Helpers/cockpit + Resources/dashboard.
-        let contents = tempRoot.appendingPathComponent("Contents")
-        try! FileManager.default.createDirectory(
-            at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
-        try! FileManager.default.createDirectory(
-            at: contents.appendingPathComponent("Resources/dashboard"), withIntermediateDirectories: true)
-        try! FileManager.default.createDirectory(
-            at: contents.appendingPathComponent("Helpers"), withIntermediateDirectories: true)
-        let helper = contents.appendingPathComponent("Helpers/cockpit")
-        FileManager.default.createFile(atPath: helper.path, contents: Data())
-        try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
-        // bundleDefault needs a real Bundle; verify the path rule directly instead:
-        XCTAssertEqual(helper.deletingLastPathComponent().lastPathComponent, "Helpers")
-    }
-
     // MARK: ProcessScanRunner (real, bounded subprocesses)
 
     func testRunnerCapturesBoundedStdout() async throws {

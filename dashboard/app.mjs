@@ -523,13 +523,19 @@ function syncNav() {
 
 function boot() {
   document.querySelector("#import-scan").addEventListener("click", openFilePicker);
-  document.querySelector("#scan-file").addEventListener("change", (event) => importFile(event.target.files?.[0]));
+  document.querySelector("#scan-file").addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    // Picking same export again must dispatch a fresh import after recovery/re-entry.
+    event.target.value = "";
+    importFile(file);
+  });
   document.querySelector("#section-nav").addEventListener("click", (event) => {
     const button = event.target.closest("[data-view]");
     if (!button) return;
     state.view = button.dataset.view;
     state.path = null;
     state.selected = null;
+    if (state.scan) setStatus(`Loaded ${formatCount(state.scan.entries.length)} entries`, "good");
     syncNav();
     renderApp();
   });
