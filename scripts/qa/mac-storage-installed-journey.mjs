@@ -40,7 +40,26 @@ function hasButton(label) {
 }
 
 function controlIncluding(kind, value) {
-  return line => line.includes(`${kind} `) && line.includes(value);
+  return line => line.includes(value) && (line.includes(`${kind} `) || (kind === "button" && value.startsWith("Inspect ") && /cell .*Inspect /.test(line)));
+}
+
+function locateInHeadingSection(ax, heading, predicate, phase) {
+  const lines = ax.split("\n");
+  const indexOf = line => Number(line.match(/^\s*(\d+)\b/)?.[1]);
+  const headingAt = lines.findIndex(line => {
+    const match = line.match(/^\s*\d+ heading (.*?)(?:, Value:.*)?$/);
+    return match?.[1] === heading;
+  });
+  assert.ok(headingAt >= 0, `${phase}: AX heading ${heading} must be present`);
+  const start = indexOf(lines[headingAt]);
+  const nextHeadingAt = lines.findIndex((line, index) => index > headingAt && /^\s*\d+ heading /.test(line));
+  const end = nextHeadingAt >= 0 ? indexOf(lines[nextHeadingAt]) : Number.POSITIVE_INFINITY;
+  const candidates = lines.filter(line => {
+    const index = indexOf(line);
+    return Number.isFinite(index) && index >= start && index < end && predicate(line);
+  });
+  assert.equal(candidates.length, 1, `${phase}: expected one AX control in ${heading}, found ${candidates.length}`);
+  return indexOf(candidates[0]);
 }
 
 async function fingerprint(file) {
@@ -159,6 +178,11 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && /(?:pop up button|popup button|combo box|select)/i.test(line)),
       `AX select ${label} must remain available after choosing ${value}`);
   };
+  const clickInHeadingSection = async (heading, predicate) => {
+    const ax = await state();
+    await app.click(locateInHeadingSection(ax, heading, predicate, phase));
+    return state();
+  };
 
   try {
     phase = "launch-and-native-scan";
@@ -188,7 +212,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     phase = "storage-drill-and-inspector";
     ax = await click(controlIncluding("button", `Open ${fixture.nested}`));
     assert.ok(ax.includes(fixture.duplicateB), "storage drill must render nested duplicate");
-    ax = await click(controlIncluding("button", `Inspect ${fixture.duplicateB}`));
+    ax = await clickInHeadingSection("Entries in view", line => line.includes(`cell (selectable) Inspect ${fixture.duplicateB}`));
     assert.ok(ax.includes("Inspector") && ax.includes(fixture.duplicateB) && ax.includes("Metadata"), "inspector must show selected fixture");
     await phaseDone(phase);
 
@@ -204,9 +228,13 @@ export async function runInstalledStorageJourney(initialApp, options) {
 
     phase = "filename-index-build-and-hidden-search";
     await navigate("Find");
-    ax = await click(hasButton("Build filename index"));
-    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value),
-      "Build filename index must expose native indexed-search state");
+    ax = await waitFor(value => /button (?:Build|Rescan) filename index(?:,|$)/.test(value),
+      "Find must expose observed native filename-index build/resume control");
+    const initialIndexButton = controlLines(ax).find(line => /button (?:Build|Rescan) filename index(?:,|$)/.test(line));
+    assert.ok(initialIndexButton, "filename-index action must be an observed AX button");
+    ax = await click(hasButton(initialIndexButton.match(/^\s*\d+ button (.*?)(?:,|$)/)?.[1]));
+    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value) && /button Rescan filename index(?:,|$)/.test(value),
+      "Build filename index must expose native indexed-search state & Rescan status");
     await replaceText("Name or path", path.basename(fixture.hiddenFile));
     ax = await click(hasButton("Search"));
     ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.hiddenFile),
@@ -256,10 +284,12 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assert.ok(app && typeof app.getAXState === "function", "filename-index relaunch must return fresh CUA app");
     ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "filename-index relaunch must return to native dashboard");
     await navigate("Find");
-    ax = await waitFor(value => value.includes("Build filename index"),
-      "Find must expose explicit filename-index Build control after relaunch");
-    ax = await click(hasButton("Build filename index"));
-    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value), "filename-index replay must expose resumed index state");
+    ax = await waitFor(value => /button (?:Build|Rescan) filename index(?:,|$)/.test(value),
+      "Find must expose explicit filename-index Build or Rescan control after relaunch");
+    const replayIndexButton = controlLines(ax).find(line => /button (?:Build|Rescan) filename index(?:,|$)/.test(line));
+    assert.ok(replayIndexButton, "relaunch filename-index action must be an observed AX button");
+    ax = await click(hasButton(replayIndexButton.match(/^\s*\d+ button (.*?)(?:,|$)/)?.[1]));
+    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value) && /button Rescan filename index(?:,|$)/.test(value), "filename-index replay must expose resumed index state & Rescan status");
     await replaceText("Name or path", path.basename(fixture.indexFiles[0]));
     ax = await click(hasButton("Search"));
     ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.indexFiles[0]),
@@ -298,7 +328,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must be absent after native apply");
     await access(fixture.discard);
     ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render applied plan");
-    assert.ok(!/\b(?:interrupted|indeterminate|failed|partial)\b/i.test(ax), "partial native cleanup outcome cannot be reported as success");
+    assert.ok(!/(?:Cleanup incomplete|interrupted|indeterminate|failed)/i.test(ax), "partial native cleanup outcome cannot be reported as success");
     await phaseDone(phase);
 
     phase = "quit-relaunch-and-undo";
@@ -323,7 +353,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assertFingerprint(restored, before[originalFixtureFiles.indexOf(fixture.discard)], "retained discard fixture");
     await navigate("Cleanup");
     ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render restored plan");
-    assert.ok(!/\b(?:interrupted|indeterminate|failed|partial)\b/i.test(ax), "partial native Undo outcome cannot be reported as success");
+    assert.ok(!/(?:Undo incomplete|interrupted|indeterminate|failed)/i.test(ax), "partial native Undo outcome cannot be reported as success");
     await phaseDone(phase, { restored: [restoredOneFile, restoredTwo, restored] });
 
     phase = "activity-cleanup-filters-and-scan-history";

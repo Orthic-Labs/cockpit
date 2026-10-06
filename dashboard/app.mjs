@@ -443,8 +443,22 @@ export function formatCount(value) {
 
 const MODULE_ALIASES = { storage: ["storage"], growth: ["folder_growth", "folderGrowth", "growth"], duplicates: ["duplicates", "duplicate_groups"], apps: ["apps", "app_footprint"], monitor: ["monitor", "resources"], activity: ["activity"], compress: ["compress", "compression"] };
 function moduleFor(scan, view) { for (const key of MODULE_ALIASES[view] ?? [view]) if (scan.modules?.[key] !== undefined) return scan.modules[key]; return null; }
-function modulePayload(module) { const source = objectOrEmpty(module); return Object.keys(objectOrEmpty(source.data)).length ? source.data : module; }
+function modulePayload(module) {
+  if (module === null || module === undefined) return {};
+  if (Array.isArray(module)) return module;
+  const source = objectOrEmpty(module);
+  return Object.keys(objectOrEmpty(source.data)).length ? source.data : source;
+}
 function moduleItems(module, keys = ["items", "rows", "groups", "events", "apps", "processes"]) { const value = modulePayload(module); if (Array.isArray(value)) return value; for (const key of keys) if (Array.isArray(value?.[key])) return value[key]; return []; }
+function collectionValue(value, keys = ["items", "entries", "processes", "groups", "ports", "results", "value"]) {
+  if (Array.isArray(value)) return value;
+  const source = objectOrEmpty(value);
+  for (const key of keys) if (Array.isArray(source[key])) return source[key];
+  if (source.value && typeof source.value === "object") return collectionValue(source.value, keys);
+  return [];
+}
+function observationValue(value) { const source = objectOrEmpty(value); return Object.prototype.hasOwnProperty.call(source, "value") ? source.value : value; }
+function observationReason(value, fallback = "Unavailable") { const source = objectOrEmpty(value); return text(source.reason ?? source.label, fallback); }
 function text(value, fallback = "Unknown") { return value === null || value === undefined || value === "" ? fallback : pathText(value); }
 function numberText(value, fallback = "Unknown") { const parsed = asNumber(value); return parsed === null ? fallback : formatCount(parsed); }
 function node(tag, options = {}, children = []) {
@@ -931,11 +945,13 @@ function renderMonitor(scan) {
   const swapUsed = data.swapUsedBytes ?? data.swap_used_bytes ?? resources.swapUsedBytes ?? resources.swap_used_bytes;
   const swapTotal = data.swapTotalBytes ?? data.swap_total_bytes ?? resources.swapTotalBytes ?? resources.swap_total_bytes;
   const pressure = data.memoryPressure ?? data.memory_pressure ?? resources.memoryPressure ?? resources.memory_pressure;
-  const processes = (data.processes ?? data.process_groups ?? data.processGroups ?? raw.processes ?? []).slice(0, MAX_RENDER_ROWS);
-  const diskRows = (data.disks ?? data.volumes ?? resources.disks ?? resources.volumes ?? raw.disks ?? raw.volumes ?? []).slice(0, MAX_RENDER_ROWS);
-  const portSource = objectOrEmpty(data.listeningPorts ?? data.listening_ports ?? raw.listeningPorts ?? raw.listening_ports);
-  const ports = Array.isArray(portSource) ? portSource : (portSource.ports ?? []);
-  const interfaces = data.interfaces ?? data.serviceInterfaces ?? data.service_interfaces ?? network.interfaces ?? network.serviceInterfaces ?? [];
+  const processSource = data.processes ?? data.process_source ?? data.processSource ?? data.process_groups ?? data.processGroups ?? raw.processes ?? raw.process_source ?? raw.processSource;
+  const processes = collectionValue(processSource).slice(0, MAX_RENDER_ROWS);
+  const diskRows = collectionValue(data.disks ?? data.volumes ?? resources.disks ?? resources.volumes ?? raw.disks ?? raw.volumes).slice(0, MAX_RENDER_ROWS);
+  const portValue = data.listeningPorts ?? data.listening_ports ?? raw.listeningPorts ?? raw.listening_ports;
+  const portSource = objectOrEmpty(portValue);
+  const ports = collectionValue(portValue);
+  const interfaces = collectionValue(data.interfaces ?? data.serviceInterfaces ?? data.service_interfaces ?? network.interfaces ?? network.serviceInterfaces);
   const processRows = processes.map((process) => {
     const identity = objectOrEmpty(process.identity);
     const pid = identity.pid ?? process.pid;
@@ -948,22 +964,29 @@ function renderMonitor(scan) {
     node("div", {}, [node("div", { className: "module-name", textContent: text(disk.name ?? disk.path, "Volume") }), node("div", { className: "module-detail", textContent: disk.isInternal === undefined ? "Drive type unknown" : disk.isInternal ? "Internal" : "External" })]),
     node("div", { className: "app-metrics" }, [node("span", { className: "number", textContent: `Free ${formatBytes(disk.freeBytes ?? disk.free_bytes)}` }), node("span", { className: "number", textContent: `Total ${formatBytes(disk.totalBytes ?? disk.total_bytes)}` })]),
   ]));
-  const batteryValue = battery.percent ?? battery.chargePercent ?? battery.charge_percent;
-  const rateAvailable = network.ratesAvailable === true || (Array.isArray(interfaces) && interfaces.some((item) => item.ratesAvailable === true));
-  const networkNote = rateAvailable ? "Measured rate" : "First sample or rate unavailable";
-  const rateRows = Array.isArray(interfaces) ? interfaces.slice(0, MAX_RENDER_ROWS).map((item) => {
+  const batteryCharge = battery.percent ?? battery.chargePercent ?? battery.charge_percent;
+  const batteryValue = observationValue(batteryCharge);
+  const chargingValue = observationValue(battery.charging ?? battery.is_charging);
+  const secondsRemaining = observationValue(battery.seconds_remaining ?? battery.secondsRemaining ?? battery.time_remaining_seconds);
+  const networkRates = observationValue(network.rates ?? network.rate);
+  const rateAvailable = (networkRates && typeof networkRates === "object") || network.ratesAvailable === true || interfaces.some((item) => item.ratesAvailable === true);
+  const networkNote = rateAvailable ? "Measured rate" : observationReason(network.rates, "First sample or rate unavailable");
+  const rateRows = interfaces.slice(0, MAX_RENDER_ROWS).map((item) => {
     const inRate = item.bytesInPerSecond ?? item.bytes_in_per_second;
     const outRate = item.bytesOutPerSecond ?? item.bytes_out_per_second;
     return node("div", { className: "module-row" }, [node("span", { className: "module-name", textContent: text(item.name ?? item.interface ?? item.service, "Network interface") }), node("span", { className: "number", textContent: inRate === undefined || outRate === undefined ? "Rate unavailable" : `${formatBytes(inRate)}/s in · ${formatBytes(outRate)}/s out` })]);
-  }) : [];
+  });
+  if (!interfaces.length && networkRates && typeof networkRates === "object") {
+    rateRows.push(node("div", { className: "module-row" }, [node("span", { className: "module-name", textContent: "All interfaces" }), node("span", { className: "number", textContent: `${formatBytes(networkRates.received_bytes_per_second ?? networkRates.bytesInPerSecond)}/s in · ${formatBytes(networkRates.transmitted_bytes_per_second ?? networkRates.bytesOutPerSecond)}/s out` })]));
+  }
   const portNodes = ports.map((port) => {
-    const identity = objectOrEmpty(port.identity);
-    const verified = port.processIdentityVerified ?? port.process_identity_verified;
-    const ownerReason = port.ownerReason ?? port.owner_reason;
-    const details = [text(port.process ?? port.processName, "Process unknown"), `PID ${text(port.pid, "Unknown")}`, `Start ${text(port.startTime ?? port.start_time ?? identity.startTime, "Unknown")}`, text(port.exposure, "Exposure unknown"), verified === true ? "Identity verified" : verified === false ? `Identity unverified${ownerReason ? ` · ${text(ownerReason)}` : ""}` : "Identity unknown"];
+    const identity = objectOrEmpty(port.identity ?? port.owner);
+    const verified = port.processIdentityVerified ?? port.process_identity_verified ?? (port.owner ? port.capability === "Available" : undefined);
+    const details = [text(port.process ?? port.processName, "Process unknown"), `PID ${text(port.pid ?? identity.pid, "Unknown")}`, `Start ${text(port.startTime ?? port.start_time ?? identity.startTime ?? identity.start_time, "Unknown")}`, text(port.exposure, observationReason(port, "Exposure unknown")), verified === true ? "Identity verified" : verified === false ? `Identity unverified${port.reason ? ` · ${text(port.reason)}` : ""}` : observationReason(port, "Identity unknown")];
     return node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: `${text(port.address ?? port.local_address ?? port.localAddress, "Address unknown")}:${text(port.port, "Port unknown")}` }), node("div", { className: "module-detail", textContent: details.join(" · ") })]), node("span", { className: "muted", textContent: text(port.protocol, "Protocol unknown") })]);
   });
-  return [pageHead("Monitor", "Resources, network, battery, & listening ports", nativeButton("Refresh readings", "refresh_monitor")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("CPU", cpuPercent === null || cpuPercent === undefined ? "Unknown" : `${cpuPercent}%`, text(data.observedAt ?? raw.observedAt, "Current reading")), statistic("Memory", `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`, "used / total"), statistic("Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`, "used / total"), statistic("Memory pressure", text(pressure, "Unknown"), "OS reading")]), card("Storage volumes", "Free & total space by volume", [node("div", { className: "module-list" }, diskNodes.length ? diskNodes : [node("p", { className: "muted", textContent: "No volume readings." })])]), card("Resource processes", "CPU & memory from process readings", [node("div", { className: "module-list" }, processRows.length ? processRows : [node("p", { className: "muted", textContent: "No process readings." })])]), card("Network & battery", "Current OS readings", [node("div", { className: "module-list" }, rateRows.length ? rateRows : [node("p", { className: "muted", textContent: text(network.reason, "No network interface readings.") })]), node("p", { className: "faint", textContent: networkNote }), metaRow("Battery", batteryValue === undefined ? text(battery.reason, "No battery reading") : `${batteryValue}%${battery.charging === undefined ? "" : battery.charging ? " · Charging" : " · On battery"}`), metaRow("Capacity health", battery.healthPercent === undefined ? text(objectOrEmpty(battery.health).condition ?? objectOrEmpty(battery.health).reason, "Unknown") : `${Number(battery.healthPercent).toFixed(1)}% · capacity estimate`), metaRow("Cycles", battery.cycles ?? text(objectOrEmpty(battery.cycleCount).reason, "Unknown")), metaRow("Temperature", battery.temperatureC === undefined ? text(objectOrEmpty(battery.temperature).reason, "Unknown") : `${battery.temperatureC} °C`), metaRow("Battery power", battery.batteryWatts === undefined ? text(objectOrEmpty(battery.batteryPower).reason, "Unknown") : `${Number(battery.batteryWatts).toFixed(1)} W`), metaRow("Adapter rating", battery.adapterWatts === undefined ? text(objectOrEmpty(battery.powerAdapter).reason, "Unknown") : `${battery.adapterWatts} W`), metaRow("Time remaining", battery.timeRemainingSeconds === undefined ? "Unknown" : `${Math.round(battery.timeRemainingSeconds / 60)} min`)]), card("Listening ports", portSource.available === false ? text(portSource.reason, "Listening ports unavailable") : portNodes.length ? node("div", { className: "module-list" }, portNodes) : node("p", { className: "muted", textContent: "No listening ports reported." }))].filter(Boolean);
+  const portContent = ports.length ? node("div", { className: "module-list" }, portNodes) : node("p", { className: "muted", textContent: observationReason(portSource, "No listening ports reported.") });
+  return [pageHead("Monitor", "Resources, network, battery, & listening ports", nativeButton("Refresh readings", "refresh_monitor")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("CPU", cpuPercent === null || cpuPercent === undefined ? "Unknown" : `${cpuPercent}%`, text(data.observedAt ?? raw.observedAt, "Current reading")), statistic("Memory", `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`, "used / total"), statistic("Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`, "used / total"), statistic("Memory pressure", text(pressure, "Unknown"), "OS reading")]), card("Storage volumes", "Free & total space by volume", [node("div", { className: "module-list" }, diskNodes.length ? diskNodes : [node("p", { className: "muted", textContent: "No volume readings." })])]), card("Resource processes", "CPU & memory from process readings", [node("div", { className: "module-list" }, processRows.length ? processRows : [node("p", { className: "muted", textContent: "No process readings." })])]), card("Network & battery", "Current OS readings", [node("div", { className: "module-list" }, rateRows.length ? rateRows : [node("p", { className: "muted", textContent: observationReason(network.rates, "No network rate reading.") })]), node("p", { className: "faint", textContent: networkNote }), metaRow("Battery", batteryValue === undefined || batteryValue === null ? observationReason(batteryCharge, "No battery reading") : `${batteryValue}%${chargingValue === undefined || chargingValue === null ? "" : chargingValue ? " · Charging" : " · On battery"}`), metaRow("Capacity health", battery.healthPercent === undefined ? text(objectOrEmpty(battery.health).condition ?? objectOrEmpty(battery.health).reason, "Unknown") : `${Number(battery.healthPercent).toFixed(1)}% · capacity estimate`), metaRow("Cycles", battery.cycles ?? text(objectOrEmpty(battery.cycleCount).reason, "Unknown")), metaRow("Temperature", battery.temperatureC === undefined ? text(objectOrEmpty(battery.temperature).reason, "Unknown") : `${battery.temperatureC} °C`), metaRow("Battery power", battery.batteryWatts === undefined ? text(objectOrEmpty(battery.batteryPower).reason, "Unknown") : `${Number(battery.batteryWatts).toFixed(1)} W`), metaRow("Adapter rating", battery.adapterWatts === undefined ? text(objectOrEmpty(battery.powerAdapter).reason, "Unknown") : `${battery.adapterWatts} W`), metaRow("Time remaining", secondsRemaining === undefined || secondsRemaining === null ? "Unknown" : `${Math.round(secondsRemaining / 60)} min`)]), card("Listening ports", ports.length ? `${formatCount(ports.length)} observed` : observationReason(portSource, "No listening ports reported."), [portContent])].filter(Boolean);
 }
 const bridge = { pending: null, cancelPending: null, cancelResult: null, sequence: 0, feedback: null, error: null, review: null, cleanupPlans: [], undoPlanId: null, compressionResult: null, appDetails: null, appUpdateResult: null, appUninstallReview: null, appUninstallResult: null, filenameIndexStatus: null, filenameIndexResults: null };
 const state = { scan: null, view: "storage", path: null, selected: null, indexMode: false, indexSelected: null, activityAction: "", activityPeriod: "", filters: { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }, staged: new Set(), error: null };

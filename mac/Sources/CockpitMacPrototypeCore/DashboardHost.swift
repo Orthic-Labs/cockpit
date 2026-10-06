@@ -425,6 +425,29 @@ public final class DashboardHost: NSObject {
         _ = try await webView.evaluateJavaScript(DashboardInjection.importJavaScript(for: object))
         let imported = try await webView.evaluateJavaScript("window.CockpitDashboard.getState().scan.entries.length > 0")
         guard (imported as? Bool) == true else { throw ScanFailure.emptyReport }
+        // Navigate actual bundled routes after a real scan. A helper exchange can
+        // succeed while a native payload crashes one renderer & leaves it blank.
+        let routesPassed = try await webView.evaluateJavaScript("""
+            (() => {
+                const failures = [];
+                const capture = event => failures.push(String(event.message));
+                window.addEventListener('error', capture);
+                try {
+                    for (const route of ['storage', 'find', 'duplicates', 'cleanup', 'apps', 'monitor', 'activity', 'compress']) {
+                        document.querySelector(`[data-view="${route}"]`).click();
+                        const view = document.querySelector('#app-view');
+                        const title = view.querySelector('.page-head .eyebrow');
+                        if (!title || title.textContent.trim().toLowerCase() !== route || !view.querySelector('.card, .capability')) {
+                            failures.push(`Blank or mismatched ${route} section`);
+                        }
+                    }
+                    return failures.join('; ');
+                } finally { window.removeEventListener('error', capture); }
+            })()
+            """)
+        guard let routeFailures = routesPassed as? String, routeFailures.isEmpty else {
+            throw ScanFailure.invalidJSON("Dashboard route journey failed: \(routesPassed)")
+        }
         let searchPassed = try await webView.evaluateJavaScript("""
             (() => {
                 document.querySelector('[data-view="find"]').click();
