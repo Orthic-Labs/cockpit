@@ -30,8 +30,9 @@ final class DashboardHostE2ETests: XCTestCase {
             return
         }
 
-        let fixture = fileManager.temporaryDirectory
-            .resolvingSymlinksInPath()
+        let fixture = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
+                          ?? fileManager.temporaryDirectory.resolvingSymlinksInPath().path,
+                          isDirectory: true)
             .appendingPathComponent("cockpit-dashboard-e2e-\(UUID().uuidString)", isDirectory: true)
         let scanRoot = fixture.appendingPathComponent("scan-root", isDirectory: true)
         let dashboard = fixture.appendingPathComponent("dashboard", isDirectory: true)

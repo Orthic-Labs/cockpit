@@ -1384,7 +1384,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostE2ETests.swift",
-        "sha256": "197c0ddb21c8144c0c8ee18ecd39f95199e43e497191e9330536c80950e2aec9",
+        "sha256": "0fee31afaaf91794db257d10e7c2a0c13c1ded5eaac88280ee473c2a72ef0a37",
         "declared_test_names": [
           "testPackagedDashboardScansFixtureThroughNativeHostAndRetainsResults"
         ],
@@ -1414,7 +1414,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/MediaCompressionTests.swift",
-        "sha256": "f721fa9da71493404fd6958c6af1ffd37d24feb5272151cba9d9a133a475aa38",
+        "sha256": "d3bb261f3b7ed5c1c22a0cbbf0b8ec931fc7d76e3f31f398c70c51b2e3f3a6fd",
         "declared_test_names": [
           "testInvalidParametersAreRejectedWithoutEncoding",
           "testCancellationStopsBeforePublishAndLeavesOriginal",
@@ -1426,7 +1426,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
-        "sha256": "55ac2bdf8854a8eb25f95f03a00fd6cb549970172574135d96010b4b4ea65a1b",
+        "sha256": "b15eb90f97c71f4c596a9581c62e27834897d862d15c6be5481474a522167933",
         "declared_test_names": [
           "testReviewApplyRestartUndoConflictAndAncestorProtection"
         ],
@@ -1434,7 +1434,7 @@
       },
       {
         "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeStorageServicesTests.swift",
-        "sha256": "c17def4ee6ee3df2c2098a6c501445fb049dfee44018c7b66284f4295f7e54f6",
+        "sha256": "8ca32caf55de4b27c844c21f76707bf636a422295dd598093a8c8de836604840",
         "declared_test_names": [
           "testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput"
         ],

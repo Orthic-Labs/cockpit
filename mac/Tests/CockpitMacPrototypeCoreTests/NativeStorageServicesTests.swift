@@ -7,7 +7,10 @@ import XCTest
 @MainActor
 final class NativeStorageServicesTests: XCTestCase {
     func testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput() async throws {
-        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-native-\(UUID().uuidString)", isDirectory: true)
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
+                       ?? FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path,
+                       isDirectory: true)
+            .appendingPathComponent("cockpit-native-\(UUID().uuidString)", isDirectory: true)
         let input = root.appendingPathComponent("input", isDirectory: true)
         let output = root.appendingPathComponent("output", isDirectory: true)
         let state = root.appendingPathComponent("state", isDirectory: true)

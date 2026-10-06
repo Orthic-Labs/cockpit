@@ -411,8 +411,12 @@ public final class DashboardHost: NSObject {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         guard ready else { throw ScanFailure.invalidJSON("Bundled dashboard did not become ready") }
-        let smokeState = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        let temporaryRoot = ProcessInfo.processInfo.environment["RUNNER_TEMP"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory
+        let smokeState = temporaryRoot.resolvingSymlinksInPath()
             .appendingPathComponent("cockpit-dashboard-state-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: smokeState, withIntermediateDirectories: false,
+                                               attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: smokeState) }
         let object = try await coordinator.scanExport(root: root, stateDirectory: smokeState)
         acceptNativeScan(object)

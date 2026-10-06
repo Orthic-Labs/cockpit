@@ -11,7 +11,10 @@ final class NativeCleanupJourneyTests: XCTestCase {
     private var state: URL { fixture.appendingPathComponent("state", isDirectory: true) }
 
     override func setUpWithError() throws {
-        fixture = FileManager.default.temporaryDirectory.appendingPathComponent("cockpit-native-cleanup-\(UUID().uuidString)", isDirectory: true)
+        fixture = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
+                      ?? FileManager.default.temporaryDirectory.path,
+                      isDirectory: true)
+            .appendingPathComponent("cockpit-native-cleanup-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         try FileManager.default.createDirectory(at: state, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

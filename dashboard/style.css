@@ -120,8 +120,33 @@ h3 { margin-bottom: 5px; font-size: 1rem; }
 .map-segment .segment-label { align-self: end; overflow: hidden; font-size: 0.72rem; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
 .map-segment:nth-child(3n) { background: linear-gradient(145deg, color-mix(in srgb, #dfb56b 80%, var(--panel)), color-mix(in srgb, #dfb56b 28%, var(--panel))); }
 .map-segment:nth-child(4n) { background: linear-gradient(145deg, color-mix(in srgb, #a5c9d8 75%, var(--panel)), color-mix(in srgb, #a5c9d8 25%, var(--panel))); }
+.map-segment.age-recent { background: linear-gradient(145deg, color-mix(in srgb, var(--good) 78%, var(--panel)), color-mix(in srgb, var(--good) 25%, var(--panel))); }
+.map-segment.age-aging { background: linear-gradient(145deg, color-mix(in srgb, var(--warning) 78%, var(--panel)), color-mix(in srgb, var(--warning) 25%, var(--panel))); }
+.map-segment.age-old { background: linear-gradient(145deg, color-mix(in srgb, var(--danger) 78%, var(--panel)), color-mix(in srgb, var(--danger) 25%, var(--panel))); }
+.map-segment.age-unknown { border: 1px dashed var(--line-strong); background: var(--panel-soft); }
 .map-unknown { display: flex; min-width: 45px; align-items: end; border: 1px dashed var(--line-strong); border-radius: 6px; padding: 11px; color: var(--muted); font-size: 0.72rem; }
 .map-legend { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 0.74rem; }
+.storage-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; color: var(--muted); font-size: 0.72rem; }
+.legend-label { color: var(--faint); font-size: 0.66rem; font-weight: 760; letter-spacing: 0.08em; text-transform: uppercase; }
+.legend-age-label { margin-left: 8px; }
+.legend-key { display: inline-flex; align-items: center; gap: 5px; }
+.legend-key::before { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); content: ""; }
+.legend-key.kind-file::before { background: #8dc7a1; }
+.legend-key.kind-directory::before { background: #b8df73; }
+.legend-key.kind-symlink::before { background: #dfb56b; }
+.legend-key.kind-other::before { background: #a5c9d8; }
+.legend-key.age-recent::before { background: var(--good); }
+.legend-key.age-aging::before { background: var(--warning); }
+.legend-key.age-old::before { background: var(--danger); }
+.legend-key.age-unknown::before { border: 1px dashed var(--line-strong); background: transparent; }
+.data-table tr.age-recent > td:first-child { border-left: 3px solid var(--good); }
+.data-table tr.age-aging > td:first-child { border-left: 3px solid var(--warning); }
+.data-table tr.age-old > td:first-child { border-left: 3px solid var(--danger); }
+.data-table tr.age-unknown > td:first-child { border-left: 3px dashed var(--line-strong); }
+.data-table td.kind-file { color: #8dc7a1; }
+.data-table td.kind-directory { color: #b8df73; }
+.data-table td.kind-symlink { color: #dfb56b; }
+.data-table td.kind-other { color: #a5c9d8; }
 .table-wrap { overflow: auto; }
 .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .entry-table th:first-child { width: 52%; }

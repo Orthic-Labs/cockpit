@@ -8,8 +8,9 @@ final class MediaCompressionTests: XCTestCase {
     private var source: URL { input.appendingPathComponent("fixture.png") }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
-            .resolvingSymlinksInPath()
+        root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
+                   ?? FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path,
+                   isDirectory: true)
             .appendingPathComponent("cockpit-media-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: input, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)

@@ -85,19 +85,90 @@ function normalizeReclaim(value) {
   return { lowerBytes: lower, upperBytes: upper, state, reasons };
 }
 
+function normalizeDate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (!(value instanceof Date) && (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value))) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function normalizeDates(source) {
+  const dates = objectOrEmpty(source.dates ?? source.dateAvailability);
+  const created = source.created_at ?? source.createdAt ?? source.creation_date ?? source.creationDate ?? dates.created_at ?? dates.createdAt ?? dates.creation_date ?? dates.creationDate;
+  const modified = source.modified_at ?? source.modifiedAt ?? source.modification_date ?? source.modificationDate ?? dates.modified_at ?? dates.modifiedAt ?? dates.modification_date ?? dates.modificationDate;
+  const createdDate = normalizeDate(created);
+  const modifiedDate = normalizeDate(modified);
+  return {
+    created: createdDate,
+    modified: modifiedDate,
+    available: Boolean(createdDate || modifiedDate),
+    reason: text(dates.reason, "Dates unavailable in scan metadata"),
+  };
+}
+
+function kindClass(kind) {
+  return `kind-${kindText(kind)}`;
+}
+
+function ageClass(dates) {
+  const date = dates?.modified ?? dates?.created;
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "age-unknown";
+  if (date.getTime() > Date.now()) return "age-unknown";
+  const ageDays = (Date.now() - date.getTime()) / 86_400_000;
+  return ageDays <= 30 ? "age-recent" : ageDays <= 180 ? "age-aging" : "age-old";
+}
+
+function dateText(value, fallback = "Unknown") {
+  return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toLocaleString() : fallback;
+}
+
+function countValue(value) {
+  if (value === null || value === undefined || typeof value === "boolean") return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function normalizeCounts(source) {
+  const counts = objectOrEmpty(source.counts ?? source.item_counts ?? source.itemCounts);
+  return {
+    directChildren: countValue(counts.direct_children ?? counts.directChildren),
+    descendantEntries: countValue(counts.descendant_entries ?? counts.descendantEntries ?? source.item_count ?? source.itemCount),
+    files: countValue(counts.files),
+    directories: countValue(counts.directories),
+    symlinks: countValue(counts.symlinks),
+    other: countValue(counts.other),
+  };
+}
+
+function normalizeShare(source) {
+  const share = objectOrEmpty(source.share ?? source.parent_share ?? source.parentShare);
+  return {
+    accountingOwner: source.accounting_owner ?? source.accountingOwner ?? null,
+    filePaths: countValue(share.paths_with_same_file_id ?? share.pathsWithSameFileId),
+    clonePaths: countValue(share.paths_with_same_clone_id ?? share.pathsWithSameCloneId),
+    hardlinkShared: typeof share.hardlink_shared === "boolean" ? share.hardlink_shared : share.hardlinkShared,
+    cloneShared: typeof share.clone_shared === "boolean" ? share.clone_shared : share.cloneShared,
+  };
+}
+
 function normalizeEntry(entry) {
   const source = objectOrEmpty(entry);
   const metadata = objectOrEmpty(source.metadata);
   const path = normalizedPath(source.path);
-  const logicalBytes = asBytes(source.logical_bytes ?? source.logicalBytes ?? source.logical_size ?? source.logicalSize ?? metadata.logical_size ?? metadata.logicalSize) ?? 0;
-  const attributedBytes = asBytes(source.attributed_allocation_bytes ?? source.attributedAllocationBytes ?? source.attributed_allocation_size ?? source.attributedAllocationSize ?? metadata.allocation_size ?? metadata.allocationSize);
+  const logicalBytes = asBytes(source.logical_bytes ?? source.logicalBytes ?? source.logical_size ?? source.logicalSize ?? metadata.logical_size ?? metadata.logicalSize);
+  const allocationBytes = asBytes(source.allocation_size ?? source.allocationSize ?? metadata.allocation_size ?? metadata.allocationSize);
+  const attributedBytes = asBytes(source.attributed_allocation_bytes ?? source.attributedAllocationBytes ?? source.attributed_allocation_size ?? source.attributedAllocationSize ?? metadata.attributed_allocation_bytes ?? metadata.attributedAllocationBytes ?? metadata.attributed_allocation_size ?? metadata.attributedAllocationSize);
   const volume = objectOrEmpty(metadata.volume).id ?? source.volume_id ?? source.volumeId ?? "unknown";
+  const dates = normalizeDates({ ...metadata, ...source });
+  const counts = normalizeCounts({ ...metadata, ...source });
+  const share = normalizeShare({ ...metadata, ...source });
   return {
     raw: entry,
     path,
     name: pathBase(path),
     kind: kindText(metadata.kind ?? source.kind),
     logicalBytes,
+    allocationBytes,
     attributedBytes,
     volume: pathText(volume) || "unknown",
     fileId: objectOrEmpty(metadata.file_id ?? metadata.fileId).id ?? null,
@@ -106,6 +177,11 @@ function normalizeEntry(entry) {
     complete: metadata.metadata_complete !== false && source.metadata_complete !== false,
     owner: source.accounting_owner ?? source.accountingOwner ?? null,
     reclaim: source.reclaim ? normalizeReclaim(source.reclaim) : null,
+    dates,
+    counts,
+    share,
+    kindClass: kindClass(metadata.kind ?? source.kind),
+    ageClass: ageClass(dates),
   };
 }
 
@@ -116,10 +192,18 @@ function normalizeFolder(folder) {
     raw: folder,
     path: normalizedPath(source.path),
     name: pathBase(source.path),
+    kind: "directory",
     volume: pathText(volume) || "unknown",
-    logicalBytes: asBytes(source.logical_bytes ?? source.logicalBytes ?? source.logical_size ?? source.logicalSize) ?? 0,
-    attributedBytes: asBytes(source.attributed_allocation_bytes ?? source.attributedAllocationBytes ?? source.attributed_allocation_size ?? source.attributedAllocationSize ?? source.allocation_size ?? source.allocationSize),
+    logicalBytes: asBytes(source.logical_bytes ?? source.logicalBytes ?? source.logical_size ?? source.logicalSize),
+    allocationBytes: asBytes(source.allocation_size ?? source.allocationSize),
+    attributedBytes: asBytes(source.attributed_allocation_bytes ?? source.attributedAllocationBytes ?? source.attributed_allocation_size ?? source.attributedAllocationSize),
     incomplete: Boolean(source.incomplete),
+    complete: source.incomplete !== true,
+    dates: normalizeDates(source),
+    counts: normalizeCounts(source),
+    share: normalizeShare(source),
+    kindClass: "kind-directory",
+    ageClass: ageClass(normalizeDates(source)),
   };
 }
 
@@ -225,8 +309,11 @@ function folderFromEntries(scan, basePath) {
     let child = entry.path;
     while (!directChild(basePath, child)) child = pathParent(child);
     if (!child || child === ".") continue;
-    const current = grouped.get(child) ?? { path: child, name: pathBase(child), logicalBytes: 0, attributedBytes: 0, incomplete: false, volume: entry.volume, derived: true };
-    current.logicalBytes += entry.logicalBytes;
+    const current = grouped.get(child) ?? { path: child, name: pathBase(child), kind: "directory", logicalBytes: 0, allocationBytes: 0, attributedBytes: 0, incomplete: false, complete: true, volume: entry.volume, dates: normalizeDates({}), counts: normalizeCounts({}), share: normalizeShare({}), kindClass: "kind-directory", ageClass: "age-unknown", derived: true };
+    if (entry.logicalBytes === null) current.logicalBytes = null;
+    else if (current.logicalBytes !== null) current.logicalBytes += entry.logicalBytes;
+    if (entry.allocationBytes === null) current.allocationBytes = null;
+    else if (current.allocationBytes !== null) current.allocationBytes += entry.allocationBytes;
     current.attributedBytes += entry.attributedBytes ?? 0;
     current.incomplete ||= !entry.complete || entry.attributedBytes === null;
     grouped.set(child, current);
@@ -253,6 +340,83 @@ export function buildStorageModel(scan, currentPath = null) {
     unknownCount,
     hasMore: folders.length > 24,
   };
+}
+
+function resolvedStorageCounts(scan, item) {
+  const counts = { ...normalizeCounts(item.raw ?? {}), ...item.counts };
+  const complete = !scan.incompleteReasons.length && !scan.limits.entriesOmitted;
+  if (item.kind !== "directory" || item.complete === false || !complete) return counts;
+  const descendants = scan.entries.filter((entry) => pathContains(item.path, entry.path, false));
+  const direct = descendants.filter((entry) => directChild(item.path, entry.path));
+  if (counts.descendantEntries === null) counts.descendantEntries = descendants.length;
+  if (counts.directChildren === null) counts.directChildren = direct.length;
+  if (counts.files === null) counts.files = descendants.filter((entry) => entry.kind === "file").length;
+  if (counts.directories === null) counts.directories = descendants.filter((entry) => entry.kind === "directory").length;
+  if (counts.symlinks === null) counts.symlinks = descendants.filter((entry) => entry.kind === "symlink").length;
+  if (counts.other === null) counts.other = descendants.filter((entry) => entry.kind === "other").length;
+  return counts;
+}
+
+function resolvedStorageShare(scan, item) {
+  const share = { ...normalizeShare(item.raw ?? {}), ...item.share };
+  const complete = !scan.incompleteReasons.length && !scan.limits.entriesOmitted;
+  const sameVolume = (entry) => entry.volume !== "unknown" && entry.volume === item.volume;
+  const sameFile = complete && item.fileId ? scan.entries.filter((entry) => sameVolume(entry) && entry.fileId === item.fileId).length : null;
+  const sameClone = complete && item.cloneId ? scan.entries.filter((entry) => sameVolume(entry) && entry.cloneId === item.cloneId).length : null;
+  if (share.filePaths === null && sameFile !== null) share.filePaths = sameFile;
+  if (share.clonePaths === null && sameClone !== null) share.clonePaths = sameClone;
+  if (share.hardlinkShared === undefined && sameFile !== null) share.hardlinkShared = sameFile > 1;
+  if (share.cloneShared === undefined && sameClone !== null) share.cloneShared = sameClone > 1;
+  return share;
+}
+
+function storageCountText(scan, item) {
+  const counts = resolvedStorageCounts(scan, item);
+  if (item.kind !== "directory") return "1 item";
+  if (counts.descendantEntries !== null) return `${formatCount(counts.descendantEntries)} descendant entries`;
+  return "Unknown";
+}
+
+function storageParentShareText(scan, item) {
+  const parentPath = pathParent(item.path);
+  const parent = scan.folders.find((folder) => folder.path === parentPath);
+  if (!parent || parent.incomplete || item.complete === false || item.volume === "unknown" || parent.volume !== item.volume) return "Unknown";
+  const candidates = [
+    ["attributed", item.attributedBytes, parent.attributedBytes],
+    ["logical", item.logicalBytes, parent.logicalBytes],
+  ];
+  for (const [basis, itemBytes, parentBytes] of candidates) {
+    if (!Number.isFinite(itemBytes) || !Number.isFinite(parentBytes) || parentBytes <= 0 || itemBytes < 0) continue;
+    const percentage = (itemBytes / parentBytes) * 100;
+    if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) continue;
+    return `${percentage.toFixed(percentage >= 10 ? 1 : 2)}% of ${parent.path} · ${basis}`;
+  }
+  return "Unknown";
+}
+
+function storageFileSharingText(scan, item) {
+  const share = resolvedStorageShare(scan, item);
+  const details = [];
+  if (share.filePaths !== null && share.filePaths > 1) details.push(`${formatCount(share.filePaths)} scanned paths share file identity`);
+  if (share.clonePaths !== null && share.clonePaths > 1) details.push(`${formatCount(share.clonePaths)} scanned paths share clone identity`);
+  if (share.accountingOwner && normalizedPath(share.accountingOwner) !== normalizedPath(item.path)) details.push(`${pathText(share.accountingOwner)} · allocation owner`);
+  if (details.length) return details.join(" · ");
+  if (share.filePaths === 1 || share.clonePaths === 1) return "No shared path in loaded scan";
+  return "Unknown";
+}
+
+function storageAgeLegend() {
+  return node("div", { className: "storage-legend", "aria-label": "Storage kind and age legend" }, [
+    node("span", { className: "legend-label", textContent: "Kind" }),
+    node("span", { className: "legend-key kind-file", textContent: "File" }),
+    node("span", { className: "legend-key kind-directory", textContent: "Folder" }),
+    node("span", { className: "legend-key kind-symlink", textContent: "Link" }),
+    node("span", { className: "legend-label legend-age-label", textContent: "Age" }),
+    node("span", { className: "legend-key age-recent", textContent: "≤30 days" }),
+    node("span", { className: "legend-key age-aging", textContent: "31–180 days" }),
+    node("span", { className: "legend-key age-old", textContent: ">180 days" }),
+    node("span", { className: "legend-key age-unknown", textContent: "Unknown" }),
+  ]);
 }
 
 export function formatBytes(value) {
@@ -300,8 +464,8 @@ function statistic(label, value, note) { return node("div", { className: "card s
 function pathCrumbs(path) { const wrap = node("div", { className: "crumbs", "aria-label": "Storage path" }); wrap.append(node("button", { className: "crumb", type: "button", dataset: { navigate: "" }, textContent: "All roots" })); if (!path) return wrap; const parts = normalizedPath(path).split("/").filter(Boolean); let built = normalizedPath(path).startsWith("/") ? "/" : ""; parts.forEach((part, index) => { wrap.append(node("span", { className: "crumb-separator", ariaHidden: "true", textContent: "/" })); built = built === "/" ? `/${part}` : built ? `${built}/${part}` : part; wrap.append(node("button", { className: "crumb", type: "button", dataset: { navigate: built }, textContent: part, "aria-current": index === parts.length - 1 ? "location" : null })); }); return wrap; }
 function notice(scan) { const accounting = deriveAccounting(scan); const reasons = [...scan.incompleteReasons]; if (scan.limits.entriesOmitted) reasons.push(`${formatCount(scan.limits.entriesOmitted)} entries omitted from loaded result`); if (!accounting.incomplete && !reasons.length) return null; return node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", ariaHidden: "true", textContent: "!" }), node("div", {}, [node("strong", { textContent: "Accounting is incomplete" }), node("p", { textContent: [...new Set(reasons)].join(" · ") || "Some metadata or volume readings are unavailable. Unknown values stay unknown." })])]); }
 function table(headers, rows, emptyText, className = "data-table") { const tableNode = node("table", { className }); tableNode.append(node("thead", {}, [node("tr", {}, headers.map((header) => node("th", { scope: "col", textContent: header })))])); const body = node("tbody"); if (!rows.length) body.append(node("tr", {}, [node("td", { colSpan: headers.length, className: "muted", textContent: emptyText })])); else rows.forEach((row) => body.append(row)); tableNode.append(body); return tableNode; }
-function entryRow(entry, action = "inspect") { const size = entry.attributedBytes ?? entry.logicalBytes; return node("tr", {}, [node("td", {}, [node("button", { className: "row-button", type: "button", dataset: { [action]: entry.path }, ariaLabel: `Inspect ${entry.path}` }, [node("div", { className: "path-name", textContent: entry.name }), node("div", { className: "path-secondary", textContent: entry.path })])]), node("td", { className: "number", textContent: formatBytes(size) }), node("td", { className: "muted", textContent: entry.kind }), node("td", { className: entry.complete ? "" : "faint", textContent: entry.complete ? "Complete" : "Partial" })]); }
-function folderRow(folder) { const size = folder.attributedBytes ?? folder.logicalBytes; return node("tr", {}, [node("td", {}, [node("button", { className: "row-button", type: "button", dataset: { navigate: folder.path }, ariaLabel: `Open ${folder.path}` }, [node("div", { className: "path-name", textContent: folder.name }), node("div", { className: "path-secondary", textContent: folder.path })]), node("button", { className: "button button-quiet", type: "button", dataset: { inspect: folder.path }, textContent: "Inspect" })]), node("td", { className: "number", textContent: formatBytes(size) }), node("td", { className: folder.incomplete || folder.attributedBytes === null ? "faint" : "", textContent: folder.incomplete || folder.attributedBytes === null ? "Unknown bound" : "Attributed" })]); }
+function entryRow(entry, action = "inspect") { const size = entry.attributedBytes ?? entry.logicalBytes; return node("tr", { className: `${entry.kindClass} ${entry.ageClass}` }, [node("td", {}, [node("button", { className: "row-button", type: "button", dataset: { [action]: entry.path }, ariaLabel: `Inspect ${entry.path}` }, [node("div", { className: "path-name", textContent: entry.name }), node("div", { className: "path-secondary", textContent: entry.path })])]), node("td", { className: "number", textContent: formatBytes(size) }), node("td", { className: `muted ${entry.kindClass}`, textContent: entry.kind }), node("td", { className: entry.complete ? entry.ageClass : "faint", textContent: entry.complete ? (entry.dates.available ? dateText(entry.dates.modified ?? entry.dates.created) : "Unknown age") : "Partial" })]); }
+function folderRow(folder) { const size = folder.attributedBytes ?? folder.logicalBytes; return node("tr", { className: `${folder.kindClass} ${folder.ageClass}` }, [node("td", {}, [node("button", { className: "row-button", type: "button", dataset: { navigate: folder.path }, ariaLabel: `Open ${folder.path}` }, [node("div", { className: "path-name", textContent: folder.name }), node("div", { className: "path-secondary", textContent: folder.path })]), node("button", { className: "button button-quiet", type: "button", dataset: { inspect: folder.path }, textContent: "Inspect" })]), node("td", { className: "number", textContent: formatBytes(size) }), node("td", { className: folder.incomplete || folder.attributedBytes === null ? "faint" : "", textContent: folder.incomplete || folder.attributedBytes === null ? "Unknown bound" : "Attributed" })]); }
 function storageModuleRows(scan, kind) { const module = moduleFor(scan, "storage"); const value = modulePayload(module); const rows = kind === "files" ? (value?.largest_files ?? []) : (value?.largest_folders ?? []); return rows.map((item) => kind === "files" ? normalizeEntry(item) : normalizeFolder(item)); }
 function growthRow(item) { const source = objectOrEmpty(item); const delta = source.attributed_growth_bytes ?? source.attributedGrowthBytes ?? source.logical_growth_bytes ?? source.logicalGrowthBytes; return node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: pathBase(source.path) }), node("div", { className: "module-detail", textContent: text(source.path) })]), node("div", { className: `number ${asNumber(delta) < 0 ? "good-text" : "warning-text"}`, textContent: `${asNumber(delta) < 0 ? "−" : "+"}${formatBytes(Math.abs(asNumber(delta) ?? 0))}` })]); }
 function growthCard(scan) { const growth = moduleFor(scan, "growth"); if (!growth) return null; const source = modulePayload(growth); const growthRows = (source.top_growth ?? []).slice(0, 12); const shrinkRows = (source.top_shrink ?? []).slice(0, 8); return card("Folder growth", source.comparable === false ? "Comparison unavailable" : "Largest attributed changes between reported snapshots", [source.comparable === false ? node("p", { className: "muted", textContent: (source.reasons ?? []).join(" · ") || "Snapshots cannot be compared." }) : node("div", { className: "growth-grid" }, [node("div", {}, [node("p", { className: "table-head", textContent: "Growing" }), node("div", { className: "module-list" }, growthRows.length ? growthRows.map(growthRow) : [node("p", { className: "muted", textContent: "No folder growth reported." })])]), node("div", {}, [node("p", { className: "table-head", textContent: "Shrinking" }), node("div", { className: "module-list" }, shrinkRows.length ? shrinkRows.map(growthRow) : [node("p", { className: "muted", textContent: "No folder shrinkage reported." })])])])]); }
@@ -312,7 +476,7 @@ function renderStorage(scan, localState) {
   const mapParts = model.mapFolders.map((folder) => {
     const size = folder.attributedBytes ?? folder.logicalBytes;
     const percentage = mapBytes > 0 ? Math.max(4, (size / mapBytes) * 100) : 100 / Math.max(1, model.mapFolders.length);
-    return node("button", { className: "map-segment", type: "button", style: `flex-grow:${percentage}`, dataset: { navigate: folder.path }, ariaLabel: `Open ${folder.path}, ${formatBytes(size)}` }, [node("span", { className: "segment-label", textContent: folder.name })]);
+    return node("button", { className: `map-segment ${folder.kindClass} ${folder.ageClass}`, type: "button", style: `flex-grow:${percentage}`, dataset: { navigate: folder.path }, ariaLabel: `Open ${folder.path}, ${formatBytes(size)}` }, [node("span", { className: "segment-label", textContent: folder.name })]);
   });
   if (model.unknownCount) mapParts.push(node("div", { className: "map-unknown", textContent: `${model.unknownCount} unknown` }));
   const largestFiles = storageModuleRows(scan, "files");
@@ -320,7 +484,7 @@ function renderStorage(scan, localState) {
   const files = largestFiles.length ? largestFiles : model.entries;
   const folders = largestFolders.length ? largestFolders : model.folders;
   const sections = [
-    node("section", { className: "card" }, [node("div", { className: "card-header" }, [node("div", {}, [node("h3", { textContent: "Storage map" }), node("p", { textContent: localState.path ? `Direct children of ${localState.path}` : "Top-level folders across selected roots" })])]), node("div", { className: "map-wrap" }, [pathCrumbs(localState.path), node("div", { className: "storage-map", role: "list", "aria-label": "Folder size map" }, mapParts.length ? mapParts : [node("div", { className: "map-unknown", textContent: "No folder totals" })]), node("div", { className: "map-legend" }, [node("span", { textContent: `${formatBytes(model.knownBytes)} shown` }), node("span", { textContent: model.hasMore ? "Map capped at 24 folders" : "Bounded to reported rows" })])])]),
+    node("section", { className: "card" }, [node("div", { className: "card-header" }, [node("div", {}, [node("h3", { textContent: "Storage map" }), node("p", { textContent: localState.path ? `Direct children of ${localState.path}` : "Top-level folders across selected roots" })])]), node("div", { className: "map-wrap" }, [pathCrumbs(localState.path), node("div", { className: "storage-map", role: "list", "aria-label": "Folder size map" }, mapParts.length ? mapParts : [node("div", { className: "map-unknown", textContent: "No folder totals" })]), node("div", { className: "map-legend" }, [node("span", { textContent: `${formatBytes(model.knownBytes)} shown` }), node("span", { textContent: model.hasMore ? "Map capped at 24 folders" : "Bounded to reported rows" })]), storageAgeLegend()])]),
     card("Largest folders", "Largest folders from storage readings", [node("div", { className: "table-wrap" }, [table(["Folder", "Attributed", "State"], folders.slice(0, MAX_RENDER_ROWS).map(folderRow), "No folder readings for this level.")])]),
     card("Largest files", "Top files by observed allocation", [node("div", { className: "table-wrap" }, [table(["File", "Size", "Kind", "Metadata"], files.slice(0, MAX_RENDER_ROWS).map((entry) => entryRow(entry)), "No largest-file reading.")])]),
     growthCard(scan),
@@ -548,7 +712,7 @@ function renderInspector(scan, selectedPath) {
   if (!entry && !folder) return card("Inspector", "Select a row to inspect metadata", [node("p", { className: "inspector-empty", textContent: "Choose a folder or entry from Storage or Find. Dashboard selection stays local to this page." })], "card inspector");
   const item = entry ?? folder;
   const isEntry = Boolean(entry);
-  const rows = [metaRow("Path", item.path), metaRow("Kind", isEntry ? item.kind : "folder"), metaRow("Logical size", formatBytes(item.logicalBytes)), metaRow("Allocation", formatBytes(item.attributedBytes)), metaRow("Volume", item.volume)];
+  const rows = [metaRow("Path", item.path), metaRow("Kind", isEntry ? item.kind : "folder"), metaRow("Logical size", formatBytes(item.logicalBytes)), metaRow("Attributed allocation", formatBytes(item.attributedBytes)), metaRow("Observed allocation", formatBytes(item.allocationBytes)), metaRow("Volume", item.volume), metaRow("Items", storageCountText(scan, item)), metaRow("Parent share", storageParentShareText(scan, item)), metaRow("File sharing", storageFileSharingText(scan, item)), metaRow("Created", dateText(item.dates?.created)), metaRow("Modified", dateText(item.dates?.modified))];
   if (isEntry) rows.push(metaRow("Metadata", item.complete ? "Complete" : "Partial"), metaRow("Placeholder", item.placeholder ? "Yes" : "No"), metaRow("Reclaim bound", item.reclaim ? (item.reclaim.upperBytes === null ? `${formatBytes(item.reclaim.lowerBytes)}+ · unknown upper` : `${formatBytes(item.reclaim.lowerBytes)}–${formatBytes(item.reclaim.upperBytes)}`) : "Not reported"));
   else rows.push(metaRow("Accounting", item.incomplete ? "Incomplete" : "Attributed"));
   const manual = isEntry && scannedOrdinaryFile(scan, item.path)
