@@ -174,7 +174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // readings — CPU, memory pressure and one ring per mounted local disk.
             _ = (webProviders, customProviders)
             let allProviders: [UsageProvider] = claudeProviders
-                + codexProfiles.map { CodexLocalProvider(profile: $0) }
+                // Cockpit fork: one Codex ring — the default ~/.codex profile.
+                + codexProfiles.filter { $0.id == CodexProfile.defaultID }.map { CodexLocalProvider(profile: $0) }
                 + SystemProviders.all()
             preferences.reconcile(discoveredIDs: allProviders.map(\.id))
             let store = UsageStore(

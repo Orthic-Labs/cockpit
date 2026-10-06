@@ -809,7 +809,8 @@ final class Preferences: ObservableObject {
         // designed around — not hidden, which would make a fresh install look
         // like it failed to start.
         self.notchVisibility = defaults.string(forKey: Keys.visibility)
-            .flatMap(NotchVisibility.init(rawValue:)) ?? .onHover
+            // Cockpit fork: the notch is always on screen by default.
+            .flatMap(NotchVisibility.init(rawValue:)) ?? .alwaysShow
         // Absent means the fold that has shipped since full-screen detection
         // exists — the setting silences it, it does not introduce it.
         self.foldsForFullScreen = defaults.object(forKey: Keys.foldsForFullScreen) as? Bool ?? true
