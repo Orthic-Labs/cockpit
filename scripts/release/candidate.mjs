@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -38,7 +38,7 @@ if (action === 'admit') {
   const app=env.COCKPIT_CHECK_APP || path.join(root,'cockpit','mac','Cockpit.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
   for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Resources/dashboard/index.html','Contents/Resources/dashboard/app.mjs','Contents/Resources/dashboard/style.css']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
-  const fixture=mkdtempSync(path.join(os.tmpdir(),'cockpit-package-smoke-'));
+  const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-smoke-')));
   try{
     writeFileSync(path.join(fixture,'example.txt'),'Cockpit fixture');
     const out=run(path.join(app,'Contents/Helpers/cockpit'),['scan',fixture,'--save','--state-dir',path.join(fixture,'state'),'--json'],{encoding:'utf8',stdio:'pipe'});
