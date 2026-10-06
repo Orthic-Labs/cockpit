@@ -955,7 +955,7 @@ public final class NativeFilenameIndex {
 
     private func integer(_ payload: [String: Any], keys: [String]) throws -> Int? {
         guard let raw = value(payload, keys: keys) else { return nil }
-        guard let number = raw as? NSNumber, !(raw is Bool) else {
+        guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else {
             throw NativeFilenameIndexError.invalidQuery("page bounds must be integers")
         }
         let type = String(cString: number.objCType)
