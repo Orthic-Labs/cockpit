@@ -113,6 +113,23 @@ export async function runInstalledStorageJourney(initialApp, options) {
   let trashAccessDenied = false;
 
   const state = () => app.getAXState({ emit: false, disableDiffing: true });
+  const reveal = async predicate => {
+    let ax = await state();
+    if (predicate(ax)) return ax;
+    const scrollArea = controlLines(ax).find(line => /^\s*\d+ scroll area$/.test(line));
+    if (!scrollArea) return ax;
+    await app.scroll(Number(scrollArea.trim().split(" ")[0]), "up", 20);
+    ax = await state();
+    for (let page = 0; page < 20 && !predicate(ax); page += 1) {
+      const currentArea = controlLines(ax).find(line => /^\s*\d+ scroll area$/.test(line));
+      if (!currentArea) break;
+      await app.scroll(Number(currentArea.trim().split(" ")[0]), "down", 1);
+      const next = await state();
+      if (next === ax) break;
+      ax = next;
+    }
+    return ax;
+  };
   const waitFor = async (predicate, description, timeout = 30_000) => {
     const deadline = Date.now() + timeout;
     let ax = await state();
@@ -122,7 +139,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     } while (Date.now() < deadline);
     throw Error(`${phase}: ${description}`);
   };
-  const click = async predicate => { const ax = await state(); await app.click(locate(ax, predicate, phase)); return state(); };
+  const click = async predicate => { const ax = await reveal(value => controlLines(value).some(predicate)); await app.click(locate(ax, predicate, phase)); return state(); };
   const checkpoint = async name => {
     const ax = await state();
     await writeFile(path.join(output, `${name}.txt`), ax);
@@ -204,16 +221,41 @@ export async function runInstalledStorageJourney(initialApp, options) {
       `AX field ${label} must retain ${value}`);
   };
   const chooseSelectValue = async (label, value) => {
-    await click(line => line.includes(label) && /(?:pop up button|popup button|combo box|select)/i.test(line));
+    const observedSelect = line => line.match(/^\s*\d+ (?:pop up button|popup button|combo box|select)(?: \([^)]*\))? (.*?)(?:,|$)/i)?.[1] === label;
+    await click(observedSelect);
     await app.typeText(value);
     await app.pressKey("Return");
-    await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && /(?:pop up button|popup button|combo box|select)/i.test(line)),
-      `AX select ${label} must remain available after choosing ${value}`);
+    await waitFor(valueAx => controlLines(valueAx).some(line => observedSelect(line) && line.includes(`Value: ${value}`)),
+      `AX select ${label} must retain observed value ${value}`);
   };
   const clickInHeadingSection = async (heading, predicate) => {
     const ax = await state();
     await app.click(locateInHeadingSection(ax, heading, predicate, phase));
     return state();
+  };
+  const closePreview = async () => {
+    await app.pressKey("Escape");
+    const preview = await state();
+    if (/window Quick Look/.test(preview)) {
+      await app.click(locate(preview, line => /^\s*\d+ close button/.test(line), phase));
+      return "observed native close button";
+    }
+    return "Escape";
+  };
+  const findApplicationDetails = async (name, expectedPath) => {
+    for (let page = 0; page < 16; page += 1) {
+      const previous = controlLines(await reveal(value => controlLines(value).some(hasButton("Previous applications")))).find(hasButton("Previous applications"));
+      if (!previous || previous.includes("disabled")) break;
+      await app.click(Number(previous.trim().split(" ")[0]));
+    }
+    for (let page = 0; page < 16; page += 1) {
+      const current = await reveal(value => value.includes(expectedPath) && controlLines(value).some(hasButton(`Details for ${name}`)));
+      if (current.includes(expectedPath) && controlLines(current).some(hasButton(`Details for ${name}`))) return current;
+      const next = controlLines(await reveal(value => controlLines(value).some(hasButton("Next applications")))).find(hasButton("Next applications"));
+      assert.ok(next && !next.includes("disabled"), `supplied inventory must include ${expectedPath}`);
+      await app.click(Number(next.trim().split(" ")[0]));
+    }
+    throw Error(`Bounded inventory pages did not expose ${expectedPath}`);
   };
 
   try {
@@ -497,10 +539,10 @@ export async function runInstalledStorageJourney(initialApp, options) {
       "Preview output must open observed native Quick Look for exact output path");
     assert.ok(ax.includes(path.basename(encodedPath)), "Quick Look AX must identify exact compressed output");
     await checkpoint(`${phase}-open`);
-    await app.pressKey("Escape");
+    const previewClosedWith = await closePreview();
     ax = await waitFor(value => value.includes("Latest result") && value.includes(encodedPath) && value.includes("Preview output"),
-      "Escape must close Quick Look and restore compression result controls");
-    await phaseDone(phase, { previewPath: encodedPath, closedWith: "Escape" });
+      "native Quick Look close must restore compression result controls");
+    await phaseDone(phase, { previewPath: encodedPath, closedWith: previewClosedWith });
 
     phase = "activity-compression-filter";
     await navigate("Activity");
@@ -535,14 +577,14 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await waitFor(value => value.includes(path.basename(videoPath)) && /Quick Look|Close/i.test(value),
       "Native Quick Look must identify compressed video");
     await checkpoint(`${phase}-open`);
-    await app.pressKey("Escape");
+    const videoPreviewClosedWith = await closePreview();
     await waitFor(value => value.includes("Latest result") && value.includes(videoPath), "video preview must return to exact result");
     await navigate("Activity");
     await click(hasButton("Refresh activity"));
     await chooseSelectValue("Action", "Compression");
     await waitFor(value => value.includes("Compression · compress · completed") && value.includes(videoPath),
       "video completion must appear in durable Activity");
-    await phaseDone(phase, { output: videoPath });
+    await phaseDone(phase, { output: videoPath, previewClosedWith: videoPreviewClosedWith });
 
     for (const view of ["Apps", "Monitor", "Activity"]) {
       phase = `native-${view.toLowerCase()}`;
@@ -552,6 +594,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
       const expected = view === "Apps" ? "Application inventory" : view === "Monitor" ? "Storage volumes" : "Cleanup, scan, compression";
       ax = await waitFor(value => value.includes(expected) && value.includes(`${action.replace("Refresh readings", "refresh monitor").replace("Refresh app inventory", "refresh apps").replace("Refresh activity", "refresh activity")} complete`), `${view} native reading must render after response`);
       if (view === "Monitor") {
+        ax = await reveal(value => controlLines(value).some(hasButton("Next processes")));
         const nextLine = controlLines(ax).find(hasButton("Next processes"));
         assert.ok(nextLine, "Monitor must expose process pagination");
         if (!nextLine.includes("disabled")) {
@@ -566,6 +609,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
       }
       await phaseDone(phase);
       if (view === "Apps") {
+        ax = await reveal(value => controlLines(value).some(hasButton("Next applications")));
         const nextLine = controlLines(ax).find(hasButton("Next applications"));
         assert.ok(nextLine, "Apps must expose supplied inventory pagination");
         if (!nextLine.includes("disabled")) {
@@ -577,6 +621,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
         }
         phase = "native-app-details";
         const appName = path.basename(appBundle, path.extname(appBundle));
+        ax = await findApplicationDetails(appName, appBundle);
         assert.ok(ax.includes(appBundle), "Apps inventory must include current Cockpit bundle path");
         ax = await click(hasButton(`Details for ${appName}`));
         ax = await waitFor(value => value.includes(`Details · ${appName}`) && value.includes(appBundle), "app details must render current bundle identity and exact path");
@@ -586,7 +631,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
         assert.ok(ax.includes("report only"), "related app paths must remain report only");
         ax = await waitFor(value => value.includes("app details complete") && value.includes("Verified app inspection") && value.includes("Resource history"), "current running app must expose verified native inspection & confirmed persisted history");
         assert.ok(/Verified process · PID \d+ · start \d+/.test(ax), "native inspection must expose verified incarnation");
-        assert.ok(ax.includes("Disk I/O") && ax.includes("Open files") && ax.includes("Network endpoints"), "app inspection must render bounded native I/O observations");
+        assert.ok(/Disk I\/O/i.test(ax) && /Open files/i.test(ax) && /Network endpoints/i.test(ax), "app inspection must render bounded native I/O observations");
         const previousSamples = Number(ax.match(/(\d+) retained samples/)?.[1] ?? 0);
         assert.ok(previousSamples > 0 && previousSamples <= 256, "confirmed native history must contain bounded samples");
         ax = await click(hasButton("Check app feed"));
@@ -607,10 +652,12 @@ export async function runInstalledStorageJourney(initialApp, options) {
         assert.equal(cockpitAfter.ino, cockpitBefore.ino, "running Cockpit uninstall failure changed bundle identity");
         await click(hasButton(`Details for ${appName}`));
         ax = await waitFor(value => value.includes("app details complete") && Number(value.match(/(\d+) retained samples/)?.[1]) === Math.min(256, previousSamples + 1), "second verified inspection must append bounded resource history");
-        assert.ok(ax.includes("Application history") && /partial|unknown/i.test(ax), "app history must expose partial or unknown coverage");
+        const historyAx = await reveal(value => value.includes("Application history") && /partial|unknown/i.test(value));
+        assert.ok(historyAx.includes("Application history") && /partial|unknown/i.test(historyAx), "app history must expose partial or unknown coverage");
         await phaseDone(phase);
 
         phase = "disposable-app-inventory-and-details";
+        ax = await findApplicationDetails(appFixture.name, appFixture.path);
         ax = await waitFor(value => value.includes(appFixture.path) && value.includes(appFixture.bundleID),
           "fresh app inventory must include disposable fixture bundle and bundle ID");
         ax = await click(hasButton(`Details for ${appFixture.name}`));

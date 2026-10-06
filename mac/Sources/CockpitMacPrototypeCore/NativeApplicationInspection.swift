@@ -913,7 +913,8 @@ public final class NativeApplicationInspection {
     }
 
     private func isBoolean(_ value: Any?) -> Bool {
-        if value is Bool { return true }
+        // NSNumber(0/1) also passes Swift's `is Bool` bridge. Only actual
+        // CFBoolean values are booleans; JSON schemaVersion 1 stays numeric.
         guard let number = value as? NSNumber else { return false }
         return CFGetTypeID(number) == CFBooleanGetTypeID()
     }
