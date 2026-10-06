@@ -369,6 +369,8 @@ public final class DashboardHost: NSObject {
     private let filenameIndex: NativeFilenameIndex
     private var trustedApplications: [String: String] = [:]
     private var reviewedApplications: [String: (path: String, bundleID: String)] = [:]
+    private var trustedDuplicateReport: [String: Any]?
+    private var reviewedDuplicates: [String: NativeDuplicateRevalidation] = [:]
     private var trustedSnapshotID: String?
     private var trustedRoot: URL?
     private var trustedEntries: [String: [String: Any]] = [:]
@@ -566,6 +568,8 @@ public final class DashboardHost: NSObject {
               let roots = report["roots"] as? [String], roots.count == 1,
               let entries = report["entries"] as? [[String: Any]] else { return }
         cleanupService.revokeReviewedPlans()
+        trustedDuplicateReport = nil
+        reviewedDuplicates.removeAll()
         trustedCleanupPaths = Set((snapshot["findings"] as? [[String: Any]] ?? []).compactMap { finding in
             guard finding["eligible"] as? Bool == true,
                   finding["report_only"] as? Bool != true,
@@ -637,6 +641,7 @@ public final class DashboardHost: NSObject {
         case "refresh_apps":
             reviewedApplications.removeAll()
             cleanupService.revokeReviewedPlans()
+            reviewedDuplicates.removeAll()
             var apps = try await nativeServices.appsPayload()
             let rows = apps["apps"] as? [[String: Any]] ?? []
             trustedApplications = Dictionary(rows.compactMap { row in
@@ -746,6 +751,9 @@ public final class DashboardHost: NSObject {
             guard minimum >= 1 else { throw ScanFailure.invalidJSON("Minimum duplicate size must be positive") }
             let result = try await coordinator.commandObject(arguments: ["duplicates", root.path, "--min-size", String(minimum), "--max-files", "10000", "--max-read-bytes", "1073741824", "--seconds", "30", "--json"])
             guard let report = result["duplicates"] as? [String: Any] else { throw ScanFailure.invalidJSON("Duplicate report missing") }
+            cleanupService.revokeReviewedPlans()
+            reviewedDuplicates.removeAll()
+            trustedDuplicateReport = report
             return report
         case "compress_media":
             let quality = (payload["quality"] as? NSNumber)?.doubleValue ?? 0.8
@@ -794,10 +802,22 @@ public final class DashboardHost: NSObject {
                     throw ScanFailure.invalidJSON("Cleanup requires fully inspected ordinary files")
                 }
             }
-            return try cleanupService.review(paths: paths.map { URL(fileURLWithPath: $0) }, root: root, presenting: window)
+            let duplicates = try NativeDuplicateRevalidation.review(report: trustedDuplicateReport ?? [:], selectedPaths: paths)
+            var result = try cleanupService.review(paths: paths.map { URL(fileURLWithPath: $0) }, root: root, presenting: window)
+            if let duplicates {
+                try duplicates.revalidate()
+                guard let plan = result["plan_id"] as? String else { throw ScanFailure.invalidJSON("Cleanup review did not return a plan") }
+                reviewedDuplicates[plan] = duplicates
+                result["duplicate_content_revalidated"] = true
+            }
+            return result
         case "apply_cleanup":
             guard let plan = payload["plan_id"] as? String else { throw ScanFailure.invalidJSON("Review cleanup first") }
-            return try cleanupService.apply(planID: plan)
+            let duplicates = reviewedDuplicates[plan]
+            var result = try cleanupService.apply(planID: plan) { try duplicates?.revalidate() }
+            reviewedDuplicates.removeValue(forKey: plan)
+            if duplicates != nil { result["duplicate_content_revalidated"] = true }
+            return result
         case "undo_cleanup":
             guard let plan = payload["plan_id"] as? String else { throw ScanFailure.invalidJSON("Missing cleanup plan") }
             if payload["paths"] != nil, payload["paths"] as? [String] == nil {

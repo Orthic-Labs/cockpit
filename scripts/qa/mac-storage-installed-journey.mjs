@@ -165,7 +165,38 @@ export async function runInstalledStorageJourney(initialApp, options) {
   const navigate = async label => click(hasButton(label));
   const assertLiveFile = async file => { await access(file); return fingerprint(file); };
   const replaceText = async (label, value) => {
-    await click(line => line.includes("text field") && line.includes(label));
+    const current = await state();
+    const dateLine = controlLines(current).find(line => line.includes(`date time area ${label},`));
+    if (dateLine) {
+      const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      assert.ok(parts, `date ${label} must use explicit ISO input`);
+      const dateControls = valueAx => {
+        const lines = controlLines(valueAx);
+        const start = lines.findIndex(line => line.includes(`date time area ${label},`));
+        assert.ok(start >= 0, `date ${label} must remain available`);
+        const end = lines.findIndex((line, index) => index > start && /date time area|^\s*\d+ text (?:Created|Modified|Results)/.test(line));
+        return lines.slice(start + 1, end < 0 ? lines.length : end);
+      };
+      const segments = dateControls(current).filter(line => /stepper .* (?:month|day|year),/.test(line));
+      assert.equal(segments.length, 3, `date ${label} must expose three native segments`);
+      assert.ok(segments[0].includes("month,"), "observed native date order must begin with month");
+      assert.ok(segments[1].includes("day,") && segments[2].includes("year,"), "observed native date order must continue day/year");
+      await app.click(Number(segments[0].trim().split(" ")[0]));
+      await app.pressKey("super+a");
+      await app.typeText(parts[2]);
+      await app.pressKey("Right");
+      await app.typeText(parts[3]);
+      await app.pressKey("Right");
+      await app.typeText(parts[1]);
+      await app.pressKey("Tab");
+      await waitFor(valueAx => {
+        const controls = dateControls(valueAx);
+        return [["month", parts[2]], ["day", parts[3]], ["year", parts[1]]].every(([segment, expected]) =>
+          controls.some(line => line.includes(`${segment}, Value: ${Number(expected)}`)));
+      }, `AX date ${label} must retain all ISO segments`);
+      return;
+    }
+    await click(line => /(?:text|number) field/.test(line) && line.includes(label));
     await app.pressKey("super+a");
     await app.typeText(value);
     await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && line.includes(value)),
@@ -190,7 +221,8 @@ export async function runInstalledStorageJourney(initialApp, options) {
     if (ax.includes("system dialog Cockpit — Notch")) ax = await click(controlIncluding("button", "Open Cockpit dashboard"));
     await click(line => /(?:button|toolbar item) Scan folder(?:,|$)/.test(line));
     await pickerChoose(fixture.root);
-    ax = await waitFor(value => value.includes("Storage") && /Loaded \d+ entries/.test(value), "native folder scan must load Storage view");
+    await navigate("Storage");
+    ax = await waitFor(value => value.includes(path.basename(fixture.root)) && /Loaded \d+ entries/.test(value), "native folder scan must load selected fixture in Storage view");
     assert.ok(ax.includes(path.basename(fixture.root)), "native scan must render fixture root evidence");
     const firstSnapshot = await Promise.all(originalFixtureFiles.map(fingerprint));
     report.firstSnapshot = firstSnapshot;
@@ -205,7 +237,9 @@ export async function runInstalledStorageJourney(initialApp, options) {
       ["Activity", /Activity readings unavailable|Timeline/], ["Compress", /Compression controls/],
     ]) {
       ax = await navigate(label);
+      ax = await waitFor(value => expected.test(value), `${label} rendered controls must become accessible`);
       assert.ok(expected.test(ax), `${label} must render actual content or explicit unavailable state`);
+      assert.ok(!/^\s*\d+ text (?:null|undefined)$/m.test(ax), `${label} must not render absent nodes as text`);
       await checkpoint(`section-${label.toLowerCase()}`);
     }
     await navigate("Storage");
@@ -216,7 +250,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await access(growth.path);
     await click(line => /(?:button|toolbar item) Scan folder(?:,|$)/.test(line));
     await pickerChoose(fixture.root);
-    ax = await waitFor(value => value.includes("Storage") && /Loaded \d+ entries/.test(value), "changed fixture scan must load Storage view");
+    ax = await waitFor(value => value.includes(path.basename(fixture.root)) && /Loaded \d+ entries/.test(value) && /growing/i.test(value), "changed fixture scan must render growth in Storage view");
     assert.ok(ax.includes("Folder growth") && /growing/i.test(ax) && ax.includes(fixture.root) && /\+\d/.test(ax),
       "changed fixture scan must render positive folder growth for fixture root");
     for (let index = 0; index < originalFixtureFiles.length; index += 1) {
@@ -328,11 +362,44 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assert.ok(ax.includes("2 files considered") || ax.includes("1 groups shown"), "duplicate summary must be rendered");
     await phaseDone(phase);
 
-    phase = "native-trash-multi-review-and-apply";
+    phase = "duplicate-change-refusal";
     await navigate("Cleanup");
     ax = await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC), "cleanup must expose both duplicate extras for explicit review");
     await click(controlIncluding("checkbox", `Stage ${fixture.duplicateB}`));
     await click(controlIncluding("checkbox", `Stage ${fixture.duplicateC}`));
+    const refusedChanges = [];
+    for (const changedPath of [fixture.duplicateB, fixture.duplicateA]) {
+      ax = await click(hasButton("Review selected files"));
+      ax = await waitFor(value => value.includes("Move selected files to Trash?") && value.includes("Move to Trash"), "native duplicate review must be visible");
+      await app.click(locate(ax, hasButton("Move to Trash"), phase));
+      await waitFor(value => value.includes("Review ready") && value.includes("Duplicate bytes confirmed"), "duplicate review must confirm complete equality");
+      const original = await readFile(changedPath);
+      const changed = Buffer.from(original);
+      assert.ok(changed.length > 0, "duplicate fixture must contain bytes");
+      changed[0] ^= 0xff;
+      try {
+        await writeFile(changedPath, changed, { flag: "r+" });
+        ax = await click(hasButton("Apply cleanup"));
+        ax = await waitFor(value => /Action failed:.*duplicate (?:identity changed|content no longer matches|descriptor raced)/i.test(value), "changed duplicate must refuse Trash before claim");
+        for (const file of [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC]) await access(file);
+        for (const file of [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC].filter(file => file !== changedPath)) {
+          assertFingerprint(await fingerprint(file), before[originalFixtureFiles.indexOf(file)], "refused duplicate action preserves other originals");
+        }
+        refusedChanges.push({ path: changedPath, refusal: ax.match(/Action failed:.*duplicate[^\n]*/i)?.[0] });
+        await checkpoint(`refused-change-${path.basename(changedPath)}`);
+      } finally {
+        await writeFile(changedPath, original, { flag: "r+" });
+      }
+      assertFingerprint(await fingerprint(changedPath), before[originalFixtureFiles.indexOf(changedPath)], "restored changed fixture");
+      await navigate("Duplicates");
+      await click(line => /button (?:Inspect content for duplicates|Re-run content inspection)(?:,|$)/.test(line));
+      await waitFor(value => value.includes("Exact duplicate groups") && value.includes(fixture.duplicateC), "fresh duplicate inspection must return after refused action");
+      await navigate("Cleanup");
+      await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB), "duplicate selection must remain available after refused action");
+    }
+    await phaseDone(phase, { refusedChanges });
+
+    phase = "native-trash-multi-review-and-apply";
     ax = await click(hasButton("Review selected files"));
     ax = await waitFor(value => value.includes("Move selected files to Trash?") && value.includes("Move to Trash"), "native Trash review must be visible");
     await app.click(locate(ax, hasButton("Move to Trash"), phase));
@@ -440,6 +507,19 @@ export async function runInstalledStorageJourney(initialApp, options) {
       ax = await click(hasButton(action));
       const expected = view === "Apps" ? "Application inventory" : view === "Monitor" ? "Storage volumes" : "Cleanup, scan, compression";
       ax = await waitFor(value => value.includes(expected) && value.includes(`${action.replace("Refresh readings", "refresh monitor").replace("Refresh app inventory", "refresh apps").replace("Refresh activity", "refresh activity")} complete`), `${view} native reading must render after response`);
+      if (view === "Monitor") {
+        const nextLine = controlLines(ax).find(hasButton("Next processes"));
+        assert.ok(nextLine, "Monitor must expose process pagination");
+        if (!nextLine.includes("disabled")) {
+          await click(hasButton("Next processes"));
+          ax = await waitFor(value => /Showing 51–\d+ of/.test(value), "second process page must render distinct supplied rows");
+          await checkpoint("monitor-process-page-two");
+          await click(hasButton("Previous processes"));
+          ax = await waitFor(value => /Showing 1–50 of/.test(value), "process pagination must restore first page");
+        } else {
+          assert.ok(/Showing 1–\d+ of|No processes reported/.test(ax), "short process source must explicitly report its supplied rows");
+        }
+      }
       await phaseDone(phase);
       if (view === "Apps") {
         phase = "native-app-details";
@@ -558,7 +638,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assert.equal(afterApp.ino, beforeApp.ino, "restored app bundle identity changed");
     for (let index = 0; index < beforeApp.files.length; index += 1) assertFingerprint(afterApp.files[index], beforeApp.files[index], `restored app bundle file ${beforeApp.files[index].path}`);
     report.finalApplication = afterApp;
-    report.status = "passed";
+    report.status = report.phases.every(item => item.status === "passed") ? "passed" : "partial";
     report.finishedAt = new Date().toISOString();
     await writeFile(path.join(output, "result.json"), `${JSON.stringify(report, null, 2)}\n`);
     return report;

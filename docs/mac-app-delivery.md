@@ -61,3 +61,12 @@ Installed E2E recovery repair: standard native Edit menu restores Cmd+A/C/X/V ke
 [Hosted candidate 37451708406](https://github.com/Orthic-Labs/cockpit/actions/runs/37451708406) passed at source `03de859209e235ecc96164b6c2c648f14b0bb319`, including 105 Swift tests & packaged native dashboard checks. Candidate ZIP SHA-256 is `caeb8bf53fc391948b64deeac45dc55d8f24fb77c9970dd6189ce4eecc9823ea`; all extracted bundle files matched hosted stage summary before signing.
 
 Existing local preview packaging signed exact candidate with Developer ID team `6KLGD3LLKF`. App & DMG strict signature checks passed; DMG SHA-256 is `bfe39f8fe5e30dd5fa608c55c24e7931263df55cec61742a8d3aaae24bb383c4`. Installed `/Applications/Cockpit.app` matches signed staged binaries & dashboard assets. Installed storage journey is in progress; early chooser-harness failures are retained. No notarization or publication performed.
+
+
+## Dashboard route repair adoption — 2026-10-06
+
+[Hosted candidate 37455199423](https://github.com/Orthic-Labs/cockpit/actions/runs/37455199423) passed at source `e631454320dcbd1355bd70986c2e53d4911e8f24`: native release build, Rust runtime/Clippy, 105 Swift declarations & packaged eight-route dashboard journey. ZIP SHA-256: `e42e9c69b3ae3702f2b8d84aade94826048d5b0993de58e4996f94f5263dd595`. Every hosted bundle file matched stage summary before signing.
+
+Exact candidate was signed with existing Developer ID team `6KLGD3LLKF` & installed. Entire installed regular-file tree matches signed stage; strict app & DMG signatures pass. DMG SHA-256: `5bcfaa817335dca07b7a12f839ff4e918dcdc619c6f92ed6a1bca9321395a617`. Prior signed bundle was preserved by copy across volumes. No notarization/publication.
+
+Installed journey passed launch/native fixture scan, then failed Monitor accessibility traversal: pixels render content but its process subtree is unavailable to AX. All eight route screenshots were captured. Complete storage effects/restart journey remains unproven; source pagination repair is pending hosted & installed qualification. Six current notch instruments expose metric-specific AX readings; per-ring hover remains unrun.

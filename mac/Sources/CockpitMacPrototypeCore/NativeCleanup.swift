@@ -151,14 +151,16 @@ public final class NativeCleanupService {
         return try applyReviewedPlan(reviewed)
     }
 
-    public func apply(planID: String) throws -> [String: Any] {
+    public func apply(planID: String, revalidate: () throws -> Void = {}) throws -> [String: Any] {
         try loadStateIfNeeded()
         guard let reviewed = reviewedPlans[planID] else { throw Error.reviewRequired }
         guard reviewed.plan.id == planID else { throw Error.reviewRequired }
         guard reviewed.plan.operation != "app_uninstall" else { throw Error.unsupported("application_plan_requires_revalidation") }
-        reviewedPlans.removeValue(forKey: planID)
         guard Date().timeIntervalSince1970 < Double(reviewed.plan.expiresAt) else { throw Error.expired }
         guard journal.plans[planID] == nil else { throw Error.planAlreadyClaimed }
+        try revalidate()
+        guard Date().timeIntervalSince1970 < Double(reviewed.plan.expiresAt) else { throw Error.expired }
+        reviewedPlans.removeValue(forKey: planID)
 
         return try applyReviewedPlan(reviewed)
     }
