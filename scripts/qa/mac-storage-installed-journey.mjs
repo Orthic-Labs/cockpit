@@ -239,7 +239,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
       ax = await navigate(label);
       ax = await waitFor(value => expected.test(value), `${label} rendered controls must become accessible`);
       assert.ok(expected.test(ax), `${label} must render actual content or explicit unavailable state`);
-      assert.ok(!/^\s*\d+ text (?:null|undefined)$/m.test(ax), `${label} must not render absent nodes as text`);
+      assert.ok(!/^\s*\d+ text (?:null|undefined)$|\[object Object\]/m.test(ax), `${label} must not render absent nodes as text`);
       await checkpoint(`section-${label.toLowerCase()}`);
     }
     await navigate("Storage");
@@ -522,6 +522,15 @@ export async function runInstalledStorageJourney(initialApp, options) {
       }
       await phaseDone(phase);
       if (view === "Apps") {
+        const nextLine = controlLines(ax).find(hasButton("Next applications"));
+        assert.ok(nextLine, "Apps must expose supplied inventory pagination");
+        if (!nextLine.includes("disabled")) {
+          await click(hasButton("Next applications"));
+          ax = await waitFor(value => /Showing 26–\d+ of/.test(value), "second app page must render distinct supplied rows");
+          await checkpoint("apps-inventory-page-two");
+          await click(hasButton("Previous applications"));
+          ax = await waitFor(value => /Showing 1–25 of/.test(value), "app pagination must restore first page");
+        }
         phase = "native-app-details";
         const appName = path.basename(appBundle, path.extname(appBundle));
         assert.ok(ax.includes(appBundle), "Apps inventory must include current Cockpit bundle path");

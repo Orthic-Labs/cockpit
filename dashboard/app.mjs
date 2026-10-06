@@ -7,6 +7,7 @@ export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_ENTRIES = 100_000;
 export const MAX_RENDER_ROWS = 500;
 const MONITOR_PROCESS_PAGE_SIZE = 50;
+const APPS_PAGE_SIZE = 25;
 
 const EMPTY_RECLAIM = { lowerBytes: 0, upperBytes: null, state: "unknown", reasons: [] };
 
@@ -761,6 +762,21 @@ function renderInspector(scan, selectedPath) {
   return node("section", { className: "card inspector" }, [node("div", { className: "card-header" }, [node("h3", { textContent: "Inspector" })]), node("div", { className: "inspector-body" }, [node("div", { className: "inspector-title", textContent: item.path }), node("dl", { className: "meta-list" }, rows), manual ? node("div", { className: "row-actions" }, [manual]) : null])]);
 }
 
+function normalizeActivityEvent(event) {
+  const source = objectOrEmpty(event);
+  if (typeof source.action === "string") return source;
+  const legacy = objectOrEmpty(source.kind);
+  const types = { Scan: ["scan", "scan"], CleanupMoved: ["cleanup", "move"], CleanupRestored: ["cleanup", "restore"], Uninstall: ["uninstall", "uninstall"], Compression: ["compression", "compress"], VolumeObservation: ["volume_observation", "observe"] };
+  const kind = Object.keys(legacy).find(key => types[key]);
+  if (!kind) return { ...source, kind: "Event", operation: "Unknown", status: "Unknown" };
+  const bytes = objectOrEmpty(legacy[kind]);
+  return { ...source, action: types[kind][0], operation: types[kind][1], kind,
+    status: "recorded", time_state: Number.isFinite(asNumber(source.occurred_at)) ? "known" : "unknown",
+    logical_bytes: bytes.logical_bytes, allocation_bytes: bytes.attributed_bytes,
+    moved_bytes: bytes.moved_bytes, logical_delta_bytes: bytes.logical_delta_bytes,
+    observed_volume_delta_bytes: bytes.used_delta_bytes };
+}
+
 function renderActivity(scan) {
   const module = moduleFor(scan, "activity");
   if (!module) return moduleUnavailable(scan, "Activity", { label: "Refresh activity", name: "refresh_activity" }, "Activity totals, scan history, & cleanup history require native evidence.");
@@ -770,7 +786,7 @@ function renderActivity(scan) {
   const month = objectOrEmpty(data.month ?? data.monthly);
   const coverage = objectOrEmpty(data.coverage);
   const labels = { cleanup: "Cleanup", compression: "Compression", scan: "Scan", uninstall: "Uninstall", volume_observation: "Volume observation" };
-  const all = Array.isArray(data.events) ? data.events : [];
+  const all = Array.isArray(data.events) ? data.events.map(normalizeActivityEvent) : [];
   const selectedPeriod = state.activityPeriod === "7" ? week : state.activityPeriod === "30" ? month : null;
   const window = objectOrEmpty(selectedPeriod?.window);
   const events = all.filter(event => (!state.activityAction || event.action === state.activityAction) && (!selectedPeriod || (event.time_state === "known" && Number(event.occurred_at) >= window.start && Number(event.occurred_at) < window.end))).slice(0, MAX_RENDER_ROWS);
@@ -781,7 +797,7 @@ function renderActivity(scan) {
     const short = objectOrEmpty(objectOrEmpty(week.by_action)[key]);
     const long = objectOrEmpty(objectOrEmpty(month.by_action)[key]);
     const bytes = value => key === "compression" ? `output ${formatBytes(value.output_bytes)} · measured saving ${formatBytes(value.measured_saved_bytes)}` : key === "volume_observation" ? `observed change ${formatBytes(value.observed_volume_delta_bytes)}` : `logical ${formatBytes(value.logical_bytes)} · allocation ${formatBytes(value.allocation_bytes)}`;
-    return node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: label }), node("div", { className: "module-detail", textContent: `7 days: ${short.events ?? 0} events · ${bytes(short)} · 30 days: ${long.events ?? 0} events · ${bytes(long)}` })])]);
+    return node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: label }), node("div", { className: "module-detail", textContent: `7 days: ${short.events ?? "Unknown"} events · ${bytes(short)} · 30 days: ${long.events ?? "Unknown"} events · ${bytes(long)}` })])]);
   });
   const history = objectOrEmpty(data.history);
   const scans = Array.isArray(history.snapshots) ? history.snapshots : [];
@@ -890,7 +906,7 @@ function receiveAction(response) {
   if (action === "refresh_monitor") state.monitorProcessPage = 0;
   if (action === "refresh_filename_index" || action === "filename_index_status") { bridge.filenameIndexStatus = moduleData; state.indexMode = true; if (action === "refresh_filename_index") bridge.filenameIndexResults = null; }
   if (action === "query_filename_index") bridge.filenameIndexResults = moduleData;
-  if (action === "refresh_apps") { bridge.appDetails = null; bridge.appUpdateResult = null; bridge.appUninstallReview = null; bridge.appUninstallResult = null; }
+  if (action === "refresh_apps") { state.appsPage = 0; state.appHistoryPage = 0; bridge.appDetails = null; bridge.appUpdateResult = null; bridge.appUninstallReview = null; bridge.appUninstallResult = null; }
   if (action === "compress_media") bridge.compressionResult = objectOrEmpty(moduleData);
   if (action === "refresh_activity") captureCleanupHistory(moduleData);
   if (moduleName && source.data !== undefined && !["review_cleanup", "apply_cleanup", "undo_cleanup", "cancel_compress", "preview_compressed_output", "check_app_updates", "review_app_uninstall", "apply_app_uninstall"].includes(action)) applyModule(moduleName, moduleData);
@@ -903,7 +919,8 @@ function updateModule(name, data) {
   const moduleName = source.module ?? name;
   const moduleData = Object.keys(objectOrEmpty(source.payload)).length ? source.payload : data;
   applyModule(moduleName, moduleData);
-  if (moduleName === "monitor") state.monitorProcessPage = 0;
+  if ((MODULE_ALIASES.monitor ?? []).includes(moduleName)) state.monitorProcessPage = 0;
+  if ((MODULE_ALIASES.apps ?? []).includes(moduleName)) { state.appsPage = 0; state.appHistoryPage = 0; }
   if (moduleName === "activity" || moduleName === "history") captureCleanupHistory(moduleData);
   bridge.feedback = `${moduleName} updated`;
   bridge.error = null;
@@ -919,6 +936,8 @@ export function importScanJson(input, options = {}) {
   state.indexMode = false;
   state.indexSelected = null;
   state.monitorProcessPage = 0;
+  state.appsPage = 0;
+  state.appHistoryPage = 0;
   bridge.filenameIndexStatus = null;
   bridge.filenameIndexResults = null;
   state.staged = new Set();
@@ -1006,7 +1025,7 @@ function renderMonitor(scan) {
   return [pageHead("Monitor", "Resources, network, battery, & listening ports", nativeButton("Refresh readings", "refresh_monitor")), actionFeedback(), node("div", { className: "stats-grid" }, [statistic("CPU", cpuPercent === null || cpuPercent === undefined ? "Unknown" : `${cpuPercent}%`, text(data.observedAt ?? raw.observedAt, "Current reading")), statistic("Memory", `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`, "used / total"), statistic("Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`, "used / total"), statistic("Memory pressure", text(pressure, "Unknown"), "OS reading")]), card("Storage volumes", "Free & total space by volume", [node("div", { className: "module-list" }, diskNodes.length ? diskNodes : [node("p", { className: "muted", textContent: "No volume readings." })])]), card("Resource processes", processPageLabel, [node("div", { className: "module-list" }, processRows.length ? processRows : [node("p", { className: "muted", textContent: "No processes reported." })]), processPager]), card("Network & battery", "Current OS readings", [node("div", { className: "module-list" }, rateRows.length ? rateRows : [node("p", { className: "muted", textContent: observationReason(network.rates, "No network rate reading.") })]), node("p", { className: "faint", textContent: networkNote }), metaRow("Battery", batteryValue === undefined || batteryValue === null ? observationReason(batteryCharge, "No battery reading") : `${batteryValue}%${chargingValue === undefined || chargingValue === null ? "" : chargingValue ? " · Charging" : " · On battery"}`), metaRow("Capacity health", battery.healthPercent === undefined ? text(objectOrEmpty(battery.health).condition ?? objectOrEmpty(battery.health).reason, "Unknown") : `${Number(battery.healthPercent).toFixed(1)}% · capacity estimate`), metaRow("Cycles", battery.cycles ?? text(objectOrEmpty(battery.cycleCount).reason, "Unknown")), metaRow("Temperature", battery.temperatureC === undefined ? text(objectOrEmpty(battery.temperature).reason, "Unknown") : `${battery.temperatureC} °C`), metaRow("Battery power", battery.batteryWatts === undefined ? text(objectOrEmpty(battery.batteryPower).reason, "Unknown") : `${battery.batteryWatts} W`), metaRow("Adapter rating", battery.adapterWatts === undefined ? text(objectOrEmpty(battery.powerAdapter).reason, "Unknown") : `${battery.adapterWatts} W`), metaRow("Time remaining", secondsRemaining === undefined || secondsRemaining === null ? "Unknown" : `${Math.round(secondsRemaining / 60)} min`)]), card("Listening ports", ports.length ? `${formatCount(ports.length)} observed` : observationReason(portSource, "No listening ports reported."), [portContent])].filter(Boolean);
 }
 const bridge = { pending: null, cancelPending: null, cancelResult: null, sequence: 0, feedback: null, error: null, review: null, cleanupPlans: [], undoPlanId: null, compressionResult: null, appDetails: null, appUpdateResult: null, appUninstallReview: null, appUninstallResult: null, filenameIndexStatus: null, filenameIndexResults: null };
-const state = { scan: null, view: "storage", path: null, selected: null, indexMode: false, indexSelected: null, monitorProcessPage: 0, activityAction: "", activityPeriod: "", filters: { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }, staged: new Set(), error: null };
+const state = { scan: null, view: "storage", path: null, selected: null, indexMode: false, indexSelected: null, monitorProcessPage: 0, appsPage: 0, appHistoryPage: 0, activityAction: "", activityPeriod: "", filters: { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }, staged: new Set(), error: null };
 
 function setStatus(message, tone = "neutral") { const status = document.querySelector("#scan-status"); if (!status) return; status.textContent = message; status.dataset.tone = tone; }
 function openFilePicker() { document.querySelector("#scan-file")?.click(); }
@@ -1017,7 +1036,7 @@ function actionModule(action) { return { refresh_monitor: "monitor", refresh_app
 function applyModule(name, data) { if (!state.scan) return; state.scan.modules = { ...state.scan.modules, [name]: data }; }
 function renderApp() { if (typeof document === "undefined") return; const view = document.querySelector("#app-view"); if (!view) return; view.replaceChildren(); if (!state.scan) { view.append(node("div", { className: "empty-state" }, [node("div", { className: "empty-state-inner" }, [node("p", { className: "eyebrow", textContent: "Storage desk" }), node("h2", { textContent: "Choose a folder to scan" }), node("p", { textContent: "Scan a folder to see storage, find large files & review cleanup." }), node("button", { className: "button button-quiet", type: "button", dataset: { openFile: "" }, textContent: "Import saved scan" })])])); return; } const renderers = { storage: () => renderStorage(state.scan, state), find: () => renderFind(state.scan, state), cleanup: () => renderCleanup(state.scan, state), duplicates: () => renderDuplicates(state.scan), apps: () => renderApps(state.scan), monitor: () => renderMonitor(state.scan), activity: () => renderActivity(state.scan), compress: () => renderCompress(state.scan) }; view.append(...(renderers[state.view] ? renderers[state.view]() : renderers.storage()).filter(Boolean)); }
 
-function boot() { loadPreferences(); document.querySelector("#import-scan")?.addEventListener("click", openFilePicker); document.querySelector("#scan-file")?.addEventListener("change", (event) => { const file = event.target.files?.[0]; event.target.value = ""; importFile(file); }); document.querySelector("#section-nav")?.addEventListener("click", (event) => { const button = event.target.closest("[data-view]"); if (!button) return; state.view = button.dataset.view; state.path = null; state.selected = null; savePreferences(); syncNav(); renderApp(); }); document.querySelector("#app-view")?.addEventListener("click", (event) => { const open = event.target.closest("[data-open-file]"); if (open) { openFilePicker(); return; } const local = event.target.closest("[data-local-search]"); if (local) { state.indexMode = false; renderApp(); return; } const indexed = event.target.closest("[data-index-inspect]"); if (indexed) { state.indexSelected = indexed.dataset.indexInspect; renderApp(); return; } const clear = event.target.closest("[data-clear-filters]"); if (clear) { state.filters = { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }; state.indexSelected = null; savePreferences(); if (state.indexMode) postNativeAction("query_filename_index", indexQueryPayload()); else renderApp(); return; } const stage = event.target.closest("[data-stage-finding]"); if (stage) { if (stage.checked) state.staged.add(stage.dataset.stageFinding); else state.staged.delete(stage.dataset.stageFinding); renderApp(); return; } const stagePath = event.target.closest("[data-stage-path]"); if (stagePath) { const key = duplicateStageKey(stagePath.dataset.stagePath); if (stagePath.checked) state.staged.add(key); else state.staged.delete(key); renderApp(); return; } const monitorPage = event.target.closest("[data-monitor-process-page]"); if (monitorPage) { const nextPage = Number(monitorPage.dataset.monitorProcessPage); if (Number.isInteger(nextPage)) state.monitorProcessPage = Math.max(0, nextPage); renderApp(); return; } const cancel = event.target.closest("[data-cancel-compression]"); if (cancel) { postNativeAction("cancel_compress", { compression_request_id: bridge.pending?.request_id }); return; } const action = event.target.closest("[data-action]"); if (action) { let payload = {}; try { payload = JSON.parse(action.dataset.payload ?? "{}"); } catch { payload = {}; } if (action.dataset.path) payload.path = action.dataset.path; if ((action.dataset.action === "reveal_item" || action.dataset.action === "preview_item") && (!state.scan || !scanHasPath(state.scan, payload.path))) return; postNativeAction(action.dataset.action, payload); return; } const navigate = event.target.closest("[data-navigate]"); if (navigate) { state.path = navigate.dataset.navigate || null; state.selected = null; renderApp(); return; } const inspect = event.target.closest("[data-inspect]"); if (inspect) { state.selected = inspect.dataset.inspect; renderApp(); return; } }); document.querySelector("#app-view")?.addEventListener("change", (event) => { const filter = event.target.closest("[data-activity-filter]"); if (!filter) return; if (filter.dataset.activityFilter === "action") state.activityAction = filter.value; else state.activityPeriod = filter.value; renderApp(); }); document.querySelector("#app-view")?.addEventListener("submit", (event) => { if (event.target.id === "find-form") { event.preventDefault(); state.filters = formFilters(event.target); savePreferences(); if (state.indexMode) { try { postNativeAction("query_filename_index", indexQueryPayload()); } catch (error) { bridge.error = error.message; renderApp(); } } else renderApp(); return; } if (event.target.id === "compress-form") { event.preventDefault(); try { postNativeAction("compress_media", compressionPayload(event.target)); } catch (error) { bridge.error = error instanceof Error ? error.message : "Compression options are invalid"; bridge.feedback = null; renderApp(); } } }); syncNav(); renderApp(); }
+function boot() { loadPreferences(); document.querySelector("#import-scan")?.addEventListener("click", openFilePicker); document.querySelector("#scan-file")?.addEventListener("change", (event) => { const file = event.target.files?.[0]; event.target.value = ""; importFile(file); }); document.querySelector("#section-nav")?.addEventListener("click", (event) => { const button = event.target.closest("[data-view]"); if (!button) return; state.view = button.dataset.view; state.path = null; state.selected = null; savePreferences(); syncNav(); renderApp(); }); document.querySelector("#app-view")?.addEventListener("click", (event) => { const open = event.target.closest("[data-open-file]"); if (open) { openFilePicker(); return; } const local = event.target.closest("[data-local-search]"); if (local) { state.indexMode = false; renderApp(); return; } const indexed = event.target.closest("[data-index-inspect]"); if (indexed) { state.indexSelected = indexed.dataset.indexInspect; renderApp(); return; } const clear = event.target.closest("[data-clear-filters]"); if (clear) { state.filters = { name: "", extension: "", kind: "", minBytes: "", maxBytes: "" }; state.indexSelected = null; savePreferences(); if (state.indexMode) postNativeAction("query_filename_index", indexQueryPayload()); else renderApp(); return; } const stage = event.target.closest("[data-stage-finding]"); if (stage) { if (stage.checked) state.staged.add(stage.dataset.stageFinding); else state.staged.delete(stage.dataset.stageFinding); renderApp(); return; } const stagePath = event.target.closest("[data-stage-path]"); if (stagePath) { const key = duplicateStageKey(stagePath.dataset.stagePath); if (stagePath.checked) state.staged.add(key); else state.staged.delete(key); renderApp(); return; } const monitorPage = event.target.closest("[data-monitor-process-page]"); if (monitorPage) { const nextPage = Number(monitorPage.dataset.monitorProcessPage); if (Number.isInteger(nextPage)) state.monitorProcessPage = Math.max(0, nextPage); renderApp(); return; } const appsPage = event.target.closest("[data-apps-page]"); if (appsPage) { const nextPage = Number(appsPage.dataset.appsPage); if (Number.isInteger(nextPage)) state.appsPage = Math.max(0, nextPage); renderApp(); return; } const appHistoryPage = event.target.closest("[data-app-history-page]"); if (appHistoryPage) { const nextPage = Number(appHistoryPage.dataset.appHistoryPage); if (Number.isInteger(nextPage)) state.appHistoryPage = Math.max(0, nextPage); renderApp(); return; } const cancel = event.target.closest("[data-cancel-compression]"); if (cancel) { postNativeAction("cancel_compress", { compression_request_id: bridge.pending?.request_id }); return; } const action = event.target.closest("[data-action]"); if (action) { let payload = {}; try { payload = JSON.parse(action.dataset.payload ?? "{}"); } catch { payload = {}; } if (action.dataset.path) payload.path = action.dataset.path; if ((action.dataset.action === "reveal_item" || action.dataset.action === "preview_item") && (!state.scan || !scanHasPath(state.scan, payload.path))) return; postNativeAction(action.dataset.action, payload); return; } const navigate = event.target.closest("[data-navigate]"); if (navigate) { state.path = navigate.dataset.navigate || null; state.selected = null; renderApp(); return; } const inspect = event.target.closest("[data-inspect]"); if (inspect) { state.selected = inspect.dataset.inspect; renderApp(); return; } }); document.querySelector("#app-view")?.addEventListener("change", (event) => { const filter = event.target.closest("[data-activity-filter]"); if (!filter) return; if (filter.dataset.activityFilter === "action") state.activityAction = filter.value; else state.activityPeriod = filter.value; renderApp(); }); document.querySelector("#app-view")?.addEventListener("submit", (event) => { if (event.target.id === "find-form") { event.preventDefault(); state.filters = formFilters(event.target); savePreferences(); if (state.indexMode) { try { postNativeAction("query_filename_index", indexQueryPayload()); } catch (error) { bridge.error = error.message; renderApp(); } } else renderApp(); return; } if (event.target.id === "compress-form") { event.preventDefault(); try { postNativeAction("compress_media", compressionPayload(event.target)); } catch (error) { bridge.error = error instanceof Error ? error.message : "Compression options are invalid"; bridge.feedback = null; renderApp(); } } }); syncNav(); renderApp(); }
 
 export function getDashboardState() { return { view: state.view, path: state.path, selected: state.selected, stagedFindingIds: [...state.staged], scan: state.scan, pendingAction: bridge.pending }; }
 if (typeof globalThis !== "undefined") { globalThis.CockpitDashboard = { importScan: importScanJson, importScanJson, loadScan: importScanJson, getState: getDashboardState, receiveAction, updateModule }; globalThis.loadCockpitScan = importScanJson; }
@@ -1027,11 +1046,23 @@ function renderApps(scan) {
   const module = moduleFor(scan, "apps");
   if (!module) return moduleUnavailable(scan, "Apps", { label: "Refresh app inventory", name: "refresh_apps" }, "Installed applications, startup entries, & permissions require an available reading.");
   const data = modulePayload(module);
-  const apps = (data.apps ?? data.items ?? data.inventory ?? []).slice(0, MAX_RENDER_ROWS);
+  const appsSource = data.apps ?? data.items ?? data.inventory ?? [];
+  const apps = collectionValue(appsSource, ["apps", "items", "entries", "value"]);
+  const appsMeta = objectOrEmpty(data.appSource ?? data.app_source ?? data.inventorySource ?? data.inventory_source ?? (Array.isArray(appsSource) ? null : appsSource));
+  const declaredAppsTotal = asNumber(data.total_apps ?? data.totalApps ?? data.app_count ?? data.appCount ?? appsMeta.total ?? appsMeta.total_count ?? appsMeta.totalCount ?? appsMeta.app_count ?? appsMeta.appCount);
+  const appsTotal = declaredAppsTotal !== null && declaredAppsTotal >= apps.length ? declaredAppsTotal : apps.length;
+  const appsTruncated = data.truncated === true || data.apps_truncated === true || data.appsTruncated === true || appsMeta.truncated === true || appsMeta.apps_truncated === true || appsMeta.appsTruncated === true || appsTotal > apps.length;
+  const appsPageCount = Math.max(1, Math.ceil(apps.length / APPS_PAGE_SIZE));
+  const appsPage = Math.min(Math.max(0, state.appsPage), appsPageCount - 1);
+  state.appsPage = appsPage;
+  const appsStart = appsPage * APPS_PAGE_SIZE;
+  const pageApps = apps.slice(appsStart, appsStart + APPS_PAGE_SIZE);
+  const appsEnd = pageApps.length ? appsStart + pageApps.length : 0;
+  const appsPageLabel = apps.length ? `Showing ${formatCount(appsStart + 1)}–${formatCount(appsEnd)} of ${formatCount(appsTotal)} applications${appsTruncated ? " · source truncated" : ""}` : appsTruncated ? `No supplied applications · source truncated at ${formatCount(appsTotal)}` : "No applications reported";
   const startupSource = objectOrEmpty(data.startup ?? data.startup_entries ?? data.startupEntries);
   const startup = (startupSource.launchItems ?? startupSource.items ?? data.launchItems ?? data.launch_items ?? []).slice(0, MAX_RENDER_ROWS);
   const startupUnavailable = startupSource.available === false || startupSource.supported === false;
-  const appRows = apps.map((app) => {
+  const appRows = pageApps.map((app) => {
     const identity = objectOrEmpty(app.identity);
     const name = app.name ?? identity.name ?? app.display_name ?? app.displayName;
     const path = app.path ?? app.root ?? identity.path;
@@ -1046,7 +1077,8 @@ function renderApps(scan) {
   const inventoryIncomplete = data.inventoryIncomplete === true || data.inventory_incomplete === true;
   const coverageReason = Array.isArray(data.reasons) && data.reasons.length ? data.reasons.join(" · ") : text(missing, "Some app metadata is unavailable.");
   const uninstallHistory = bridge.appUninstallResult ? cleanupPlanHistory(bridge.appUninstallResult) : null;
-  return [pageHead("Apps", "Installed applications & startup items", nativeButton("Refresh app inventory", "refresh_apps")), actionFeedback(), inventoryIncomplete || missing ? node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", textContent: "!" }), node("p", { textContent: inventoryIncomplete ? `Partial inventory · ${coverageReason}` : `Some app details are unavailable: ${coverageReason}` })]) : null, renderApplicationDetails(bridge.appDetails), uninstallHistory, card("Application inventory", `${formatCount(apps.length)} applications · ${inventoryIncomplete ? "partial coverage" : "reported coverage"}`, [node("div", { className: "app-list" }, appRows.length ? appRows : [node("p", { className: "muted", textContent: "No application readings." })])]), renderApplicationHistory(data.history), card("Startup items", "Launch items reported by system", [node("div", { className: "module-list" }, startupRows.length ? startupRows : [node("p", { className: "muted", textContent: startupUnavailable ? text(startupSource.reason, "Startup items unavailable") : "No startup items found." })])])].filter(Boolean);
+  const appsPager = node("div", { className: "row-actions" }, [node("button", { className: "button button-quiet", type: "button", disabled: appsPage <= 0, dataset: { appsPage: String(appsPage - 1) }, textContent: "Previous applications" }), node("span", { className: "muted", textContent: appsPageLabel }), node("button", { className: "button button-quiet", type: "button", disabled: appsPage >= appsPageCount - 1, dataset: { appsPage: String(appsPage + 1) }, textContent: "Next applications" })]);
+  return [pageHead("Apps", "Installed applications & startup items", nativeButton("Refresh app inventory", "refresh_apps")), actionFeedback(), inventoryIncomplete || missing ? node("div", { className: "notice", role: "status" }, [node("div", { className: "notice-icon", textContent: "!" }), node("p", { textContent: inventoryIncomplete ? `Partial inventory · ${coverageReason}` : `Some app details are unavailable: ${coverageReason}` })]) : null, renderApplicationDetails(bridge.appDetails), uninstallHistory, card("Application inventory", `${appsPageLabel} · ${inventoryIncomplete ? "partial coverage" : "reported coverage"}`, [node("div", { className: "app-list" }, appRows.length ? appRows : [node("p", { className: "muted", textContent: "No application readings." })]), appsPager]), renderApplicationHistory(data.history), card("Startup items", "Launch items reported by system", [node("div", { className: "module-list" }, startupRows.length ? startupRows : [node("p", { className: "muted", textContent: startupUnavailable ? text(startupSource.reason, "Startup items unavailable") : "No startup items found." })])])].filter(Boolean);
 }
 
 function renderApplicationDetails(details) {
@@ -1085,8 +1117,22 @@ function renderApplicationInspection(value) {
 }
 function renderApplicationHistory(history) {
   if (!history) return null;
-  const records = (history.records ?? []).slice(0, MAX_RENDER_ROWS);
-  return card("Application history", history.qualifiedForDisappearance ? "Qualified inventory history" : "Standard roots only · disappearance unknown", [node("div", { className: "module-list" }, records.length ? records.map(item => node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: text(item.name) }), node("div", { className: "module-detail", textContent: text(item.path) })]), node("span", { className: "muted", textContent: text(item.state) })])) : [node("p", { className: "muted", textContent: text(history.reason, "No history recorded") })])]);
+  const recordsSource = history.records ?? history.items ?? [];
+  const records = collectionValue(recordsSource, ["records", "items", "entries", "value"]);
+  const recordsMeta = objectOrEmpty(Array.isArray(recordsSource) ? null : recordsSource);
+  const declaredTotal = asNumber(history.total_records ?? history.totalRecords ?? history.record_count ?? history.recordCount ?? recordsMeta.total ?? recordsMeta.total_count ?? recordsMeta.totalCount);
+  const recordsTotal = declaredTotal !== null && declaredTotal >= records.length ? declaredTotal : records.length;
+  const recordsTruncated = history.truncated === true || history.records_truncated === true || history.recordsTruncated === true || recordsMeta.truncated === true || recordsMeta.records_truncated === true || recordsMeta.recordsTruncated === true || recordsTotal > records.length;
+  const pageCount = Math.max(1, Math.ceil(records.length / APPS_PAGE_SIZE));
+  const page = Math.min(Math.max(0, state.appHistoryPage), pageCount - 1);
+  state.appHistoryPage = page;
+  const start = page * APPS_PAGE_SIZE;
+  const pageRecords = records.slice(start, start + APPS_PAGE_SIZE);
+  const end = pageRecords.length ? start + pageRecords.length : 0;
+  const pageLabel = records.length ? `Showing ${formatCount(start + 1)}–${formatCount(end)} of ${formatCount(recordsTotal)} history records${recordsTruncated ? " · source truncated" : ""}` : recordsTruncated ? `No supplied history records · source truncated at ${formatCount(recordsTotal)}` : "No history records";
+  const pager = node("div", { className: "row-actions" }, [node("button", { className: "button button-quiet", type: "button", disabled: page <= 0, dataset: { appHistoryPage: String(page - 1) }, textContent: "Previous history" }), node("span", { className: "muted", textContent: pageLabel }), node("button", { className: "button button-quiet", type: "button", disabled: page >= pageCount - 1, dataset: { appHistoryPage: String(page + 1) }, textContent: "Next history" })]);
+  const rows = pageRecords.length ? pageRecords.map(item => node("div", { className: "module-row" }, [node("div", {}, [node("div", { className: "module-name", textContent: text(item.name) }), node("div", { className: "module-detail", textContent: text(item.path) })]), node("span", { className: "muted", textContent: text(item.state) })])) : [node("p", { className: "muted", textContent: text(history.reason, "No history recorded") })];
+  return card("Application history", `${history.qualifiedForDisappearance ? "Qualified inventory history" : "Standard roots only · disappearance unknown"} · ${pageLabel}`, [node("div", { className: "module-list" }, rows), pager]);
 }
 
 const COMPRESSION_FORMATS = ["jpeg", "png", "heic", "mp4", "mov"];
