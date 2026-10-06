@@ -196,6 +196,21 @@ export async function runInstalledStorageJourney(initialApp, options) {
     report.firstSnapshot = firstSnapshot;
     await phaseDone(phase);
 
+    phase = "all-dashboard-sections-render";
+    for (const [label, expected] of [
+      ["Storage", /Storage map/], ["Find", /Filename index/],
+      ["Duplicates", /Duplicates readings unavailable|Duplicate groups/], ["Cleanup", /Findings/],
+      ["Apps", /Apps readings unavailable|Application inventory/],
+      ["Monitor", /Monitor readings unavailable|Storage volumes/],
+      ["Activity", /Activity readings unavailable|Timeline/], ["Compress", /Compression controls/],
+    ]) {
+      ax = await navigate(label);
+      assert.ok(expected.test(ax), `${label} must render actual content or explicit unavailable state`);
+      await checkpoint(`section-${label.toLowerCase()}`);
+    }
+    await navigate("Storage");
+    await phaseDone(phase);
+
     phase = "changed-fixture-rescan-and-growth";
     const growth = await addStorageGrowthFile(fixture);
     await access(growth.path);
