@@ -408,7 +408,7 @@ system-tool/
   upstream/petal/        git subtree of henrydennis/petal
   core/                  shared Rust core + CLI (own code)
   mac/                   Mac app shell: imports upstream modules through adapters
-  windows/               native Windows pill (own code)
+  windows/               native Windows notch (own code)
   dashboard/             Tauri dashboard & settings (own code)
 ```
 
