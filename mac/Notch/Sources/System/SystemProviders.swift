@@ -1,9 +1,9 @@
 import Darwin
 import Foundation
 
-/// Cockpit fork: the machine's own readings as two notch cells — system (CPU
-/// as the main ring, memory pressure as the thin outer ring) and disks
-/// (internal drive as the main ring, external as the outer ring). Each is a `UsageProvider` of
+/// Cockpit fork: the machine's own readings as two notch cells — system
+/// (memory pressure as the main outer ring, CPU as the thin inner ring) and
+/// disks (external drive as the main outer ring, internal as the inner). Each is a `UsageProvider` of
 /// kind `.system`, so it gets Codenotch's ring, hover card and ordering for
 /// free, while the store refreshes it every two seconds and keeps it out of
 /// the usage archive and alerts.
@@ -34,8 +34,8 @@ enum SystemProviders {
     }
 }
 
-/// One cell: share of all cores busy since the previous reading as the main
-/// ring, memory pressure as the thin outer ring.
+/// One cell: memory pressure as the main ring, share of all cores busy since
+/// the previous reading as the thin inner ring.
 actor SystemLoadProvider: UsageProvider {
     nonisolated let id = SystemProviders.cpuID
     nonisolated let displayName = "System"
@@ -65,9 +65,12 @@ actor SystemLoadProvider: UsageProvider {
                               usedFraction: min(max(busy / total, 0), 1),
                               detail: L10n.t("\(Percent.text(for: busy / total))% busy · \(cores) cores"))
         let memory = try? MemoryProvider.window()
+        // Memory pressure leads (the main, outer ring); CPU is the thin inner
+        // ring. Without a memory reading, CPU leads alone.
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
                                 status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []),
-                                headlineID: cpu.id, weeklyID: memory?.id, kind: .system)
+                                headlineID: memory?.id ?? cpu.id,
+                                weeklyID: memory == nil ? nil : cpu.id, kind: .system)
     }
 
     private static func read() throws -> Ticks {
@@ -159,9 +162,9 @@ struct MemoryProvider: UsageProvider {
     }
 }
 
-/// One cell for every mounted local, writable, browsable volume. The internal
-/// (startup) drive is the main ring; the first external drive is the thin
-/// outer ring, drawn by Codenotch's second-ring support. Every drive is listed
+/// One cell for every mounted local, writable, browsable volume. The first
+/// external drive is the main ring; the internal (startup) drive is the thin
+/// inner ring, drawn by Codenotch's second-ring support. Every drive is listed
 /// in the hover card with how much is free, as Finder counts it. Volumes are
 /// re-read on each refresh, so a drive plugged in later appears without a
 /// relaunch and an ejected one drops out.
@@ -187,15 +190,19 @@ struct DisksProvider: UsageProvider {
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
         let volumes = Self.volumes()
-        let internal = volumes.first(where: \.isStartup) ?? volumes.first(where: \.isInternal)
-        guard let main = internal ?? volumes.first else {
+        let startup = volumes.first(where: \.isStartup) ?? volumes.first(where: \.isInternal)
+        guard let inside = startup ?? volumes.first else {
             throw UsageProviderError.apiError(L10n.t("No local disks found"))
         }
-        let outer = volumes.first { !$0.isInternal && $0.window.id != main.window.id }
-        let ordered = [main] + volumes.filter { $0.window.id != main.window.id }
+        // The external drive leads (the main, outer ring) and the internal one
+        // is the thin inner ring; with no external drive, internal leads alone.
+        let external = volumes.first { !$0.isInternal && $0.window.id != inside.window.id }
+        let lead = external ?? inside
+        let ordered = [inside] + volumes.filter { $0.window.id != inside.window.id }
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
                                 status: .ok, windows: ordered.map(\.window),
-                                headlineID: main.window.id, weeklyID: outer?.window.id,
+                                headlineID: lead.window.id,
+                                weeklyID: external == nil ? nil : inside.window.id,
                                 kind: .system)
     }
 

@@ -859,7 +859,9 @@ final class Preferences: ObservableObject {
         // choice for whoever budgets their week that way.
         self.claudeDailyPaceRing = defaults.bool(forKey: Keys.claudeDailyPaceRing)
         // Off by default for the same reason: it changes what every ring means.
-        self.weeklyHeadline = defaults.bool(forKey: Keys.weeklyHeadline)
+        // Cockpit fork: the weekly limit leads (main, outer ring); the
+        // five-hour session is the thin inner ring.
+        self.weeklyHeadline = defaults.object(forKey: Keys.weeklyHeadline) as? Bool ?? true
         self.showCodexExtraLimits = Self.storedShowCodexExtraLimits(defaults: defaults)
         self.deepSeekPricingEnabled = defaults.object(forKey: Keys.deepSeekPricingEnabled) as? Bool ?? true
         if let data = defaults.data(forKey: Keys.deepSeekPricingSchedule),
