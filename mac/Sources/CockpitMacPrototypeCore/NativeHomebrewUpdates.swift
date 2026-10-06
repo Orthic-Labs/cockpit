@@ -344,8 +344,8 @@ public enum NativeHomebrewUpdates {
                 depth += 1
             } else if character == "}" {
                 depth -= 1
-                if depth == 0, let start {
-                    let candidate = String(text[start...index])
+                if depth == 0, let objectStart = start {
+                    let candidate = String(text[objectStart...index])
                     if let object = try? JSONSerialization.jsonObject(with: Data(candidate.utf8)) as? [String: Any] {
                         return object
                     }
