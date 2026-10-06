@@ -84,7 +84,7 @@ function assertFingerprint(actual, expected, label) {
  * quitting and before relaunching, then return `preparedWhileClosed: true`.
  */
 export async function runInstalledStorageJourney(initialApp, options) {
-  const { appBundle, fixture, output, onRelaunch, onCheckpoint = () => {}, onRingHover } = options;
+  const { appBundle, fixture, output, onRelaunch, onCheckpoint = () => {}, onRingHover, continueAfterTrashAccessDenied = false } = options;
   assert.ok(initialApp && typeof initialApp.getAXState === "function", "CUA app is required");
   assert.ok(path.isAbsolute(appBundle) && path.isAbsolute(output), "appBundle/output must be absolute");
   assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.sourceVideo && fixture?.growthFile && fixture?.hiddenFile && fixture?.replayFile,
@@ -110,6 +110,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
   report.inputs = before;
   report.applicationInput = beforeApp;
   let phase = "launch-and-native-scan";
+  let trashAccessDenied = false;
 
   const state = () => app.getAXState({ emit: false, disableDiffing: true });
   const waitFor = async (predicate, description, timeout = 30_000) => {
@@ -363,99 +364,111 @@ export async function runInstalledStorageJourney(initialApp, options) {
     assert.ok(ax.includes("2 files considered") || ax.includes("1 groups shown"), "duplicate summary must be rendered");
     await phaseDone(phase);
 
-    phase = "duplicate-change-refusal";
-    await navigate("Cleanup");
-    ax = await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC), "cleanup must expose both duplicate extras for explicit review");
-    await click(controlIncluding("checkbox", `Stage ${fixture.duplicateB}`));
-    await click(controlIncluding("checkbox", `Stage ${fixture.duplicateC}`));
-    const refusedChanges = [];
-    for (const changedPath of [fixture.duplicateB, fixture.duplicateA]) {
-      ax = await click(hasButton("Review selected files"));
-      ax = await waitFor(value => value.includes("Move selected files to Trash?") && value.includes("Move to Trash"), "native duplicate review must be visible");
-      await app.click(locate(ax, hasButton("Move to Trash"), phase));
-      await waitFor(value => value.includes("Review ready") && value.includes("Duplicate bytes confirmed"), "duplicate review must confirm complete equality");
-      const original = await readFile(changedPath);
-      const changed = Buffer.from(original);
-      assert.ok(changed.length > 0, "duplicate fixture must contain bytes");
-      changed[0] ^= 0xff;
-      try {
-        await writeFile(changedPath, changed, { flag: "r+" });
-        ax = await click(hasButton("Apply cleanup"));
-        ax = await waitFor(value => /Action failed:.*duplicate (?:identity changed|content no longer matches|descriptor raced)/i.test(value), "changed duplicate must refuse Trash before claim");
-        for (const file of [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC]) await access(file);
-        for (const file of [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC].filter(file => file !== changedPath)) {
-          assertFingerprint(await fingerprint(file), before[originalFixtureFiles.indexOf(file)], "refused duplicate action preserves other originals");
-        }
-        refusedChanges.push({ path: changedPath, refusal: ax.match(/Action failed:.*duplicate[^\n]*/i)?.[0] });
-        await checkpoint(`refused-change-${path.basename(changedPath)}`);
-      } finally {
-        await writeFile(changedPath, original, { flag: "r+" });
-      }
-      assertFingerprint(await fingerprint(changedPath), before[originalFixtureFiles.indexOf(changedPath)], "restored changed fixture");
-      await navigate("Duplicates");
-      await click(line => /button (?:Inspect content for duplicates|Re-run content inspection)(?:,|$)/.test(line));
-      await waitFor(value => value.includes("Exact duplicate groups") && value.includes(fixture.duplicateC), "fresh duplicate inspection must return after refused action");
+    try {
+      phase = "duplicate-change-refusal";
       await navigate("Cleanup");
-      await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB), "duplicate selection must remain available after refused action");
+      ax = await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC), "cleanup must expose both duplicate extras for explicit review");
+      await click(controlIncluding("checkbox", `Stage ${fixture.duplicateB}`));
+      await click(controlIncluding("checkbox", `Stage ${fixture.duplicateC}`));
+      const refusedChanges = [];
+      for (const changedPath of [fixture.duplicateB, fixture.duplicateA]) {
+        ax = await click(hasButton("Review selected files"));
+        ax = await waitFor(value => (value.includes("Move selected files to Trash?") && value.includes("Move to Trash")) || /Action failed: macOS denied access to Trash directory/.test(value), "native duplicate review must be visible");
+        if (/Action failed: macOS denied access to Trash directory/.test(ax)) throw Error("Native Trash access denied before review");
+        await app.click(locate(ax, hasButton("Move to Trash"), phase));
+        await waitFor(value => value.includes("Review ready") && value.includes("Duplicate bytes confirmed"), "duplicate review must confirm complete equality");
+        const original = await readFile(changedPath);
+        const changed = Buffer.from(original);
+        assert.ok(changed.length > 0, "duplicate fixture must contain bytes");
+        changed[0] ^= 0xff;
+        try {
+          await writeFile(changedPath, changed, { flag: "r+" });
+          ax = await click(hasButton("Apply cleanup"));
+          ax = await waitFor(value => /Action failed:.*duplicate (?:identity changed|content no longer matches|descriptor raced)/i.test(value), "changed duplicate must refuse Trash before claim");
+          for (const file of [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC]) await access(file);
+          for (const file of [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC].filter(file => file !== changedPath)) {
+            assertFingerprint(await fingerprint(file), before[originalFixtureFiles.indexOf(file)], "refused duplicate action preserves other originals");
+          }
+          refusedChanges.push({ path: changedPath, refusal: ax.match(/Action failed:.*duplicate[^\n]*/i)?.[0] });
+          await checkpoint(`refused-change-${path.basename(changedPath)}`);
+        } finally {
+          await writeFile(changedPath, original, { flag: "r+" });
+        }
+        assertFingerprint(await fingerprint(changedPath), before[originalFixtureFiles.indexOf(changedPath)], "restored changed fixture");
+        await navigate("Duplicates");
+        await click(line => /button (?:Inspect content for duplicates|Re-run content inspection)(?:,|$)/.test(line));
+        await waitFor(value => value.includes("Exact duplicate groups") && value.includes(fixture.duplicateC), "fresh duplicate inspection must return after refused action");
+        await navigate("Cleanup");
+        await waitFor(value => value.includes("Duplicate extras") && value.includes(fixture.duplicateB), "duplicate selection must remain available after refused action");
+      }
+      await phaseDone(phase, { refusedChanges });
+
+      phase = "native-trash-multi-review-and-apply";
+      ax = await click(hasButton("Review selected files"));
+      ax = await waitFor(value => value.includes("Move selected files to Trash?") && value.includes("Move to Trash"), "native Trash review must be visible");
+      await app.click(locate(ax, hasButton("Move to Trash"), phase));
+      ax = await waitFor(value => value.includes("Review ready") || value.includes("Cleanup complete"), "native review must return to dashboard");
+      ax = await click(hasButton("Apply cleanup"));
+      ax = await waitFor(value => value.includes("Cleanup complete") && value.includes("2 files moved to Trash"), "native multi-file cleanup apply must complete");
+      await assert.rejects(() => access(fixture.duplicateB), /ENOENT/, "first duplicate extra must be absent after native apply");
+      await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must be absent after native apply");
+      await access(fixture.discard);
+      ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render applied plan");
+      assert.ok(!/(?:Cleanup incomplete|interrupted|indeterminate|failed)/i.test(ax), "partial native cleanup outcome cannot be reported as success");
+      await phaseDone(phase);
+
+      phase = "quit-relaunch-and-undo";
+      const relaunched = await onRelaunch({ app, phase, fixture, report });
+      assert.ok(relaunched?.restarted === true, "onRelaunch must report observed quit/relaunch completion");
+      app = relaunched.app;
+      assert.ok(app && typeof app.getAXState === "function", "onRelaunch must return fresh CUA app");
+      ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "relaunch must return to native dashboard");
+      await navigate("Activity");
+      ax = await click(hasButton("Refresh activity"));
+      ax = await waitFor(value => value.includes("Cleanup, scan, compression") && value.includes("Cleanup history"), "activity must reload durable cleanup journal");
+      await click(hasButton(`Restore ${path.basename(fixture.duplicateB)}`));
+      ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "native per-item Restore must complete after relaunch");
+      const restoredOneFile = await assertLiveFile(fixture.duplicateB);
+      assertFingerprint(restoredOneFile, before[originalFixtureFiles.indexOf(fixture.duplicateB)], "restored first duplicate extra");
+      await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must remain missing after per-item Restore");
+      ax = await click(hasButton("Undo"));
+      ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "whole Undo must restore remaining item");
+      const restoredTwo = await assertLiveFile(fixture.duplicateC);
+      assertFingerprint(restoredTwo, before[originalFixtureFiles.indexOf(fixture.duplicateC)], "restored second duplicate extra");
+      const restored = await assertLiveFile(fixture.discard);
+      assertFingerprint(restored, before[originalFixtureFiles.indexOf(fixture.discard)], "retained discard fixture");
+      await navigate("Cleanup");
+      ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render restored plan");
+      assert.ok(!/(?:Undo incomplete|interrupted|indeterminate|failed)/i.test(ax), "partial native Undo outcome cannot be reported as success");
+      await phaseDone(phase, { restored: [restoredOneFile, restoredTwo, restored] });
+
+      phase = "activity-cleanup-filters-and-scan-history";
+      await navigate("Activity");
+      ax = await click(hasButton("Refresh activity"));
+      ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline") && value.includes("Cleanup history"),
+        "durable Activity refresh must render timeline and cleanup history");
+      await chooseSelectValue("Action", "Cleanup");
+      await chooseSelectValue("Period", "Last 7 days");
+      ax = await waitFor(value => value.includes(`Cleanup · move · moved`) && value.includes(`Cleanup · restore · restored`) && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC),
+        "Cleanup and restore events must remain visible for both duplicate paths");
+      assert.match(ax, /7 days: \d+ events/);
+      assert.match(ax, /30 days: \d+ events/);
+      assert.ok(/observed allocation Unknown/i.test(ax), "cleanup timeline must preserve unknown allocation");
+      assert.ok(!/\bFreed\s+\d/i.test(ax) && !/\breclaimed\s+\d/i.test(ax), "cleanup Activity must not claim freed or reclaimed bytes");
+      await chooseSelectValue("Action", "Scan");
+      ax = await waitFor(value => value.includes("Scan ·") && value.includes(fixture.root) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
+        "Scan filter must render durable fixture scan evidence with known timestamp");
+      await phaseDone(phase, { cleanupPaths: [fixture.duplicateB, fixture.duplicateC], scanRoot: fixture.root });
+
+    } catch (error) {
+      const denial = await state();
+      if (!continueAfterTrashAccessDenied || phase !== "duplicate-change-refusal" || !/Action failed: macOS denied access to Trash directory/.test(denial)) throw error;
+      trashAccessDenied = true;
+      for (const name of ["duplicate-change-refusal", "native-trash-multi-review-and-apply", "quit-relaunch-and-undo", "activity-cleanup-filters-and-scan-history"]) {
+        report.phases.push({ name, status: "blocked", reason: "Observed macOS denial of native Trash directory access before review/effects", at: new Date().toISOString() });
+      }
+      await checkpoint("native-trash-access-denied");
     }
-    await phaseDone(phase, { refusedChanges });
-
-    phase = "native-trash-multi-review-and-apply";
-    ax = await click(hasButton("Review selected files"));
-    ax = await waitFor(value => value.includes("Move selected files to Trash?") && value.includes("Move to Trash"), "native Trash review must be visible");
-    await app.click(locate(ax, hasButton("Move to Trash"), phase));
-    ax = await waitFor(value => value.includes("Review ready") || value.includes("Cleanup complete"), "native review must return to dashboard");
-    ax = await click(hasButton("Apply cleanup"));
-    ax = await waitFor(value => value.includes("Cleanup complete") && value.includes("2 files moved to Trash"), "native multi-file cleanup apply must complete");
-    await assert.rejects(() => access(fixture.duplicateB), /ENOENT/, "first duplicate extra must be absent after native apply");
-    await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must be absent after native apply");
-    await access(fixture.discard);
-    ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render applied plan");
-    assert.ok(!/(?:Cleanup incomplete|interrupted|indeterminate|failed)/i.test(ax), "partial native cleanup outcome cannot be reported as success");
-    await phaseDone(phase);
-
-    phase = "quit-relaunch-and-undo";
-    const relaunched = await onRelaunch({ app, phase, fixture, report });
-    assert.ok(relaunched?.restarted === true, "onRelaunch must report observed quit/relaunch completion");
-    app = relaunched.app;
-    assert.ok(app && typeof app.getAXState === "function", "onRelaunch must return fresh CUA app");
-    ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "relaunch must return to native dashboard");
-    await navigate("Activity");
-    ax = await click(hasButton("Refresh activity"));
-    ax = await waitFor(value => value.includes("Cleanup, scan, compression") && value.includes("Cleanup history"), "activity must reload durable cleanup journal");
-    await click(hasButton(`Restore ${path.basename(fixture.duplicateB)}`));
-    ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "native per-item Restore must complete after relaunch");
-    const restoredOneFile = await assertLiveFile(fixture.duplicateB);
-    assertFingerprint(restoredOneFile, before[originalFixtureFiles.indexOf(fixture.duplicateB)], "restored first duplicate extra");
-    await assert.rejects(() => access(fixture.duplicateC), /ENOENT/, "second duplicate extra must remain missing after per-item Restore");
-    ax = await click(hasButton("Undo"));
-    ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "whole Undo must restore remaining item");
-    const restoredTwo = await assertLiveFile(fixture.duplicateC);
-    assertFingerprint(restoredTwo, before[originalFixtureFiles.indexOf(fixture.duplicateC)], "restored second duplicate extra");
-    const restored = await assertLiveFile(fixture.discard);
-    assertFingerprint(restored, before[originalFixtureFiles.indexOf(fixture.discard)], "retained discard fixture");
-    await navigate("Cleanup");
-    ax = await waitFor(value => value.includes("Cleanup history"), "cleanup history must render restored plan");
-    assert.ok(!/(?:Undo incomplete|interrupted|indeterminate|failed)/i.test(ax), "partial native Undo outcome cannot be reported as success");
-    await phaseDone(phase, { restored: [restoredOneFile, restoredTwo, restored] });
-
-    phase = "activity-cleanup-filters-and-scan-history";
-    await navigate("Activity");
-    ax = await click(hasButton("Refresh activity"));
-    ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline") && value.includes("Cleanup history"),
-      "durable Activity refresh must render timeline and cleanup history");
-    await chooseSelectValue("Action", "Cleanup");
-    await chooseSelectValue("Period", "Last 7 days");
-    ax = await waitFor(value => value.includes(`Cleanup · move · moved`) && value.includes(`Cleanup · restore · restored`) && value.includes(fixture.duplicateB) && value.includes(fixture.duplicateC),
-      "Cleanup and restore events must remain visible for both duplicate paths");
-    assert.match(ax, /7 days: \d+ events/);
-    assert.match(ax, /30 days: \d+ events/);
-    assert.ok(/observed allocation Unknown/i.test(ax), "cleanup timeline must preserve unknown allocation");
-    assert.ok(!/\bFreed\s+\d/i.test(ax) && !/\breclaimed\s+\d/i.test(ax), "cleanup Activity must not claim freed or reclaimed bytes");
-    await chooseSelectValue("Action", "Scan");
-    ax = await waitFor(value => value.includes("Scan ·") && value.includes(fixture.root) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
-      "Scan filter must render durable fixture scan evidence with known timestamp");
-    await phaseDone(phase, { cleanupPaths: [fixture.duplicateB, fixture.duplicateC], scanRoot: fixture.root });
 
     phase = "native-compression-picker";
     const sourceBefore = await assertLiveFile(fixture.sourcePng);
@@ -606,53 +619,62 @@ export async function runInstalledStorageJourney(initialApp, options) {
         assert.ok(ax.includes("Unknown") && ax.includes("report only"), "disposable app metadata must preserve unknown bytes and report-only related paths");
         await phaseDone(phase);
 
-        phase = "disposable-app-uninstall-cancel-and-apply";
-        ax = await click(hasButton("Review app uninstall"));
-        ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
-          "disposable app uninstall review must show native confirmation");
-        await app.click(locate(ax, hasButton("Cancel"), phase));
-        ax = await waitFor(value => /Action failed:/i.test(value) && /cancel/i.test(value),
-          "disposable app uninstall review cancel must return explicit cancellation");
-        const canceledBundle = await bundleFingerprint(appFixture);
-        assert.equal(canceledBundle.ino, beforeApp.ino, "canceled app review changed bundle identity");
-        ax = await click(hasButton("Review app uninstall"));
-        ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
-          "disposable app uninstall retry must show native confirmation");
-        await app.click(locate(ax, hasButton("Move App to Trash"), phase));
-        ax = await waitFor(value => value.includes("Review ready · app uninstall") && value.includes("Apply app uninstall"),
-          "accepted app uninstall review must expose native apply action");
-        ax = await click(hasButton("Apply app uninstall"));
-        ax = await waitFor(value => value.includes("App uninstall complete") && /1 app moved to Trash/.test(value),
-          "app uninstall apply must report one moved bundle");
-        await assert.rejects(() => access(appFixture.path), /ENOENT/, "app bundle must be absent after uninstall apply");
-        await phaseDone(phase, { appPath: appFixture.path, bundleID: appFixture.bundleID });
+        if (trashAccessDenied) {
+          report.phases.push({ name: "disposable-app-uninstall-cancel-and-apply", status: "blocked", reason: "Native Trash access denied; uninstall effect unrun", at: new Date().toISOString() });
+        } else {
+          phase = "disposable-app-uninstall-cancel-and-apply";
+          ax = await click(hasButton("Review app uninstall"));
+          ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
+            "disposable app uninstall review must show native confirmation");
+          await app.click(locate(ax, hasButton("Cancel"), phase));
+          ax = await waitFor(value => /Action failed:/i.test(value) && /cancel/i.test(value),
+            "disposable app uninstall review cancel must return explicit cancellation");
+          const canceledBundle = await bundleFingerprint(appFixture);
+          assert.equal(canceledBundle.ino, beforeApp.ino, "canceled app review changed bundle identity");
+          ax = await click(hasButton("Review app uninstall"));
+          ax = await waitFor(value => value.includes("Move App to Trash") && value.includes("Cancel"),
+            "disposable app uninstall retry must show native confirmation");
+          await app.click(locate(ax, hasButton("Move App to Trash"), phase));
+          ax = await waitFor(value => value.includes("Review ready · app uninstall") && value.includes("Apply app uninstall"),
+            "accepted app uninstall review must expose native apply action");
+          ax = await click(hasButton("Apply app uninstall"));
+          ax = await waitFor(value => value.includes("App uninstall complete") && /1 app moved to Trash/.test(value),
+            "app uninstall apply must report one moved bundle");
+          await assert.rejects(() => access(appFixture.path), /ENOENT/, "app bundle must be absent after uninstall apply");
+          await phaseDone(phase, { appPath: appFixture.path, bundleID: appFixture.bundleID });
+        }
       }
     }
 
-    phase = "activity-app-uninstall-and-relaunch-undo";
-    await navigate("Activity");
-    ax = await click(hasButton("Refresh activity"));
-    ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline"),
-      "Activity refresh must expose durable app uninstall timeline");
-    await chooseSelectValue("Action", "Uninstall");
-    await chooseSelectValue("Period", "Last 30 days");
-    ax = await waitFor(value => value.includes("Uninstall · remove · moved") && value.includes(appFixture.path) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
-      "Uninstall filter must render durable moved bundle event");
-    const appRelaunched = await onRelaunch({ app, phase, fixture, report });
-    assert.ok(appRelaunched?.restarted === true, "app uninstall restart must report observed quit/relaunch completion");
-    app = appRelaunched.app;
-    assert.ok(app && typeof app.getAXState === "function", "app uninstall restart must return fresh CUA app");
-    ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "app uninstall relaunch must return to native dashboard");
-    await navigate("Activity");
-    ax = await click(hasButton("Refresh activity"));
-    ax = await waitFor(value => value.includes("Cleanup history") && value.includes(appFixture.path), "relaunch must retain app uninstall cleanup journal");
-    ax = await click(hasButton(`Restore ${appFixture.name}`));
-    ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "app bundle Undo must complete after relaunch");
-    const restoredApp = await bundleFingerprint(appFixture);
-    assert.equal(restoredApp.dev, beforeApp.dev, "restored app bundle volume changed");
-    assert.equal(restoredApp.ino, beforeApp.ino, "restored app bundle identity changed");
-    for (let index = 0; index < beforeApp.files.length; index += 1) assertFingerprint(restoredApp.files[index], beforeApp.files[index], `app Undo file ${beforeApp.files[index].path}`);
-    await phaseDone(phase, { appPath: appFixture.path, restored: restoredApp });
+    if (trashAccessDenied) {
+      report.phases.push({ name: "activity-app-uninstall-and-relaunch-undo", status: "blocked", reason: "Native Trash access denied; app uninstall/restore unrun", at: new Date().toISOString() });
+    } else {
+      phase = "activity-app-uninstall-and-relaunch-undo";
+      await navigate("Activity");
+      ax = await click(hasButton("Refresh activity"));
+      ax = await waitFor(value => value.includes("refresh activity complete") && value.includes("Timeline"),
+        "Activity refresh must expose durable app uninstall timeline");
+      await chooseSelectValue("Action", "Uninstall");
+      await chooseSelectValue("Period", "Last 30 days");
+      ax = await waitFor(value => value.includes("Uninstall · remove · moved") && value.includes(appFixture.path) && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value),
+        "Uninstall filter must render durable moved bundle event");
+      const appRelaunched = await onRelaunch({ app, phase, fixture, report });
+      assert.ok(appRelaunched?.restarted === true, "app uninstall restart must report observed quit/relaunch completion");
+      app = appRelaunched.app;
+      assert.ok(app && typeof app.getAXState === "function", "app uninstall restart must return fresh CUA app");
+      ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "app uninstall relaunch must return to native dashboard");
+      await navigate("Activity");
+      ax = await click(hasButton("Refresh activity"));
+      ax = await waitFor(value => value.includes("Cleanup history") && value.includes(appFixture.path), "relaunch must retain app uninstall cleanup journal");
+      ax = await click(hasButton(`Restore ${appFixture.name}`));
+      ax = await waitFor(value => value.includes("Undo complete") && value.includes("1 file restored"), "app bundle Undo must complete after relaunch");
+      const restoredApp = await bundleFingerprint(appFixture);
+      assert.equal(restoredApp.dev, beforeApp.dev, "restored app bundle volume changed");
+      assert.equal(restoredApp.ino, beforeApp.ino, "restored app bundle identity changed");
+      for (let index = 0; index < beforeApp.files.length; index += 1) assertFingerprint(restoredApp.files[index], beforeApp.files[index], `app Undo file ${beforeApp.files[index].path}`);
+      await phaseDone(phase, { appPath: appFixture.path, restored: restoredApp });
+
+    }
 
     phase = "per-ring-hover";
     if (typeof onRingHover === "function") {

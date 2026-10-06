@@ -889,7 +889,9 @@ public final class DashboardHost: NSObject {
         var object: [String: Any] = ["request_id": id, "action": action]
         switch result {
         case .success(let data): object["ok"] = true; object["data"] = data
-        case .failure(let error): object["ok"] = false; object["error"] = String(describing: error)
+        case .failure(let error):
+            object["ok"] = false
+            object["error"] = (error as? NativeCleanupService.Error)?.errorDescription ?? String(describing: error)
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object), data.count <= configuration.requestLimit else { return }
         let literal = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "<", with: "\\u003c")

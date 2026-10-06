@@ -21,6 +21,7 @@ public final class NativeCleanupService {
         case stateCorrupt
         case indeterminate(String)
         case io(Int32)
+        case directoryAccessDenied(String, Int32)
 
         public var errorDescription: String? {
             switch self {
@@ -38,6 +39,9 @@ public final class NativeCleanupService {
             case .stateCorrupt: return "cleanup journal is corrupt or untrusted"
             case .indeterminate(let reason): return "cleanup effect is indeterminate: \(reason)"
             case .io(let code): return "cleanup I/O failed (errno \(code))"
+            case .directoryAccessDenied(let purpose, let code):
+                let label = ["trash": "Trash", "root": "selected folder", "source_parent": "source folder", "state": "private activity state"][purpose] ?? "cleanup folder"
+                return "macOS denied access to \(label) directory (errno \(code))"
             }
         }
     }
@@ -732,7 +736,12 @@ public final class NativeCleanupService {
                 guard mkdirat(fd, component, 0o700) == 0 || errno == EEXIST else { let code = errno; close(fd); throw Error.io(code) }
                 next = openat(fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             }
-            if next < 0 { let code = errno; close(fd); throw code == ELOOP ? Error.untrustedPath : Error.io(code) }
+            if next < 0 {
+                let code = errno
+                close(fd)
+                if code == EPERM || code == EACCES { throw Error.directoryAccessDenied(purpose, code) }
+                throw code == ELOOP ? Error.untrustedPath : Error.io(code)
+            }
             close(fd)
             fd = next
         }
