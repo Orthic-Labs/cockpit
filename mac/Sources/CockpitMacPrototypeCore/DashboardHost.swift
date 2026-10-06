@@ -361,6 +361,8 @@ public final class DashboardHost: NSObject {
     private let stateDirectory: URL
     private let nativeServices: NativeStorageServices
     private let cleanupService: NativeCleanupService
+    private let applicationDetails: NativeApplicationDetails
+    private var trustedApplications: [String: String] = [:]
     private var trustedSnapshotID: String?
     private var trustedRoot: URL?
     private var trustedEntries: [String: [String: Any]] = [:]
@@ -376,6 +378,7 @@ public final class DashboardHost: NSObject {
         self.stateDirectory = state.standardizedFileURL
         self.nativeServices = NativeStorageServices(stateDirectory: state)
         self.cleanupService = NativeCleanupService(stateDirectory: state)
+        self.applicationDetails = NativeApplicationDetails(stateDirectory: state)
         self.configuration = configuration
         self.coordinator = ScanCoordinator(configuration: configuration, runner: runner)
     }
@@ -576,7 +579,23 @@ public final class DashboardHost: NSObject {
 
     private func performAction(_ action: String, payload: [String: Any]) async throws -> [String: Any] {
         switch action {
-        case "refresh_apps": return try await nativeServices.appsPayload()
+        case "refresh_apps":
+            var apps = try await nativeServices.appsPayload()
+            let rows = apps["apps"] as? [[String: Any]] ?? []
+            trustedApplications = Dictionary(rows.compactMap { row in
+                guard let path = row["path"] as? String, let bundle = row["bundleID"] as? String else { return nil }
+                return (path, bundle)
+            }, uniquingKeysWith: { first, _ in first })
+            // Standard roots do not cover portable/external installations.
+            do { try applicationDetails.recordInventory(rows, coverageComplete: false) }
+            catch { apps["historyReason"] = "history_persistence_unavailable" }
+            apps["history"] = applicationDetails.historyPayload()
+            return apps
+        case "app_details":
+            guard let path = payload["path"] as? String, let bundle = trustedApplications[path] else {
+                throw ScanFailure.invalidJSON("Refresh inventory & select an application first")
+            }
+            return try await applicationDetails.details(appPath: path, bundleID: bundle)
         case "refresh_monitor":
             let before = try await coordinator.commandObject(arguments: ["procs", "--sort", "ram", "--json"])
             var monitor = try await nativeServices.monitorPayload()
@@ -661,7 +680,12 @@ public final class DashboardHost: NSObject {
             return try cleanupService.apply(planID: plan)
         case "undo_cleanup":
             guard let plan = payload["plan_id"] as? String else { throw ScanFailure.invalidJSON("Missing cleanup plan") }
-            return try cleanupService.undo(planID: plan)
+            if payload["paths"] != nil, payload["paths"] as? [String] == nil {
+                throw ScanFailure.invalidJSON("Restore selection must contain item paths")
+            }
+            var result = try cleanupService.undo(planID: plan, paths: payload["paths"] as? [String])
+            result["cleanup"] = try cleanupService.historyPayload()
+            return result
         default: throw ScanFailure.invalidJSON("Unsupported native action")
         }
     }

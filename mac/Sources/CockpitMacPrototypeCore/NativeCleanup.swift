@@ -187,11 +187,18 @@ public final class NativeCleanupService {
         ]
     }
 
-    public func undo(planID: String) throws -> [String: Any] {
+    public func undo(planID: String, paths: [String]? = nil) throws -> [String: Any] {
         try loadStateIfNeeded()
         guard var record = journal.plans[planID] else { throw Error.planNotFound }
         guard record.state == "completed" || record.state == "interrupted" else { throw Error.unsupported("plan_not_complete") }
-        let pending = record.items.filter { $0.outcome?.status == "moved" && $0.undoState == nil }
+        let selection = paths.map(Set.init)
+        if let paths, let selection {
+            guard !paths.isEmpty, paths.count <= Self.maxPlanItems, paths.count == selection.count,
+                  selection.isSubset(of: Set(record.items.map { $0.item.path })) else { throw Error.invalidPath }
+        }
+        let pending = record.items.filter {
+            $0.outcome?.status == "moved" && $0.undoState == nil && (selection?.contains($0.item.path) ?? true)
+        }
         guard !pending.isEmpty else { throw Error.planAlreadyClaimed }
         if record.undoClaimID == nil {
             record.undoClaimID = Self.randomID()
@@ -204,7 +211,7 @@ public final class NativeCleanupService {
         }
 
         var outcomes: [[String: Any]] = []
-        for index in record.items.indices where record.items[index].outcome?.status == "moved" && record.items[index].undoState == nil {
+        for index in record.items.indices where record.items[index].outcome?.status == "moved" && record.items[index].undoState == nil && (selection?.contains(record.items[index].item.path) ?? true) {
             record.items[index].undoState = "started"
             journal.plans[planID] = record
             try persistState() // A restart never retries this item.
@@ -227,7 +234,8 @@ public final class NativeCleanupService {
         record.undoState = record.items.contains { $0.undoState == "started" } ? "interrupted" : "completed"
         journal.plans[planID] = record
         try persistState()
-        return ["plan_id": planID, "state": record.undoState == "completed" ? "completed" : "interrupted", "items": outcomes, "outcomes": outcomes]
+        let remaining = record.items.filter { $0.outcome?.status == "moved" && $0.undoState == nil }.count
+        return ["plan_id": planID, "state": record.undoState == "completed" ? "completed" : "interrupted", "items": outcomes, "outcomes": outcomes, "remaining_items": remaining]
     }
 
     public func historyPayload() throws -> [String: Any] {

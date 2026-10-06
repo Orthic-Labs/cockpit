@@ -428,20 +428,34 @@ public final class NativeStorageServices {
     }
 
     private func batteryPayload(reasons: inout [String]) -> [String: Any] {
-        let blob = IOPSCopyPowerSourcesInfo().takeRetainedValue()
-        let list = IOPSCopyPowerSourcesList(blob).takeRetainedValue() as [CFTypeRef]
-        for source in list {
+        var result = NativePowerDetails.reading()
+        guard let copied = IOPSCopyPowerSourcesInfo(),
+              let sources = IOPSCopyPowerSourcesList(copied.takeUnretainedValue()) else {
+            result["available"] = false
+            result["reason"] = "power_source_unavailable"
+            reasons.append("battery_unavailable")
+            return result
+        }
+        let blob = copied.takeRetainedValue()
+        let list = sources.takeRetainedValue() as [CFTypeRef]
+        for source in list.prefix(4) {
             guard let description = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any],
+                  description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
                   let current = description[kIOPSCurrentCapacityKey] as? Int,
                   let maximum = description[kIOPSMaxCapacityKey] as? Int,
                   maximum > 0, current >= 0, current <= maximum else { continue }
-            var result: [String: Any] = ["available": true, "percent": (Double(current) / Double(maximum)) * 100]
+            result["available"] = true
+            result["percent"] = (Double(current) / Double(maximum)) * 100
             if let charging = description[kIOPSIsChargingKey] as? Bool { result["charging"] = charging }
-            if let remaining = description[kIOPSTimeToEmptyKey] as? Int, remaining >= 0 { result["timeRemainingSeconds"] = remaining * 60 }
+            if let remaining = description[kIOPSTimeToEmptyKey] as? Int, (0...10_080).contains(remaining) {
+                result["timeRemainingSeconds"] = remaining * 60
+            }
             return result
         }
         reasons.append("battery_unavailable")
-        return ["available": false, "reason": "power_source_unavailable"]
+        result["available"] = false
+        result["reason"] = "internal_battery_unavailable"
+        return result
     }
 
     private func listeningPortsPayload() async -> [String: Any] {
