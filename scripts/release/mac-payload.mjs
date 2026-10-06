@@ -110,6 +110,14 @@ async function candidate() {
   await copyExecutable(source.appExecutable, appExecutable, 'Mac app executable');
   await copyExecutable(source.helper, helper, 'Cockpit CLI');
   await copyTree(source.dashboard, dashboard, 'dashboard assets');
+  // WKWebView file origins cannot depend on ES-module fetch semantics. This file
+  // has no imports; preserve exact implementation inside a classic-script closure.
+  const moduleSource = await readFile(join(dashboard, 'app.mjs'), 'utf8');
+  const classicSource = moduleSource.replace(/^export (?=(?:const|function)\b)/gm, '');
+  if (/^\s*(?:import|export)\s/m.test(classicSource)) fail('Dashboard requires an explicit module bundler');
+  await writeFile(join(dashboard, 'app.js'), `(() => {\n${classicSource}\n})();\n`);
+  const index = await readFile(join(dashboard, 'index.html'), 'utf8');
+  await writeFile(join(dashboard, 'index.html'), index.replace('<script type="module" src="./app.mjs"></script>', '<script src="./app.js"></script>'));
   await writeInfoPlist(join(app, 'Contents', 'Info.plist'));
   await copyExecutable(source.appExecutable, join(root, 'raw', 'Cockpit'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'cockpit'), 'Cockpit CLI');
@@ -140,6 +148,9 @@ async function prepare() {
   await cp(sourceApp, paths.app, { recursive: true, force: true });
   await requireFile(paths.appExecutable, 'staged app executable');
   await requireFile(paths.helper, 'staged Cockpit CLI');
+  // GitHub artifact handoff normalizes file modes; restore both known executables.
+  await chmod(paths.appExecutable, 0o755);
+  await chmod(paths.helper, 0o755);
   await requireDirectory(paths.dashboard, 'staged dashboard assets');
   await mkdir(paths.raw, { recursive: true });
   await copyExecutable(paths.appExecutable, join(paths.raw, 'Cockpit'), 'staged app executable');

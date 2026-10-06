@@ -308,7 +308,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     emit("dashboard_smoke_pass")
                     NSApp.terminate(nil)
                 } catch {
-                    emit("dashboard_smoke_failed", level: "error", ["reason": error.localizedDescription])
+                    emit("dashboard_smoke_failed", level: "error", ["reason": String(describing: error)])
                     shutdown(reason: "package_smoke_failure")
                     exit(1)
                 }

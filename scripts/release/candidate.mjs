@@ -37,7 +37,7 @@ if (action === 'admit') {
   const root=env.RIGHT_GIT_ARTIFACT_ROOT;
   const app=env.COCKPIT_CHECK_APP || path.join(root,'cockpit','mac','Cockpit.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
-  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Resources/dashboard/index.html','Contents/Resources/dashboard/app.mjs','Contents/Resources/dashboard/style.css']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Resources/dashboard/index.html','Contents/Resources/dashboard/app.js','Contents/Resources/dashboard/style.css']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
   const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-smoke-')));
   try{
     writeFileSync(path.join(fixture,'example.txt'),'Cockpit fixture');
