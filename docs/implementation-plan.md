@@ -25,7 +25,7 @@ No application installation, settings changes, public forks or product implement
 ## Requirements
 
 - **Always-visible notch**, right screen edge, both OSes: Claude & ChatGPT usage, CPU, memory pressure, disk free for each mounted local disk. Hover card adds swap, GPU, top storage findings & limit reset times. Never steals focus; hidden whenever a fullscreen window is on notch's display, even when focus is on another display.
-- **Compact notch presentation** (owner correction, 2026-10-06): 26 pt rings, percentages centered inside rings, 40 pt resting depth, compact spacing. Metric names & disk details live in hover card. Menu-bar entry uses an icon, never a visible Cockpit text label. Donor geometry adapts to this footprint; donor's 44 pt ring scale is not Cockpit's default.
+- **Compact notch presentation** (owner correction, 2026-10-06): 26 pt rings with centered metric icons, 40 pt resting depth, compact spacing. Always show Claude, ChatGPT, CPU, memory pressure & every mounted local disk; never truncate to first disk. Ring arcs show provider/CPU utilization & disk free space; memory pressure is a categorical OS status. Exact percentages, metric names & disk details live in hover card. Menu-bar entry uses an icon, never a visible Cockpit text label. Donor geometry adapts to this footprint; donor's 44 pt ring scale is not Cockpit's default.
 - **Click opens dashboard** (Tauri):
   - Resources: task-manager view, apps with helpers grouped, sortable CPU, RAM, GPU; expand to individual processes; Quit then explicit Force Quit.
   - Storage: biggest folders per disk, growth since previous scan, clone-aware sizes.

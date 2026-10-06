@@ -8,18 +8,26 @@ import Foundation
 // Native notch & on-demand storage dashboard. Provider readers & donor extraction
 // remain separate integrations.
 
+enum MemoryPressure: Int32 {
+    case normal = 1, warning = 2, critical = 4
+    var label: String { switch self { case .normal: return "Normal"; case .warning: return "Warning"; case .critical: return "Critical" } }
+    var severity: Double { switch self { case .normal: return 0; case .warning: return 0.5; case .critical: return 1 } }
+}
+
 struct DiskReading: Equatable {
     let id: String
     let name: String
     let free: Double
 }
 
-struct SystemReading: Equatable {
+struct SystemReading {
     let cpu: Double?
     let memory: Double?
     let disks: [DiskReading]
     /// Counter names that failed to sample this tick (unavailable, rendered as "--").
     var failures: Set<String> = []
+    var memoryPressure: MemoryPressure? = nil
+    var ai: [AIUsageReading] = []
 }
 
 /// Mach host calls: every mach_host_self() call returns a send right that must be released.
@@ -59,7 +67,11 @@ private final class SystemReader {
                 free: min(max(Double(available) / Double(total), 0), 1)
             )
         }.sorted { $0.id < $1.id }
-        return SystemReading(cpu: cpu, memory: memory, disks: disks, failures: failures)
+        var pressureLevel: Int32 = 0
+        var pressureSize = MemoryLayout<Int32>.size
+        let pressure = sysctlbyname("kern.memorystatus_vm_pressure_level", &pressureLevel, &pressureSize, nil, 0) == 0
+            ? MemoryPressure(rawValue: pressureLevel) : nil
+        return SystemReading(cpu: cpu, memory: memory, disks: disks, failures: failures, memoryPressure: pressure)
     }
 
     private func readCPU(_ failures: inout Set<String>) -> Double? {
@@ -117,7 +129,7 @@ private final class PillPanel: NSPanel {
         self.surfaceView = NotchSurfaceView(edge: edge)
         // Attach to physical bezel; visibleFrame would leave a menu bar/Dock gap
         // for top/bottom anchors.
-        let rect = NotchPresentationLayout.frame(visible: screen.frame, edge: edge)
+        let rect = NotchPresentationLayout.frame(visible: screen.frame, edge: edge, count: 4 + diskCount)
         super.init(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         title = "Cockpit — Notch"
         setAccessibilityLabel("Cockpit system notch")
@@ -139,7 +151,7 @@ private final class PillPanel: NSPanel {
             guard let self else { return }
             let edge = CockpitNotchEdge.from(anchor: self.placementAnchor)
             self.setFrame(NotchPresentationLayout.frame(visible: self.placementScreen.frame,
-                                                        edge: edge, expanded: expanded), display: true)
+                                                        edge: edge, count: self.surfaceView.metricCount, expanded: expanded), display: true)
         }
         // Not shown here: the sampler decides visibility (settings, monitor, fullscreen).
     }
@@ -150,7 +162,7 @@ private final class PillPanel: NSPanel {
         placementAnchor = anchor
         let edge = CockpitNotchEdge.from(anchor: anchor)
         surfaceView.edge = edge
-        let rect = NotchPresentationLayout.frame(visible: screen.frame, edge: edge, expanded: surfaceView.isExpanded)
+        let rect = NotchPresentationLayout.frame(visible: screen.frame, edge: edge, count: 4 + diskCount, expanded: surfaceView.isExpanded)
         if frame != rect { setFrame(rect, display: true) }
     }
 
@@ -235,6 +247,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let runtime: PillRuntime
     private let reader = SystemReader()
+    private let aiSampler = AIUsageSampler()
+    private var aiReadings: [AIUsageReading] = []
+    private var aiTask: Task<Void, Never>?
     private let detector = FullscreenDetector()
     private var panels: [String: PillPanel] = [:]
     /// The single sampling owner. Only schedule(after:) creates or invalidates it.
@@ -303,6 +318,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             signalSources.append(source)
         }
         sample()
+        guard !args.contains("--package-smoke-root") else { return }
+        aiTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let readings = await self.aiSampler.refresh()
+                guard !Task.isCancelled else { return }
+                self.aiReadings = readings
+                self.sample()
+                do { try await Task.sleep(nanoseconds: 300_000_000_000) }
+                catch { return }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -320,6 +347,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !shuttingDown else { return }
         shuttingDown = true
         dashboard.stop()
+        aiTask?.cancel()
+        aiTask = nil
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
         statusItem = nil
         // Order (stop timer, close panels, persist, release lock, emit shutdown) is owned by PillRuntime.
@@ -370,7 +399,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     /// fullscreen monitor never stops sampling for the visible ones.
     private func sample() {
         guard !shuttingDown else { return }
-        let reading = reader.read()
+        var reading = reader.read()
+        reading.ai = aiReadings
         diskCount = reading.disks.count
         let change = failures.update(failing: reading.failures)
         for name in change.failed { emit("sampling_failed", level: "error", ["counter": name]) }

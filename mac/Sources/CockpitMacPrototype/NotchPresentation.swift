@@ -21,19 +21,20 @@ enum CockpitNotchEdge: Equatable {
 
 enum NotchPresentationLayout {
     // Compact owner-directed adaptation of donor's bezel silhouette.
-    // Percent stays inside each ring; names & volume detail appear on hover.
+    // Metric icon stays inside each ring; exact values & names appear on hover.
     static let ringDiameter: CGFloat = 26
     static let ringTrackWidth: CGFloat = 2
     static let ringProgressWidth: CGFloat = 2
     static let ringMargin: CGFloat = 7
     static let cellExtent: CGFloat = 40
-    static let stackLength: CGFloat = 158
+    static func stackLength(count: Int) -> CGFloat { CGFloat(max(1, count)) * cellExtent + 38 }
     static let restingDepth: CGFloat = 40
     static func restingDepth(for edge: CockpitNotchEdge) -> CGFloat { restingDepth }
     static let expandedDepth: CGFloat = 238
 
-    static func frame(visible: CGRect, edge: CockpitNotchEdge, expanded: Bool = false) -> CGRect {
+    static func frame(visible: CGRect, edge: CockpitNotchEdge, count: Int, expanded: Bool = false) -> CGRect {
         let depth = expanded ? expandedDepth : restingDepth(for: edge)
+        let stackLength = stackLength(count: count)
         switch edge {
         case .right:
             return CGRect(x: visible.maxX - depth, y: visible.midY - stackLength / 2,
@@ -54,7 +55,10 @@ enum NotchPresentationLayout {
 private struct NotchMetric {
     let title: String
     let value: Double?
+    let symbol: String
     let color: NSColor
+    var detail: String? = nil
+    var summary: String { detail ?? PillFormat.label(title, fraction: value) }
 }
 
 final class NotchSurfaceView: NSView {
@@ -83,7 +87,8 @@ final class NotchSurfaceView: NSView {
 
     func update(_ reading: SystemReading) {
         self.reading = reading
-        setAccessibilityValue(metrics.map { PillFormat.label($0.title, fraction: $0.value) }.joined(separator: ", "))
+        toolTip = metrics.map { $0.summary }.joined(separator: " · ")
+        setAccessibilityValue(metrics.map { $0.summary }.joined(separator: ", "))
         needsDisplay = true
     }
 
@@ -118,18 +123,31 @@ final class NotchSurfaceView: NSView {
         return inside ? self : nil
     }
 
+    var metricCount: Int { 4 + reading.disks.count }
+
     private var metrics: [NotchMetric] {
-        let disk = reading.disks.first
-        return [
-            NotchMetric(title: "CPU", value: reading.cpu, color: .systemBlue),
-            NotchMetric(title: "RAM", value: reading.memory, color: .systemOrange),
-            NotchMetric(title: "Volume", value: disk.map { 1 - $0.free }, color: .systemGreen)
-        ]
+        let providers = [("claude", "Claude", "claude"), ("chatgpt", "ChatGPT", "openai")].map { id, title, symbol in
+            let sample = reading.ai.first { $0.id == id }
+            return NotchMetric(title: title, value: sample?.fraction, symbol: symbol,
+                               color: id == "claude" ? .systemOrange : .systemTeal,
+                               detail: sample?.detail ?? "\(title): awaiting provider reading")
+        }
+        let pressure = reading.memoryPressure
+        let memoryDetail = "Memory pressure: \(pressure?.label ?? "Unavailable") · \(PillFormat.label("RAM used", fraction: reading.memory))"
+        return providers + [
+            NotchMetric(title: "CPU", value: reading.cpu, symbol: "cpu", color: .systemBlue),
+            NotchMetric(title: "Memory pressure", value: pressure?.severity, symbol: "memorychip",
+                        color: pressure == .critical ? .systemRed : pressure == .warning ? .systemOrange : .systemGreen,
+                        detail: memoryDetail)
+        ] + reading.disks.map { disk in
+            NotchMetric(title: disk.name, value: disk.free, symbol: "externaldrive", color: .systemGreen,
+                        detail: "\(disk.name) · \(PillFormat.label("free", fraction: disk.free))")
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let depth = expanded ? NotchPresentationLayout.expandedDepth : NotchPresentationLayout.restingDepth(for: edge)
-        let length = NotchPresentationLayout.stackLength
+        let length = NotchPresentationLayout.stackLength(count: metricCount)
         let alongOffset: CGFloat = edge == .right || edge == .left
             ? (bounds.height - length) / 2 : (bounds.width - length) / 2
         drawNotch(depth: depth, length: length, alongOffset: alongOffset)
@@ -200,21 +218,46 @@ final class NotchSurfaceView: NSView {
                               startAngle: 90, endAngle: 90 - CGFloat(min(max(value, 0), 1) * 360), clockwise: true)
                 arc.stroke()
             }
-            let label = metric.value.map { "\(Int(min(max($0, 0), 1) * 100))%" } ?? "—"
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 8, weight: .semibold),
-                .foregroundColor: NSColor.white
-            ]
-            let size = label.size(withAttributes: attributes)
-            let labelPoint = CGPoint(x: center.x - size.width / 2,
-                                     y: center.y - size.height / 2)
-            (label as NSString).draw(at: labelPoint, withAttributes: attributes)
+            let iconRect = NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
+            let outline = metric.symbol == "claude" ? ProviderGlyphOutlines.claude
+                : metric.symbol == "openai" ? ProviderGlyphOutlines.openai : nil
+            if let outline {
+                let path = NSBezierPath()
+                path.windingRule = .evenOdd
+                for loop in outline {
+                    guard let first = loop.first else { continue }
+                    path.move(to: CGPoint(x: iconRect.minX + first.x * iconRect.width,
+                                          y: iconRect.minY + first.y * iconRect.height))
+                    for point in loop.dropFirst() {
+                        path.line(to: CGPoint(x: iconRect.minX + point.x * iconRect.width,
+                                              y: iconRect.minY + point.y * iconRect.height))
+                    }
+                    path.close()
+                }
+                NSColor.white.setFill()
+                path.fill()
+            } else if let image = NSImage(systemSymbolName: metric.symbol, accessibilityDescription: metric.title) {
+                let tinted = image.copy() as! NSImage
+                tinted.lockFocus()
+                NSColor.white.setFill()
+                NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+                tinted.unlockFocus()
+                tinted.draw(in: NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12),
+                            from: .zero, operation: .sourceOver, fraction: 1)
+            }
         }
     }
 
+    private func drawDetail(_ text: String, at point: CGPoint, attributes: [NSAttributedString.Key: Any]) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        var styled = attributes
+        styled[.paragraphStyle] = paragraph
+        (text as NSString).draw(in: CGRect(x: point.x, y: point.y, width: 170, height: 16), withAttributes: styled)
+    }
+
     private func drawDetails(depth: CGFloat, alongOffset: CGFloat) {
-        let diskLines = reading.disks.prefix(3).map { "\($0.name.prefix(16))  \(Int((1 - $0.free) * 100))% used" }
-        let lines = ["System"] + metrics.prefix(2).map { PillFormat.label($0.title, fraction: $0.value) } + diskLines
+        let lines = ["System"] + metrics.map { $0.summary }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.9)
@@ -227,13 +270,13 @@ final class NotchSurfaceView: NSView {
         case .right:
             var y: CGFloat = alongOffset + 26
             for (index, line) in lines.enumerated() {
-                (line as NSString).draw(at: CGPoint(x: 18, y: y), withAttributes: index == 1 ? secondary : attributes)
+                drawDetail(line, at: CGPoint(x: 18, y: y), attributes: index == 1 ? secondary : attributes)
                 y += index == 0 ? 22 : 17
             }
         case .left:
             var y: CGFloat = alongOffset + 26
             for (index, line) in lines.enumerated() {
-                (line as NSString).draw(at: CGPoint(x: NotchPresentationLayout.ringDiameter + 28, y: y), withAttributes: index == 1 ? secondary : attributes)
+                drawDetail(line, at: CGPoint(x: NotchPresentationLayout.ringDiameter + 20, y: y), attributes: index == 1 ? secondary : attributes)
                 y += index == 0 ? 22 : 17
             }
         case .top:
