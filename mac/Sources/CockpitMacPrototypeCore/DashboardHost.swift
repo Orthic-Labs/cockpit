@@ -339,6 +339,23 @@ public final class DashboardHost: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Hosted package smoke: verify bundled page scripts & real scanner exchange.
+    public func verifyBundledScan(root: URL) async throws {
+        show()
+        guard let webView else { throw ScanFailure.emptyReport }
+        var ready = false
+        for _ in 0..<150 {
+            if let loaded = try? await webView.evaluateJavaScript("typeof window.CockpitDashboard === 'object'"),
+               (loaded as? Bool) == true { ready = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard ready else { throw ScanFailure.invalidJSON("Bundled dashboard did not become ready") }
+        let script = try await coordinator.importScript(for: root)
+        _ = try await webView.evaluateJavaScript(script)
+        let imported = try await webView.evaluateJavaScript("window.CockpitDashboard.getState().scan.entries.length > 0")
+        guard (imported as? Bool) == true else { throw ScanFailure.emptyReport }
+    }
+
     /// Cancels any scan, destroys the webview and releases the window; reopening is fresh.
     public func stop() {
         scanTask?.cancel()

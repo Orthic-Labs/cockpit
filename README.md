@@ -1,8 +1,8 @@
 # Cockpit
 
-Native system gauges & controls for macOS & Windows. Native always-on pills, shared Rust core & on-demand Tauri dashboard.
+Native system gauges & controls for macOS & Windows. CodeNOTCH-inspired native notch, shared Rust core & on-demand storage dashboard.
 
-Initial implementation: bounded read-only storage CLI, report-only incident rules & native pill feasibility prototypes. Mutation commands refuse execution. No apps are installed or existing utilities replaced by this source checkout.
+Current implementation: read-only storage scanner, filename search, folder map, file inspector, report-only findings & native notch. Mac app bundles dashboard & scanner; generated hosted workflow produces installer candidates.
 
 ## CLI
 
@@ -23,4 +23,4 @@ Default scan does not persist anything. `--save` records private metadata snapsh
 
 Public repository: compilation & tests run exclusively in generated RightKit GitHub Actions. Toolchains are pinned in `rust-toolchain.toml` & `package.json`. Rust dependency/compiler caches use `rust-cache` & `sccache`; Swift native prototype builds on Mac runner. Primary agent owns integration & pushes. Follow [AGENTS.md](AGENTS.md).
 
-See [implementation plan](docs/implementation-plan.md), [Mac prototype](mac/README.md) & [Windows prototype](windows/README.md). M0 machine gates decide subsequent integration: footprint, fullscreen occupancy, keyboard events & permission identity. Dashboard, cleanup, uninstallation, donor extraction & update integration follow those gates.
+See [implementation plan](docs/implementation-plan.md), [Mac app delivery](docs/mac-app-delivery.md) & [Windows prototype](windows/README.md). Donor feature extraction, cleanup, uninstallation & update integration remain planned work. Hardware qualification covers footprint, fullscreen occupancy, keyboard events & permission identity.

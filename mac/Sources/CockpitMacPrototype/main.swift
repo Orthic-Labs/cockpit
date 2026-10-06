@@ -5,8 +5,8 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-// M0 only: a native, non-interactive edge pill. Provider readers, settings, dashboard,
-// permissions prompts, login items, updater, and donor extraction intentionally live later.
+// Native notch & on-demand storage dashboard. Provider readers & donor extraction
+// remain separate integrations.
 
 private struct DiskReading: Equatable {
     let id: String
@@ -300,6 +300,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenu)
         NSApp.mainMenu = mainMenu
         dashboard.show()
+        let args = ProcessInfo.processInfo.arguments
+        if let flag = args.firstIndex(of: "--package-smoke-root"), flag + 1 < args.count {
+            Task { [self] in
+                do {
+                    try await dashboard.verifyBundledScan(root: URL(fileURLWithPath: args[flag + 1]))
+                    emit("dashboard_smoke_pass")
+                    NSApp.terminate(nil)
+                } catch {
+                    emit("dashboard_smoke_failed", level: "error", ["reason": error.localizedDescription])
+                    shutdown(reason: "package_smoke_failure")
+                    exit(1)
+                }
+            }
+        }
         emit("startup", [
             "pid": String(ProcessInfo.processInfo.processIdentifier),
             "accessibility": AXIsProcessTrusted() ? "trusted" : "denied"

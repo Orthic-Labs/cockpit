@@ -178,6 +178,13 @@ async function packageMac() {
     preEmbedProvisioningProfile: false,
     gatekeeperAssess: false
   });
+  await new Promise((resolvePromise,reject) => {
+    const child=spawn(process.execPath,[join(repoRoot,'scripts/release/candidate.mjs'),'check'],{
+      stdio:'inherit',env:{...process.env,COCKPIT_CHECK_APP:paths.app}
+    });
+    child.once('error',reject);
+    child.once('exit',code=>code===0?resolvePromise():reject(new Error(`Signed app smoke exited ${code}`)));
+  });
 
   await mkdir(dirname(paths.output), { recursive: true });
   const specification = JSON.parse(await readFile(join(releaseRoot, 'appdmg.json'), 'utf8'));
