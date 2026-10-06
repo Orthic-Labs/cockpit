@@ -165,7 +165,7 @@ private final class PillPanel: NSPanel {
         self.monitorID = monitorID
         self.ringView = RingView(frame: .zero)
         let rect = AnchoredPlacement.frame(visible: screen.visibleFrame, diskCount: diskCount, anchor: anchor)
-        super.init(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false, screen: screen)
+        super.init(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         level = .statusBar
         collectionBehavior = [.canJoinAllSpaces, .fullScreenNone]
         isOpaque = false
@@ -413,7 +413,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.ringView.update(reading)
             let id = monitorID(for: screen)
             let wanted = runtime.settings.visible && runtime.monitorSetting(for: id).enabled
-            // Fullscreen detection (Accessibility/CGWindowList) only runs for pills that could show.
+            // Fullscreen detection (Accessibility/CGWindowList) only runs for notches that could show.
             let suppressed = wanted ? detector.shouldHide(on: screen) : false
             if PillVisibility.shouldShow(settingsVisible: runtime.settings.visible,
                                          monitorEnabled: runtime.monitorSetting(for: id).enabled,
