@@ -8,23 +8,23 @@ Build one owned tool with native always-on pills, shared Rust core & shared on-d
 
 | Layer | Mac | Windows | Runs |
 | --- | --- | --- | --- |
-| Pill (always on) | Fork of Codenotch's Swift app, providers cut to Claude & Codex, new resource & disk rings | Native Rust pill (`windows` crate, layered window, Direct2D/DirectComposition), Codenotch's design & ring logic redrawn natively | Always; minimal footprint |
+| Notch (always on) | Fork of Codenotch's Swift app, providers cut to Claude & Codex, new resource & disk rings | Native Rust notch (`windows` crate, layered window, Direct2D/DirectComposition), Codenotch's design & ring logic redrawn natively | Always; minimal footprint |
 | Core (library) | Rust library via UniFFI bindings | Same Rust library, linked directly | Linked into every process below |
-| Worker | Rust executable; owns scans, plan/apply & uninstall jobs | Same | Started on demand by pill, dashboard or CLI; exits when idle |
+| Worker | Rust executable; owns scans, plan/apply & uninstall jobs | Same | Started on demand by notch, dashboard or CLI; exits when idle |
 | Dashboard & settings | Tauri app: Resources (task manager), Storage, Cleanup, Uninstall, Settings | Same Tauri app, same screens | Launched on demand; exits when closed |
-| CLI | Same Rust core; talks to pill/worker | Same | On demand |
-| Mac conveniences | Swift modules inside Mac pill app, reused from Vorssaint | Not needed (native in Windows) | Always |
+| CLI | Same Rust core; talks to notch/worker | Same | On demand |
+| Mac conveniences | Swift modules inside Mac notch app, reused from Vorssaint | Not needed (native in Windows) | Always |
 | Launcher | Tinycast module inside Mac app | PowerToys Command Palette + this tool's extension | On hotkey |
 
-Why this split: always-on part must be minimal, so it is native on both OSes (no web view running in background). Codenotch's Swift Mac app already exists and is more complete than its Windows port, so Mac keeps Swift. Windows pill is native Rust because Codenotch's Windows pill is Tauri/WebView2, whose background web-view processes cost tens of MB permanently. Everything heavier (charts, tables, settings) is one Tauri app on both OSes, so those screens are identical and only cost memory while open. All numbers come from one Rust core, so both machines and CLI agree.
+Why this split: always-on part must be minimal, so it is native on both OSes (no web view running in background). Codenotch's Swift Mac app already exists and is more complete than its Windows port, so Mac keeps Swift. Windows notch is native Rust because Codenotch's Windows notch is Tauri/WebView2, whose background web-view processes cost tens of MB permanently. Everything heavier (charts, tables, settings) is one Tauri app on both OSes, so those screens are identical and only cost memory while open. All numbers come from one Rust core, so both machines and CLI agree.
 
-Earlier options rejected: keeping stock Vorssaint (owner wants one owned tool); single Tauri app for everything (web view always resident; Mac pill behaviour risk); GPUI (small community, weaker Windows maturity).
+Earlier options rejected: keeping stock Vorssaint (owner wants one owned tool); single Tauri app for everything (web view always resident; Mac notch behaviour risk); GPUI (small community, weaker Windows maturity).
 
 No application installation, settings changes, public forks or product implementation are included in this document task.
 
 ## Requirements
 
-- **Always-visible pill**, right screen edge, both OSes: Claude & ChatGPT usage, CPU, memory pressure, disk free for each mounted local disk. Hover card adds swap, GPU, top storage findings & limit reset times. Never steals focus; hidden whenever a fullscreen window is on pill's display, even when focus is on another display.
+- **Always-visible notch**, right screen edge, both OSes: Claude & ChatGPT usage, CPU, memory pressure, disk free for each mounted local disk. Hover card adds swap, GPU, top storage findings & limit reset times. Never steals focus; hidden whenever a fullscreen window is on notch's display, even when focus is on another display.
 - **Click opens dashboard** (Tauri):
   - Resources: task-manager view, apps with helpers grouped, sortable CPU, RAM, GPU; expand to individual processes; Quit then explicit Force Quit.
   - Storage: biggest folders per disk, growth since previous scan, clone-aware sizes.
@@ -38,20 +38,20 @@ No application installation, settings changes, public forks or product implement
 - Owned updates on both OSes; no dependency on Vorssaint upstream.
 - Local metadata only by default; no upload, cloud-placeholder hydration or continuous full-disk scanning.
 
-## Resource budget (always-on pill)
+## Resource budget (always-on notch)
 
-| | Mac pill | Windows pill |
+| | Mac notch | Windows notch |
 | --- | --- | --- |
 | Memory | ≤ 60 MB resident before launcher first use; ≤ 150 MB with launcher index loaded | ≤ 25 MB resident |
 | CPU, idle | ≤ 0.5 % average at 2 s sampling | ≤ 0.5 % average |
 | While hidden (fullscreen) | Sampling slowed to 10 s, no drawing | Same |
 
-Sampling uses cheap counters only (host statistics, volume totals, cached provider readings). Scans, process trees & GPU detail run in worker or dashboard, never in pill. Pill animations stop when nothing changes; no idle timers faster than sampling.
+Sampling uses cheap counters only (host statistics, volume totals, cached provider readings). Scans, process trees & GPU detail run in worker or dashboard, never in notch. Notch animations stop when nothing changes; no idle timers faster than sampling.
 
 Budgets are feasibility gates, not assumptions: nothing measured yet proves them. Measured on release builds before integration (milestone 0) and again at acceptance, using:
 
 - Memory: physical footprint (Mac) / private bytes (Windows), plus RSS for reference; steady state after 10 min idle, peak during hover & ring updates, and return to baseline within 60 s after dashboard closes; child processes reported separately, never hidden.
-- CPU: percent of one core averaged over 10 min idle with pill visible, no dashboard, providers polling at configured interval.
+- CPU: percent of one core averaged over 10 min idle with notch visible, no dashboard, providers polling at configured interval.
 - If a gate fails, revise budget or design deliberately (e.g. launcher as separate process) rather than discovering it late.
 
 ## Open-source sources
@@ -60,73 +60,73 @@ Reuse first; hand-roll only gaps.
 
 | Area | Source | Licence | Use |
 | --- | --- | --- | --- |
-| Mac pill & AI usage | Codenotch Mac app (Swift) | MIT | Fork: pill, edge placement, Option-drag, settings orb, Claude & Codex readers, updater |
-| Windows pill design & AI usage | Codenotch `windows/` (Rust/Tauri 2) | MIT | Claude & Codex readers (`usage.rs`, `claude_auth.rs`, `codex.rs`), ring geometry, updater wiring; pill redrawn natively |
+| Mac notch & AI usage | Codenotch Mac app (Swift) | MIT | Fork: notch, edge placement, Option-drag, settings orb, Claude & Codex readers, updater |
+| Windows notch design & AI usage | Codenotch `windows/` (Rust/Tauri 2) | MIT | Claude & Codex readers (`usage.rs`, `claude_auth.rs`, `codex.rs`), ring geometry, updater wiring; notch redrawn natively |
 | Storage engine | Petal main `f5e5b00` (Rust) | MIT | `scan`, `dirlist`, `disk`, `findings`, `classify`, `watch`, `trashing`; not GPUI UI, not `admin.rs` in first version |
 | Cross-platform processes, CPU, RAM | `sysinfo` crate (Rust) | MIT | Process list, CPU, memory, disks in core |
-| Mac resource readers | Stats (exelban/stats, Swift) | MIT | CPU, GPU, RAM, memory-pressure, disk readers for Mac pill & core reference |
+| Mac resource readers | Stats (exelban/stats, Swift) | MIT | CPU, GPU, RAM, memory-pressure, disk readers for Mac notch & core reference |
 | Windows process & GPU detail | System Informer (C) | MIT | Reference for per-process GPU counters, process identity, termination edge cases |
 | Mac uninstaller & leftovers | Pearcleaner (Swift) | Apache-2.0 + Commons Clause | Leftover search logic for Mac app |
 | Windows uninstaller & leftovers | Bulk Crap Uninstaller (C#) | Apache-2.0 | Reference for uninstaller discovery & leftover detection; reimplement in Rust |
 | Cleanup detection | Mole (tw93/Mole, shell) | GPL-3.0 | Detection rules & paths reused directly |
-| Fullscreen hide rule | HeardRight `tauri-app-next` (owner's, proprietary) | Owner's call | `pill/state/windows.rs` reused in Windows pill; Mac logic ported to Swift |
+| Fullscreen hide rule | HeardRight `tauri-app-next` (owner's, proprietary) | Owner's call | `pill/state/windows.rs` reused in Windows notch; Mac logic ported to Swift |
 | Mac conveniences | Vorssaint 3.4.0 (Swift) | GPL-3.0-or-later | Reuse Finder cut/paste, Dock minimize, Auto Quit & maximizer code directly |
 | Mac launcher | Tinycast (abue-ammar/tinycast, Swift) | AGPL-3.0-or-later (verified pinned source) | Forked into Mac app; weekly upstream merge |
 | Rust ↔ Swift bridge | UniFFI (Mozilla) | MPL-2.0 | Generates Swift bindings for core |
 
-Hand-rolled because nothing suitable exists or existing code is wrong: clone/hard-link/snapshot-aware reclaim accounting (Petal findings 1–3), developer & agent artefact rule pack with liveness checks, CLI with plan/apply safety contract, native Windows pill, unified findings store shared by pills, dashboard & CLI.
+Hand-rolled because nothing suitable exists or existing code is wrong: clone/hard-link/snapshot-aware reclaim accounting (Petal findings 1–3), developer & agent artefact rule pack with liveness checks, CLI with plan/apply safety contract, native Windows notch, unified findings store shared by pills, dashboard & CLI.
 
 Repository is public; donor extraction requires checking publication & redistribution rights. Preserve notices & applicable licence obligations. Custom/restricted donor code is not imported until reviewed.
 
-## Pill placement
+## Notch placement
 
 Default: right screen edge on both OSes and every monitor, so position never differs between machines. Placement is a setting.
 
 - Mac notch area (optional mode): top-centre beside notch on built-in display, expanding downward on hover. Uses otherwise dead space, but competes with menu-bar icons (which already overflow behind notch on MacBook Air), needs hover delay against accidental expansion from menu-bar trips, and has no notch on external displays, where it falls back to right edge.
 - Windows taskbar: not offered. Windows 11 removed taskbar toolbars/deskbands; overlaying taskbar fights its z-order, auto-hide, centred icons & multi-monitor layouts and breaks with Windows updates.
-- No tray, menu-bar or Dock icon: pill is sole surface (Codenotch Mac setting “neither”). Launch at login restores it. Drop Codenotch's Windows tray code.
-- Mac keeps Codenotch's Option-drag along edge & per-edge memory; Windows pill implements same gesture with Alt-drag.
+- No tray, menu-bar or Dock icon: notch is sole surface (Codenotch Mac setting “neither”). Launch at login restores it. Drop Codenotch's Windows tray code.
+- Mac keeps Codenotch's Option-drag along edge & per-edge memory; Windows notch implements same gesture with Alt-drag.
 
 ## Settings access
 
-Identical on both OSes; Settings is a screen in shared Tauri dashboard, same layout, sections & wording. Pill is the single settings writer: dashboard and CLI send changes to pill over local channel; pill also persists its own state (edge, position). Writes are atomic (write-then-rename), schema versioned with migrations. If pill is not running, dashboard starts it first. Preferences are machine-local; optional export/import of shared settings between Mac & Windows later.
+Identical on both OSes; Settings is a screen in shared Tauri dashboard, same layout, sections & wording. Notch is the single settings writer: dashboard and CLI send changes to notch over local channel; notch also persists its own state (edge, position). Writes are atomic (write-then-rename), schema versioned with migrations. If notch is not running, dashboard starts it first. Preferences are machine-local; optional export/import of shared settings between Mac & Windows later.
 
-- Settings orb under pill (Codenotch's arc that becomes a gear on hover) on both OSes: one click opens Settings.
-- Clicking pill body opens dashboard on Resources.
-- Pill right-click menu: Settings, Pause, Quit.
+- Settings orb under notch (Codenotch's arc that becomes a gear on hover) on both OSes: one click opens Settings.
+- Clicking notch body opens dashboard on Resources.
+- Notch right-click menu: Settings, Pause, Quit.
 - Global shortcut to open settings, same key position on both machines: default Command+Shift+Comma on Mac, Alt+Shift+Comma on Windows (matches PowerToys Alt convention; plain Command+Comma is avoided because every Mac app uses it for its own settings). Configurable.
 - CLI `settings` command opens window, so agents & terminal can reach it too.
-- Single instance, separately for pill and dashboard: per-user instance lock; a second launch (login item, manual, CLI, post-update restart) forwards its request to the running instance and exits. Dashboard cold start target ≤ 1 s.
+- Single instance, separately for notch and dashboard: per-user instance lock; a second launch (login item, manual, CLI, post-update restart) forwards its request to the running instance and exits. Dashboard cold start target ≤ 1 s.
 - Global shortcut registration checks for collisions and reports them in Settings instead of failing silently.
 - Only platform differences: Mac-only sections for conveniences & macOS permissions, shown with status & “Open System Settings” buttons; hidden on Windows rather than greyed.
 
-## Pill visibility
+## Notch visibility
 
-Rule: pill is hidden whenever a fullscreen window (video, game, presentation) is on the pill's display, regardless of which display has focus. Start from HeardRight's code and close its one gap:
+Rule: notch is hidden whenever a fullscreen window (video, game, presentation) is on the notch's display, regardless of which display has focus. Start from HeardRight's code and close its one gap:
 
-- Mac: macOS fullscreen apps get their own Space, and the pill panel is deliberately not fullscreen-auxiliary, so it never appears over a fullscreen app even when focus is on another display. HeardRight's foreground check is kept for non-native fullscreen (games, non-AppKit players).
-- Windows: HeardRight checks only the foreground window. With two monitors, a fullscreen video on the pill's monitor while you work on the other monitor is no longer foreground, so HeardRight's pill would reappear over the video. This tool instead checks the topmost visible window on the pill's monitor (not just the foreground window) with the same style & geometry test, so the pill stays hidden.
+- Mac: macOS fullscreen apps get their own Space, and the notch panel is deliberately not fullscreen-auxiliary, so it never appears over a fullscreen app even when focus is on another display. HeardRight's foreground check is kept for non-native fullscreen (games, non-AppKit players).
+- Windows: HeardRight checks only the foreground window. With two monitors, a fullscreen video on the notch's monitor while you work on the other monitor is no longer foreground, so HeardRight's notch would reappear over the video. This tool instead checks the topmost visible window on the notch's monitor (not just the foreground window) with the same style & geometry test, so the notch stays hidden.
 
 Displays are identified by stable display IDs (not index or coordinates) so placement survives reconnects, resolution & DPI changes.
 
 - Mac (Swift, ported from HeardRight's Rust logic): frontmost app's focused window `AXFullScreen` attribute decides; window-geometry fallback only when attribute is missing (games, non-AppKit windows), never overriding explicit `false`. Panel joins all Spaces but is not fullscreen-auxiliary.
-- Windows (reuse HeardRight `pill/state/windows.rs` directly): foreground window counts as fullscreen only when it has no caption or resize frame and covers pill's monitor; shell overlays and maximized windows do not count; fullscreen app on another monitor never hides pill.
+- Windows (reuse HeardRight `pill/state/windows.rs` directly): foreground window counts as fullscreen only when it has no caption or resize frame and covers notch's monitor; shell overlays and maximized windows do not count; fullscreen app on another monitor never hides notch.
 - Requires Accessibility permission on Mac (already needed by convenience modules).
 
-A video playing in an ordinary window does not hide pill; only fullscreen does. Same as HeardRight.
+A video playing in an ordinary window does not hide notch; only fullscreen does. Same as HeardRight.
 
-Windows' style-plus-geometry check is a heuristic (borderless maximized windows can match; some fullscreen windows keep style flags). Test matrix on both OSes: video & game fullscreen, presentation mode, borderless maximized windows, focus moving between two monitors, macOS Spaces & Stage Manager, display reconnect, mixed DPI, auto-hide Dock/taskbar, Accessibility permission denied (Mac falls back to showing pill).
+Windows' style-plus-geometry check is a heuristic (borderless maximized windows can match; some fullscreen windows keep style flags). Test matrix on both OSes: video & game fullscreen, presentation mode, borderless maximized windows, focus moving between two monitors, macOS Spaces & Stage Manager, display reconnect, mixed DPI, auto-hide Dock/taskbar, Accessibility permission denied (Mac falls back to showing notch).
 
 ## AI usage rings
 
 - ChatGPT: Codex plan limits (5-hour & weekly) from local Codex sign-in `~/.codex/auth.json` (present on this Mac), read only, never refreshed; fall back to last session snapshot marked stale. ChatGPT chat usage itself has no public limit API; Codex limits are what CodexBar shows.
 - Claude: session & weekly windows. Codenotch's Windows port reads `~/.claude/.credentials.json`; its Mac app reads Claude Desktop's cached usage first, then `claude /usage`, then keychain token. On this Mac neither the credentials file nor standard `Claude Code-credentials` keychain item was found (2026-10-05), so Mac source is chosen in step 1 (Codenotch Mac's Desktop-cache → `claude /usage` → keychain chain is the starting point).
 - Never send expired tokens; respect 429 back-off; missing data shows “Unavailable”, not zero. Credentials stay in memory; tool never writes others' credential files.
-- Single owner: readers live in Rust core (port of Codenotch's Rust readers, with Mac credential sources from Codenotch's Swift app ported in), polled only by pill; dashboard & CLI `usage` read pill's latest readings. Each reading carries account, timestamp & source; stale readings dimmed with age. Poll interval 5 min with back-off; any subprocess (`claude /usage`, `codex`) bounded to 20 s and reaped. Expired login shows “Sign in needed”, never retries in a loop.
+- Single owner: readers live in Rust core (port of Codenotch's Rust readers, with Mac credential sources from Codenotch's Swift app ported in), polled only by notch; dashboard & CLI `usage` read notch's latest readings. Each reading carries account, timestamp & source; stale readings dimmed with age. Poll interval 5 min with back-off; any subprocess (`claude /usage`, `codex`) bounded to 20 s and reaped. Expired login shows “Sign in needed”, never retries in a loop.
 
 ## Vorssaint replacement
 
-Modules are Swift inside Mac pill app, taken from Vorssaint and adapted. Vorssaint 3.4.0 settings re-read 2026-10-05 from `com.vorssaint.utils`. Keep it running until each replacement module reaches parity, disabling each Vorssaint feature as its replacement turns on so two apps never handle same shortcut. Uninstall Vorssaint after last module ships.
+Modules are Swift inside Mac notch app, taken from Vorssaint and adapted. Vorssaint 3.4.0 settings re-read 2026-10-05 from `com.vorssaint.utils`. Keep it running until each replacement module reaches parity, disabling each Vorssaint feature as its replacement turns on so two apps never handle same shortcut. Uninstall Vorssaint after last module ships.
 
 | Feature | Mac implementation needs | Windows |
 | --- | --- | --- |
@@ -189,41 +189,41 @@ Hardware proof first (milestone 0): built-in MacBook Air keyboard and any extern
 ## Updates & distribution
 
 - Mac: Codenotch Mac's existing self-updater, repointed to own release channel; dashboard, worker & CLI ship inside app bundle and update with it. Ad-hoc signing works for personal use but re-prompts permissions after rebuilds.
-- Windows: one per-user installer containing native pill, dashboard, worker & CLI; pill runs updater check (Codenotch port's signed-update format), dashboard shows status. Unsigned installer works but shows SmartScreen warning.
+- Windows: one per-user installer containing native notch, dashboard, worker & CLI; notch runs updater check (Codenotch port's signed-update format), dashboard shows status. Unsigned installer works but shows SmartScreen warning.
 
-**Signing & permission identity is decided in milestone 0, not at the end**, because every Mac permission test depends on it. macOS keeps permissions when the code's designated requirement stays the same (same signing identity & bundle ID); notarization alone does not preserve them, and development vs distribution certificates count as different identities. Decide: bundle IDs for app, dashboard, worker & CLI; one signing identity for all; which executable each permission is attributed to. Test early: Full Disk Access for worker started by pill vs CLI started from Terminal (Terminal-launched CLI otherwise inherits Terminal's permissions, not the app's); Apple Events sent in-process for correct attribution (as Vorssaint's Finder bridge already does); permissions surviving a signed upgrade.
+**Signing & permission identity is decided in milestone 0, not at the end**, because every Mac permission test depends on it. macOS keeps permissions when the code's designated requirement stays the same (same signing identity & bundle ID); notarization alone does not preserve them, and development vs distribution certificates count as different identities. Decide: bundle IDs for app, dashboard, worker & CLI; one signing identity for all; which executable each permission is attributed to. Test early: Full Disk Access for worker started by notch vs CLI started from Terminal (Terminal-launched CLI otherwise inherits Terminal's permissions, not the app's); Apple Events sent in-process for correct attribution (as Vorssaint's Finder bridge already does); permissions surviving a signed upgrade.
 
-Update safety: pill quiesces worker jobs before installing; all executables check they share one version and refuse mixed versions; settings & findings store migrations are versioned with rollback on failed update.
+Update safety: notch quiesces worker jobs before installing; all executables check they share one version and refuse mixed versions; settings & findings store migrations are versioned with rollback on failed update.
 
 ## Boundaries
 
-- Shared Rust core: scan orchestration, tree, rule schema & findings store, accounting, history, resource sampling (`sysinfo` + platform readers), process actions, app inventory & leftover search, AI usage readers, settings model. Exposed to Swift via UniFFI, to Windows pill & Tauri directly, and through CLI.
+- Shared Rust core: scan orchestration, tree, rule schema & findings store, accounting, history, resource sampling (`sysinfo` + platform readers), process actions, app inventory & leftover search, AI usage readers, settings model. Exposed to Swift via UniFFI, to Windows notch & Tauri directly, and through CLI.
 - Mac-specific: `getattrlistbulk`, APFS sharing/allocation & snapshots, libproc & physical footprint, app identity & lifecycle quit, GPU readers, Trash, Full Disk Access, `simctl`, edge panel & conveniences (Swift).
-- Windows-specific: process identity/counters & GPU Engine counters, filesystem allocation, hard links/reparse points, placeholder-safe enumeration, Recycle Bin, registered uninstallers, native topmost pill.
+- Windows-specific: process identity/counters & GPU Engine counters, filesystem allocation, hard links/reparse points, placeholder-safe enumeration, Recycle Bin, registered uninstallers, native topmost notch.
 - Capability flags: unavailable counters display “Unavailable”; permission errors stay visible. Never present missing GPU readings as zero.
-- No permanent background daemon beyond pill itself, no remote service, no administrator helper in first version. Petal's `admin.rs` stays disabled; snapshot deletion is separate reviewed action, never cleanup default. Machine-wide Windows uninstallers may raise their own UAC prompt.
-- Scans & process trees never run in pill; pill shows scan-derived figures from last completed scan.
+- No permanent background daemon beyond notch itself, no remote service, no administrator helper in first version. Petal's `admin.rs` stays disabled; snapshot deletion is separate reviewed action, never cleanup default. Machine-wide Windows uninstallers may raise their own UAC prompt.
+- Scans & process trees never run in notch; notch shows scan-derived figures from last completed scan.
 - Filesystem provider interface defined before extracting Petal: Petal's `scan.rs` imports Unix metadata & GPUI types directly, `disk.rs` assumes macOS/APFS and volume discovery enumerates `/Volumes`. Extraction therefore = algorithms (tree, aggregation, findings) behind a provider interface + Mac provider from Petal + new Windows provider. The Windows provider is a port, not a reuse.
 
 ## Runtime ownership
 
-A shared library is not shared authority: pill, worker, dashboard & CLI are separate processes each linking core. One owner per responsibility:
+A shared library is not shared authority: notch, worker, dashboard & CLI are separate processes each linking core. One owner per responsibility:
 
 | Responsibility | Owner | Others |
 | --- | --- | --- |
-| Live sampling (CPU, memory, volume totals), AI usage polling | Pill | Read pill's latest readings over local channel |
-| Settings writes | Pill | Send change requests |
-| Scans, findings refresh, plan creation, apply, uninstall | Worker (single instance, job queue) | Pill, dashboard & CLI submit jobs and subscribe to progress |
+| Live sampling (CPU, memory, volume totals), AI usage polling | Notch | Read notch's latest readings over local channel |
+| Settings writes | Notch | Send change requests |
+| Scans, findings refresh, plan creation, apply, uninstall | Worker (single instance, job queue) | Notch, dashboard & CLI submit jobs and subscribe to progress |
 | Findings & history store | Worker writes; all read | SQLite in WAL mode, schema-versioned |
-| Process list & Quit/Force Quit | Worker for CLI & dashboard | Pill never terminates processes |
+| Process list & Quit/Force Quit | Worker for CLI & dashboard | Notch never terminates processes |
 
 - Local channel: Unix domain socket (Mac) / named pipe (Windows), per-user, versioned JSON messages; peers check they run the same version.
-- Worker is started on demand by whichever client needs it (including CLI when pill is not running), holds an instance lock, exits after a few minutes idle. Only one mutation job runs at a time; read jobs may run concurrently.
+- Worker is started on demand by whichever client needs it (including CLI when notch is not running), holds an instance lock, exits after a few minutes idle. Only one mutation job runs at a time; read jobs may run concurrently.
 - Jobs are journaled before they start; on crash or restart the worker resumes or marks each item's outcome from the journal. Cancellation is per job with per-item results.
 
 ## Storage expansion — DiskBuddy coverage (owner-approved 2026-10-06)
 
-Adrian requested adding & implementing gaps identified against [DiskBuddy](https://diskbuddy.com/#inside). This expands product scope; the comparison describes advertised behavior, not independent qualification of DiskBuddy. Keep existing native-pill/on-demand-worker architecture, no always-on full scanner, no telemetry uploads, & no automatic cleanup. Existing feasibility gates still control activation of effects; source implementation proceeds while qualification is open.
+Adrian requested adding & implementing gaps identified against [DiskBuddy](https://diskbuddy.com/#inside). This expands product scope; the comparison describes advertised behavior, not independent qualification of DiskBuddy. Keep existing native-notch/on-demand-worker architecture, no always-on full scanner, no telemetry uploads, & no automatic cleanup. Existing feasibility gates still control activation of effects; source implementation proceeds while qualification is open.
 
 | Capability | Required behavior & acceptance | Delivery order |
 | --- | --- | --- |
@@ -233,7 +233,7 @@ Adrian requested adding & implementing gaps identified against [DiskBuddy](https
 | Exact duplicates | Explicit opt-in content reads, size/sample narrowing & full content confirmation; configurable minimum size & bounded reads/deadline; stable keep-one/extras staging. Skip placeholders, symlinks/reparse points, unstable identity & known shared clones; hardlinks are one file. Revalidate before/after reads & again before actions. | First detection batch, then cleanup integration |
 | Cleanup & Undo | Group caches/logs/builds/dependencies/downloads/media for review; never universal “safe”. Existing identity/effect/protection/liveness/expiry rules apply. Durable per-item journal & one-time claim; Trash/Recycle Bin by default. Whole-job Undo & later restore verify original/trash identities, refuse overwrites, report partial conflicts, & refuse missing/emptied Trash entries. No replay of indeterminate effects. | State engine first; journal/native executors after M0/M2 gates |
 | Apps | Installed inventory & conservative bundle/related-file footprint, leftovers backed by install history/coverage, uninstall review; bounded per-app CPU/memory/I/O history with sampling coverage. Read-only update availability from explicit app feeds/Homebrew where supported & startup inventory; explicit user-selected switches later with identity-bound plans. Open-file/network-host inspection exposes permission limitations. | Inventory/history first; native adapters & actions next |
-| Monitor | Existing resources plus network rates, per-volume storage, battery charge/health/cycles/temperature/power/time where supported, listening ports mapped to verified process incarnation/owner & network exposure. Quit/Stop only through existing process-action contract. Same readings feed native pill & dashboard; no second sampler. | Read-only models/adapters first; native/UI qualification next |
+| Monitor | Existing resources plus network rates, per-volume storage, battery charge/health/cycles/temperature/power/time where supported, listening ports mapped to verified process incarnation/owner & network exposure. Quit/Stop only through existing process-action contract. Same readings feed native notch & dashboard; no second sampler. | Read-only models/adapters first; native/UI qualification next |
 | Compression | Local image/video encoding with explicit format/quality/resize/target-size options, preview & measured before/after size. Preserve originals; no overwrite; publish only complete verified output, clean only job-owned temporary files on failure/cancel. Original-to-Trash is a separate reviewed cleanup plan. Mac uses ImageIO/AVFoundation; Windows uses supported native codecs with explicit unsupported results. | Portable contracts & Mac adapter first; Windows adapter/UI next |
 | Activity | Filterable scan/cleanup/uninstall/compression timeline, weekly/monthly totals by action, per-item restore. Keep moved logical/allocated bytes separate from observed volume free-space change; restoring/emptying Trash updates appropriate events without invented reclaimed totals. | State/projection first; durable journal & dashboard next |
 | External/network volumes | Mounted local disks already scoped; add mounted network shares explicitly for read-only inspection. Capability/permission/identity/timeouts visible; UNC scan support distinct from private metadata-store policy. No remote mutations without qualified volume identity & reversible native route. Disconnects remain unavailable. | Provider tests & platform qualification |
@@ -321,11 +321,11 @@ Safety contract (protects against accidental misuse by this tool and by agents u
 - Journal before execution; per-item results; crash recovery from journal (see Runtime ownership).
 - Every `apply` appends to local audit log readable by `history`.
 
-Pill, dashboard & CLI read same core & findings store, so agent & UI never disagree. Thin MCP server wrapper is optional later; CLI first because every agent can already call it.
+Notch, dashboard & CLI read same core & findings store, so agent & UI never disagree. Thin MCP server wrapper is optional later; CLI first because every agent can already call it.
 
 ## Resources & task manager
 
-Pill shows CPU & memory pressure (not raw “used”, since both OSes fill RAM with cache). Hover adds swap & GPU. Dashboard Resources screen:
+Notch shows CPU & memory pressure (not raw “used”, since both OSes fill RAM with cache). Hover adds swap & GPU. Dashboard Resources screen:
 
 - Apps with helpers grouped; expand to individual processes. Columns: CPU, memory, GPU, threads, start time.
 - Sort any column; search; per-app history sparkline while dashboard is open.
@@ -376,8 +376,8 @@ Executed by parallel agents with **one integration owner** (a lead agent that ow
 - Combined repo with four upstream subtrees pinned; weekly sync bot skeleton.
 - Signing & permission identity matrix (bundle IDs, one signing identity, which executable gets which permission); Full Disk Access for worker & Terminal-launched CLI; permissions survive signed upgrade.
 - Fn remap hardware proof on owner's keyboards → event tap or Karabiner.
-- Donor extraction inventory at pinned commits (Vorssaint Finder/conveniences, Codenotch Mac pill & readers, Tinycast `AppCore`); single AppDelegate/service-registry design.
-- Footprint baselines: stripped Codenotch Mac pill; native Windows pill prototype with one ring; Tinycast index loaded vs not. Budgets confirmed or revised.
+- Donor extraction inventory at pinned commits (Vorssaint Finder/conveniences, Codenotch Mac notch & readers, Tinycast `AppCore`); single AppDelegate/service-registry design.
+- Footprint baselines: stripped Codenotch Mac notch; native Windows notch prototype with one ring; Tinycast index loaded vs not. Budgets confirmed or revised.
 - Fullscreen-hide semantics on both OSes against test matrix.
 - Runtime ownership: worker, local channel, store schema, job journal.
 - Filesystem provider interface; APFS fixture volumes (+ Windows fixtures when Windows machine is available).
@@ -386,7 +386,7 @@ Executed by parallel agents with **one integration owner** (a lead agent that ow
 
 **M2 — Bounded cleanup.** `plan`/`apply` with full safety contract (recursive protection, identity binding, effect binding, journal); Trash & bounded owner-tool actions only; adversarial fixture tests (ancestor swapped for symlink, protected descendant added after planning, remount, crash mid-apply).
 
-**M3 — Surfaces.** Mac pill rings via UniFFI; Windows pill rings; Tauri dashboard screens (Resources read-only, Storage, Cleanup, Settings). Retire CodexBar.
+**M3 — Surfaces.** Mac notch rings via UniFFI; Windows notch rings; Tauri dashboard screens (Resources read-only, Storage, Cleanup, Settings). Retire CodexBar.
 
 **M4 — Mac conveniences & launcher.** Central event-tap service; Finder cut/paste + Fn shortcuts → maximizer & Dock click → Auto Quit (per-app opt-in); Tinycast launcher module with allowlist. Disable each Vorssaint feature as replacement passes its tests; retire Vorssaint after last one.
 
@@ -421,7 +421,7 @@ Rules that keep weekly pulls manageable:
 Weekly bot (scheduled CI, Mac & Windows runners):
 
 1. Fetch each upstream and open **one pull request per donor** (not one combined pull), so a failure is attributable to one donor.
-2. Each PR builds Mac app, Windows pill, worker, dashboard & CLI; runs unit, fixture & smoke tests (pill launches, launcher opens, cut/paste fixtures, usage-reader fixtures, CLI plan/apply refusals).
+2. Each PR builds Mac app, Windows notch, worker, dashboard & CLI; runs unit, fixture & smoke tests (notch launches, launcher opens, cut/paste fixtures, usage-reader fixtures, CLI plan/apply refusals).
 3. Green → PR with upstream changelog summary for owner to merge (or auto-merge if owner prefers).
 4. Conflict or failure → PR marked failing with log; a coding agent resolves and re-runs.
 5. CI cannot exercise real permissions (TCC), Globe key, fullscreen or signed-in provider accounts. PRs touching those areas are labelled “needs machine check” and wait for a quick check on owner's Mac/Windows before merge.
@@ -439,7 +439,7 @@ This task delivers Markdown proposal, adversarial review & revision notes. Futur
 - Pills stay within resource budget on both OSes over 24 h of normal use, measured per the Resource budget definitions (footprint/private bytes, children reported, return to baseline after dashboard closes).
 - Dashboard screens identical on both OSes apart from Mac-only sections; metric labels platform-correct.
 - Uninstall never pre-selects ambiguous, shared or user-created files; leftover rule proposes only apps with recorded install history, and fixtures with a portable/external-volume install of the “missing” app produce no eligible leftovers.
-- Pill never steals focus; on right edge, topmost; hidden whenever a fullscreen window is on its display, including when focus is on another monitor, on both OSes, passing the visibility test matrix.
+- Notch never steals focus; on right edge, topmost; hidden whenever a fullscreen window is on its display, including when focus is on another monitor, on both OSes, passing the visibility test matrix.
 - Claude & ChatGPT rings agree with each provider's own `/usage` figures; missing data shows “Unavailable”; each reading shows its age.
 - CLI: `apply` refuses raw paths, expired, reused or changed plans, protected descendants at any depth, swapped ancestors (symlink/junction), remounted volumes and incomplete inspection; each initial rule has fixture tests proving live and unknown items (running Chrome, active workspace, disconnected volume, permission-denied folder) are never offered; crash mid-apply recovers from journal with correct per-item results.
 - On disposable APFS fixture, for each clone/hard-link/snapshot/failed-metadata case, observed free-space change falls within the plan's stated lower–upper bound; bounds per case are agreed in M0 and an “unknown” bound is allowed only where the case is inherently unknowable (e.g. snapshot retention).

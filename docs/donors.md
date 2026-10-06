@@ -13,7 +13,7 @@ Checked 2026-10-05 from public GitHub source. Donor pins were inspected before i
 
 [Pearcleaner main at `7724df7`](https://github.com/alienator88/Pearcleaner/tree/7724df7111bff82ae243301cf701992ef05ecf19) is reference-only for Mac leftover search. Its `LICENSE.md` is Apache-2.0 with Commons Clause: redistribution must retain notices & the Commons Clause, and “Sell” is excluded. No Pearcleaner source is copied; it remains reference-only.
 
-HeardRight is owner code, not a public donor. Fullscreen reference paths inspected in owner's HeardRight checkout (`tauri-app-next`) are `src-tauri/src/pill/state/macos.rs`, `src-tauri/src/pill/state/windows.rs`, `src-tauri/src/pill/state.rs` & `heardright_core/src/pill/model.rs`. Windows foreground-only logic is insufficient for Cockpit's multi-monitor rule; the prototype must enumerate topmost visible windows on pill's monitor.
+HeardRight is owner code, not a public donor. Fullscreen reference paths inspected in owner's HeardRight checkout (`tauri-app-next`) are `src-tauri/src/pill/state/macos.rs`, `src-tauri/src/pill/state/windows.rs`, `src-tauri/src/pill/state.rs` & `heardright_core/src/pill/model.rs`. Windows foreground-only logic is insufficient for Cockpit's multi-monitor rule; the prototype must enumerate topmost visible windows on notch's monitor.
 
 ## Entrypoint inventory
 
@@ -23,7 +23,7 @@ Mac composition currently has three incompatible roots that must collapse behind
 - Vorssaint `AppDelegate` calls `FeatureRuntime.shared.syncAtLaunch`; Finder cut/paste, Dock click & Auto Quit are singleton services with their own permissions, observers, event taps & teardown. `WindowMaximizer` shares this input surface.
 - Tinycast `AppCore.shared` constructs its stores/coordinators in `init`, then `start()` starts `AppIndex`, extensions, update checks, hotkeys, palette & feature watchers. Launcher index is therefore an explicit cold-start boundary for Cockpit.
 
-Windows Codenotch is Tauri/WebView2, not a native pill: `windows/codenotch/src/main.rs` owns Tauri state and `ui/notch.html` draws SVG rings (`svgArc`, provider state and usage snapshots); `usage.rs`, `claude_auth.rs` & `codex.rs` own readers. `windows/codenotch/Cargo.toml` includes Tauri 2.11, updater, single-instance, HTTP/TLS, SQLite and Win32 features. Cockpit may reuse reader semantics & ring geometry as reference, but native Rust ring code must be owned & redrawn; no Windows runtime claim is made by this inventory.
+Windows Codenotch is Tauri/WebView2, not a native notch: `windows/codenotch/src/main.rs` owns Tauri state and `ui/notch.html` draws SVG rings (`svgArc`, provider state and usage snapshots); `usage.rs`, `claude_auth.rs` & `codex.rs` own readers. `windows/codenotch/Cargo.toml` includes Tauri 2.11, updater, single-instance, HTTP/TLS, SQLite and Win32 features. Cockpit may reuse reader semantics & ring geometry as reference, but native Rust ring code must be owned & redrawn; no Windows runtime claim is made by this inventory.
 
 ## Public-repository boundary
 

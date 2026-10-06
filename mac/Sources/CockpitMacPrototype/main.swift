@@ -196,7 +196,7 @@ private final class FullscreenDetector {
     var accessibilityDenied: Bool { !AXIsProcessTrusted() }
 
     func shouldHide(on screen: NSScreen) -> Bool {
-        // A denied TCC check must keep the pill visible and must never prompt.
+        // A denied TCC check must keep the notch visible and must never prompt.
         let focused = focusedWindowState()
         let monitor = displayBounds(for: screen)
         return VisibilityGeometry.shouldHide(
@@ -436,7 +436,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 emit("process_start")
-// Native pill is independent of the worker: nothing here starts or connects to one.
+// Native notch is independent of the worker: nothing here starts or connects to one.
 private let runtime = PillRuntime(emit: { event, level, fields in emit(event, level: level, fields) })
 switch runtime.start() {
 case .started: break

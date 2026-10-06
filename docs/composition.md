@@ -42,20 +42,20 @@ The registry owns updater, login-item and activation-policy decisions. Codenotch
 
 ### Settings, permissions and IPC
 
-`SettingsStore` is the only settings writer. It validates schema versions, writes a temporary file, fsyncs where supported and renames atomically. Pill, dashboard and CLI use typed requests; dashboard and CLI never write preferences directly.
+`SettingsStore` is the only settings writer. It validates schema versions, writes a temporary file, fsyncs where supported and renames atomically. Notch, dashboard and CLI use typed requests; dashboard and CLI never write preferences directly.
 
 `MacPermissionBroker` is the only permission status reader and prompt owner:
 
 | Capability | Owner | Policy |
 | --- | --- | --- |
-| Accessibility | Mac pill | AX window/fullscreen reads, Finder and convenience actions; missing access produces `Unavailable` and no hidden retry loop |
-| Input Monitoring | Mac pill | One global event tap shared by remaps, Finder cut/paste, maximizer, Dock click and launcher hotkey |
-| Automation | Mac pill | Finder Apple Events only; structured URL lists and per-item results |
-| Full Disk Access | Worker / CLI process | Coverage is checked per signed executable; pill permission is not treated as worker or Terminal-launched CLI permission |
+| Accessibility | Mac notch | AX window/fullscreen reads, Finder and convenience actions; missing access produces `Unavailable` and no hidden retry loop |
+| Input Monitoring | Mac notch | One global event tap shared by remaps, Finder cut/paste, maximizer, Dock click and launcher hotkey |
+| Automation | Mac notch | Finder Apple Events only; structured URL lists and per-item results |
+| Full Disk Access | Worker / CLI process | Coverage is checked per signed executable; notch permission is not treated as worker or Terminal-launched CLI permission |
 
 The broker reports capability state to Settings; donor permission prompts, launch-item registration and activation-policy changes are removed during extraction. Windows has no parallel permission broker in this design; native Win32 failures become explicit unavailable states.
 
-`WorkerPort` is a client of the per-user Unix socket or named pipe described in [`runtime.md`](runtime.md). The worker owns scans, plans, journal and mutations. Its idle exit does not stop the pill or usage reader.
+`WorkerPort` is a client of the per-user Unix socket or named pipe described in [`runtime.md`](runtime.md). The worker owns scans, plans, journal and mutations. Its idle exit does not stop the notch or usage reader.
 
 ### One usage owner
 
@@ -73,7 +73,7 @@ actor UsagePoller {
 }
 ```
 
-`UsagePoller` is the sole owner of Claude/Codex reads, retry/backoff, stale timestamps and persistence. Pill renders its latest snapshot; dashboard and CLI request that snapshot through IPC. No donor provider starts its own timer, subprocess, credential refresh or network request. `register` fails on duplicate IDs, and adapters must not expose a second path to the same account.
+`UsagePoller` is the sole owner of Claude/Codex reads, retry/backoff, stale timestamps and persistence. Notch renders its latest snapshot; dashboard and CLI request that snapshot through IPC. No donor provider starts its own timer, subprocess, credential refresh or network request. `register` fails on duplicate IDs, and adapters must not expose a second path to the same account.
 
 ### One event-tap owner
 
@@ -100,14 +100,14 @@ The hotkey is registered with `EventTapHub` at one priority. If Mac footprint ev
 
 `WindowsPillRuntime` owns one native ring renderer, one sampler and one monitor-placement service. It receives `UsageSnapshot` values from shared core and cheap counters from `Sampler`; it does not embed Codenotch's WebView2 or start Tauri's provider loops. A native ring adapter may reuse Codenotch geometry constants as reference, while `ui/notch.html` remains excluded.
 
-The fullscreen probe is a single `MonitorOccupancy` service. It enumerates topmost visible windows on each pill monitor, applies the borderless-style and full-coverage test, and publishes suppression to every ring. It does not use a foreground-only provider path. Dashboard and worker remain separate processes.
+The fullscreen probe is a single `MonitorOccupancy` service. It enumerates topmost visible windows on each notch monitor, applies the borderless-style and full-coverage test, and publishes suppression to every ring. It does not use a foreground-only provider path. Dashboard and worker remain separate processes.
 
 ## Shutdown contract
 
 `CockpitRuntime.stop()` executes once on application termination:
 
 1. Mark registry `stopping`; reject new launcher, settings and worker requests.
-2. Hide pill surfaces and stop new sampling/drawing.
+2. Hide notch surfaces and stop new sampling/drawing.
 3. Stop launcher session and usage poller; cancel bounded child processes and persist last snapshots as stale.
 4. Disable `EventTapHub`, unregister all tokens and wait for in-flight callbacks.
 5. Stop Finder, maximizer, Dock click and Auto Quit adapters; remove AX observers and restore borrowed input state.

@@ -11,8 +11,8 @@ final class PillSettingsStoreTrustTests: XCTestCase {
     private var file: URL { dir.appendingPathComponent(PillSettingsStore.fileName) }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-trust-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        root = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-trust-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     }
 
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
@@ -119,7 +119,7 @@ final class PillInstanceLockTrustTests: XCTestCase {
     private var lockPath: URL { dir.appendingPathComponent(PillSettingsStore.lockName) }
 
     override func setUpWithError() throws {
-        dir = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-lock-\(UUID().uuidString)", isDirectory: true)
+        dir = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-lock-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])
     }

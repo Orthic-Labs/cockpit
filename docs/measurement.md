@@ -66,7 +66,7 @@ The budget (`implementation-plan.md`) is physical footprint on Mac and private b
 ## Capturing release-build baselines (planned)
 
 1. Use a signed release build produced by the generated RightKit workflows, on a real machine (not a hosted runner or VM), one platform at a time.
-2. Launch the pill normally, leave it idle with the pill visible and no dashboard, and wait for the 10-minute steady state.
+2. Launch the notch normally, leave it idle with the notch visible and no dashboard, and wait for the 10-minute steady state.
 3. Build `cockpit-probe` in CI and copy it to the test machine (explicit path). Run the probe for the plan's windows (for example `--duration 600 --interval 2` for idle CPU), then repeat around hover/ring updates and after closing the dashboard (return to baseline within 60 s).
 4. Keep raw JSON local. Only reviewed, aggregated figures with machine class, OS version, build identity and probe schema version may be added to `feasibility.md`, replacing "Pending". Footprint/private bytes come from platform tools in the same session.
 

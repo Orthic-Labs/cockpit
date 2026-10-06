@@ -34,16 +34,19 @@ public struct PillSettingsStore {
     /// Opens every ancestor descriptor without following a symlink. Intermediate system
     /// directories need not be owner-only, but must be real directories in the walked path.
     fileprivate func openParentDirectory() -> (fd: Int32, failure: SettingsFailure?) {
-        let path = directory.standardizedFileURL.path
+        let path = directory.path
         guard path.hasPrefix("/") else { return (-1, .ioError(EINVAL)) }
         let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard !components.isEmpty else { return (-1, .ioError(EINVAL)) }
+        guard !components.isEmpty, !components.contains("."), !components.contains("..") else { return (-1, .ioError(EINVAL)) }
         var fd = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return (-1, .ioError(errno)) }
         for component in components.dropLast() {
             let next = openat(fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             if next < 0 {
-                let failure: SettingsFailure = errno == ELOOP ? .symlink : .ioError(errno)
+                let savedError = errno
+                var st = stat()
+                let isLink = fstatat(fd, component, &st, AT_SYMLINK_NOFOLLOW) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+                let failure: SettingsFailure = isLink || savedError == ELOOP ? .symlink : .ioError(savedError)
                 close(fd)
                 return (-1, failure)
             }
@@ -54,7 +57,7 @@ public struct PillSettingsStore {
     }
 
     fileprivate var directoryLeaf: String {
-        directory.standardizedFileURL.path
+        directory.path
             .split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? ""
     }
 

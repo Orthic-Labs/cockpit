@@ -9,8 +9,8 @@ final class PillRuntimeMutationTests: XCTestCase {
     private var events: [(event: String, level: String)] = []
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-mut-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        root = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-mut-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         events = []
     }
 
@@ -42,7 +42,7 @@ final class PillRuntimeMutationTests: XCTestCase {
         let rt = make()
         XCTAssertEqual(rt.start(), .started)
         XCTAssertEqual(rt.setMonitor("", MonitorSetting()), .refused("invalid_monitor_key"))
-        let tooLong = String(repeating: "k", count: PillSettings.maxMonitorKeyLength + 1)
+        let tooLong = String(repeating: "k", count: PillSettings.maxKeyUTF8Bytes + 1)
         XCTAssertEqual(rt.setMonitor(tooLong, MonitorSetting()), .refused("invalid_monitor_key"))
         XCTAssertTrue(rt.settings.monitors.isEmpty)
         rt.shutdown(reason: "t", stopTimer: {}, closePanels: {})
@@ -63,8 +63,8 @@ final class PillRuntimeLifecycleTests: XCTestCase {
     private var events: [String] = []
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-life-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        root = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-life-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         events = []
     }
 

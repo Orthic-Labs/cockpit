@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import Darwin
 @testable import CockpitMacPrototypeCore
 
 final class PillSettingsCodecTests: XCTestCase {
@@ -206,8 +207,8 @@ final class PillStoreFileTests: XCTestCase {
     private var file: URL { dir.appendingPathComponent(PillSettingsStore.fileName) }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-pill-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        root = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-pill-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     }
 
     override func tearDownWithError() throws {
@@ -236,13 +237,13 @@ final class PillStoreFileTests: XCTestCase {
     func testExistingDirectoryModeIsPreserved() throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o755])
-        XCTAssertEqual(PillSettingsStore(directory: dir).ensureDirectory(), .existing)
-        assertVoidResultEqual(PillSettingsStore(directory: dir).save(.defaults), .success(()))
+        XCTAssertEqual(PillSettingsStore(directory: dir).ensureDirectory(), .refused(.ioError(EACCES)))
+        assertVoidResultEqual(PillSettingsStore(directory: dir).save(.defaults), .failure(.refused(.ioError(EACCES))))
         XCTAssertEqual(try mode(dir), 0o755)
     }
 
     func testUnreadableFilesAreProtectedAndNeverOverwritten() throws {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let store = PillSettingsStore(directory: dir)
         let cases: [(Data, SettingsFailure)] = [
             (Data("garbage".utf8), .malformed),
@@ -251,6 +252,7 @@ final class PillStoreFileTests: XCTestCase {
         ]
         for (data, failure) in cases {
             try data.write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             XCTAssertEqual(store.load(), .init(settings: .defaults, state: .protected(failure)))
             // A runtime refuses the write for protected state; the file stays byte-identical.
             XCTAssertEqual(SettingsWritePolicy.decide(state: .protected(failure), current: PillSettings(visible: false),
@@ -261,7 +263,7 @@ final class PillStoreFileTests: XCTestCase {
     }
 
     func testSymlinkedFileAndDirectoryAreRefused() throws {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let target = root.appendingPathComponent("target.json")
         try Data(#"{"schema_version":1}"#.utf8).write(to: target)
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
@@ -286,8 +288,8 @@ final class PillInstanceLockTests: XCTestCase {
     private var root: URL!
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-lock-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        root = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-lock-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     }
 
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
@@ -318,8 +320,8 @@ final class PillRuntimeTests: XCTestCase {
     private var events: [String] = []
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cockpit-rt-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        root = try canonicalFixtureDirectory(FileManager.default.temporaryDirectory).appendingPathComponent("cockpit-rt-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         events = []
     }
 
@@ -372,10 +374,11 @@ final class PillRuntimeTests: XCTestCase {
     }
 
     func testCorruptFileUsesDefaultsAndIsPreserved() throws {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let file = dir.appendingPathComponent(PillSettingsStore.fileName)
         let original = Data(#"{"schema_version":3,"cadence_seconds":9}"#.utf8)
         try original.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         let rt = make()
         XCTAssertEqual(rt.start(), .started)
         XCTAssertEqual(rt.settings, .defaults)
