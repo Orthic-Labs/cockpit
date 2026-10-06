@@ -1,8 +1,9 @@
 import Darwin
 import Foundation
 
-/// Cockpit fork: the machine's own readings as notch rings — memory
-/// pressure and one ring per mounted local disk (CPU is available, unused). Each is a `UsageProvider` of
+/// Cockpit fork: the machine's own readings as two notch cells — system (CPU
+/// as the main ring, memory pressure as the thin outer ring) and disks
+/// (internal drive as the main ring, external as the outer ring). Each is a `UsageProvider` of
 /// kind `.system`, so it gets Codenotch's ring, hover card and ordering for
 /// free, while the store refreshes it every two seconds and keeps it out of
 /// the usage archive and alerts.
@@ -13,17 +14,12 @@ import Foundation
 enum SystemProviders {
     static let cpuID = "system-cpu"
     static let memoryID = "system-memory"
-    static let diskPrefix = "system-disk:"
+    static let disksID = "system-disks"
 
     static func isSystem(providerID: String) -> Bool { providerID.hasPrefix("system-") }
 
-    /// Disks are discovered once, at launch; one mounted later gets its ring
-    /// on the next launch.
     static func all() -> [UsageProvider] {
-        // CPU is left out on purpose: memory pressure is the reading that
-        // means something at a glance. `CPUProvider` stays for the hub.
-        let fixed: [UsageProvider] = [MemoryProvider()]
-        return fixed + DiskProvider.discover().map { $0 as UsageProvider }
+        [SystemLoadProvider(), DisksProvider()]
     }
 
     static func bytes(_ value: Int64) -> String {
@@ -38,10 +34,11 @@ enum SystemProviders {
     }
 }
 
-/// Share of all cores busy since the previous reading.
-actor CPUProvider: UsageProvider {
+/// One cell: share of all cores busy since the previous reading as the main
+/// ring, memory pressure as the thin outer ring.
+actor SystemLoadProvider: UsageProvider {
     nonisolated let id = SystemProviders.cpuID
-    nonisolated let displayName = "CPU"
+    nonisolated let displayName = "System"
     nonisolated let glyph = ProviderGlyph.cpu
     nonisolated let kind = ProviderKind.system
     nonisolated var signInRoute: SignInRoute { .guidance("") }
@@ -64,10 +61,13 @@ actor CPUProvider: UsageProvider {
         let total = busy + Double(now.idle &- base.idle)
         guard total > 0 else { throw UsageProviderError.apiError(L10n.t("No CPU change yet")) }
         let cores = ProcessInfo.processInfo.activeProcessorCount
-        let window = LimitWindow(id: "load", label: L10n.t("All cores"),
-                                 usedFraction: min(max(busy / total, 0), 1),
-                                 detail: L10n.t("\(Percent.text(for: busy / total))% busy · \(cores) cores"))
-        return SystemProviders.snapshot(id: id, name: displayName, glyph: glyph, window: window)
+        let cpu = LimitWindow(id: "cpu", label: L10n.t("CPU"),
+                              usedFraction: min(max(busy / total, 0), 1),
+                              detail: L10n.t("\(Percent.text(for: busy / total))% busy · \(cores) cores"))
+        let memory = try? MemoryProvider.window()
+        return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
+                                status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []),
+                                headlineID: cpu.id, weeklyID: memory?.id, kind: .system)
     }
 
     private static func read() throws -> Ticks {
@@ -102,6 +102,10 @@ struct MemoryProvider: UsageProvider {
     private static let host = mach_host_self()
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
+        SystemProviders.snapshot(id: id, name: displayName, glyph: glyph, window: try Self.window())
+    }
+
+    static func window() throws -> LimitWindow {
         let total = Int64(ProcessInfo.processInfo.physicalMemory)
         let used = Self.usedBytes()
         let fraction: Double
@@ -115,10 +119,9 @@ struct MemoryProvider: UsageProvider {
         let (state, band) = Self.pressure()
         var detail = L10n.t("Pressure \(state)")
         if let used { detail += " · " + L10n.t("\(SystemProviders.bytes(used)) of \(SystemProviders.bytes(total)) used") }
-        let window = LimitWindow(id: "pressure", label: L10n.t("Memory pressure"),
-                                 usedFraction: min(max(fraction, 0), 1),
-                                 detail: detail, bandOverride: band)
-        return SystemProviders.snapshot(id: id, name: displayName, glyph: glyph, window: window)
+        return LimitWindow(id: "pressure", label: L10n.t("Memory pressure"),
+                           usedFraction: min(max(fraction, 0), 1),
+                           detail: detail, bandOverride: band)
     }
 
     /// 1 normal, 2 warning, 4 critical (`DISPATCH_MEMORYPRESSURE_*`).
@@ -156,51 +159,65 @@ struct MemoryProvider: UsageProvider {
     }
 }
 
-/// One mounted local, writable, browsable volume. The ring is the share used;
-/// the hover card says how much is free, as Finder counts it.
-struct DiskProvider: UsageProvider {
-    let id: String
-    let displayName: String
-    let url: URL
+/// One cell for every mounted local, writable, browsable volume. The internal
+/// (startup) drive is the main ring; the first external drive is the thin
+/// outer ring, drawn by Codenotch's second-ring support. Every drive is listed
+/// in the hover card with how much is free, as Finder counts it. Volumes are
+/// re-read on each refresh, so a drive plugged in later appears without a
+/// relaunch and an ejected one drops out.
+struct DisksProvider: UsageProvider {
+    let id = SystemProviders.disksID
+    let displayName = "Disks"
     let glyph = ProviderGlyph.disk
     let kind = ProviderKind.system
     var signInRoute: SignInRoute { .guidance("") }
     func account() -> ProviderAccount? { nil }
 
-    func fetchSnapshot() async throws -> ProviderSnapshot {
-        let values = try url.resourceValues(forKeys: [
-            .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey,
-            .volumeAvailableCapacityKey,
-        ])
-        guard let total = values.volumeTotalCapacity.map(Int64.init), total > 0 else {
-            throw UsageProviderError.apiError(L10n.t("\(displayName) is unavailable"))
-        }
-        let free = values.volumeAvailableCapacityForImportantUsage
-            ?? values.volumeAvailableCapacity.map(Int64.init) ?? 0
-        let used = max(total - free, 0)
-        let window = LimitWindow(
-            id: "space", label: displayName,
-            usedFraction: min(Double(used) / Double(total), 1),
-            detail: L10n.t("\(SystemProviders.bytes(free)) free of \(SystemProviders.bytes(total))"))
-        return SystemProviders.snapshot(id: id, name: displayName, glyph: glyph, window: window)
+    private struct Volume {
+        let window: LimitWindow
+        let isInternal: Bool
+        let isStartup: Bool
     }
 
-    static func discover() -> [DiskProvider] {
-        let keys: [URLResourceKey] = [
-            .volumeIsLocalKey, .volumeIsBrowsableKey, .volumeIsReadOnlyKey,
-            .volumeNameKey, .volumeUUIDStringKey, .volumeTotalCapacityKey,
-        ]
+    private static let keys: [URLResourceKey] = [
+        .volumeIsLocalKey, .volumeIsBrowsableKey, .volumeIsReadOnlyKey, .volumeIsInternalKey,
+        .volumeNameKey, .volumeUUIDStringKey, .volumeTotalCapacityKey,
+        .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey,
+    ]
+
+    func fetchSnapshot() async throws -> ProviderSnapshot {
+        let volumes = Self.volumes()
+        let internal = volumes.first(where: \.isStartup) ?? volumes.first(where: \.isInternal)
+        guard let main = internal ?? volumes.first else {
+            throw UsageProviderError.apiError(L10n.t("No local disks found"))
+        }
+        let outer = volumes.first { !$0.isInternal && $0.window.id != main.window.id }
+        let ordered = [main] + volumes.filter { $0.window.id != main.window.id }
+        return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
+                                status: .ok, windows: ordered.map(\.window),
+                                headlineID: main.window.id, weeklyID: outer?.window.id,
+                                kind: .system)
+    }
+
+    private static func volumes() -> [Volume] {
         let urls = FileManager.default.mountedVolumeURLs(
             includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
         return urls.compactMap { url in
             guard let values = try? url.resourceValues(forKeys: Set(keys)),
                   values.volumeIsLocal == true, values.volumeIsBrowsable == true,
                   values.volumeIsReadOnly != true,
-                  (values.volumeTotalCapacity ?? 0) > 0
+                  let total = values.volumeTotalCapacity.map(Int64.init), total > 0
             else { return nil }
+            let free = values.volumeAvailableCapacityForImportantUsage
+                ?? values.volumeAvailableCapacity.map(Int64.init) ?? 0
+            let used = max(total - free, 0)
             let name = values.volumeName ?? url.lastPathComponent
-            let identity = values.volumeUUIDString ?? url.path
-            return DiskProvider(id: SystemProviders.diskPrefix + identity, displayName: name, url: url)
+            let window = LimitWindow(
+                id: "disk:" + (values.volumeUUIDString ?? url.path), label: name,
+                usedFraction: min(Double(used) / Double(total), 1),
+                detail: L10n.t("\(SystemProviders.bytes(free)) free of \(SystemProviders.bytes(total))"))
+            return Volume(window: window, isInternal: values.volumeIsInternal == true,
+                          isStartup: url.path == "/")
         }
     }
 }

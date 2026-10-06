@@ -13,8 +13,8 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 | Right-click | One item: Quit Cockpit | `Notch/NotchWindowController.swift` |
 | Updater | Sparkle removed; `Updater` is an inert stub so no Codenotch update can install over Cockpit | `App/Updater.swift`, `project.yml` |
 | Providers | Claude and Codex only (other provider code still compiled, not instantiated) | `App/AppDelegate.swift` |
-| System rings | Memory pressure and one ring per mounted local disk (CPU provider kept, not shown); `ProviderKind.system`, 2 s refresh, no archive, no refresh spinner, excluded from usage alerts; SF Symbol glyphs | `System/SystemProviders.swift`, `Model/UsageStore.swift`, `Providers/UsageProvider.swift`, `Providers/ProviderGlyph.swift`, `Settings/Preferences.swift`, `App/AppDelegate.swift` |
-| Weekly ring | Weekly limit drawn as a second, thinner ring around the session ring by default (Codenotch's "Outside" option) | `Settings/Preferences.swift` |
+| System cells | System: CPU main ring, memory pressure inner ring. Disks: internal drive main ring, first external drive inner ring, all drives in the hover card, re-read each refresh. `ProviderKind.system`, 2 s refresh, no archive, no refresh spinner, excluded from usage alerts; SF Symbol glyphs | `System/SystemProviders.swift`, `Model/UsageStore.swift`, `Providers/UsageProvider.swift`, `Providers/ProviderGlyph.swift`, `Settings/Preferences.swift`, `App/AppDelegate.swift` |
+| Second ring | Second reading drawn as a thinner ring inside the main ring by default (Codenotch's "Inside" option), also while an agent works | `Settings/Preferences.swift`, `Features/ProviderRing.swift` |
 | Platform | Minimum macOS 26 (Liquid Glass always available); built with Xcode 27 | `project.yml` |
 | Visibility | Always shown by default; one Codex ring (default `~/.codex` profile) | `Settings/Preferences.swift`, `App/AppDelegate.swift` |
 | Activity | No spinning arc while an agent works; pulse kept for finished/waiting | `Features/ProviderRing.swift` |
@@ -24,6 +24,5 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 ## Not yet done
 
 - Remove unused provider, phone-link and costs code.
-- Disks mounted after launch appear on next launch.
 - Sampling does not yet slow while the notch is hidden for fullscreen.
 - Clicking the notch should open the hub (phase 2).

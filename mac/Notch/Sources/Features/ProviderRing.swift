@@ -145,7 +145,9 @@ struct ProviderRing: View {
                 // the case this exists for, and painting them the same colour
                 // would hide it. Held slightly back in opacity so the headline
                 // stays the one the eye lands on first.
-                if let radius = weeklyRing.radius, weeklyFraction != nil, !isWorking {
+                // Cockpit fork: shown while an agent works too — there is no
+                // spinner competing for the inner gap.
+                if let radius = weeklyRing.radius, weeklyFraction != nil {
                     let inset = NotchLayout.ringDiameter / 2 - radius
 
                     // A track of its own, for the same reason the headline has
