@@ -272,7 +272,7 @@ impl<'a, R: ContentReader> OperationState<'a, R> {
             self.truncated();
             return Err("duplicate operation bound reached".into());
         }
-        let mut handle = self
+        let handle = self
             .reader
             .open(&candidate.path)
             .map_err(|e| format!("content open failed: {e}"))?;
@@ -432,9 +432,9 @@ fn collect_candidates<R: ContentReader>(
             state.report.skip(
                 path,
                 if native.is_placeholder {
-                    "placeholder refused".into()
+                    "placeholder refused"
                 } else {
-                    "unknown or incomplete native metadata".into()
+                    "unknown or incomplete native metadata"
                 },
             );
             return;
