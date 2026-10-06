@@ -45,7 +45,7 @@ fn exact_bytes_form_group_and_changed_content_does_not() {
     fs::write(&second, b"same bytes").unwrap();
     fs::write(&changed, b"other bytes").unwrap();
 
-    let report = find_duplicates(&[root.clone()], &options());
+    let report = find_duplicates(std::slice::from_ref(&root), &options());
     assert_eq!(report.groups.len(), 1);
     assert_eq!(report.groups[0].extras.len(), 1);
     assert!(!report.groups[0].extras.contains(&changed));
@@ -62,7 +62,7 @@ fn hardlinks_are_skipped_by_identity_and_symlinks_are_refused() {
     fs::hard_link(&original, &hardlink).unwrap();
     std::os::unix::fs::symlink(&original, &link).unwrap();
 
-    let report = find_duplicates(&[root.clone()], &options());
+    let report = find_duplicates(std::slice::from_ref(&root), &options());
     assert!(report.groups.is_empty());
     assert!(report.skipped.iter().any(|skip| {
         (skip.path == hardlink || skip.path == original) && skip.reason.contains("hard link")
@@ -136,7 +136,7 @@ fn injected_partial_reader_is_reported_without_group() {
     fs::write(root.join("one"), b"same").unwrap();
     fs::write(root.join("two"), b"same").unwrap();
     let report = find_duplicates_with_reader(
-        &[root.clone()],
+        std::slice::from_ref(&root),
         &options(),
         &FixtureReader { partial: true },
     );
@@ -158,14 +158,14 @@ fn read_budget_and_deadline_truncate_before_unbounded_content_reads() {
     let mut bounded = options();
     bounded.max_total_read_bytes = 1;
     let budget =
-        find_duplicates_with_reader(&[root.clone()], &bounded, &FixtureReader { partial: false });
+        find_duplicates_with_reader(std::slice::from_ref(&root), &bounded, &FixtureReader { partial: false });
     assert!(budget.truncated);
     assert!(budget.bytes_read <= 1);
 
     let mut expired = options();
     expired.deadline = Duration::ZERO;
     let deadline =
-        find_duplicates_with_reader(&[root.clone()], &expired, &FixtureReader { partial: false });
+        find_duplicates_with_reader(std::slice::from_ref(&root), &expired, &FixtureReader { partial: false });
     assert!(deadline.truncated);
     assert!(deadline.groups.is_empty());
     fs::remove_dir_all(root).unwrap();

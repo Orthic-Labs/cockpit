@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { addStorageGrowthFile } from "./mac-storage-fixtures.mjs";
+import { addStorageGrowthFile, addStorageReplayFile } from "./mac-storage-fixtures.mjs";
 
 function imageSize(bytes) {
   const word = offset => bytes[offset] * 256 + bytes[offset + 1];
@@ -61,18 +61,21 @@ function assertFingerprint(actual, expected, label) {
  * dashboard DOM seams, injected state, mocks, and shell UI control are excluded.
  * `onRelaunch` is required because app quit/relaunch belongs to the CUA harness;
  * it must return `{ app: freshApp, restarted: true }` after observed CUA work.
+ * For replay coverage, callback must invoke supplied `prepareWhileClosed` after
+ * quitting and before relaunching, then return `preparedWhileClosed: true`.
  */
 export async function runInstalledStorageJourney(initialApp, options) {
   const { appBundle, fixture, output, onRelaunch, onCheckpoint = () => {}, onRingHover } = options;
   assert.ok(initialApp && typeof initialApp.getAXState === "function", "CUA app is required");
   assert.ok(path.isAbsolute(appBundle) && path.isAbsolute(output), "appBundle/output must be absolute");
-  assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.growthFile,
-    "fixture must include root, discard, duplicateA, duplicateB, duplicateC, sourcePng, growthFile");
+  assert.ok(fixture?.root && fixture?.discard && fixture?.duplicateA && fixture?.duplicateB && fixture?.duplicateC && fixture?.sourcePng && fixture?.growthFile && fixture?.hiddenFile && fixture?.replayFile,
+    "fixture must include root, discard, duplicateA, duplicateB, duplicateC, sourcePng, growthFile, hiddenFile, replayFile");
+  assert.ok(Array.isArray(fixture.indexFiles) && fixture.indexFiles.length >= 6, "fixture must include six filename-index files for pagination");
   assert.equal(typeof onRelaunch, "function", "onRelaunch callback is required for restart coverage");
   await mkdir(output, { recursive: true });
   let app = initialApp;
   const report = { status: "running", appBundle, startedAt: new Date().toISOString(), phases: [], checkpoints: [] };
-  const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC, fixture.discard, fixture.sourcePng];
+  const originalFixtureFiles = [fixture.duplicateA, fixture.duplicateB, fixture.duplicateC, fixture.discard, fixture.sourcePng, fixture.hiddenFile, ...fixture.indexFiles];
   const bundleFiles = ["Contents/MacOS/Cockpit", "Contents/Helpers/cockpit", "Contents/Resources/dashboard/app.js", "Contents/Resources/dashboard/index.html"]
     .map(file => path.join(appBundle, file));
   const before = await Promise.all([...originalFixtureFiles, ...bundleFiles].map(fingerprint));
@@ -114,6 +117,20 @@ export async function runInstalledStorageJourney(initialApp, options) {
   };
   const navigate = async label => click(hasButton(label));
   const assertLiveFile = async file => { await access(file); return fingerprint(file); };
+  const replaceText = async (label, value) => {
+    await click(line => line.includes("text field") && line.includes(label));
+    await app.pressKey("super+a");
+    await app.typeText(value);
+    await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && line.includes(value)),
+      `AX field ${label} must retain ${value}`);
+  };
+  const chooseSelectValue = async (label, value) => {
+    await click(line => line.includes(label) && /(?:pop up button|popup button|combo box|select)/i.test(line));
+    await app.typeText(value);
+    await app.pressKey("Return");
+    await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && line.includes(value)),
+      `AX select ${label} must retain ${value}`);
+  };
 
   try {
     phase = "launch-and-native-scan";
@@ -156,6 +173,80 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await app.pressKey("Return");
     ax = await waitFor(value => value.includes("1 matches") && value.includes(fixture.discard), "filter must show exactly discard fixture");
     await phaseDone(phase);
+
+    phase = "filename-index-build-and-hidden-search";
+    await navigate("Find");
+    ax = await click(hasButton("Build filename index"));
+    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value),
+      "Build filename index must expose native indexed-search state");
+    await replaceText("Name or path", path.basename(fixture.hiddenFile));
+    ax = await click(hasButton("Search"));
+    ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.hiddenFile),
+      "indexed search must find hidden fixture by filename");
+    ax = await click(hasButton(`Inspect indexed ${fixture.hiddenFile}`));
+    await app.pressKey("Return");
+    ax = await waitFor(value => value.includes("Indexed metadata") && value.includes(fixture.hiddenFile) && value.includes("Created") && value.includes("Modified"),
+      "keyboard indexed-row inspection must render metadata card");
+    await phaseDone(phase);
+
+    phase = "filename-index-filters-and-pagination";
+    await replaceText("Name or path", "fixture");
+    await replaceText("Extension", "txt");
+    await chooseSelectValue("Kind", "file");
+    await replaceText("Min bytes", "1");
+    await replaceText("Max bytes", "1048576");
+    await replaceText("Created after", "2000-01-01");
+    await replaceText("Created before", "2999-12-31");
+    await replaceText("Modified after", "2000-01-01");
+    await replaceText("Modified before", "2999-12-31");
+    await chooseSelectValue("Results per page", "5");
+    ax = await click(hasButton("Search"));
+    ax = await waitFor(value => /\d+ indexed matches · 0 offset/.test(value), "indexed filters must render result count and offset");
+    const indexedCount = Number(ax.match(/(\d+) indexed matches · 0 offset/)?.[1] ?? 0);
+    assert.ok(indexedCount >= 7, `indexed filters must retain at least seven fixture matches, got ${indexedCount}`);
+    ax = await click(hasButton("Next results"));
+    ax = await waitFor(value => value.includes("indexed matches · 5 offset"), "indexed results must advance by five");
+    ax = await click(hasButton("Previous results"));
+    ax = await waitFor(value => value.includes("indexed matches · 0 offset"), "indexed results must return to first page");
+    await phaseDone(phase, { indexedCount, pageSize: 5 });
+
+    phase = "filename-index-relaunch-replay";
+    let replay;
+    const replayRelaunch = await onRelaunch({
+      app,
+      phase,
+      fixture,
+      report,
+      prepareWhileClosed: async () => {
+        replay = await addStorageReplayFile(fixture);
+        return replay;
+      },
+    });
+    assert.ok(replayRelaunch?.restarted === true && replayRelaunch?.preparedWhileClosed === true,
+      "onRelaunch must report quit, closed-file preparation, and relaunch completion");
+    app = replayRelaunch.app;
+    assert.ok(app && typeof app.getAXState === "function", "filename-index relaunch must return fresh CUA app");
+    ax = await waitFor(value => value.includes("Storage") || value.includes("Loaded"), "filename-index relaunch must return to native dashboard");
+    await navigate("Find");
+    ax = await waitFor(value => value.includes("Build filename index"),
+      "Find must expose explicit filename-index Build control after relaunch");
+    ax = await click(hasButton("Build filename index"));
+    ax = await waitFor(value => /Filename index/.test(value) && /\d+ entries/.test(value), "filename-index replay must expose resumed index state");
+    await replaceText("Name or path", path.basename(fixture.indexFiles[0]));
+    ax = await click(hasButton("Search"));
+    ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.indexFiles[0]),
+      "filename-index relaunch must retain an earlier indexed entry");
+    await replaceText("Name or path", path.basename(fixture.replayFile));
+    ax = await click(hasButton("Search"));
+    ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.replayFile),
+      "filename created while app was closed must appear after index replay");
+    ax = await click(hasButton("Refresh index status"));
+    ax = await waitFor(value => /(?:\d+ entries|Stale|Partial coverage|Watching)/i.test(value), "filename-index status refresh must render observed status");
+    const staleObserved = /\bStale\b/i.test(ax);
+    ax = await click(hasButton("Search saved scan instead"));
+    ax = await waitFor(value => value.includes("Search entries") || value.includes("Search saved scan"), "saved-scan search mode must be restorable");
+    assert.ok(replay?.path === fixture.replayFile && replayRelaunch.preparedWhileClosed === true, "replay fixture must be created during closed interval");
+    await phaseDone(phase, { replay, resumedExistingPath: fixture.indexFiles[0], staleObserved });
 
     phase = "native-duplicates-opt-in";
     await navigate("Duplicates");
@@ -266,7 +357,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
       await checkpoint(phase);
     }
 
-    const finalFixtureFiles = [...originalFixtureFiles, fixture.growthFile];
+    const finalFixtureFiles = [...originalFixtureFiles, fixture.growthFile, fixture.replayFile];
     const after = await Promise.all([...finalFixtureFiles, ...bundleFiles].map(fingerprint));
     for (let index = 0; index < originalFixtureFiles.length; index += 1) {
       assertFingerprint(after[index], before[index], `read-only fixture integrity ${before[index].path}`);

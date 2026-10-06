@@ -171,6 +171,7 @@ public final class NativeCleanupService {
                 record.items[index].outcome = result
                 outcomes.append(result.dictionary)
             }
+            record.items[index].completedAt = Int64(Date().timeIntervalSince1970)
             journal.plans[planID] = record
             try persistState() // Completed is durable after rename or failure.
         }
@@ -218,6 +219,7 @@ public final class NativeCleanupService {
             let item = record.items[index]
             let result = restore(item: item)
             record.items[index].undoState = result.indeterminate ? "started" : "completed"
+            if !result.indeterminate { record.items[index].undoCompletedAt = Int64(Date().timeIntervalSince1970) }
             record.items[index].undoOutcome = result.payload.reduce(into: [String: String]()) { values, pair in
                 if let string = pair.value as? String { values[pair.key] = string }
             }
@@ -248,10 +250,24 @@ public final class NativeCleanupService {
                 "state": record.state,
                 "claim_id": record.claimID,
                 "items": record.items.map { item in
-                    var value: [String: Any] = ["path": item.item.path, "state": item.state]
-                    if let outcome = item.outcome { value["outcome"] = outcome.dictionary }
+                    var value: [String: Any] = ["path": item.item.path, "state": item.state, "logical_bytes": item.item.logicalBytes]
+                    if let outcome = item.outcome {
+                        var observed = outcome.dictionary
+                        if let at = item.completedAt {
+                            observed["occurred_at"] = at
+                            observed["timestamp_basis"] = "effect_completion_observed"
+                        }
+                        value["outcome"] = observed
+                    }
                     if let undoState = item.undoState { value["undo_state"] = undoState }
-                    if let undoOutcome = item.undoOutcome { value["undo_outcome"] = undoOutcome }
+                    if let undoOutcome = item.undoOutcome {
+                        var observed: [String: Any] = undoOutcome
+                        if let at = item.undoCompletedAt {
+                            observed["occurred_at"] = at
+                            observed["timestamp_basis"] = "effect_completion_observed"
+                        }
+                        value["undo_outcome"] = observed
+                    }
                     return value
                 }
             ] as [String: Any]
@@ -837,6 +853,8 @@ private struct ItemRecord: Codable {
     var movedBytes: UInt64?
     var undoState: String?
     var undoOutcome: [String: String]?
+    var completedAt: Int64?
+    var undoCompletedAt: Int64?
 
     init(item: ItemData) { self.item = item }
 }

@@ -37,12 +37,12 @@ node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.tes
 node --test dashboard/app.test.mjs
 cargo fmt --all
 cargo test --locked --workspace --no-fail-fast
-cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --keep-going -- -D warnings
 cargo run --locked --quiet --bin cockpit -- status --json
 if [[ "$RUNNER_OS" == "Windows" ]]; then
   cargo fmt --manifest-path windows/Cargo.toml
   cargo test --locked --manifest-path windows/Cargo.toml
-  cargo clippy --locked --manifest-path windows/Cargo.toml --all-targets -- -D warnings
+  cargo clippy --locked --manifest-path windows/Cargo.toml --all-targets --keep-going -- -D warnings
 fi
 if [[ "$RUNNER_OS" == "macOS" ]]; then
   export COCKPIT_APFS_FIXTURE=1

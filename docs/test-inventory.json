@@ -1043,7 +1043,7 @@
       },
       {
         "file": "core/tests/duplicates.rs",
-        "sha256": "ee7671dfa932bbe879c580b2631a8210cdc1019a54202381934d1464fb609c4b",
+        "sha256": "7534dbc5bf8eb8c8c255dc6e53b9dc3d1a74eaa3de1453d9c3b2e84c8ba9a5ee",
         "declared_test_names": [
           "exact_bytes_form_group_and_changed_content_does_not",
           "hardlinks_are_skipped_by_identity_and_symlinks_are_refused",

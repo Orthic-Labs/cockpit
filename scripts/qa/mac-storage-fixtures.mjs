@@ -106,20 +106,29 @@ export async function createStorageFixture({ destination }) {
     discard: path.join(destination, "discard-me.txt"),
     sourcePng: path.join(destination, "source-image.png"),
     growthFile: path.join(destination, "growth-after-first-scan.bin"),
+    hiddenFile: path.join(destination, ".fixture-hidden.txt"),
+    replayFile: path.join(destination, "fixture-replay-after-relaunch.txt"),
   };
+  paths.indexFiles = Array.from({ length: 6 }, (_, index) =>
+    path.join(destination, `fixture-index-${String(index + 1).padStart(2, "0")}.txt`));
   await exclusiveWrite(paths.duplicateA, duplicate);
   await exclusiveWrite(paths.duplicateB, duplicate);
   await exclusiveWrite(paths.duplicateC, duplicate);
   await exclusiveWrite(paths.discard, Buffer.from("Cockpit installed journey discard fixture\n", "utf8"));
   await exclusiveWrite(paths.sourcePng, makePng());
-  await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng].map(async file => {
+  await exclusiveWrite(paths.hiddenFile, Buffer.from("Hidden filename-index fixture\n", "utf8"));
+  await Promise.all(paths.indexFiles.map((file, index) => exclusiveWrite(file, Buffer.from(`Filename index fixture ${index + 1}\n`, "utf8"))));
+  await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng, paths.hiddenFile, ...paths.indexFiles].map(async file => {
     const info = await lstat(file);
     assert.equal(info.isSymbolicLink(), false, `Fixture child cannot be a symlink: ${file}`);
     assert.equal(info.isFile(), true, `Fixture child must be a regular file: ${file}`);
   }));
 
   const names = await readdir(destination);
-  assert.deepEqual(new Set(names), new Set(["compression-output", "discard-me.txt", "duplicate-a.bin", "nested-folder", "source-image.png"]));
+  assert.deepEqual(new Set(names), new Set([
+    "compression-output", "discard-me.txt", "duplicate-a.bin", "nested-folder", "source-image.png", ".fixture-hidden.txt",
+    ...paths.indexFiles.map(file => path.basename(file)),
+  ]));
   const fingerprint = async file => ({
     path: file,
     bytes: (await stat(file)).size,
@@ -127,7 +136,7 @@ export async function createStorageFixture({ destination }) {
   });
   return {
     ...paths,
-    files: await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng].map(fingerprint)),
+    files: await Promise.all([paths.duplicateA, paths.duplicateB, paths.duplicateC, paths.discard, paths.sourcePng, paths.hiddenFile, ...paths.indexFiles].map(fingerprint)),
     duplicateBytes: DUPLICATE_BYTES,
     trash,
   };
@@ -139,4 +148,12 @@ export async function addStorageGrowthFile(fixture) {
   const bytes = Buffer.alloc(32 * 1024, 0x37);
   await exclusiveWrite(fixture.growthFile, bytes);
   return { path: fixture.growthFile, bytes: bytes.length };
+}
+
+/** Add one exclusive filename-index replay file while the app is closed. */
+export async function addStorageReplayFile(fixture) {
+  assert.ok(fixture?.replayFile && under(fixture.root, fixture.replayFile), "replay file must belong to fixture root");
+  const bytes = Buffer.from("Filename index replay fixture after relaunch\n", "utf8");
+  await exclusiveWrite(fixture.replayFile, bytes);
+  return { path: fixture.replayFile, bytes: bytes.length };
 }

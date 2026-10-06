@@ -362,6 +362,7 @@ public final class DashboardHost: NSObject {
     private let nativeServices: NativeStorageServices
     private let cleanupService: NativeCleanupService
     private let applicationDetails: NativeApplicationDetails
+    private let filenameIndex: NativeFilenameIndex
     private var trustedApplications: [String: String] = [:]
     private var trustedSnapshotID: String?
     private var trustedRoot: URL?
@@ -379,6 +380,7 @@ public final class DashboardHost: NSObject {
         self.nativeServices = NativeStorageServices(stateDirectory: state)
         self.cleanupService = NativeCleanupService(stateDirectory: state)
         self.applicationDetails = NativeApplicationDetails(stateDirectory: state)
+        self.filenameIndex = NativeFilenameIndex(stateDirectory: state)
         self.configuration = configuration
         self.coordinator = ScanCoordinator(configuration: configuration, runner: runner)
     }
@@ -435,6 +437,7 @@ public final class DashboardHost: NSObject {
 
     /// Full app shutdown: cancels scanning & releases retained dashboard state.
     public func stop() {
+        filenameIndex.stop()
         scanTask?.cancel()
         actionTask?.cancel()
         coordinator.runner.cancel()
@@ -579,6 +582,16 @@ public final class DashboardHost: NSObject {
 
     private func performAction(_ action: String, payload: [String: Any]) async throws -> [String: Any] {
         switch action {
+        case "refresh_filename_index":
+            let root = try requireNativeScan(payload)
+            return try await filenameIndex.refresh(root: root)
+        case "query_filename_index", "filename_index_status":
+            let root = try requireNativeScan(payload)
+            guard filenameIndex.statusPayload()["root"] as? String == root.path else {
+                throw ScanFailure.invalidJSON("Build filename index for current folder first")
+            }
+            if action == "filename_index_status" { return filenameIndex.statusPayload() }
+            return try filenameIndex.query(payload: payload)
         case "refresh_apps":
             var apps = try await nativeServices.appsPayload()
             let rows = apps["apps"] as? [[String: Any]] ?? []
@@ -625,13 +638,13 @@ public final class DashboardHost: NSObject {
             }
             return monitor
         case "refresh_activity":
-            var activity = try await nativeServices.activityPayload()
-            if let scan = try? await coordinator.commandObject(arguments: ["export", "--state-dir", stateDirectory.path, "--json"]),
-               let modules = scan["modules"] as? [String: Any] {
-                activity["scans"] = modules["activity"]
-                activity["history"] = modules["history"]
-            }
-            activity["cleanup"] = try cleanupService.historyPayload()
+            let compression = try await nativeServices.activityPayload()
+            let cleanup = try cleanupService.historyPayload()
+            let scan = (try? await coordinator.commandObject(arguments: ["export", "--state-dir", stateDirectory.path, "--json"])) ?? [:]
+            var activity = NativeActivityProjection.project(compression: compression, cleanup: cleanup, scans: scan)
+            activity["cleanup"] = cleanup
+            if let modules = scan["modules"] as? [String: Any] { activity["history"] = modules["history"] }
+            if scan.isEmpty { activity["scanHistoryReason"] = "scan_history_unavailable" }
             return activity
         case "find_duplicates":
             let root = try requireNativeScan(payload)
