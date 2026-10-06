@@ -10,7 +10,7 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 
 | Surface | What it is | Built with |
 | --- | --- | --- |
-| Notch | Always on. Right screen edge. Claude & Codex usage rings, CPU, memory pressure, free space per mounted disk. Hover card shows details. | Fork of Codenotch Mac app (Swift) |
+| Notch | Always on. Right screen edge. Four cells, each a main outer ring with a thin inner ring: Claude (weekly / 5-hour), Codex (weekly / 5-hour), System (memory pressure / CPU), Disks (external / internal). Hover card shows details. | Fork of Codenotch Mac app (Swift), `mac/Notch` |
 | Hub | Small window (about 600×400) opened by clicking the notch. Storage, Cleanup, Apps, Monitor, Settings. Closes fully when closed. | Tauri (shared with Windows later), RightKit packages |
 | CLI | `cockpit` for agents: same data & actions as the hub, JSON output. | Existing Rust core |
 
@@ -43,8 +43,9 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 
 Each phase ends with something usable on the Mac, installed as a signed, notarized build.
 
-1. **Notch fork.** Import Codenotch, strip other providers, add CPU, memory-pressure & disk rings, no Dock/menu-bar item, right-click Quit only, launch at login. Repoint release packaging to the new app.
+1. **Notch fork.** Import Codenotch, strip other providers, add system & disk cells, no Dock/menu-bar item, right-click Quit only, launch at login. Repoint release packaging to the new app.
    *Done when:* it looks & behaves like Codenotch with Cockpit's rings, and runs a full day without issues.
+   *Status 2026-10-07:* notch built on CI (`xcode-27`) and approved by eye from a preview build — compact body, small size, rings only, paired rings, no working spinner ([mac/Notch/FORK.md](../mac/Notch/FORK.md)). Remaining: release packaging + signed install, launch at login, removing unused Codenotch provider code, full-day run.
 2. **Hub: Storage & Monitor.** Tauri hub from the approved mockup; storage list with drilldown & growth, search, monitor readings, Settings. Clicking the notch opens it.
    *Done when:* finding what's using space takes seconds, not a learning curve.
 3. **Cleanup.** Rule pack from Mole & Kudu as data in core; review screen; move to Trash only; Activity list with restore.

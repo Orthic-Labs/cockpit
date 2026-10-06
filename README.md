@@ -2,7 +2,7 @@
 
 Native system gauges & controls for macOS (Windows later): Codenotch-fork notch, Tauri hub & shared Rust core. Plan: [docs/plan.md](docs/plan.md).
 
-Current state (2026-10-07): Rust core & read-only CLI are kept. The previous Swift notch & JS dashboard were removed; the Codenotch-fork notch (phase 1) and Tauri hub (phase 2) replace them. Mac release packaging needs repointing to the new app before the next installer.
+Current state (2026-10-07): Rust core & read-only CLI are kept. The notch is a Codenotch fork in [`mac/Notch`](mac/Notch/FORK.md), built in CI on the `xcode-27` runner; `notch-preview` uploads an ad-hoc-signed build for trying. Mac release packaging still needs repointing to it before a signed installer. The Tauri hub (phase 2) comes next.
 
 ## CLI
 
