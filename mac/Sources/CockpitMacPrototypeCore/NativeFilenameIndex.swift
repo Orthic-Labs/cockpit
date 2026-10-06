@@ -939,10 +939,12 @@ public final class NativeFilenameIndex {
 
     private func size(_ payload: [String: Any], keys: [String]) throws -> Int64? {
         guard let value = value(payload, keys: keys) else { return nil }
-        guard let number = Self.strictInteger(value), number >= 0 else {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let exact = Int64(exactly: number.doubleValue), exact >= 0,
+              NSNumber(value: exact).compare(number) == .orderedSame else {
             throw NativeFilenameIndexError.invalidQuery("size bounds must be non-negative integers")
         }
-        return number
+        return exact
     }
 
     private func date(_ payload: [String: Any], keys: [String]) throws -> Date? {

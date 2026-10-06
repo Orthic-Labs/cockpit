@@ -198,7 +198,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     }
     await click(line => /(?:text|number) field/.test(line) && line.includes(label));
     await app.pressKey("super+a");
-    await app.typeText(value);
+    await app.paste(value);
     await waitFor(valueAx => controlLines(valueAx).some(line => line.includes(label) && line.includes(value)),
       `AX field ${label} must retain ${value}`);
   };
@@ -288,7 +288,7 @@ export async function runInstalledStorageJourney(initialApp, options) {
     ax = await click(hasButton("Search"));
     ax = await waitFor(value => value.includes("1 indexed matches · 0 offset") && value.includes(fixture.hiddenFile),
       "indexed search must find hidden fixture by filename");
-    ax = await click(hasButton(`Inspect indexed ${fixture.hiddenFile}`));
+    ax = await click(line => /(?:button|cell)/.test(line) && line.includes(`Inspect indexed ${fixture.hiddenFile}`));
     await app.pressKey("Return");
     ax = await waitFor(value => value.includes("Indexed metadata") && value.includes(fixture.hiddenFile) && /created/i.test(value) && /modified/i.test(value),
       "keyboard indexed-row inspection must render metadata card");
@@ -306,7 +306,8 @@ export async function runInstalledStorageJourney(initialApp, options) {
     await replaceText("Modified before", "2999-12-31");
     await chooseSelectValue("Results per page", "5");
     ax = await click(hasButton("Search"));
-    ax = await waitFor(value => /\d+ indexed matches · 0 offset/.test(value), "indexed filters must render result count and offset");
+    ax = await waitFor(value => Number(value.match(/(\d+) indexed matches · 0 offset/)?.[1] ?? 0) >= 7,
+      "indexed filters must render updated fixture result count and offset");
     const indexedCount = Number(ax.match(/(\d+) indexed matches · 0 offset/)?.[1] ?? 0);
     assert.ok(indexedCount >= 7, `indexed filters must retain at least seven fixture matches, got ${indexedCount}`);
     ax = await click(hasButton("Next results"));

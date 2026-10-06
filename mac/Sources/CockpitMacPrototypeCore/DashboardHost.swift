@@ -481,6 +481,12 @@ public final class DashboardHost: NSObject {
         guard indexReady else { throw ScanFailure.invalidJSON("Native filename index did not become ready") }
         _ = try await webView.evaluateJavaScript("""
             document.querySelector('#find-name').value = 'example.txt';
+            document.querySelector('#find-minBytes').value = '1';
+            document.querySelector('#find-maxBytes').value = '1048576';
+            document.querySelector('#find-createdAfter').value = '2000-01-01';
+            document.querySelector('#find-createdBefore').value = '2999-12-31';
+            document.querySelector('#find-modifiedAfter').value = '2000-01-01';
+            document.querySelector('#find-modifiedBefore').value = '2999-12-31';
             document.querySelector('#find-form').requestSubmit();
             """)
         var indexedSearchPassed = false
