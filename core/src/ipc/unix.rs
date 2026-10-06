@@ -499,7 +499,8 @@ fn handle_connection(mut stream: UnixStream, limits: &Limits, handler: &mut dyn 
         &response,
         limits.max_response_bytes,
         write_deadline,
-    ) && e.code == ErrorCode::OversizedFrame {
+    ) && e.code == ErrorCode::OversizedFrame
+    {
         send_error(
             &mut stream,
             limits,

@@ -316,9 +316,9 @@ fn require_empty(args: &[String]) -> Result<(), String> {
 /// store. `capability_notes` discloses platform limits that affect the
 /// privacy of the store itself (for example Windows ACL inheritance); it
 /// is surfaced verbatim alongside `history_diagnostics`.
-fn load_history(
-    directory: &std::path::Path,
-) -> Result<(Vec<store::Snapshot>, Vec<Value>, Vec<String>), String> {
+type LoadedHistory = (Vec<store::Snapshot>, Vec<Value>, Vec<String>);
+
+fn load_history(directory: &std::path::Path) -> Result<LoadedHistory, String> {
     let report = store::history_report(directory).map_err(|e| e.to_string())?;
     // Stdout JSON gains `history_diagnostics`; stderr keeps one event per file.
     let mut diagnostics = Vec::new();
