@@ -838,7 +838,8 @@ final class Preferences: ObservableObject {
         // Medium is the design frame at 1:1, so an install that predates this
         // choice keeps exactly the notch it already had.
         self.notchSize = defaults.string(forKey: Keys.size)
-            .flatMap(NotchSize.init(rawValue:)) ?? .medium
+            // Cockpit fork: small by default.
+            .flatMap(NotchSize.init(rawValue:)) ?? .small
         // Absent means never chosen, and the presets are what every earlier
         // version had — so the slider is opt-in rather than the default.
         self.usesCustomNotchScale = defaults.bool(forKey: Keys.usesCustomSize)
@@ -883,7 +884,8 @@ final class Preferences: ObservableObject {
         // Off by default: an extra arc in a 44pt circle is a change to how
         // every reading looks, and nobody asked for it on their behalf.
         self.weeklyRingDashed = defaults.object(forKey: Keys.weeklyRingDashed) as? Bool ?? false
-        self.showsNotchReadings = defaults.object(forKey: Keys.showsNotchReadings) as? Bool ?? true
+        // Cockpit fork: rings only by default; numbers are in the hover card.
+        self.showsNotchReadings = defaults.object(forKey: Keys.showsNotchReadings) as? Bool ?? false
         self.weeklyReading = defaults.object(forKey: Keys.weeklyReading) as? Bool ?? false
 
         self.weeklyRing = defaults.string(forKey: Keys.weeklyRing)

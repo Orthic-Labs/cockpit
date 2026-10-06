@@ -18,6 +18,7 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 | Platform | Minimum macOS 26 (Liquid Glass always available); built with Xcode 27 | `project.yml` |
 | Visibility | Always shown by default; one Codex ring (default `~/.codex` profile) | `Settings/Preferences.swift`, `App/AppDelegate.swift` |
 | Activity | No spinning arc while an agent works; pulse kept for finished/waiting | `Features/ProviderRing.swift` |
+| Size | Small by default, % labels off; compact body (less padding above, below and between rings, slightly less at the sides); inner ring hugs the main track | `Settings/Preferences.swift`, `Notch/NotchLayout.swift` |
 | First run | No What's New, no first-run Settings window | `App/AppDelegate.swift` |
 | Tests | Codenotch's unit tests not carried over | `project.yml` |
 
