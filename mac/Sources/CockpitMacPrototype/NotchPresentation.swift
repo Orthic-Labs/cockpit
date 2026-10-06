@@ -541,6 +541,7 @@ final class NotchSurfaceView: NSView {
             return
         }
         guard let image = NSImage(systemSymbolName: metric.symbol, accessibilityDescription: metric.title) else { return }
-        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        let visible = image.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.white])) ?? image
+        visible.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
     }
 }
