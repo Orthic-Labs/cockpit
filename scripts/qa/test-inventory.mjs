@@ -1,5 +1,5 @@
 // Static source inventory; never loads or executes test modules.
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -30,14 +30,10 @@ for (const row of rows) {
   const area = row.file.split('/')[0];
   byArea[area] = (byArea[area] ?? 0) + row.count;
 }
-const assertionScripts = ['dashboard/app.test.mjs'].filter(file => statSync(path.join(root, file), { throwIfNoEntry: false })?.isFile());
 process.stdout.write(JSON.stringify({
   schema_version: 1,
   counting_method: 'Source test declarations; cfg exclusions & parameterized registrations may change runtime case counts. Standalone assertion scripts & installed journeys are separate.',
   total_declared: rows.reduce((sum, row) => sum + row.count, 0),
   by_area: byArea,
   source_working_tree_inventory: rows,
-  standalone_assertion_scripts: assertionScripts,
-  installed_journey_runners: ['scripts/qa/mac-installed-journey.mjs', 'scripts/qa/mac-storage-installed-journey.mjs']
-    .filter(file => statSync(path.join(root, file), { throwIfNoEntry: false })?.isFile()),
 }, null, 2) + '\n');

@@ -34,7 +34,6 @@ gate_exit() {
 }
 trap gate_exit EXIT
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
-node --test dashboard/app.test.mjs
 cargo fmt --all
 cargo test --locked --workspace --no-fail-fast
 cargo clippy --locked --workspace --all-targets --keep-going -- -D warnings
@@ -58,4 +57,17 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   export COCKPIT_TEST_HELPER
   swift build --package-path mac -c release
   swift test --package-path mac
+  # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
+  xcodebuild -version
+  command -v xcodegen >/dev/null || brew install xcodegen
+  xcodegen generate --spec mac/Notch/project.yml --project mac/Notch
+  notch_log="$RUNNER_TEMP/cockpit-notch-build.log"
+  if ! xcodebuild -project mac/Notch/Cockpit.xcodeproj -scheme Cockpit -configuration Release \
+    -destination 'generic/platform=macOS' -derivedDataPath "$RUNNER_TEMP/cockpit-notch" \
+    CODE_SIGNING_ALLOWED=NO build > "$notch_log" 2>&1; then
+    grep -E "(error|warning: unreachable):" "$notch_log" | sort -u | head -n 150 || true
+    tail -n 40 "$notch_log"
+    exit 1
+  fi
+  test -x "$RUNNER_TEMP/cockpit-notch/Build/Products/Release/Cockpit.app/Contents/MacOS/Cockpit"
 fi

@@ -1,5 +1,15 @@
 # Test migration inventory
 
+## 2026-10-07: product removal (owner-directed)
+
+Owner removed the previous Swift notch & JS dashboard ([plan.md](plan.md)). Their tests were deleted with the code they tested; this is product removal, not test replacement, and no declaration is claimed as replaced. The Codenotch-fork notch & Tauri hub get new end-to-end journeys in their phases.
+
+Deleted Swift declarations (98): `DashboardHostE2ETests` 1, `DashboardHostTests` 15, `PillLifecycleTests` 13, `PillRuntimeTests` 8, `PillSettingsStoreTests` 16, `PillSettingsTests` 26, `AccessibilityGeometryTests` 5, `VisibilityGeometryTests` 6, `VisibilityEdgeCasesTests` 8 (names listed in the Mac inventory below). Also deleted: helper `ResultAssertions.swift`, standalone script `dashboard/app.test.mjs`, installed journey runners `scripts/qa/mac-installed-journey.mjs` & `scripts/qa/mac-storage-installed-journey.mjs`, and `scripts/qa/mac-storage-fixtures.mjs`.
+
+Totals: 485 declarations before → 387 after (Mac 105 → 7). Core, Windows & Node declarations unchanged. `test-inventory.json` predates this removal; regenerate it in CI.
+
+---
+
 This inventory records migration of newly supplied feature tests to complete journeys. It covers only this migration batch; retained tests remain in suite until matching product-boundary journeys exist.
 
 Counts are declarations, not assertions:

@@ -1,5 +1,7 @@
 # Runtime ownership
 
+> **Historical (2026-10-07):** describes the removed Swift notch & JS dashboard. Current direction: [plan.md](plan.md).
+
 Target architecture retains native always-on notches. Dashboard opens on demand; scanner runs only for requested work.
 
 | Owner | Reads/owns | Write boundary |
