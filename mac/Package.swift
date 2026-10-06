@@ -11,9 +11,9 @@ let package = Package(
         .executable(name: "cockpit-probe", targets: ["CockpitProbe"])
     ],
     targets: [
-        .target(name: "CockpitMacPrototypeCore"),
+        .target(name: "CockpitMacPrototypeCore", exclude: ["MediaCompression.swift"]),
         .executableTarget(name: "CockpitMacPrototype", dependencies: ["CockpitMacPrototypeCore"]),
         .executableTarget(name: "CockpitProbe"),
-        .testTarget(name: "CockpitMacPrototypeCoreTests", dependencies: ["CockpitMacPrototypeCore"])
+        .testTarget(name: "CockpitMacPrototypeCoreTests", dependencies: ["CockpitMacPrototypeCore"], exclude: ["MediaCompressionTests.swift"])
     ]
 )

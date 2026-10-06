@@ -85,7 +85,7 @@ public struct PillSettings: Equatable {
 
 /// Why the settings file could not be used. Any of these means: use defaults, emit an event,
 /// and never overwrite the file.
-public enum SettingsFailure: Equatable {
+public enum SettingsFailure: Error, Equatable {
     case oversized
     case malformed
     case unknownSchema(Int)

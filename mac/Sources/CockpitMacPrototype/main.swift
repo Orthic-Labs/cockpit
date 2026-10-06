@@ -261,7 +261,10 @@ private func monitorID(for screen: NSScreen) -> String {
     return "display-\(number)"
 }
 
+@MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let dashboard = DashboardHost()
+    private var statusItem: NSStatusItem?
     private let runtime: PillRuntime
     private let reader = SystemReader()
     private let detector = FullscreenDetector()
@@ -280,7 +283,23 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
+        let menu = NSMenu()
+        let open = NSMenuItem(title: "Open Storage", action: #selector(openDashboard), keyEquivalent: "o")
+        open.target = self
+        menu.addItem(open)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit Cockpit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "Cockpit"
+        item.menu = menu
+        statusItem = item
+        let mainMenu = NSMenu()
+        let appMenu = NSMenuItem()
+        appMenu.submenu = menu.copy() as? NSMenu
+        mainMenu.addItem(appMenu)
+        NSApp.mainMenu = mainMenu
+        dashboard.show()
         emit("startup", [
             "pid": String(ProcessInfo.processInfo.processIdentifier),
             "accessibility": AXIsProcessTrusted() ? "trusted" : "denied"
@@ -306,9 +325,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         shutdown(reason: "terminate")
     }
 
+    @objc private func openDashboard() { dashboard.show() }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        dashboard.show()
+        return true
+    }
+
     private func shutdown(reason: String) {
         guard !shuttingDown else { return }
         shuttingDown = true
+        dashboard.stop()
+        if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
+        statusItem = nil
         // Order (stop timer, close panels, persist, release lock, emit shutdown) is owned by PillRuntime.
         runtime.shutdown(reason: reason, stopTimer: { [self] in
             timer?.invalidate()
