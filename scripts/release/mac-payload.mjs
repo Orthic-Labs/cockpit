@@ -188,6 +188,7 @@ async function packageMac() {
 
   await mkdir(dirname(paths.output), { recursive: true });
   const specification = JSON.parse(await readFile(join(releaseRoot, 'appdmg.json'), 'utf8'));
+  specification['code-sign'] = { 'signing-identity': identity, identifier: 'dev.orthic.cockpit.dmg' };
   const builder = appdmg({ target: paths.output, basepath: stagingRoot, specification });
   await once(builder, 'finish');
   console.log(`[cockpit mac payload] package: ${paths.output}`);

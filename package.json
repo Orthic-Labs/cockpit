@@ -20,7 +20,9 @@
   },
   "devDependencies": {
     "@rightkit/release": "0.2.111",
-    "@electron/osx-sign": "2.7.1",
+    "@electron/osx-sign": "2.7.1"
+  },
+  "optionalDependencies": {
     "appdmg": "0.6.6"
   }
 }

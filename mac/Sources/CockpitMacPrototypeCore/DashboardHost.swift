@@ -429,6 +429,7 @@ public final class DashboardHost: NSObject {
                 try await webView.evaluateJavaScript(script)
             } catch is CancellationError {
             } catch {
+                guard !Task.isCancelled else { return }
                 try? await self.webView?.evaluateJavaScript(
                     DashboardInjection.errorJavaScript("Scan failed: \(error.localizedDescription)"))
             }
