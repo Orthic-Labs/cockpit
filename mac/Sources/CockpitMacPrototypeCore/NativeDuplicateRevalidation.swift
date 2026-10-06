@@ -350,12 +350,8 @@ public final class NativeDuplicateRevalidation {
             let matching = mounts.filter {
                 path == $0.mountPoint || path.hasPrefix($0.mountPoint == "/" ? "/" : $0.mountPoint + "/")
             }
-            guard let longestLength = matching.map({ $0.mountPoint.utf8.count }).max() else {
-                throw Error.unsupported("mount_table_incomplete")
-            }
-            guard matching.filter({ $0.mountPoint.utf8.count == longestLength }).allSatisfy({ $0.local }) else {
-                throw Error.unsupported("nonlocal")
-            }
+            guard !matching.isEmpty else { throw Error.unsupported("mount_table_incomplete") }
+            guard matching.allSatisfy({ $0.local }) else { throw Error.unsupported("nonlocal") }
         }
     }
 
