@@ -1690,6 +1690,7 @@ final class NotchWindowController {
     /// slides away from the settings arc and the tooltip, both placed from
     /// `slack`. Every setting that moves `panelSize` has to come through here.
     func apply(showsNotchReadings: Bool) {
+        NotchLayout.showsReadings = showsNotchReadings
         guard model.showsNotchReadings != showsNotchReadings else { return }
         model.showsNotchReadings = showsNotchReadings
         relocate()

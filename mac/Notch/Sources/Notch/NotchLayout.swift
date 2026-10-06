@@ -40,9 +40,9 @@ enum NotchLayout {
     static let bezelFillet  = Design.px(28)
     static let cornerRadius = Design.px(70)
     // Cockpit fork: compact body that hugs the rings.
-    static let padTop       = Design.px(30)     // body top -> first ring
-    static let padBottom    = Design.px(24)     // last label -> body bottom
-    static let cellSpacing  = Design.px(36)     // label bottom -> next ring top
+    static let padTop       = Design.px(22)     // body top -> first ring
+    static let padBottom    = Design.px(22)     // last ring/label -> body bottom
+    static let cellSpacing  = Design.px(26)     // ring/label bottom -> next ring top
 
     // The resting pill. Not in the design frame — it is the notch folded away,
     // sized to read as a deliberate handle rather than a sliver of chrome.
@@ -282,7 +282,14 @@ enum NotchLayout {
     }
 
     /// Ring plus its percent label.
-    static var cellExtent: CGFloat { ringDiameter + ringLabelGap + percentLineHeight }
+    /// Cockpit fork: whether cells reserve room for the % label under the
+    /// ring. Set by the notch controller from the readings preference; with
+    /// labels off a cell is just its ring, so the body hugs the rings.
+    nonisolated(unsafe) static var showsReadings = false
+
+    static var cellExtent: CGFloat {
+        ringDiameter + (showsReadings ? ringLabelGap + percentLineHeight : 0)
+    }
 
     /// What one cell claims along the stack.
     ///
