@@ -32,7 +32,7 @@ if (action === 'admit') {
   if(process.platform!=='darwin') throw new Error('Mac native host required');
   run('bash',['scripts/gate.sh'],{env:{...env,COCKPIT_SKIP_HUB_QA:'1'}}); // also builds the notch (xcodebuild) into $RUNNER_TEMP
   run('cargo',['build','--locked','--release','--bin','cockpit']);
-  run('pnpm',['--dir','hub','install','--ignore-workspace','--no-frozen-lockfile']);
+  run('pnpm',['--dir','hub','install','--ignore-workspace','--frozen-lockfile']);
   run('pnpm',['--dir','hub','tauri','build','--bundles','app','--no-sign']);
   run('node',['scripts/release/mac-payload.mjs','candidate']);
 } else if(action==='check') {
