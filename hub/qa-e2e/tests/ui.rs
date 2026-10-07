@@ -55,8 +55,7 @@ fn title(ctl: &Control) -> String {
 }
 
 fn wait_text(ctl: &Control, needle: &str, timeout: Duration, what: &str) {
-    let js = format!("return document.body.innerText.includes({})", json!(needle));
-    ctl.wait_eval(&js, timeout).unwrap_or_else(|e| panic!("{what}: {}", e.0));
+    ctl.wait_for_text(None, needle, timeout).unwrap_or_else(|e| panic!("{what}: {e:?}"));
 }
 
 fn hub_binary() -> PathBuf {
@@ -127,8 +126,7 @@ fn hub_sections_render_without_errors() {
             } else {
                 if sec.id == "storage" {
                     // "Rescan" is on screen before the scan starts, so wait for the fixture row itself.
-                    let js = format!("return document.body.innerText.includes({})", json!(FIXTURE));
-                    if let Err(e) = ctl.wait_eval(&js, Duration::from_secs(60)) {
+                    if let Err(e) = ctl.wait_for_text(None, FIXTURE, Duration::from_secs(60)) {
                         let text = body_text(&ctl);
                         panic!(
                             "Storage did not list fixture entry {FIXTURE} ({}); fixture home {}; page text:\n{}",

@@ -24,7 +24,7 @@ qa-native = ["dep:rightkit-control"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
-rightkit-control = { version = "=0.1.4", features = ["tauri-plugin"], optional = true }
+rightkit-control = { version = "=0.1.6", features = ["tauri-plugin"], optional = true }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
