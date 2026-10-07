@@ -1,6 +1,6 @@
 import Foundation
 
-/// The three providers from the design frame, at the levels it shows.
+/// The two providers from the design frame, at the levels it shows.
 /// These stand in until the adapters in M4 land.
 enum Fixtures {
     static func snapshots(now: Date = Date(), calendar: Calendar = .current) -> [ProviderSnapshot] {
@@ -30,17 +30,6 @@ enum Fixtures {
                 windows: [
                     LimitWindow(id: "openai.session", label: L10n.t("Current session"),
                                 usedFraction: 0.21, resetsAt: now.addingTimeInterval(3 * 60 * 60))
-                ]
-            ),
-            ProviderSnapshot(
-                id: "third",
-                displayName: "Perplexity",
-                glyph: .third,
-                fidelity: .manual,
-                status: .ok,
-                windows: [
-                    LimitWindow(id: "third.daily", label: L10n.t("Daily quota"),
-                                usedFraction: 0.52, resetsAt: midnight)
                 ]
             )
         ]

@@ -37,11 +37,6 @@ settings:
     ENABLE_APP_SANDBOX: "NO"
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
 
-packages:
-  SwiftNIO:
-    url: https://github.com/apple/swift-nio
-    from: "2.102.0"
-
 targets:
   Cockpit:
     type: application
@@ -54,11 +49,6 @@ targets:
           # copy any unrecognised file into the app bundle's Resources, and a
           # developer README has no business shipping to users.
           - "Vendor/**/README.md"
-    dependencies:
-      - package: SwiftNIO
-        product: NIOHTTP1
-      - package: SwiftNIO
-        product: NIOPosix
     info:
       path: Sources/Info.plist
       properties:
@@ -89,13 +79,6 @@ targets:
         # build settings keeps one place to bump.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        # HTTP endpoints on Tailscale use shared address space. Keep the ATS
-        # exception scoped to that range; other destinations retain defaults.
-        NSAppTransportSecurity:
-          NSExceptionDomains:
-            "100.64.0.0/10":
-              NSExceptionAllowsInsecureHTTPLoads: true
-        NSLocalNetworkUsageDescription: "Cockpit answers your phone on this network so it can show your usage."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit

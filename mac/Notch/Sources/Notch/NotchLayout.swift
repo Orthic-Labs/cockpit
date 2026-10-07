@@ -77,7 +77,6 @@ enum NotchLayout {
     /// path (radius `(ringDiameter - progressStroke) / 2`) draws roughly 20px
     /// of body plus caps — clearly an arc. It only floors a known reading;
     /// `nil` still draws the full ring.
-    static let localArcMinimumSweep: CGFloat = 0.06
     static let glyphSize     = Design.px(46)
     static let ringLabelGap  = Design.px(26.9)
 
@@ -201,13 +200,6 @@ enum NotchLayout {
     static let moneyBarHeight = Design.px(12)
     static let moneyBarToStats = Design.px(14)
     static let moneyStatGap = Design.px(4)
-    static let usageDetailIdentityGap = Design.px(4)
-    static let usageDetailBarHeight = Design.px(10.5)
-    static let usageDetailLabelToBar = Design.px(12)
-    static let usageDetailBarToStats = Design.px(10)
-    static let usageDetailChartHeight = Design.px(96)
-    static let usageDetailChartGap = Design.px(18)
-    static let usageDetailBarGap = Design.px(5)
     static let sessionRowGap = Design.px(10)   // the two lines of one session
     /// The spinner beside a session's status. Sized against the body text's cap
     /// (18px) rather than picked by eye, so it reads as part of the word rather
@@ -379,22 +371,8 @@ enum NotchLayout {
     /// The tooltip's height for a given number of limit windows and live
     /// sessions. Worked out here rather than left to SwiftUI so the hover region
     /// can be computed before the card is ever laid out.
-    static func usageDetailHeight(_ groupCount: Int, showsPricing: Bool = true) -> CGFloat {
-        guard groupCount > 0 else { return 0 }
-        let summary = hairline + blockSpacing + cardBodyLineHeight
-            + blockSpacing + 2 * cardBodyLineHeight + moneyStatGap
-        let chart = cardBodyLineHeight + usageDetailLabelToBar + usageDetailChartHeight
-        let usageDivider = blockSpacing + hairline
-        let pricing = showsPricing
-            ? blockSpacing + 2 * cardBodyLineHeight + usageDetailIdentityGap
-            : 0
-        let chartDivider = blockSpacing + hairline
-        return blockSpacing + summary + (showsPricing ? usageDivider : 0) + pricing + chartDivider
-            + blockSpacing + 2 * chart + usageDetailChartGap
-    }
-
     static func cardHeight(windowCount: Int, groupCount: Int = 0,
-                           moneyWindowCount: Int = 0, usageDetailGroupCount: Int = 0,
+                           moneyWindowCount: Int = 0,
                            sessionCount: Int = 0,
                            sessionCap: Int = defaultSessionCap,
                            statusMessage: String? = nil,
@@ -402,11 +380,7 @@ enum NotchLayout {
                            hasTokenUsage: Bool = false,
                            hasPlan: Bool = false,
                            hasResetCredits: Bool = false,
-                           localModelName: String? = nil, showsLocalPerformance: Bool = false,
-                           localLedgerRows: Int = 0,
-                           compactRowCount: Int = 0,
-                           showsDeepSeekPricing: Bool = true,
-                           costRows: Int = 0) -> CGFloat {
+                           compactRowCount: Int = 0) -> CGFloat {
         let header = max(glyphSize, cardTitleLineHeight)
             + (hasPlan ? cardBodyLineHeight : 0)
         var height = 2 * cardPadding + header
@@ -417,14 +391,7 @@ enum NotchLayout {
             height += headerToBlock + bodyTextHeight(blockMessage)
         }
 
-        if let localModelName {
-            // Match RuntimeModelDetails so the panel and hover region fit all
-            // rows: the runtime's own, the speed pair, and a logged runtime's
-            // ledger lines.
-            let rows: CGFloat = (showsLocalPerformance ? 7 : 4) + CGFloat(max(0, localLedgerRows))
-            height += headerToBlock + modelNameHeight(localModelName)
-                + blockSpacing + rows * cardBodyLineHeight + (rows - 1) * sessionRowGap
-        } else if windowCount > 0 {
+        if windowCount > 0 {
             let moneyCount = min(max(0, moneyWindowCount), windowCount)
             let fullCount = windowCount - compactRowCount - moneyCount
             // A full window row: label + bar + summary.
@@ -460,15 +427,6 @@ enum NotchLayout {
             height += codexUsageTop + hairline + codexResetCreditsHeight
         }
 
-        // "What used it": a line of range tabs, then one line per project.
-        if costRows > 0 {
-            height += blockSpacing + cardBodyLineHeight
-                + CGFloat(costRows) * (cardBodyLineHeight + sessionRowGap)
-        }
-
-        height += usageDetailHeight(usageDetailGroupCount,
-                                    showsPricing: showsDeepSeekPricing)
-
         if hasTokenUsage {
             height += codexUsageTop + hairline + blockSpacing
                 + codexMetricTop + codexMetricHeight + codexMetricBottom
@@ -492,9 +450,6 @@ enum NotchLayout {
         return height
     }
 
-    static func modelNameHeight(_ name: String) -> CGFloat {
-        min(2 * cardBodyLineHeight, bodyTextHeight(name))
-    }
 
 
     /// Room at each end of the stack: enough for the settings orb to hang past

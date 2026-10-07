@@ -124,7 +124,6 @@ extension UsageProvider {
 /// A provider as the settings sheet needs it.
 struct ProviderSummary: Identifiable, Equatable {
     var kind: ProviderKind = .usage
-    var localModel: LocalRuntimeReading.Model? = nil
     var sourceProviderID: String? = nil
     /// The runtime a local model is loaded in, for the row's own words.
     var runtimeName: String? = nil
@@ -142,14 +141,12 @@ struct ProviderSummary: Identifiable, Equatable {
     /// Apify's CLI files its token in the login keychain too, so a Deny is
     /// possible there — and "Allow access…" is the only way back from one.
     var usesKeychain: Bool {
-        ClaudeProfile.isClaude(providerID: id) || id == AntigravityProfile.defaultID || id == "cursor"
-            || id == "apify"
+        ClaudeProfile.isClaude(providerID: id)
     }
 
     let id: String
     let name: String
     let glyph: ProviderGlyph
-    var customIconFilename: String? = nil
     let account: ProviderAccount?
     let signIn: SignInRoute
     /// Whether macOS refused this credential on the last fetch — the one state

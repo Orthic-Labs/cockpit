@@ -5,21 +5,14 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchFleet: NotchFleet?
     private var store: UsageStore?
-    var phoneLinkServer: PhoneLinkServer?
-    var phoneLinkServerStatus: PhoneLinkServerStatus?
-    var phoneLinkPairing: PhoneLinkPairing?
-    var phoneLinkRegistry: PhoneLinkRegistry?
     private var activityCoordinator: ActivityCoordinator?
     private var piResponseMonitor: PiResponseMonitor?
-    private var ollamaRelay: OllamaActivityRelay?
-    private var lmstudioMetrics: LMStudioMetrics?
     private var preferences: Preferences?
     /// Held for the life of the app: releasing it stops the scheduled checks.
     private var updater: Updater?
     private var thresholdNotifier: ThresholdNotifier?
     private var resetWatcher: UsageResetWatcher?
     private var limitWatcher: UsageLimitWatcher?
-    private var statusItem: StatusItemController?
     private var hubBridge: HubBridge?
     /// Keeps the Claude keychain token from ageing out on a Mac where the CLI
     /// is never run by hand. See `ClaudeTokenRefresher`.
@@ -83,13 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// work login's sessions spin the work ring and nobody else's.
     private let claudeProfiles = ClaudeProfile.discover()
     private let codexProfiles = CodexProfile.discover()
-    private let antigravityProfiles = AntigravityProfile.discover()
     /// Held as concrete providers, not just handed to the store: the token
     /// refresher needs to ask one of them how long its token has left, and the
     /// protocol has no business carrying that.
     private var claudeProviders: [ClaudeOAuthProvider] = []
-    /// MiniMax Platform sign-in sheet. Not a UsageProvider — that is MiniMaxProvider.
-    private var miniMaxWeb: WebSessionProvider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set here, not in the Info.plist: this call is applied at launch and
@@ -131,30 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["CODENOTCH_DEMO"] == "1" {
             fleet.setSnapshots(Fixtures.snapshots())
         } else {
-            // DeepSeek's Platform usage page is a browser-session provider:
-            // login is explicit, stays in Codenotch's own WKWebView store, and
-            // the page-local requests are refreshed only after that login.
-            let deepSeek = WebSessionProvider(site: Sites.deepSeek)
-            // QianwenAI's Token Plan is the same kind of provider: no usage API
-            // to call, only a console, readable after the user signs in inside
-            // this app's own WKWebView. Unlike MiniMax's sheet below, its ring
-            // *is* this adapter, so it belongs in `webProviders` — exactly once.
-            let qianwen = WebSessionProvider(site: Sites.qianwen)
-            // MiniMax's ring is MiniMaxProvider. The sheet is the same kind of
-            // WebView DeepSeek uses, but it must not join `webProviders`:
-            // those are appended to `allProviders`, and two adapters with
-            // id `minimax` would both poll, both draw a row, and fight over
-            // the same archive key. Region is applied here and again when
-            // Settings changes it, because the fetch URLs live on the site.
-            let miniMaxWeb = WebSessionProvider(site: Sites.minimax(region: preferences.minimaxRegion))
-            self.miniMaxWeb = miniMaxWeb
-            let webProviders: [WebSessionProvider] = [deepSeek, qianwen]
-            fleet.signInItems = [deepSeek, miniMaxWeb, qianwen].map { provider in
-                let name = provider.displayName
-                return (title: L10n.t("Sign in to \(name)…"),
-                        action: { [weak provider] in provider?.presentSignIn() })
-            }
-
             // Cursor reads the editor's session, or cursor-agent's if the
             // editor is missing — never a browser one: signing into
             // cursor.com separately created a second, empty account.
@@ -165,7 +131,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // switched-off ones once the binding below delivered.
             Log.usage.info("claude profiles: \(self.claudeProfiles.map(\.displayPath).joined(separator: ", "), privacy: .public)")
             Log.usage.info("codex profiles: \(self.codexProfiles.map(\.displayPath).joined(separator: ", "), privacy: .public)")
-            Log.usage.info("antigravity profiles: \(self.antigravityProfiles.map(\.displayPath).joined(separator: ", "), privacy: .public)")
             // Named together rather than one by one: a name derived from the
             // signed-in address can collide with another profile's, and only a
             // caller holding every profile can see that.
@@ -174,12 +139,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ClaudeOAuthProvider(profile: $0, displayName: claudeNames[$0.id])
             }
             self.claudeProviders = claudeProviders
-            let customProviders: [UsageProvider] = preferences.customEndpoints.filter(\.isEnabled).map { endpoint in
-                CustomEndpointProvider(endpoint: endpoint)
-            }
             // Cockpit fork: Claude and Codex only, then the machine's own
             // readings — CPU, memory pressure and one ring per mounted local disk.
-            _ = (webProviders, customProviders)
             let allProviders: [UsageProvider] = claudeProviders
                 // Cockpit fork: one Codex ring — the default ~/.codex profile.
                 + codexProfiles.filter { $0.id == CodexProfile.defaultID }.map { CodexLocalProvider(profile: $0) }
@@ -194,32 +155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // order for a frame and then visibly shuffles.
                 order: preferences.providerOrder
             )
-            preferences.$customEndpoints
-                .map { endpoints in
-                    endpoints.filter(\.isEnabled).map {
-                        "\($0.id):\($0.name):\($0.baseURL):\($0.apiType.rawValue):\($0.trackingUnit.rawValue):\($0.monthlyBudgetUSD ?? -1):\($0.currentSpendUSD ?? -1):\($0.monthlyBudgetTokensM ?? -1):\($0.currentTokensUsedM ?? -1):\($0.displayRemaining):\($0.showCurrency):\($0.iconPreset ?? ""):\($0.customIconFilename ?? ""):\($0.accentColorHex):\($0.selectedModel):\($0.usageSource.rawValue):\($0.usagePreset?.rawValue ?? ""):\($0.usageURL ?? ""):\($0.usageRecordsPath ?? ""):\($0.usageModelField ?? ""):\($0.usageTokenField ?? ""):\($0.usageModelFilter ?? ""):\($0.usageAuthentication.rawValue)"
-                    }
-                }
-                .removeDuplicates()
-                .receive(on: RunLoop.main)
-                .sink { [weak store] _ in
-                    let stored = Preferences.storedCustomEndpoints()
-                    let active = stored.filter(\.isEnabled)
-                    let providers: [UsageProvider] = active.map { CustomEndpointProvider(endpoint: $0) }
-                    store?.registerCustomProviders(providers)
-                }
-                .store(in: &cancellables)
-            Costs.attach(to: store)
-            deepSeek.onAuthenticated = { [weak store] in
-                store?.providerAuthenticationChanged(providerID: "deepseek")
-            }
-            qianwen.onAuthenticated = { [weak store] in
-                store?.providerAuthenticationChanged(providerID: "qianwenai")
-            }
-            miniMaxWeb.onAuthenticated = { [weak store] in
-                store?.providerAuthenticationChanged(providerID: "minimax")
-            }
-
             let updater = Updater()
             self.updater = updater
             // An update is offered in the notch, and installed there — see
@@ -239,141 +174,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .store(in: &cancellables)
             if !isRunningTests { updater.start() }
 
-            let relay = OllamaActivityRelay()
-            self.ollamaRelay = relay
-            // A single publisher chain exceeds Swift's type-checking time limit.
-            let relayPreferences = Publishers.CombineLatest3(
-                preferences.$connectedProviders,
-                preferences.$ollamaEndpoint,
-                preferences.$ollamaMetricsEnabled)
-            let relayConfiguration = relayPreferences.map { values in
-                (enabled: values.0.contains("ollama-local") && values.2, endpoint: values.1)
-            }.eraseToAnyPublisher()
-            relayConfiguration
-                .removeDuplicates { $0.enabled == $1.enabled && $0.endpoint == $1.endpoint }
-                .receive(on: RunLoop.main)
-                .sink { [weak relay, weak fleet] configuration in
-                    fleet?.setLocalMetricsEnabled(configuration.enabled)
-                    relay?.configure(enabled: configuration.enabled, endpoint: configuration.endpoint)
-                }
-                .store(in: &cancellables)
-            relay.$thinkingModels
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet, weak store] models in
-                    let previous = fleet?.thinkingModels ?? [:]
-                    fleet?.setThinkingModels(models)
-                    if models.keys.contains(where: { previous[$0] == nil }) { store?.refresh(providerID: "ollama-local") }
-                }
-                .store(in: &cancellables)
-
-            relay.$performances
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet, weak store] measurements in
-                    fleet?.setPerformances(measurements)
-                    if !measurements.isEmpty { store?.refresh(providerID: "ollama-local") }
-                }
-                .store(in: &cancellables)
-
-            // LM Studio needs no relay: its own socket says what each model is
-            // doing and its own log says what every request cost. Monitoring
-            // follows the provider's switch, and the address follows Settings.
-            let lmstudio = LMStudioMetrics()
-            self.lmstudioMetrics = lmstudio
-            // Split like the relay's chain above, and for the same reason.
-            let lmstudioPreferences = Publishers.CombineLatest(
-                preferences.$connectedProviders, preferences.$lmstudioEndpoint)
-            let lmstudioConfiguration = lmstudioPreferences.map { values in
-                (enabled: values.0.contains(LMStudioMetrics.providerID), endpoint: values.1)
-            }.eraseToAnyPublisher()
-            lmstudioConfiguration
-                .removeDuplicates { $0.enabled == $1.enabled && $0.endpoint == $1.endpoint }
-                .receive(on: RunLoop.main)
-                .sink { [weak lmstudio] configuration in
-                    lmstudio?.configure(enabled: configuration.enabled, endpoint: configuration.endpoint)
-                }
-                .store(in: &cancellables)
-            lmstudio.$activities
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet] in fleet?.setLocalActivities($0) }
-                .store(in: &cancellables)
-            lmstudio.$performances
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet, weak store] measurements in
-                    fleet?.setPerformances(measurements, source: LMStudioMetrics.providerID)
-                    if !measurements.isEmpty { store?.refresh(providerID: LMStudioMetrics.providerID) }
-                }
-                .store(in: &cancellables)
-            lmstudio.$ledger
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet] in fleet?.setLedger($0) }
-                .store(in: &cancellables)
-
-            let dir: URL
-            if NSClassFromString("XCTestCase") != nil {
-                dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            } else {
-                let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                dir = appSupport.appendingPathComponent("Cockpit/phone-link", isDirectory: true)
-            }
-            let phoneSecretStore: PhoneLinkSecretStore = NSClassFromString("XCTestCase") != nil
-                ? InMemoryPhoneLinkSecretStore()
-                : PhoneLinkKeychainSecretStore()
-            let phoneRegistry = PhoneLinkRegistry(directory: dir, secretStore: phoneSecretStore)
-            let phonePairing = PhoneLinkPairing()
-            let serverStatus = PhoneLinkServerStatus()
-            self.phoneLinkRegistry = phoneRegistry
-            self.phoneLinkPairing = phonePairing
-            
-            let server = PhoneLinkServer(
-                pairing: phonePairing,
-                registry: phoneRegistry,
-                status: serverStatus,
-                getSnapshot: { @Sendable [weak store, weak fleet, weak preferences] in
-                    guard let store, let fleet, let preferences else { return nil }
-                    let snap = await MainActor.run {
-                        PhoneLinkSnapshotBuilder.build(
-                            snapshots: Self.drawn(store.snapshots,
-                                                  weekly: preferences.weeklyHeadline,
-                                                  paced: preferences.claudeDailyPaceRing),
-                            sessions: Array(fleet.sessions.values.flatMap { $0 }),
-                            disconnected: store.disconnected,
-                            order: preferences.providerOrder,
-                            serverName: PhoneLinkNetwork.getComputerName(),
-                            serverVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0",
-                            now: Date()
-                        )
-                    }
-                    return try? JSONEncoder().encode(snap)
-                },
-                refreshAndGetSnapshot: { @Sendable [weak store, weak fleet, weak preferences] in
-                    guard let store, let fleet, let preferences else { return nil }
-                    // A phone asking to refresh is the same gesture as opening
-                    // the menu here, and it is about to render these numbers on
-                    // another screen. Nothing cached will do.
-                    await MainActor.run { store.refreshNow(freshness: .fromSource) }
-                    for _ in 0..<20 {
-                        let isRef = await MainActor.run { !store.refreshing.isEmpty }
-                        if !isRef { break }
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    }
-                    let snap = await MainActor.run {
-                        PhoneLinkSnapshotBuilder.build(
-                            snapshots: Self.drawn(store.snapshots,
-                                                  weekly: preferences.weeklyHeadline,
-                                                  paced: preferences.claudeDailyPaceRing),
-                            sessions: Array(fleet.sessions.values.flatMap { $0 }),
-                            disconnected: store.disconnected,
-                            order: preferences.providerOrder,
-                            serverName: PhoneLinkNetwork.getComputerName(),
-                            serverVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0",
-                            now: Date()
-                        )
-                    }
-                    return try? JSONEncoder().encode(snap)
-                }
-            )
-            self.phoneLinkServerStatus = serverStatus
-            self.phoneLinkServer = server
+            // Cockpit fork: nobody sees System and Disks while the notch is
+            // hidden, so they are sampled five times less often.
+            fleet.onHiddenChange = { [weak store] hidden in store?.setSystemSamplingSlow(hidden) }
 
             // Cockpit fork: settings live in the hub; Codenotch's window is gone.
             fleet.onOpenSettings = { _ = HubLauncher.open(section: "settings") }
@@ -383,62 +186,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { _ = await SessionFocus.focus(pid: pid) }
             }
 
-            let statusItem = StatusItemController { _ = HubLauncher.open(section: "settings") }
-            self.statusItem = statusItem
-            // Both are somebody's own click, so neither is answered from
-            // anything held: see `UsageFreshness.fromSource`.
-            statusItem.onRefreshProvider = { [weak store] id in
-                store?.refresh(providerID: id, freshness: .fromSource)
-            }
-            statusItem.onRefreshAll = { [weak store] in store?.refreshNow(freshness: .fromSource) }
-            statusItem.onLook = { [weak store] in store?.refreshBecauseSomeoneIsLooking() }
-            // The menu's tick writes to the same preference Settings writes to,
-            // and reads nothing back of its own: the sink below carries the new
-            // value to the item, and Settings — a published property away —
-            // redraws its own switch from it in the same breath.
-            statusItem.onToggleLimits = { [weak preferences] in preferences?.showsLimitsInMenuBar = $0 }
-            // Read when the menu opens, so a model's line is as current as its cell.
-            statusItem.cells = { [weak fleet] in fleet?.menuModel.snapshots ?? [] }
-            statusItem.activity = { [weak fleet] in fleet?.menuModel.activity(for: $0) }
-            // Handed over up front, like the notch's edge: the sink below
-            // delivers a run loop turn later, and the item would otherwise go
-            // up as one thing and then change its mind.
-            statusItem.limits = preferences.menuBarLimits
-            statusItem.resetTimeFormat = preferences.resetTimeFormat
-            statusItem.showsWeeklyLimit = preferences.showsWeeklyLimitInMenuBar
-
-            preferences.$appPresence
-                .receive(on: RunLoop.main)
-                .sink { _ in
-                    // Cockpit fork: whatever the stored choice, never a Dock
-                    // tile and never a menu-bar item.
-                    NSApp.setActivationPolicy(.accessory)
-                    statusItem.hide()
-                }
-                .store(in: &cancellables)
-
-            // What the item shows is presentation alone. It reaches the item and
-            // nothing else — no provider is read, refreshed, or switched on or
-            // off to answer it — and the item redraws from the readings it
-            // already holds, so a change in Settings lands on the bar at once.
-            Publishers.CombineLatest(preferences.$showsLimitsInMenuBar, preferences.$menuBarProviders)
-                .map { MenuBarLimits(isOn: $0, chosen: $1) }
-                .removeDuplicates()
-                // Dispatch, not the run loop: switched from the menu's own
-                // tick, this has to land while AppKit is still tracking that
-                // menu, which the run loop's default mode would hold back.
-                .receive(on: DispatchQueue.main)
-                .sink { [weak statusItem] in statusItem?.limits = $0 }
-                .store(in: &cancellables)
-
-            // Presentation only, like the parent limit switch: redraw from the
-            // current snapshots immediately and never start another fetch.
-            preferences.$showsWeeklyLimitInMenuBar
-                .removeDuplicates()
-                .receive(on: DispatchQueue.main)
-                .sink { [weak statusItem] in statusItem?.showsWeeklyLimit = $0 }
-                .store(in: &cancellables)
-
             preferences.$notchVisibility
                 .receive(on: RunLoop.main)
                 .sink { [weak fleet] in fleet?.apply($0) }
@@ -447,26 +194,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preferences.$foldsForFullScreen
                 .receive(on: RunLoop.main)
                 .sink { [weak fleet] in fleet?.apply(foldsForFullScreen: $0) }
-                .store(in: &cancellables)
-
-            preferences.$deepSeekPricingEnabled
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet] in fleet?.apply(deepSeekPricingEnabled: $0) }
-                .store(in: &cancellables)
-
-            preferences.$deepSeekPricingSchedule
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet] in fleet?.apply(deepSeekPricingSchedule: $0) }
-                .store(in: &cancellables)
-
-            preferences.$minimaxRegion
-                .dropFirst()
-                .removeDuplicates()
-                .receive(on: RunLoop.main)
-                .sink { [weak miniMaxWeb, weak store] region in
-                    miniMaxWeb?.apply(site: Sites.minimax(region: region))
-                    store?.refresh(providerID: "minimax")
-                }
                 .store(in: &cancellables)
 
             preferences.$notchEdge
@@ -543,10 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             preferences.$resetTimeFormat
                 .receive(on: RunLoop.main)
-                .sink { [weak fleet, weak statusItem] in
-                    fleet?.apply(resetTimeFormat: $0)
-                    statusItem?.resetTimeFormat = $0
-                }
+                .sink { [weak fleet] in fleet?.apply(resetTimeFormat: $0) }
                 .store(in: &cancellables)
 
             preferences.$accentColor
@@ -606,38 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .sink { [weak store] in store?.nicknames = $0 }
                 .store(in: &cancellables)
 
-            preferences.$ollamaEndpoint
-                .receive(on: RunLoop.main)
-                .sink { [weak store] address in
-                    guard let endpoint = try? OllamaEndpoint.parse(address) else { return }
-                    store?.updateOllamaEndpoint(endpoint)
-                }
-                .store(in: &cancellables)
-
-            preferences.$lmstudioEndpoint
-                .receive(on: RunLoop.main)
-                .sink { [weak store] address in
-                    guard let endpoint = try? LMStudioEndpoint.parse(address) else { return }
-                    store?.updateLMStudioEndpoint(endpoint)
-                }
-                .store(in: &cancellables)
-
             preferences.$providerOrder
                 .receive(on: RunLoop.main)
                 .sink { [weak store] in store?.order = $0 }
-                .store(in: &cancellables)
-
-            // Redraw the Gemini API ring against the new ceiling.
-            //
-            // `dropFirst` because `@Published` publishes the value it is given
-            // at init, and a refresh there would race the store's first poll.
-            // `receive(on:)` because `@Published` emits in `willSet` — the hop
-            // to the next run loop pass is what lets the `didSet` persist the
-            // number before the provider's closure goes looking for it.
-            preferences.$geminiAPIMonthlyTokenBudget
-                .dropFirst()
-                .receive(on: RunLoop.main)
-                .sink { [weak store] _ in store?.refresh(providerID: "gemini-api") }
                 .store(in: &cancellables)
 
             // Limit crossings become notifications here rather than inside
@@ -694,12 +389,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store.$snapshots
                 .combineLatest(preferences.$claudeDailyPaceRing)
                 .receive(on: RunLoop.main)
-                .sink { [weak statusItem] snapshots, paced in
+                .sink { snapshots, paced in
                     // Cockpit fork: usage alerts are for quotas, never for
                     // CPU, memory or disk readings.
                     let snapshots = DailyPace.apply(to: snapshots.filter { $0.kind != .system },
                                                     enabled: paced)
-                    statusItem?.snapshots = snapshots
                     notifier.observe(snapshots)
                     resetWatcher.observe(snapshots)
                     limitWatcher.observe(snapshots)
@@ -731,32 +425,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .sink { [weak fleet] ids in fleet?.setRefreshing(ids) }
                 .store(in: &cancellables)
 
-            // CODENOTCH_DISCOVER=<url> loads that page in the signed-in WebView
-            // and logs the API calls it makes — for finding an undocumented
-            // endpoint by watching the site rather than guessing at path names.
-            if let target = ProcessInfo.processInfo.environment["CODENOTCH_DISCOVER"],
-               let url = URL(string: target),
-               let provider = webProviders.first(where: { url.host?.contains($0.id) == true })
-                   ?? webProviders.first {
-                Task {
-                    let calls = await provider.recordCalls(on: url)
-                    Log.usage.notice("discovered: \(calls.joined(separator: "  "), privacy: .public)")
-                }
-            }
             self.store = store
         }
 
         // What each agent is doing right now, so the notch can say whether it is
         // still working without you switching to it.
-        var monitors: [String: any AgentActivityMonitor] = [
-            "cursor": CursorActivityMonitor(),
-            "grok": GrokActivityMonitor(),
-            "gemini-api": GeminiAPIActivityMonitor(),
-            "kimi": KimiActivityMonitor(),
-        ]
-        for profile in antigravityProfiles {
-            monitors[profile.id] = AntigravityActivityMonitor(profile: profile)
-        }
+        var monitors: [String: any AgentActivityMonitor] = [:]
         var claudeMonitors: [ClaudeSessionMonitor] = []
         var claudeMonitorsByProfile: [(ClaudeProfile, ClaudeSessionMonitor)] = []
         for profile in claudeProfiles {
@@ -859,7 +533,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let activity = ActivityCoordinator(monitors: monitors) { [weak self, weak fleet] id, sessions in
             guard let fleet else { return }
             fleet.setSessions(providerID: id, sessions: sessions)
-            self?.statusItem?.setActivity(providerID: id, sessions: sessions)
             self?.announceCompletions(sessions: fleet.sessions)
             self?.noteWorkState(providerID: id, sessions: sessions)
         }
@@ -898,8 +571,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         piResponseMonitor.start()
         self.piResponseMonitor = piResponseMonitor
 
-        store?.isBusy = { [weak self, weak activity] in
-            (activity?.isBusy ?? false) || (self?.lmstudioMetrics?.isBusy ?? false)
+        store?.isBusy = { [weak activity] in
+            activity?.isBusy ?? false
         }
         // Read on every look rather than carried in by a sink, for the reason
         // `isBusy` is: a stored copy answers with whatever the preference was
@@ -933,28 +606,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        preferences.$phoneLinkEnabled
-            .receive(on: RunLoop.main)
-            .sink { [weak self] enabled in
-                guard PhoneLink.isAvailable, let self = self, let srv = self.phoneLinkServer else { return }
-                Task { @MainActor in
-                    if enabled {
-                        self.phoneLinkServerStatus?.state = .starting
-                        do {
-                            let prefPort = self.preferences?.phoneLinkPort ?? 8788
-                            let port = try await srv.start(port: prefPort)
-                            self.preferences?.phoneLinkPort = port
-                            self.phoneLinkServerStatus?.state = .ready(port: port)
-                        } catch {
-                            self.phoneLinkServerStatus?.state = .failed(error.localizedDescription)
-                        }
-                    } else {
-                        await srv.stop()
-                        self.phoneLinkServerStatus?.state = .off
-                    }
-                }
-            }
-            .store(in: &cancellables)
         fleet.apply(displayPreference: preferences.displayPreference)
         fleet.apply(alongOffset: preferences.offset(for: preferences.notchEdge))
         fleet.apply(scale: preferences.notchScale)
@@ -968,8 +619,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fleet.apply(weeklyReading: preferences.weeklyReading)
         fleet.apply(foldsForFullScreen: preferences.foldsForFullScreen)
         fleet.apply(surfaceStyle: preferences.notchSurfaceStyle)
-        fleet.apply(deepSeekPricingEnabled: preferences.deepSeekPricingEnabled)
-        fleet.apply(deepSeekPricingSchedule: preferences.deepSeekPricingSchedule)
         fleet.show()
     }
 
@@ -1190,24 +839,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor func openSettings() { _ = HubLauncher.open(section: "settings") }
-    @MainActor func openConnectPhone() {
-        guard PhoneLink.isAvailable, let pairing = phoneLinkPairing, let registry = phoneLinkRegistry, let status = phoneLinkServerStatus else { return }
-        if preferences?.phoneLinkEnabled == false { preferences?.phoneLinkEnabled = true }
-        PhoneLinkWindowController.shared.show(pairing: pairing, registry: registry, port: preferences?.phoneLinkPort ?? 8788, serverStatus: status)
-    }
-
     func applicationWillTerminate(_ notification: Notification) {
-        ollamaRelay?.configure(enabled: false, endpoint: OllamaEndpoint.defaultAddress)
-        lmstudioMetrics?.stop()
         tokenRefresher?.stop()
         piResponseMonitor?.stop()
         store?.stop()
         activityCoordinator?.stop()
         notchFleet?.stop()
-        // A language server this app started, if any. Left running it would
-        // outlive the reason it exists and keep answering on loopback to
-        // nothing.
-        AntigravityBridge.owned.stop()
-        Task { await phoneLinkServer?.stop() }
     }
 }

@@ -54,18 +54,9 @@ final class UsageStore: ObservableObject {
         return snapshot
     }
 
-    func registerCustomProviders(_ custom: [UsageProvider]) {
-        providers.removeAll { $0.id.hasPrefix("custom-endpoint-") }
-        providers.append(contentsOf: custom)
-        for provider in custom {
-            publish(Self.placeholder(provider))
-        }
-        refreshNow()
-    }
-
-    /// Provider ids plus any model cells currently on screen.
+    /// Provider ids plus any cells currently on screen.
     var knownIDs: [String] {
-        Array(Set(providers.map(\.id) + snapshots.map(\.id) + localModelSummaries.map(\.id)))
+        Array(Set(providers.map(\.id) + snapshots.map(\.id)))
     }
     /// Provider IDs block fetching before credential access. Model IDs only hide
     /// their cells so disabling one model does not stop the shared runtime.
@@ -88,8 +79,6 @@ final class UsageStore: ObservableObject {
             let changed = disconnected.symmetricDifference(oldValue)
             if providers.contains(where: { changed.contains($0.id) && $0.kind == .usage }) {
                 refreshNow()
-            } else if providers.contains(where: { changed.contains($0.id) && $0.kind == .localRuntime }) {
-                refreshLocalRuntimes()
             }
         }
     }
@@ -153,7 +142,6 @@ final class UsageStore: ObservableObject {
     /// answer to a 429, and walking into one trades half a minute of lag for
     /// fifteen minutes of it.
     private let busyRefreshInterval: TimeInterval
-    private let localRefreshInterval: TimeInterval
     /// How long a snapshot stays believable after its last successful fetch.
     ///
     /// Comfortably above `idleRefreshInterval`, on purpose. With the two equal,
@@ -182,7 +170,6 @@ final class UsageStore: ObservableObject {
     private let archive: UsageArchive
     private var lastGood: [String: (snapshot: ProviderSnapshot, fetchedAt: Date)] = [:]
     private var timer: Timer?
-    private var localTimer: Timer?
     /// Cockpit fork: CPU, memory and disk rings, read every two seconds.
     private var systemTimer: Timer?
     private var fetchTasks: [String: Task<Void, Never>] = [:]
@@ -219,7 +206,6 @@ final class UsageStore: ObservableObject {
         providers: [UsageProvider],
         refreshInterval: TimeInterval = 15,
         busyRefreshInterval: TimeInterval = 30,
-        localRefreshInterval: TimeInterval = 1,
         idleRefreshInterval: TimeInterval = 5 * 60,
         staleAfter: TimeInterval = 15 * 60,
         // Thirty times a normal pass, which is a second or two. High enough
@@ -236,7 +222,6 @@ final class UsageStore: ObservableObject {
         self.providers = providers
         self.refreshInterval = refreshInterval
         self.busyRefreshInterval = busyRefreshInterval
-        self.localRefreshInterval = localRefreshInterval
         self.idleRefreshInterval = idleRefreshInterval
         self.staleAfter = staleAfter
         self.refreshDeadline = refreshDeadline
@@ -253,9 +238,6 @@ final class UsageStore: ObservableObject {
         _disconnected = Published(initialValue: disconnected)
         _order = Published(initialValue: order)
         lastGood = archive.load()
-        for provider in providers where provider.kind == .localRuntime {
-            lastGood.removeValue(forKey: provider.id)
-        }
         // Pruned here as well as in `didSet`, because `didSet` cannot be relied
         // on to run: it guards against a no-op change, and the value the
         // preference binding delivers a moment later is usually identical to
@@ -286,32 +268,45 @@ final class UsageStore: ObservableObject {
             .filter { !disconnected.contains($0.id) }
     }
 
-    /// Model discovery does not need to re-read any cloud account's credential.
-    var localModelSummaries: [ProviderSummary] {
-        ProviderOrder.cells(from: snapshots, keeping: notchSnapshots).compactMap { cell in
-            guard let model = cell.localModel else { return nil }
-            let runtime = providers.first { $0.id == cell.providerID }?.displayName ?? cell.displayName
-            return ProviderSummary(kind: .localRuntime, localModel: model,
-                                   sourceProviderID: cell.providerID, runtimeName: runtime,
-                                   id: cell.id, name: model.name, glyph: cell.glyph,
-                                   account: nil, signIn: .guidance(L10n.t("Loaded in \(runtime).")))
-        }
-    }
-
     /// Enough to list the providers in settings without exposing them.
     var providerSummaries: [ProviderSummary] {
-        let models = localModelSummaries
-        let summaries = orderedProviders.flatMap { provider in
-            let summary = ProviderSummary(kind: provider.kind, id: provider.id, name: provider.displayName,
+        let summaries = orderedProviders.map { provider in
+            ProviderSummary(kind: provider.kind, id: provider.id, name: provider.displayName,
                             glyph: provider.glyph,
-                            customIconFilename: provider.customIconFilename,
                             account: disconnected.contains(provider.id) ? nil : provider.account(),
                             signIn: provider.signInRoute,
                             wasRefusedAccess: refusedAccess.contains(provider.id),
                             needsSignInRenewal: needsRenewal.contains(provider.id))
-            return [summary] + models.filter { $0.sourceProviderID == provider.id }
         }
         return ProviderOrder.arrange(summaries, by: order, id: \.id)
+    }
+
+    /// Cockpit fork: how often the System and Disks cells are re-read. Two
+    /// seconds while the notch can be seen; ten while it is hidden — folded
+    /// away for a full-screen app, or set to Hide — since nobody is looking.
+    private static let systemIntervalVisible: TimeInterval = 2
+    private static let systemIntervalHidden: TimeInterval = 10
+    private var systemSamplingSlow = false
+
+    /// Called by the app as the notch is hidden or shown again. Restores the
+    /// fast interval, and takes one reading at once, when it comes back.
+    func setSystemSamplingSlow(_ slow: Bool) {
+        guard slow != systemSamplingSlow else { return }
+        systemSamplingSlow = slow
+        guard systemTimer != nil else { return }
+        scheduleSystemTimer()
+        if !slow { refreshSystem() }
+    }
+
+    private func scheduleSystemTimer() {
+        systemTimer?.invalidate()
+        let interval = systemSamplingSlow ? Self.systemIntervalHidden : Self.systemIntervalVisible
+        let systemTimer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSystem() }
+        }
+        systemTimer.tolerance = interval / 4
+        RunLoop.main.add(systemTimer, forMode: .common)
+        self.systemTimer = systemTimer
     }
 
     func start() {
@@ -323,18 +318,7 @@ final class UsageStore: ObservableObject {
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
 
-        let localTimer = Timer(timeInterval: localRefreshInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshLocalRuntimes() }
-        }
-        RunLoop.main.add(localTimer, forMode: .common)
-        self.localTimer = localTimer
-
-        let systemTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshSystem() }
-        }
-        systemTimer.tolerance = 0.5
-        RunLoop.main.add(systemTimer, forMode: .common)
-        self.systemTimer = systemTimer
+        scheduleSystemTimer()
 
         // Waking up is the one moment the numbers are guaranteed to be wrong —
         // and the one moment a cache is guaranteed to be wrong with them, having
@@ -361,8 +345,6 @@ final class UsageStore: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
-        localTimer?.invalidate()
-        localTimer = nil
         systemTimer?.invalidate()
         systemTimer = nil
         refreshTask?.cancel()
@@ -606,34 +588,6 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func refreshLocalRuntimes() {
-        for provider in providers where provider.kind == .localRuntime && !disconnected.contains(provider.id) {
-            _ = beginRefresh(provider)
-        }
-    }
-
-    func updateOllamaEndpoint(_ endpoint: URL) {
-        guard let provider = providers.first(where: { $0.id == "ollama-local" }) as? OllamaLocalProvider,
-              provider.endpoint != endpoint else { return }
-        restart(provider) { provider.endpoint = endpoint }
-    }
-
-    func updateLMStudioEndpoint(_ endpoint: URL) {
-        guard let provider = providers.first(where: { $0.id == LMStudioMetrics.providerID }) as? LMStudioLocalProvider,
-              provider.endpoint != endpoint else { return }
-        restart(provider) { provider.endpoint = endpoint }
-    }
-
-    /// A changed address makes whatever the old one was about to answer
-    /// untrue; the reading is cleared and the new address asked at once.
-    private func restart(_ provider: UsageProvider, applying change: () -> Void) {
-        cancelRefresh(providerID: provider.id)
-        change()
-        guard !disconnected.contains(provider.id) else { return }
-        publish(Self.placeholder(provider))
-        _ = beginRefresh(provider)
-    }
-
     private func beginRefresh(_ provider: UsageProvider, freshness: UsageFreshness = .standard,
                              holdIndicator: Bool = false) -> Task<Void, Never> {
         if let task = fetchTasks[provider.id] { return task }
@@ -786,19 +740,6 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func reevaluate(providerID: String) {
-        guard let provider = providers.first(where: { $0.id == providerID }) else { return }
-        if let idx = snapshots.firstIndex(where: { $0.id == providerID }) {
-            var snapshot = snapshots[idx]
-            if let ag = provider as? AntigravityProvider {
-                snapshot.headlineID = ag.resolveHeadlineID(for: snapshot.windows)
-                snapshot.weeklyID = ag.resolveWeeklyID(for: snapshot.windows)
-                snapshots[idx] = snapshot
-                updateNotchSnapshots()
-            }
-        }
-    }
-
     private func snapshot(from provider: UsageProvider, generation: Int,
                           freshness: UsageFreshness) async -> ProviderSnapshot? {
         // A scheduled task can be disconnected before it begins; avoid reading
@@ -822,11 +763,6 @@ final class UsageStore: ObservableObject {
             return fresh
         } catch {
             guard acceptsResult(from: provider, generation: generation) else { return nil }
-            if provider.kind == .localRuntime {
-                var empty = Self.placeholder(provider)
-                empty.status = .error(error.localizedDescription)
-                return empty
-            }
             Log.usage.error("\(provider.id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             return degraded(provider: provider, error: error)
         }
@@ -966,7 +902,7 @@ final class UsageStore: ObservableObject {
     }
 
     private static func placeholder(_ provider: UsageProvider) -> ProviderSnapshot {
-        var snapshot = ProviderSnapshot(
+        ProviderSnapshot(
             id: provider.id,
             displayName: provider.displayName,
             glyph: provider.glyph,
@@ -975,7 +911,5 @@ final class UsageStore: ObservableObject {
             windows: [],
             kind: provider.kind
         )
-        snapshot.customIconFilename = provider.customIconFilename
-        return snapshot
     }
 }

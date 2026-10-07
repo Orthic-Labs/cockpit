@@ -4,65 +4,13 @@ import Combine
 @MainActor
 final class NotchViewModel: ObservableObject {
     @Published var snapshots: [ProviderSnapshot] = []
-    /// Per runtime, so Ollama's relay switching off clears its own readings
-    /// and nobody else's.
-    private var performances: [String: [String: LocalModelPerformance]] = [:]
-    private var ledger = LocalTokenLedger()
-    private var localMetricsEnabled = false
-
-    /// The Ollama relay's own id; its readings are keyed by model name.
-    static let ollamaSource = "ollama-local"
-
-    func setLocalMetricsEnabled(_ enabled: Bool) {
-        localMetricsEnabled = enabled
-        if !enabled { performances[Self.ollamaSource] = nil; thinkingModels = [:] }
-        snapshots = snapshots.map(decorated)
-    }
-
     func updateSnapshots(_ providerSnapshots: [ProviderSnapshot]) {
         let hoveredID = hoveredSnapshot?.id
-        let next = ProviderOrder.cells(from: providerSnapshots, keeping: snapshots).map(decorated).map(Costs.decorate)
+        let next = ProviderOrder.cells(from: providerSnapshots, keeping: snapshots)
         let nextHoveredIndex = hoveredID.flatMap { id in next.firstIndex { $0.id == id } }
         if hoveredIndex != nextHoveredIndex { hoveredIndex = nextHoveredIndex }
         snapshots = next
     }
-
-    func updatePerformances(_ measurements: [String: LocalModelPerformance],
-                            source: String = NotchViewModel.ollamaSource) {
-        performances[source] = measurements
-        snapshots = snapshots.map(decorated)
-    }
-
-    /// Logged tokens per cell, read against `now` as it is drawn so "today"
-    /// rolls over at midnight without a new line being written.
-    func updateLedger(_ ledger: LocalTokenLedger) {
-        self.ledger = ledger
-        snapshots = snapshots.map(decorated)
-    }
-
-    private func decorated(_ snapshot: ProviderSnapshot) -> ProviderSnapshot {
-        guard let model = snapshot.localModel else { return snapshot }
-        var snapshot = snapshot
-        let shows = localMetricsEnabled || snapshot.localRuntimeMeasuresSpeed
-        snapshot.showsLocalPerformance = shows
-        snapshot.localPerformance = shows
-            ? performances[snapshot.providerID]?[Self.performanceKey(for: snapshot, model: model)] : nil
-        snapshot.localLedger = ledger.summary(for: snapshot.id, now: now)
-        snapshot.localContextFraction = snapshot.localLedger?.contextFraction(contextLength: model.contextLength)
-        return snapshot
-    }
-
-    /// Ollama's relay knows a model by the name a client used, with Ollama's
-    /// implicit `:latest`; everything else reports by notch cell id.
-    static func performanceKey(for snapshot: ProviderSnapshot, model: LocalRuntimeReading.Model) -> String {
-        snapshot.providerID == ollamaSource ? OllamaThinkingStream.modelKey(model.name) : snapshot.id
-    }
-
-    @Published var thinkingModels: [String: Date] = [:]
-    /// What each local model instance is doing, keyed by cell id. Ollama's
-    /// thinking relay reports through `thinkingModels`; LM Studio's state
-    /// poll reports here, phase and queue included.
-    @Published var localActivities: [String: LocalModelActivity] = [:]
 
     /// Live agent sessions, keyed by the provider they belong to. They surface
     /// inside that provider's own ring rather than as a cell of their own — one
@@ -108,27 +56,10 @@ final class NotchViewModel: ObservableObject {
     /// instead of restarting from wherever it had got to.
     @Published var settingsSpins = 0
 
-    @Published private(set) var refreshingCells: Set<String> = []
-
     func isRefreshing(_ snapshot: ProviderSnapshot) -> Bool {
-        snapshot.localModel == nil
-            ? refreshing.contains(snapshot.providerID)
-            : refreshingCells.contains(snapshot.id)
+        refreshing.contains(snapshot.providerID)
     }
 
-    func refresh(_ snapshot: ProviderSnapshot, using refreshProvider: (String) async -> Void) async {
-        guard snapshot.localModel != nil else {
-            await refreshProvider(snapshot.providerID)
-            return
-        }
-        guard refreshingCells.insert(snapshot.id).inserted else { return }
-        defer { refreshingCells.remove(snapshot.id) }
-        // A shared inventory fetch is not activity in every loaded model.
-        // Only the clicked cell presses in, even when it joins an existing poll.
-        async let feedback: Void = Task.sleep(nanoseconds: 380_000_000)
-        await refreshProvider(snapshot.providerID)
-        _ = try? await feedback
-    }
     /// The settings handle is under the cursor.
     @Published var isHoveringSettings = false
     /// The six-dot grip beside the settings button is under the cursor.
@@ -214,11 +145,6 @@ final class NotchViewModel: ObservableObject {
     /// Mirrors the persisted Appearance choice so the separate notch window
     /// redraws immediately when Settings changes it.
     @Published var surfaceStyle: NotchSurfaceStyle = .glass
-    /// Whether DeepSeek's billing phase rows are visible in its usage card.
-    @Published var deepSeekPricingEnabled = true
-    /// The rule used by the DeepSeek card, mirrored from Preferences so a
-    /// settings change is reflected in every notch immediately.
-    @Published var deepSeekPricingSchedule = DeepSeekPricing.Schedule.current
     /// Whether each ring carries its percentage beside the hardware notch.
     /// Mirrors the Appearance setting; see `showsCellReading`.
     @Published var showsNotchReadings = false
@@ -1168,15 +1094,7 @@ final class NotchViewModel: ObservableObject {
     /// A provider with no activity source gets none, rather than borrowing
     /// somebody else's.
     func activity(for snapshot: ProviderSnapshot) -> ActivitySummary? {
-        guard let model = snapshot.localModel else { return activity(for: snapshot.providerID) }
-        if let local = localActivities[snapshot.id] {
-            return ActivitySummary(sessions: [AgentSession(id: snapshot.id, name: local.label,
-                detail: snapshot.displayName, state: .busy, waitingFor: nil, since: local.since)],
-                queued: local.queued, note: local.note)
-        }
-        guard let since = thinkingModels[OllamaThinkingStream.modelKey(model.name)] else { return nil }
-        return ActivitySummary(sessions: [AgentSession(id: snapshot.id, name: L10n.t("Thinking"),
-            detail: snapshot.displayName, state: .busy, waitingFor: nil, since: since)])
+        activity(for: snapshot.providerID)
     }
 
     func activity(for providerID: String) -> ActivitySummary? {
@@ -1262,31 +1180,19 @@ final class NotchViewModel: ObservableObject {
                                            hasResetCredits: hasResetCredits)
     }
 
-    /// Project rows a card may list: the ones the cost model has, capped at
-    /// what the section draws.
-    func costRows(for snapshot: ProviderSnapshot) -> Int {
-        CostSection.rowCount(for: snapshot)
-    }
-
     private func contentCardHeight(sessionCap: Int) -> CGFloat {
         snapshots.map { snapshot in
             NotchLayout.cardHeight(windowCount: snapshot.windows.count,
                 groupCount: Set(snapshot.windows.compactMap(\.group)).count,
                 moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
-                usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
-                sessionCount: snapshot.localModel == nil ? sessionCap + 1 : 0,
+                sessionCount: sessionCap + 1,
                 sessionCap: sessionCap,
                 statusMessage: snapshot.statusMessage,
                 blockMessage: snapshot.block?.summary(now: now),
                 hasTokenUsage: snapshot.tokenUsage != nil,
                 hasPlan: snapshot.plan != nil,
                 hasResetCredits: snapshot.hasAvailableResetCredits,
-                localModelName: snapshot.localModel?.name,
-                showsLocalPerformance: snapshot.showsLocalPerformance,
-                localLedgerRows: snapshot.localLedgerRowCount,
-                compactRowCount: snapshot.compactRowCount,
-                showsDeepSeekPricing: deepSeekPricingEnabled,
-                costRows: costRows(for: snapshot))
+                compactRowCount: snapshot.compactRowCount)
         }.max() ?? 0
     }
 
