@@ -1,0 +1,6 @@
+# Install scripts of the QA driver's browser-driver downloads stay off:
+# the hub drives its own webview through the embedded plugin.
+allowBuilds:
+  edgedriver: false
+  geckodriver: false
+  esbuild: false
