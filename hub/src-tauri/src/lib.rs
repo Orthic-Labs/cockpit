@@ -8,7 +8,25 @@ use std::sync::Mutex;
 use cockpit_core::storage_browser::{self, SearchRequest};
 use cockpit_core::{EntryKind, ScanOptions, ScanReport};
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
+
+// The notch's settings bridge (see mac/Notch/Sources/System/HubBridge.swift).
+// Darwin notifications through libSystem; no payloads.
+unsafe extern "C" {
+    fn notify_post(name: *const std::ffi::c_char) -> u32;
+    fn notify_register_check(name: *const std::ffi::c_char, token: *mut i32) -> u32;
+    fn notify_check(token: i32, changed: *mut i32) -> u32;
+}
+
+fn bridge_dir() -> PathBuf {
+    home().join("Library/Application Support/Cockpit")
+}
+
+fn post(name: &str) {
+    if let Ok(name) = std::ffi::CString::new(name) {
+        unsafe { notify_post(name.as_ptr()) };
+    }
+}
 
 #[derive(Default)]
 struct Hub {
@@ -162,6 +180,74 @@ fn search(query: String, hub: State<'_, Hub>) -> Result<Vec<Row>, String> {
         .collect())
 }
 
+/// The notch's last published settings and accounts.
+#[tauri::command]
+fn notch_state() -> Result<serde_json::Value, String> {
+    let text = std::fs::read_to_string(bridge_dir().join("notch-state.json"))
+        .map_err(|_| "The Cockpit notch isn't running.".to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// Ask the notch to change a setting or run an account action. The notch is
+/// the only writer of its preferences; this only leaves it a request.
+#[tauri::command]
+fn notch_command(command: serde_json::Value) -> Result<(), String> {
+    let dir = bridge_dir().join("hub-commands");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let temp = dir.join(format!("{stamp}.tmp"));
+    std::fs::write(&temp, serde_json::to_vec(&command).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, dir.join(format!("{stamp}.json"))).map_err(|e| e.to_string())?;
+    post("dev.orthic.cockpit.hub.command");
+    Ok(())
+}
+
+/// The section the hub was opened for (`--section <name>`), if any.
+#[tauri::command]
+fn initial_section() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter().position(|a| a == "--section").and_then(|i| args.get(i + 1).cloned())
+}
+
+/// Watch for the notch asking a running hub to show a section, and for new
+/// notch state; forward both to the page as events.
+fn watch_notch(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let names = [
+            ("dev.orthic.cockpit.hub.show.settings", "show-section", "settings"),
+            ("dev.orthic.cockpit.hub.show.storage", "show-section", "storage"),
+            ("dev.orthic.cockpit.notch.state", "notch-state", ""),
+        ];
+        let mut tokens = Vec::new();
+        for (name, event, payload) in names {
+            let Ok(cname) = std::ffi::CString::new(name) else { continue };
+            let mut token = 0i32;
+            if unsafe { notify_register_check(cname.as_ptr(), &mut token) } == 0 {
+                tokens.push((token, event, payload));
+            }
+        }
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            for (token, event, payload) in &tokens {
+                let mut changed = 0i32;
+                if unsafe { notify_check(*token, &mut changed) } == 0 && changed != 0 {
+                    if *event == "show-section" {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    let _ = app.emit(event, payload.to_string());
+                }
+            }
+        }
+    });
+}
+
 /// Show a file or folder in Finder. Read-only: it only opens a window.
 #[tauri::command]
 fn reveal(path: String) -> Result<(), String> {
@@ -181,12 +267,15 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             // An accessory app is not brought forward on launch; do it here.
-            if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+            if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
+            watch_notch(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, processes, scan, children, search, reveal])
+        .invoke_handler(tauri::generate_handler![
+            status, processes, scan, children, search, reveal, notch_state, notch_command, initial_section
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Cockpit hub");
 }

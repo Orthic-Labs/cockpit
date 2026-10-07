@@ -49,3 +49,23 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 22px; }
 .section { margin-top: 6px; font-size: 11px; color: var(--ink-3); }
+
+.settings { overflow: auto; }
+.group { display: flex; flex-direction: column; gap: 4px; }
+.group-body { display: flex; flex-direction: column; border-radius: 10px; background: var(--fill-2); padding: 2px 12px; }
+.setting { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 36px; padding: 6px 0; border-bottom: 1px solid var(--hairline); }
+.setting:last-child, .account:last-child { border-bottom: 0; }
+.setting-control { flex: none; display: flex; align-items: center; }
+.select { height: 26px; border-radius: 6px; border: 1px solid var(--hairline); background: var(--plane); color: var(--ink); font: inherit; padding: 0 6px; }
+.slider { display: flex; align-items: center; gap: 8px; }
+.slider input { width: 140px; accent-color: var(--accent); }
+.num { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+.buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.account { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--hairline); }
+.account-main { min-width: 0; }
+.account-name { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 600; }
+.account-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.order { display: flex; gap: 2px; }
+.mini { width: 22px; height: 22px; border: 0; border-radius: 5px; background: none; color: var(--ink-3); cursor: pointer; }
+.mini:hover:not(:disabled) { background: var(--fill-2); color: var(--ink); }
+.mini:disabled { opacity: 0.3; }
