@@ -100,6 +100,11 @@ export function Storage() {
         </div>
       )}
 
+      {folder?.incomplete && !results && (
+        <div className="muted small">
+          Partial scan: the file limit was reached or some folders couldn't be read, so sizes may be low.
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
       {!folder && busy && <div className="muted">Scanning your home folder…</div>}
 
