@@ -184,6 +184,21 @@ export function Storage() {
       await loadFindings();
     });
 
+  const installers = volumes.filter((v) => v.disk_image);
+  const [ejecting, setEjecting] = useState<string | null>(null);
+  const [ejectError, setEjectError] = useState<string | null>(null);
+  const eject = async (v: Volume) => {
+    setEjecting(v.mount_point);
+    setEjectError(null);
+    try {
+      await api.eject(v.mount_point);
+    } catch (e) {
+      setEjectError(`${v.name}: ${String(e)}`);
+    }
+    setEjecting(null);
+    api.volumes().then(setVolumes).catch(() => {});
+  };
+
   const rows = results ?? folder?.rows ?? [];
   const largest = Math.max(1, ...rows.map((r) => r.bytes));
   const total = Math.max(1, rows.reduce((sum, r) => sum + r.bytes, 0));
@@ -191,7 +206,7 @@ export function Storage() {
   return (
     <div className="view storage">
       <div className="volumes">
-        {volumes.map((v) => {
+        {volumes.filter((v) => !v.disk_image).map((v) => {
           const Icon = v.internal ? HardDrive : Usb;
           return (
             <button
@@ -213,6 +228,22 @@ export function Storage() {
           );
         })}
       </div>
+
+      {installers.length > 0 && (
+        <div className="installers muted small">
+          <span>Mounted installers</span>
+          {installers.map((v) => (
+            <span className="installer-chip" key={v.mount_point} title={v.mount_point}>
+              <span className="name">{v.name}</span>
+              <span>{bytes(v.total_bytes)}</span>
+              <Button size="sm" variant="ghost" onClick={() => eject(v)} disabled={ejecting === v.mount_point}>
+                Eject
+              </Button>
+            </span>
+          ))}
+          {ejectError && <span className="error">{ejectError}</span>}
+        </div>
+      )}
 
       {internalActive && (
         <section className="card-block">

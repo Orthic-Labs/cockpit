@@ -25,6 +25,7 @@ final class ConveniencesService {
     private let fnHub = EventTapHub(location: .cghidEventTap, events: [.keyDown, .keyUp, .flagsChanged])
     private var fnToken: EventTapToken?
     private let autoQuit = AutoQuit()
+    private lazy var diskImage = DiskImageInstaller(preferences: preferences)
     private var tokens: [String: EventTapToken] = [:]
     private var cancellables = Set<AnyCancellable>()
     private var recheck: Timer?
@@ -65,6 +66,7 @@ final class ConveniencesService {
         workspaceTokens.forEach { center.removeObserver($0) }
         workspaceTokens.removeAll()
         tearDown()
+        diskImage.stop()
     }
 
     func openAccessibilitySettings() {
@@ -81,6 +83,8 @@ final class ConveniencesService {
 
     private func reconcile() {
         defer { publishIfChanged() }
+        // Needs no Accessibility permission, so it runs before that check.
+        diskImage.sync()
         guard wantsAnything else {
             tearDown()
             setRecheck(false)

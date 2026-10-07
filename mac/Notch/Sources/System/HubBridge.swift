@@ -277,6 +277,8 @@ final class HubBridge {
         "convDockClickMinimize": bool(\.convDockClickMinimize),
         "convFnCommand": bool(\.convFnCommand),
         "convAutoQuit": bool(\.convAutoQuit),
+        "convDiskImageInstaller": bool(\.convDiskImageInstaller),
+        "convDiskImageTrashDownload": bool(\.convDiskImageTrashDownload),
         "convAutoQuitApps": stringList(\.convAutoQuitApps),
         "launcherEnabled": bool(\.launcherEnabled),
         "launcherHotkey": choice(\.launcherHotkey),

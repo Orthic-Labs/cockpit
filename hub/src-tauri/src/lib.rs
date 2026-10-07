@@ -323,6 +323,8 @@ struct Volume {
     removable: bool,
     /// The startup disk; its scan starts at the home folder.
     internal: bool,
+    /// A mounted disk image (an installer), shown apart from the drives.
+    disk_image: bool,
 }
 
 /// The name Finder shows for the startup disk: the entry in /Volumes that
@@ -352,9 +354,9 @@ fn is_disk_image(mount: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Every mounted drive a person would recognise: the startup disk and
-/// external drives under /Volumes, not disk images, system volumes or Time
-/// Machine snapshots.
+/// Every mounted volume a person would recognise: the startup disk, external
+/// drives and mounted disk images (flagged) under /Volumes, not system
+/// volumes or Time Machine snapshots.
 #[tauri::command]
 async fn volumes() -> Result<Vec<Volume>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -368,9 +370,7 @@ async fn volumes() -> Result<Vec<Volume>, String> {
             if mount.contains("com.apple.") || out.iter().any(|v| v.mount_point == mount) {
                 continue;
             }
-            if !internal && is_disk_image(&mount) {
-                continue;
-            }
+            let disk_image = !internal && is_disk_image(&mount);
             let (Some(total), Some(available)) = (disk.total_bytes, disk.available_bytes) else {
                 continue;
             };
@@ -389,10 +389,42 @@ async fn volumes() -> Result<Vec<Volume>, String> {
                 available_bytes: available,
                 removable: disk.removable,
                 internal,
+                disk_image,
             });
         }
         out.sort_by_key(|v| !v.internal);
         Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Eject a mounted disk image. Only a direct child of /Volumes that is a disk
+/// image is accepted, never a drive. A busy image is reported, not forced.
+#[tauri::command]
+async fn eject(mount: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = std::fs::canonicalize(&mount).map_err(|_| "That image is no longer mounted.".to_string())?;
+        if path.parent() != Some(std::path::Path::new("/Volumes")) {
+            return Err("Only mounted disk images under /Volumes can be ejected here.".into());
+        }
+        let path = path.to_string_lossy().into_owned();
+        if !is_disk_image(&path) {
+            return Err("That is a drive, not a disk image. Eject it from Finder.".into());
+        }
+        let out = std::process::Command::new("/usr/bin/hdiutil")
+            .args(["detach", &path])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&out.stderr).to_lowercase();
+        if text.contains("busy") {
+            Err("Busy: something is still using it. Close what is open from it and try again.".into())
+        } else {
+            Err(format!("Could not eject: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -457,7 +489,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, volumes, open_full_disk_access, notch_state, notch_command, initial_section,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section,
             cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())

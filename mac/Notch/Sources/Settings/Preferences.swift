@@ -198,6 +198,14 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(convAutoQuit, forKey: Keys.convAutoQuit) }
     }
     /// Bundle ids opted in to Auto Quit. Empty until the person adds one.
+    /// Offer to install an app from a mounted disk image and eject it (on by
+    /// default), and move the downloaded .dmg to the Trash afterwards (off).
+    @Published var convDiskImageInstaller: Bool {
+        didSet { defaults.set(convDiskImageInstaller, forKey: Keys.convDiskImageInstaller) }
+    }
+    @Published var convDiskImageTrashDownload: Bool {
+        didSet { defaults.set(convDiskImageTrashDownload, forKey: Keys.convDiskImageTrashDownload) }
+    }
     @Published var convAutoQuitApps: [String] {
         didSet { defaults.set(convAutoQuitApps, forKey: Keys.convAutoQuitApps) }
     }
@@ -424,6 +432,8 @@ final class Preferences: ObservableObject {
         static let convFnCommand = "convFnCommand"
         static let convAutoQuit = "convAutoQuit"
         static let convAutoQuitApps = "convAutoQuitApps"
+        static let convDiskImageInstaller = "convDiskImageInstaller"
+        static let convDiskImageTrashDownload = "convDiskImageTrashDownload"
         static let launcherEnabled = "launcherEnabled"
         static let launcherHotkey = "launcherHotkey"
         static let scope = "notchScope"
@@ -607,6 +617,8 @@ final class Preferences: ObservableObject {
         self.convDockClickMinimize = defaults.bool(forKey: Keys.convDockClickMinimize)
         self.convFnCommand = defaults.bool(forKey: Keys.convFnCommand)
         self.convAutoQuit = defaults.bool(forKey: Keys.convAutoQuit)
+        self.convDiskImageInstaller = defaults.object(forKey: Keys.convDiskImageInstaller) as? Bool ?? true
+        self.convDiskImageTrashDownload = defaults.bool(forKey: Keys.convDiskImageTrashDownload)
         self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
         self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)
         self.launcherHotkey = defaults.string(forKey: Keys.launcherHotkey)

@@ -286,6 +286,10 @@ function ConveniencesGroup({ c, s, set, send }: {
         "Fills the screen without a full-screen Space. Option-click keeps the usual behaviour.")}
       {toggle("convDockClickMinimize", "Dock click minimizes",
         "Clicking the Dock icon of the frontmost app minimizes its windows.")}
+      {toggle("convDiskImageInstaller", "Offer to install and eject",
+        "When a disk image holding one app mounts, the notch offers to copy it to Applications and eject the image. Needs no permission.")}
+      {Boolean(s.convDiskImageInstaller) && toggle("convDiskImageTrashDownload", "Move the downloaded disk image to the Trash",
+        "After a successful install, the .dmg you opened goes to the Trash. Off by default.")}
       {toggle("convAutoQuit", "Auto Quit",
         "Quits the apps below when their last window closes. Only apps you add; windows on other Spaces or minimized keep an app open.")}
       {Boolean(s.convAutoQuit) && (

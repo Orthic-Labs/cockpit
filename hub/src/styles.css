@@ -129,3 +129,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .kind-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
 .pct { text-align: right; }
 .treemap { width: 100%; height: auto; border-radius: 8px; background: var(--fill-2); position: sticky; top: 0; }
+.installers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; flex: none; opacity: 0.85; }
+.installer-chip { display: inline-flex; align-items: center; gap: 6px; padding: 1px 4px 1px 9px; border-radius: 999px; border: 1px solid var(--hairline); background: var(--fill-2); }
+.installer-chip .name { max-width: 160px; }

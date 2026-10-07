@@ -55,6 +55,7 @@ export interface Volume {
   available_bytes: number;
   removable: boolean;
   internal: boolean;
+  disk_image: boolean;
 }
 
 export interface CleanupFinding {
@@ -189,6 +190,7 @@ export const api = {
   forceQuit: (r: ProcessRow) =>
     invoke<QuitOutcome>("process_force_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
   volumes: () => invoke<Volume[]>("volumes"),
+  eject: (mount: string) => invoke<void>("eject", { mount }),
   openFullDiskAccess: () => invoke<void>("open_full_disk_access"),
   cleanupScan: () => invoke<CleanupReport>("cleanup_scan"),
   cleanupApply: (items: CleanupFinding[]) =>
