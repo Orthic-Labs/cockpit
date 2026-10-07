@@ -1,5 +1,5 @@
 minimumReleaseAgeExclude:
-  - '@rightkit/release@0.2.122'
+  - '@rightkit/release@0.2.123'
 allowBuilds:
   fs-xattr: true
   macos-alias: true
