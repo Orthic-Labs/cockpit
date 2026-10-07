@@ -86,24 +86,38 @@ pub struct Discover {
 const DISCOVER_MAX_DEPTH: usize = 8;
 const DISCOVER_MAX_ENTRIES: usize = 400_000;
 const BUNDLE_EXTENSIONS: &[&str] = &[
-    "app", "appex", "framework", "bundle", "plugin", "xpc", "kext", "photoslibrary",
-    "musiclibrary", "fcpbundle", "pkg", "mpkg", "xcarchive",
+    "app",
+    "appex",
+    "framework",
+    "bundle",
+    "plugin",
+    "xpc",
+    "kext",
+    "photoslibrary",
+    "musiclibrary",
+    "fcpbundle",
+    "pkg",
+    "mpkg",
+    "xcarchive",
 ];
 
 /// Folders a project search never enters: where apps and the system keep
 /// their own trees, and media libraries.
 fn not_a_project_area(name: &str) -> bool {
     name.starts_with('.')
-        || matches!(name, "Library" | "Applications" | "Movies" | "Music" | "Pictures")
-        || name
-            .rsplit_once('.')
-            .is_some_and(|(stem, ext)| {
-                !stem.is_empty() && BUNDLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
-            })
+        || matches!(
+            name,
+            "Library" | "Applications" | "Movies" | "Music" | "Pictures"
+        )
+        || name.rsplit_once('.').is_some_and(|(stem, ext)| {
+            !stem.is_empty() && BUNDLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+        })
 }
 
 fn has_marker(parent: &Path, d: &Discover) -> bool {
-    d.markers.iter().any(|m| parent.join(m).symlink_metadata().is_ok())
+    d.markers
+        .iter()
+        .any(|m| parent.join(m).symlink_metadata().is_ok())
 }
 
 fn discover_dirs(home: &Path, d: &Discover) -> Vec<PathBuf> {
@@ -129,7 +143,10 @@ fn discover_dirs(home: &Path, d: &Discover) -> Vec<PathBuf> {
             let path = entry.path();
             if name == d.dir && has_marker(&dir, d) {
                 found.push(path);
-            } else if !not_a_project_area(&name) && name != "node_modules" && depth < DISCOVER_MAX_DEPTH {
+            } else if !not_a_project_area(&name)
+                && name != "node_modules"
+                && depth < DISCOVER_MAX_DEPTH
+            {
                 stack.push((path, depth + 1));
             }
         }
@@ -152,7 +169,9 @@ fn is_discovered(path: &Path, home: &Path, d: &Discover) -> bool {
     };
     last == &d.dir
         && ancestors.len() <= DISCOVER_MAX_DEPTH + 1
-        && !ancestors.iter().any(|a| not_a_project_area(a) || a == "node_modules")
+        && !ancestors
+            .iter()
+            .any(|a| not_a_project_area(a) || a == "node_modules")
         && path.parent().is_some_and(|p| has_marker(p, d))
 }
 
@@ -482,10 +501,7 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                     rule_id: rule.id.clone(),
                     category: rule.category.clone(),
                     name: if rule.discover.is_some() {
-                        let project = path
-                            .parent()
-                            .map(display_name)
-                            .unwrap_or_default();
+                        let project = path.parent().map(display_name).unwrap_or_default();
                         format!("{} · {}", rule.name, project)
                     } else if rule.risk == RuleRisk::Info || name.is_empty() {
                         rule.name.clone()
