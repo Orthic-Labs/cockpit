@@ -86,16 +86,6 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
     head -c 65536 /dev/zero > "$qa_home/alpha-folder/fixture.bin"
     qa_out="$RUNNER_TEMP/cockpit-hub-qa"
     rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots"
-    # Diagnostic probe: does the embedded WebDriver answer at all?
-    HOME="$qa_home" RIGHTKIT_QA_NATIVE=1 TAURI_WEBDRIVER_PORT=4445 hub/src-tauri/target/debug/cockpit-hub > "$qa_out/probe.log" 2>&1 &
-    probe_pid=$!
-    sleep 10
-    echo "probe alive: $(kill -0 $probe_pid 2>&1 && echo yes || echo no)"
-    curl -sS -m 5 http://127.0.0.1:4445/status || true; echo
-    curl -sS -m 5 -X POST -H 'content-type: application/json' -d '{"capabilities":{"alwaysMatch":{"browserName":"tauri"}}}' http://127.0.0.1:4445/session | head -c 600 || true; echo
-    lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -i cockpit || true
-    tail -n 30 "$qa_out/probe.log" || true
-    kill $probe_pid 2>/dev/null || true; sleep 1
     qa_rc=0
     HOME="$qa_home" COCKPIT_QA_SHOTS="$qa_out/screenshots" COCKPIT_QA_FIXTURE_NAME=alpha-folder \
       node hub/qa/run.mjs || qa_rc=$?

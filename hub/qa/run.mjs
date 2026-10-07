@@ -30,7 +30,7 @@ fs.writeFileSync(
   ].join("\n"),
 );
 
-const timeoutMs = 540_000;
+const timeoutMs = 300_000;
 const child = spawn(process.execPath, [wdioBin, "run", generated], {
   cwd: app.appRoot,
   stdio: ["ignore", "inherit", "inherit"],

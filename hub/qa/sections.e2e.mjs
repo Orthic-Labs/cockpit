@@ -37,7 +37,8 @@ describe("Cockpit hub sections", () => {
       if (index > 0 || section.id !== "storage") {
         const item = await $(`//nav[contains(@class,'rk-nav')]//button[normalize-space(.)='${section.title}']`);
         await item.waitForExist({ timeout: 10_000 });
-        await item.click();
+        // A DOM click: the embedded driver's native click blocks ~35s waiting on a load event.
+        await browser.execute((el) => el.click(), item);
       }
       lap("navigated");
       try {
