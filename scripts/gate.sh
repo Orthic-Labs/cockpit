@@ -79,6 +79,9 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   echo "Hub QA evidence in $qa_out:"; ls -l "$qa_out" "$qa_out/screenshots" || true
   rm -rf "$qa_home"
   [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
+  # A silent no-op must not pass: demand the receipt and one screenshot per section.
+  [[ -f "$qa_out/evidence.json" ]] && grep -q '"passed"' "$qa_out/evidence.json" || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
+  [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
   # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
   xcodebuild -version
   command -v xcodegen >/dev/null || brew install xcodegen

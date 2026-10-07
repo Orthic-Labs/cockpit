@@ -8,7 +8,7 @@
     "build": "vite build",
     "tauri": "tauri",
     "qa:build": "tauri build --debug --no-bundle --features qa-native",
-    "qa:native": "right-qa native --config right-qa.config.mjs"
+    "qa:native": "node node_modules/@rightkit/qa/dist/cli.js native --config right-qa.config.mjs"
   },
   "dependencies": {
     "@rightkit/app-shell": "0.1.0",
