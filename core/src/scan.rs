@@ -562,9 +562,22 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     report
 }
 
+/// Resolve platform alias prefixes in a scan root (macOS `/var` ->
+/// `/private/var`, `/tmp`, `/etc`) by canonicalizing the parent. The final
+/// component is kept so a root that is itself a symlink is still refused.
+fn canonical_root(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            fs::canonicalize(parent).map_or_else(|_| path.to_path_buf(), |p| p.join(name))
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
 pub fn scan(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {
     // Fresh per-scan cache for every call.
-    scan_with_provider(&CachingStdProvider::new(), paths, options)
+    let roots: Vec<PathBuf> = paths.iter().map(|p| canonical_root(p.as_path())).collect();
+    scan_with_provider(&CachingStdProvider::new(), &roots, options)
 }
 
 pub fn scan_paths(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {
@@ -944,6 +957,33 @@ mod tests {
             error.message.contains("identity changed"),
             "{}",
             error.message
+        );
+    }
+
+    #[test]
+    fn root_given_through_var_alias_is_scanned() {
+        let var = Path::new("/var");
+        if !fs::symlink_metadata(var).is_ok_and(|m| m.file_type().is_symlink()) {
+            return; // platform has no /var symlink
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let canon_var = fs::canonicalize(var).unwrap();
+        let real = canon_var.join(format!("cockpit-alias-{}-{nanos}", std::process::id()));
+        if fs::create_dir(&real).is_err() {
+            return; // not writable here
+        }
+        fs::write(real.join("a.txt"), b"hello").unwrap();
+        let alias = var.join(real.strip_prefix(&canon_var).unwrap());
+        let report = scan(&[alias], &ScanOptions::default());
+        let found = report.entries.iter().any(|e| e.path.ends_with("a.txt"));
+        let _ = fs::remove_dir_all(&real);
+        assert!(
+            found,
+            "entries missing: {:?} {:?}",
+            report.skipped_links, report.inspection_errors
         );
     }
 }

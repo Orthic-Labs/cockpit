@@ -370,6 +370,21 @@ fn root_contains(roots: &[PathBuf], path: &Path) -> bool {
         .any(|root| path == root || path.starts_with(root))
 }
 
+/// Resolve platform alias prefixes (macOS /var -> /private/var) in a caller
+/// supplied path so it compares equal to scanned (canonical) paths. The final
+/// component is kept as-is so a symlink leaf is never followed.
+fn normalize_input(report: &ScanReport, path: &Path) -> PathBuf {
+    if root_contains(&report.roots, path) {
+        return path.to_path_buf();
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            std::fs::canonicalize(parent).map_or_else(|_| path.to_path_buf(), |p| p.join(name))
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
 fn validate_path(report: &ScanReport, path: &Path) -> Result<(), StorageBrowserError> {
     if root_contains(&report.roots, path) {
         Ok(())
@@ -540,6 +555,8 @@ pub fn drilldown_children(
     limit: usize,
 ) -> Result<ChildrenPage, StorageBrowserError> {
     validate_page_bounds(offset, limit)?;
+    let normalized = normalize_input(report, path);
+    let path = normalized.as_path();
     validate_path(report, path)?;
     let entries = canonical_entries(report);
     if !directory_exists(report, path, &entries) {
@@ -581,6 +598,8 @@ pub fn children(
 /// Inspect one scanned entry or folder aggregate without touching the host
 /// filesystem.
 pub fn inspect(report: &ScanReport, path: &Path) -> Result<StorageInspection, StorageBrowserError> {
+    let normalized = normalize_input(report, path);
+    let path = normalized.as_path();
     validate_path(report, path)?;
     let entries = canonical_entries(report);
     let entry = entries.iter().find(|entry| entry.path == path).copied();
