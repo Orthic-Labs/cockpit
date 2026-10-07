@@ -463,13 +463,10 @@ compile_error!("qa-native must never be enabled in release builds");
 
 pub fn run() {
     // QA launches (rightkit-qa) can only pass RIGHTKIT_* keys on macOS, so the isolated
-    // HOME (a fixture folder Storage scans) is derived from the QA data dir here.
+    // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_COCKPIT_QA_HOME.
     #[cfg(all(debug_assertions, feature = "qa-native"))]
-    if let Some(dir) = std::env::var_os("RIGHTKIT_QA_DATA_DIR") {
-        let home = std::path::Path::new(&dir).join("home");
-        if home.is_dir() {
-            std::env::set_var("HOME", home);
-        }
+    if let Some(home) = std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME") {
+        std::env::set_var("HOME", home);
     }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();

@@ -76,7 +76,12 @@ fn hub_sections_render_without_errors() {
         let ws = workspace::create(&sc.scratch("ws"), None, "cockpit-hub").expect("qa workspace");
         // The app derives HOME from RIGHTKIT_QA_DATA_DIR/home (macOS launches carry only
         // RIGHTKIT_* keys), so Storage scans this fixture and never the user's real home.
-        let home = ws.data_dir.join("home");
+        // Not under the system temp dir: the scanner reports no entries for /var/folders.
+        let home = std::env::var_os("RUNNER_TEMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME")).join("Library/Caches"))
+            .join(format!("cockpit-hub-qa-home-{}", ws.run_id));
+        let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(FIXTURE)).expect("fixture dir");
         std::fs::write(home.join(FIXTURE).join("fixture.bin"), vec![0u8; 65536]).expect("fixture file");
 
@@ -88,7 +93,7 @@ fn hub_sections_render_without_errors() {
         let spec = LaunchSpec {
             binary: hub_binary(),
             mode: Mode::Hidden,
-            env: Vec::new(),
+            env: vec![("RIGHTKIT_COCKPIT_QA_HOME".into(), home.to_string_lossy().into_owned())],
             startup_timeout: Duration::from_secs(90),
             label: "Cockpit Hub".into(),
         };
@@ -152,5 +157,6 @@ fn hub_sections_render_without_errors() {
             ctl.screenshot_to(&shot).expect("screenshot");
             sc.keep(&format!("{:02}-{}", index + 1, sec.id), &shot);
         }
+        let _ = std::fs::remove_dir_all(&home);
     });
 }
