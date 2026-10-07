@@ -14,8 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ollamaRelay: OllamaActivityRelay?
     private var lmstudioMetrics: LMStudioMetrics?
     private var preferences: Preferences?
-    private var settings: SettingsWindowController?
-    private var whatsNew: WhatsNewWindowController?
     /// Held for the life of the app: releasing it stops the scheduled checks.
     private var updater: Updater?
     private var thresholdNotifier: ThresholdNotifier?
@@ -377,79 +375,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.phoneLinkServerStatus = serverStatus
             self.phoneLinkServer = server
 
-            let settings = SettingsWindowController(
-                preferences: preferences,
-                // A closure so the sheet re-reads accounts each time it comes
-                // forward; a snapshot here is what made a switched account keep
-                // showing the old address until the app restarted.
-                providers: { [weak store] in store?.providerSummaries ?? [] },
-                updater: updater,
-                signOut: { [weak store] in store?.signOut(providerID: $0) },
-                signIn: { [weak store] in store?.signIn(providerID: $0) ?? false },
-                switchAccount: { [weak store] in
-                    store?.openAccountSource(providerID: $0, switching: true) ?? false
-                },
-                retry: { [weak store] in store?.reauthorize(providerID: $0) },
-                // Both halves, because the stored nudge and the live one are
-                // kept apart on purpose — clearing only the preference would
-                // leave the notch where it is until the next edge change, and
-                // moving only the panel would put it back on relaunch.
-                resetPosition: { [weak fleet, weak preferences] in
-                    preferences?.setOffset(0, for: preferences?.notchEdge ?? .right)
-                    fleet?.apply(alongOffset: 0)
-                },
-                quit: { NSApp.terminate(nil) },
-                previewResetAlert: { [weak self] in
-                    self?.previewUsageResetAlert()
-                },
-                previewSessionLimitAlert: { [weak self] in
-                    self?.previewSessionLimitAlert()
-                },
-                previewWeeklyLimitAlert: { [weak self] in
-                    self?.previewWeeklyLimitAlert()
-                },
-                sendTestNotification: { [weak self] in
-                    self?.sendTestNotification()
-                },
-                usageStore: store, ollamaRelay: relay, lmstudioMetrics: lmstudio,
-                phoneLinkPairing: phonePairing, phoneLinkRegistry: phoneRegistry, phoneLinkServerStatus: serverStatus
-            )
-            // The gear toggles; everything else that opens settings opens it.
-            // Cockpit fork: settings live in the hub. The old window is only the
-            // fallback while no hub is installed.
-            fleet.onOpenSettings = { [weak settings] in
-                if !HubLauncher.open(section: "settings") { settings?.toggle() }
-            }
+            // Cockpit fork: settings live in the hub; Codenotch's window is gone.
+            fleet.onOpenSettings = { _ = HubLauncher.open(section: "settings") }
             fleet.onOpenHub = { _ = HubLauncher.open(section: $0) }
             // A session row answers where it runs by taking you there.
             fleet.onFocusSession = { pid in
                 Task { _ = await SessionFocus.focus(pid: pid) }
             }
-            self.settings = settings
 
-            // What changed, once per version — including on a fresh install,
-            // where it is the introduction.
-            let whatsNew = WhatsNewWindowController(
-                preferences: preferences, version: updater.currentVersion
-            )
-            self.whatsNew = whatsNew
-
-            // An agent app has no dock icon and no window: installed and
-            // launched, it shows four empty rings on a screen edge and no
-            // reason to look at them. Once, on the very first run, it opens the
-            // one place that explains what to connect.
-            //
-            // Sequenced behind What's New rather than beside it: two windows
-            // arriving together is one to dismiss before you can read either.
-            let introduce = { [weak settings] in
-                guard preferences.isFirstLaunch else { return }
-                settings?.show()
-            }
-            // Cockpit fork: no What's New and no first-run Settings window. The
-            // notch appears on its own; Settings stays one click away on it.
-            _ = introduce
-
-            let statusItem = StatusItemController { [weak settings] in settings?.show() }
+            let statusItem = StatusItemController { _ = HubLauncher.open(section: "settings") }
             self.statusItem = statusItem
             // Both are somebody's own click, so neither is answered from
             // anything held: see `UsageFreshness.fromSource`.
@@ -1255,7 +1189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    @MainActor func openSettings() { settings?.show() }
+    @MainActor func openSettings() { _ = HubLauncher.open(section: "settings") }
     @MainActor func openConnectPhone() {
         guard PhoneLink.isAvailable, let pairing = phoneLinkPairing, let registry = phoneLinkRegistry, let status = phoneLinkServerStatus else { return }
         if preferences?.phoneLinkEnabled == false { preferences?.phoneLinkEnabled = true }

@@ -19,9 +19,10 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 | Visibility | Always shown by default; one Codex ring (default `~/.codex` profile) | `Settings/Preferences.swift`, `App/AppDelegate.swift` |
 | Activity | No spinning arc while an agent works; pulse kept for finished/waiting | `Features/ProviderRing.swift` |
 | Size | Small by default, % labels off; compact body (less padding above, below and between rings, slightly less at the sides); inner ring hugs the main track | `Settings/Preferences.swift`, `Notch/NotchLayout.swift` |
-| Hub bridge | Settings + accounts published to `~/Library/Application Support/Cockpit/notch-state.json`; hub commands applied from `hub-commands/`; Darwin notifications both ways. Settings handle opens the hub (old window only as fallback) | `System/HubBridge.swift`, `System/HubLauncher.swift`, `App/AppDelegate.swift` |
+| Hub bridge | Settings + accounts published to `~/Library/Application Support/Cockpit/notch-state.json`; hub commands applied from `hub-commands/`; Darwin notifications both ways. Settings handle opens the hub | `System/HubBridge.swift`, `System/HubLauncher.swift`, `App/AppDelegate.swift` |
 | Clicks | A click on the open notch opens the hub: disks ring → Storage, system ring → Monitor, account ring → Accounts, elsewhere → Storage | `Notch/NotchWindowController.swift`, `Notch/NotchFleet.swift`, `App/AppDelegate.swift` |
 | Login item | Open at login on by default, once, for the copy in /Applications | `App/AppDelegate.swift` |
+| Settings window | Codenotch's Settings and What's New windows removed; every route that opened them opens the hub | `App/AppDelegate.swift`, `Settings/` |
 | First run | No What's New, no first-run Settings window | `App/AppDelegate.swift` |
 | Tests | Codenotch's unit tests not carried over | `project.yml` |
 
