@@ -91,7 +91,7 @@ actor DriveHealth {
                         + ": " + summary(last)))
             }
         } else if let last = disk.last {
-            var parts = [last.isWarning ? L10n.t("Health Warning") : L10n.t("Health OK")]
+            var parts = [last.isWarning ? L10n.t("Warning") : L10n.t("OK")]
             if let percent = last.wearPercent { parts.append(L10n.t("\(percent)% worn")) }
             if let written = last.writtenBytes {
                 parts.append(L10n.t("\(ByteCountFormatter.string(fromByteCount: written, countStyle: .decimal)) written"))
