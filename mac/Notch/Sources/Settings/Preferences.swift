@@ -179,6 +179,25 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(asksProviderOnLook, forKey: Keys.asksProviderOnLook) }
     }
 
+    // Cockpit fork: Mac conveniences. Every one is off until chosen, and each
+    // needs Accessibility (see `Conveniences/ConveniencesService.swift`).
+    @Published var convFinderCutPaste: Bool {
+        didSet { defaults.set(convFinderCutPaste, forKey: Keys.convFinderCutPaste) }
+    }
+    @Published var convWindowMaximizer: Bool {
+        didSet { defaults.set(convWindowMaximizer, forKey: Keys.convWindowMaximizer) }
+    }
+    @Published var convDockClickMinimize: Bool {
+        didSet { defaults.set(convDockClickMinimize, forKey: Keys.convDockClickMinimize) }
+    }
+    @Published var convAutoQuit: Bool {
+        didSet { defaults.set(convAutoQuit, forKey: Keys.convAutoQuit) }
+    }
+    /// Bundle ids opted in to Auto Quit. Empty until the person adds one.
+    @Published var convAutoQuitApps: [String] {
+        didSet { defaults.set(convAutoQuitApps, forKey: Keys.convAutoQuitApps) }
+    }
+
     /// Whether Claude's big ring shows the day's share of the weekly limit
     /// instead of the session. See `DailyPace`.
     @Published var claudeDailyPaceRing: Bool {
@@ -386,6 +405,11 @@ final class Preferences: ObservableObject {
         static let display = "notchDisplay"
         static let resetTimeFormat = "resetTimeFormat"
         static let asksProviderOnLook = "asksProviderOnLook"
+        static let convFinderCutPaste = "convFinderCutPaste"
+        static let convWindowMaximizer = "convWindowMaximizer"
+        static let convDockClickMinimize = "convDockClickMinimize"
+        static let convAutoQuit = "convAutoQuit"
+        static let convAutoQuitApps = "convAutoQuitApps"
         static let scope = "notchScope"
         static let accentColor = "accentColor"
         // A new key, so there is nothing under the old app name to migrate.
@@ -562,6 +586,11 @@ final class Preferences: ObservableObject {
         // choice, and on a rate-limited provider it can cost freshness rather
         // than buy it.
         self.asksProviderOnLook = defaults.bool(forKey: Keys.asksProviderOnLook)
+        self.convFinderCutPaste = defaults.bool(forKey: Keys.convFinderCutPaste)
+        self.convWindowMaximizer = defaults.bool(forKey: Keys.convWindowMaximizer)
+        self.convDockClickMinimize = defaults.bool(forKey: Keys.convDockClickMinimize)
+        self.convAutoQuit = defaults.bool(forKey: Keys.convAutoQuit)
+        self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
         // Off by default: it swaps what Claude's ring means, and that is a
         // choice for whoever budgets their week that way.
         self.claudeDailyPaceRing = defaults.bool(forKey: Keys.claudeDailyPaceRing)

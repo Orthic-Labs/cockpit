@@ -15,7 +15,23 @@ interface Account {
   signInExplanation: string;
 }
 
+interface AppRef {
+  id: string;
+  name: string;
+}
+
+interface Conveniences {
+  accessibility: boolean;
+  inputMonitoring: boolean;
+  wanted: boolean;
+  active: boolean;
+  runningApps: AppRef[];
+  autoQuitApps: AppRef[];
+  cutPasteResults: { name: string; ok: boolean; detail: string }[];
+}
+
 interface NotchState {
+  conveniences?: Conveniences;
   version: string;
   settings: Record<string, string | number | boolean>;
   options: Record<string, string[]>;
@@ -186,10 +202,85 @@ export function Settings({ section }: { section: string }) {
               "Spends a request each time. Useful to check against a provider's own page.")}
             <Row label="Refresh"><Button size="sm" variant="secondary" onClick={() => send({ command: "refresh" })}>Refresh now</Button></Row>
           </Group>
+          {state.conveniences && (
+            <ConveniencesGroup c={state.conveniences} s={s} set={set} send={send} />
+          )}
           <div className="muted small">Cockpit notch {state.version} · built on Codenotch (MIT)</div>
         </>
       )}
     </div>
+  );
+}
+
+function ConveniencesGroup({ c, s, set, send }: {
+  c: Conveniences;
+  s: NotchState["settings"];
+  set: (key: string, value: unknown) => void;
+  send: Send;
+}) {
+  const [pick, setPick] = useState("");
+  const listed = c.autoQuitApps.map((a) => a.id);
+  const addable = c.runningApps.filter((a) => !listed.includes(a.id));
+  const toggle = (key: string, text: string, note: string) => (
+    <Row label={text} note={note}>
+      <Toggle checked={Boolean(s[key])} onChange={(v) => set(key, v)} label={text} />
+    </Row>
+  );
+  return (
+    <Group title="Conveniences">
+      <Row
+        label="Accessibility"
+        note={c.accessibility
+          ? c.active || !c.wanted ? "Allowed." : "Allowed; starting."
+          : "Needs Accessibility permission. Until it is granted these stay off."}
+      >
+        {c.accessibility ? (
+          <span className="muted small">Allowed</span>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={() => send({ command: "openAccessibilitySettings" })}>
+            Open System Settings
+          </Button>
+        )}
+      </Row>
+      {toggle("convFinderCutPaste", "Cut and paste in Finder",
+        "⌘X marks the selected items, ⌘V in a Finder window moves them there. Never overwrites; a name clash gets \" 2\".")}
+      {Boolean(s.convFinderCutPaste) && c.accessibility && !c.inputMonitoring && (
+        <div className="muted small">
+          Key shortcuts may also need Input Monitoring (System Settings, Privacy and Security).
+        </div>
+      )}
+      {c.cutPasteResults.length > 0 && (
+        <div className="muted small">
+          Last paste: {c.cutPasteResults.map((r) => `${r.name} — ${r.ok ? r.detail : `failed: ${r.detail}`}`).join("; ")}
+        </div>
+      )}
+      {toggle("convWindowMaximizer", "Green button maximizes",
+        "Fills the screen without a full-screen Space. Option-click keeps the usual behaviour.")}
+      {toggle("convDockClickMinimize", "Dock click minimizes",
+        "Clicking the Dock icon of the frontmost app minimizes its windows.")}
+      {toggle("convAutoQuit", "Auto Quit",
+        "Quits the apps below when their last window closes. Only apps you add; windows on other Spaces or minimized keep an app open.")}
+      {Boolean(s.convAutoQuit) && (
+        <>
+          {c.autoQuitApps.map((a) => (
+            <Row key={a.id} label={a.name} note={a.id}>
+              <Button size="sm" variant="ghost"
+                onClick={() => set("convAutoQuitApps", listed.filter((id) => id !== a.id))}>Remove</Button>
+            </Row>
+          ))}
+          <Row label="Add a running app">
+            <span className="buttons">
+              <select className="select" value={pick} onChange={(e) => setPick(e.target.value)}>
+                <option value="">Choose…</option>
+                {addable.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+              <Button size="sm" variant="secondary" disabled={!pick}
+                onClick={() => { set("convAutoQuitApps", [...listed, pick]); setPick(""); }}>Add</Button>
+            </span>
+          </Row>
+        </>
+      )}
+    </Group>
   );
 }
 

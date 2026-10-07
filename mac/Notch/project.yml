@@ -49,6 +49,10 @@ targets:
           # copy any unrecognised file into the app bundle's Resources, and a
           # developer README has no business shipping to users.
           - "Vendor/**/README.md"
+    entitlements:
+      path: Cockpit.entitlements
+      properties:
+        com.apple.security.automation.apple-events: true
     info:
       path: Sources/Info.plist
       properties:
@@ -74,6 +78,7 @@ targets:
           - uz
           - tr
         LSMinimumSystemVersion: "26.0"
+        NSAppleEventsUsageDescription: "Cockpit asks Finder which items and folder you have selected so Cut and Paste can move files."
         # Sources/Info.plist is *generated* from this block, so editing that
         # file directly is undone by the next `make gen`. Pointing both at the
         # build settings keeps one place to bump.
