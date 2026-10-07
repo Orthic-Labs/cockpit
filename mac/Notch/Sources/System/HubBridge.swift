@@ -25,6 +25,8 @@ final class HubBridge {
         /// Mac conveniences: permission state, running apps, Auto Quit list.
         var conveniences: () -> [String: Any] = { [:] }
         var openAccessibilitySettings: () -> Void = {}
+        /// Why the launcher hotkey is not working, when it is not.
+        var launcherStatus: () -> String? = { nil }
     }
 
     private let preferences: Preferences
@@ -124,6 +126,7 @@ final class HubBridge {
             "accounts": accounts,
             "providerOrder": preferences.providerOrder,
             "conveniences": actions.conveniences(),
+            "launcherStatus": actions.launcherStatus() ?? NSNull(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         else { return }
@@ -274,6 +277,8 @@ final class HubBridge {
         "convDockClickMinimize": bool(\.convDockClickMinimize),
         "convAutoQuit": bool(\.convAutoQuit),
         "convAutoQuitApps": stringList(\.convAutoQuitApps),
+        "launcherEnabled": bool(\.launcherEnabled),
+        "launcherHotkey": choice(\.launcherHotkey),
     ]
 }
 

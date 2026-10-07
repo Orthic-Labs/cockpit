@@ -198,6 +198,15 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(convAutoQuitApps, forKey: Keys.convAutoQuitApps) }
     }
 
+    /// Cockpit fork: the launcher is off until switched on.
+    @Published var launcherEnabled: Bool {
+        didSet { defaults.set(launcherEnabled, forKey: Keys.launcherEnabled) }
+    }
+
+    @Published var launcherHotkey: LauncherHotkeyChoice {
+        didSet { defaults.set(launcherHotkey.rawValue, forKey: Keys.launcherHotkey) }
+    }
+
     /// Whether Claude's big ring shows the day's share of the weekly limit
     /// instead of the session. See `DailyPace`.
     @Published var claudeDailyPaceRing: Bool {
@@ -410,6 +419,8 @@ final class Preferences: ObservableObject {
         static let convDockClickMinimize = "convDockClickMinimize"
         static let convAutoQuit = "convAutoQuit"
         static let convAutoQuitApps = "convAutoQuitApps"
+        static let launcherEnabled = "launcherEnabled"
+        static let launcherHotkey = "launcherHotkey"
         static let scope = "notchScope"
         static let accentColor = "accentColor"
         // A new key, so there is nothing under the old app name to migrate.
@@ -591,6 +602,9 @@ final class Preferences: ObservableObject {
         self.convDockClickMinimize = defaults.bool(forKey: Keys.convDockClickMinimize)
         self.convAutoQuit = defaults.bool(forKey: Keys.convAutoQuit)
         self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
+        self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)
+        self.launcherHotkey = defaults.string(forKey: Keys.launcherHotkey)
+            .flatMap(LauncherHotkeyChoice.init(rawValue:)) ?? .optionSpace
         // Off by default: it swaps what Claude's ring means, and that is a
         // choice for whoever budgets their week that way.
         self.claudeDailyPaceRing = defaults.bool(forKey: Keys.claudeDailyPaceRing)
