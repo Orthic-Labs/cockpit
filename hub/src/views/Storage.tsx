@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, ConfirmDialog, EmptyState } from "@rightkit/app-shell/react";
 import { Activity, ChevronDown, ChevronRight, File, Folder as FolderIcon, HardDrive, Info, RefreshCw, ShieldCheck, Terminal, Undo2, Usb } from "lucide-react";
 import {
@@ -30,6 +30,13 @@ interface Group {
   reason: string;
   discovered: boolean;
 }
+
+/** Findings survive leaving and returning to Storage; they are only rescanned on demand. */
+let cachedReport: CleanupReport | null = null;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const when = (secs: number) =>
+  new Date(secs * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -67,13 +74,17 @@ export function Storage() {
   const [results, setResults] = useState<Row[] | null>(null);
   const [query, setQuery] = useState("");
   const [growth, setGrowth] = useState<Growth | null>(null);
-  const [report, setReport] = useState<CleanupReport | null>(null);
+  const [report, setReport] = useState<CleanupReport | null>(cachedReport);
   const [showAll, setShowAll] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<{ label: string; items: CleanupFinding[] } | null>(null);
   const [undo, setUndo] = useState<{ id: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  // Latest scan request; an older one that comes back (cancelled) is ignored.
+  const scanToken = useRef(0);
+  const alive = useRef(true);
   const [error, setError] = useState<string | null>(null);
 
   const run = async (work: () => Promise<void>) => {
@@ -88,35 +99,102 @@ export function Storage() {
     }
   };
 
-  const loadFindings = () =>
-    api.cleanupScan().then(setReport).catch(() => setReport(null));
+  const loadFindings = (force = false) => {
+    if (cachedReport && !force) {
+      setReport(cachedReport);
+      return;
+    }
+    api
+      .cleanupScan()
+      .then((r) => {
+        cachedReport = r;
+        setReport(r);
+      })
+      .catch(() => setReport(null));
+  };
+
+  const isInternal = (mount: string, list: Volume[]) => {
+    const volume = list.find((v) => v.mount_point === mount);
+    return !volume || volume.internal;
+  };
+
+  // Show data that is already scanned: pick the matching drive card, then the
+  // growth line (home only) and, once, the cleanup findings.
+  const show = (f: Folder, list: Volume[]) => {
+    const external = list.find((v) => !v.internal && v.mount_point === f.root);
+    const mount = external ? external.mount_point : (list.find((v) => v.internal)?.mount_point ?? "/");
+    setActive(mount);
+    setFolder(f);
+    if (external) {
+      setGrowth(null);
+    } else {
+      api.growth().then(setGrowth).catch(() => setGrowth(null));
+      loadFindings();
+    }
+  };
 
   // The startup disk is scanned from the home folder; other volumes from their root.
-  const scanVolume = (mount: string, list: Volume[] = volumes) =>
-    run(async () => {
-      setActive(mount);
-      setQuery("");
-      const volume = list.find((v) => v.mount_point === mount);
-      const internal = !volume || volume.internal;
-      setFolder(await api.scan(internal ? undefined : mount));
-      if (internal) {
-        // Not awaited: the list is usable while these load.
-        api.growth().then(setGrowth).catch(() => setGrowth(null));
-      } else {
-        setGrowth(null);
-      }
-    });
+  // Starting a scan cancels the one running; there is never more than one.
+  const scanVolume = async (mount: string, list: Volume[] = volumes) => {
+    const token = ++scanToken.current;
+    setActive(mount);
+    setQuery("");
+    setError(null);
+    setScanning(true);
+    try {
+      const f = await api.scan(isInternal(mount, list) ? undefined : mount);
+      if (token !== scanToken.current || !alive.current) return;
+      show(f, list);
+      setScanning(false);
+    } catch (e) {
+      if (token !== scanToken.current || !alive.current) return;
+      setScanning(false);
+      if (!String(e).includes("cancelled")) setError(String(e));
+    }
+  };
+
+  // A scan started before this view was reopened keeps running; wait for it.
+  const follow = async (list: Volume[]) => {
+    const token = ++scanToken.current;
+    setScanning(true);
+    for (;;) {
+      await sleep(1500);
+      if (token !== scanToken.current || !alive.current) return;
+      const status = await api.scanStatus().catch(() => null);
+      if (status && !status.running) break;
+    }
+    const f = await api.lastScan().catch(() => null);
+    if (token !== scanToken.current || !alive.current) return;
+    if (f) show(f, list);
+    setScanning(false);
+  };
+
   const open = (path: string) => run(async () => setFolder(await api.children(path)));
 
   useEffect(() => {
-    api
-      .volumes()
-      .then((list) => {
-        setVolumes(list);
-        scanVolume("/", list);
-      })
-      .catch(() => scanVolume("/", []));
-    loadFindings();
+    alive.current = true;
+    (async () => {
+      const list = await api.volumes().catch(() => [] as Volume[]);
+      if (!alive.current) return;
+      setVolumes(list);
+      const status = await api.scanStatus().catch(() => null);
+      if (!alive.current) return;
+      if (status?.running) {
+        const root = status.running_root;
+        const external = list.find((v) => !v.internal && v.mount_point === root);
+        setActive(external ? external.mount_point : (list.find((v) => v.internal)?.mount_point ?? "/"));
+        follow(list);
+        return;
+      }
+      // Launch shows the last saved scan; a fresh scan starts only when there is none.
+      const saved = await api.lastScan().catch(() => null);
+      if (!alive.current) return;
+      if (saved) show(saved, list);
+      else scanVolume("/", list);
+    })();
+    return () => {
+      alive.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -174,7 +252,7 @@ export function Storage() {
         setError(result.skipped.map((s) => `${shortPath(s.path)}: ${s.reason}`).join("\n"));
       }
       api.volumes().then(setVolumes).catch(() => {});
-      await loadFindings();
+      loadFindings(true);
     });
 
   const undoMove = () =>
@@ -182,7 +260,7 @@ export function Storage() {
       if (!undo) return;
       await api.cleanupRestore(undo.id);
       setUndo(null);
-      await loadFindings();
+      loadFindings(true);
     });
 
   const installers = volumes.filter((v) => v.disk_image);
@@ -213,7 +291,7 @@ export function Storage() {
             <button
               key={v.mount_point}
               className={`volume-card${v.mount_point === active ? " active" : ""}`}
-              onClick={() => scanVolume(v.mount_point)}
+              onClick={() => (scanning && v.mount_point === active ? undefined : scanVolume(v.mount_point))}
               disabled={busy}
               title={v.mount_point}
             >
@@ -366,8 +444,11 @@ export function Storage() {
 
       <div className="toolbar">
         <input className="search" placeholder="Search files" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <Button size="sm" onClick={() => scanVolume(active)} disabled={busy}>
-          <RefreshCw size={12} /> {busy ? "Scanning…" : "Rescan"}
+        <span className="muted small">
+          {scanning ? "Scanning…" : folder ? `Scanned ${when(folder.scanned_at)}${folder.from_snapshot ? " (saved scan)" : ""} ·` : ""}
+        </span>
+        <Button size="sm" onClick={() => scanVolume(active)} disabled={busy || scanning}>
+          <RefreshCw size={12} /> Rescan
         </Button>
       </div>
 
@@ -398,8 +479,8 @@ export function Storage() {
         <div className="muted small">This is a very large folder, so sizes may be a little low.</div>
       )}
       {error && <div className="error" style={{ whiteSpace: "pre-wrap" }}>{error}</div>}
-      {!folder && busy && <div className="muted">Scanning…</div>}
-      {folder && rows.length === 0 && !busy && (
+      {!folder && scanning && <div className="muted">Scanning…</div>}
+      {folder && rows.length === 0 && !busy && !scanning && (
         <EmptyState icon={<FolderIcon size={22} />} title={results ? "No matches" : "This folder is empty"} />
       )}
 
@@ -414,7 +495,7 @@ export function Storage() {
                   key={r.path}
                   className={`row folder-row${r.is_dir && !results ? " clickable" : ""}`}
                   onClick={() => (r.is_dir && !results ? open(r.path) : undefined)}
-                  onDoubleClick={() => api.reveal(r.path)}
+                  onDoubleClick={() => (r.summary ? undefined : api.reveal(r.path))}
                   title={`${r.path}\n${kind.label}`}
                 >
                   <span className="name">

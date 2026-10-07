@@ -8,14 +8,12 @@ mod cleanup;
 
 mod growth;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Mutex;
+mod scanner;
 
-use cockpit_core::storage_browser::{self, SearchRequest};
-use cockpit_core::{EntryKind, ScanOptions, ScanReport};
+use std::path::PathBuf;
+
 use serde::Serialize;
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager};
 
 // The notch's settings bridge (see mac/Notch/Sources/System/HubBridge.swift).
 // Darwin notifications through libSystem; no payloads.
@@ -35,133 +33,8 @@ fn post(name: &str) {
     }
 }
 
-#[derive(Default)]
-struct Hub {
-    report: Mutex<Option<ScanReport>>,
-}
-
-#[derive(Serialize)]
-struct Row {
-    path: PathBuf,
-    name: String,
-    is_dir: bool,
-    bytes: u64,
-}
-
-#[derive(Serialize)]
-struct Folder {
-    path: PathBuf,
-    root: PathBuf,
-    rows: Vec<Row>,
-    total_children: usize,
-    incomplete: bool,
-    /// Some folders could not be read (permission): Full Disk Access helps.
-    needs_access: bool,
-    /// A size limit was reached, so totals may be a little low.
-    limited: bool,
-    /// Label for the scan root in the breadcrumbs.
-    root_label: String,
-}
-
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
-}
-
-/// Children of `path` from the held scan, largest first. Folder sizes are the
-/// scan's per-folder totals; file sizes are their attributed allocation.
-fn folder(report: &ScanReport, path: &PathBuf) -> Result<Folder, String> {
-    // The browser pages at most 1,000 children per request.
-    let mut items = Vec::new();
-    let mut offset = 0;
-    let (total_children, incomplete) = loop {
-        let page = storage_browser::drilldown_children(report, path, offset, 1_000)
-            .map_err(|e| e.to_string())?;
-        items.extend(page.items);
-        offset += 1_000;
-        if !page.has_more || offset >= 20_000 {
-            break (page.total_children, page.incomplete);
-        }
-    };
-    let totals: HashMap<&PathBuf, u64> = report
-        .folders
-        .iter()
-        .map(|f| (&f.path, f.attributed_allocation_bytes))
-        .collect();
-    let mut rows: Vec<Row> = items
-        .into_iter()
-        .map(|item| {
-            let is_dir = item.kind == EntryKind::Directory;
-            let bytes = if is_dir {
-                totals.get(&item.path).copied().unwrap_or(item.attributed_allocation_size)
-            } else {
-                item.attributed_allocation_size
-            };
-            Row { path: item.path, name: item.name, is_dir, bytes }
-        })
-        .collect();
-    rows.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-    rows.truncate(200);
-    Ok(Folder {
-        path: path.clone(),
-        root: report.roots.first().cloned().unwrap_or_default(),
-        rows,
-        total_children,
-        incomplete: incomplete && !material(report).is_empty(),
-        needs_access: needs_access(report),
-        limited: limited(report),
-        root_label: root_label(report),
-    })
-}
-
-fn root_label(report: &ScanReport) -> String {
-    let root = report.roots.first().cloned().unwrap_or_default();
-    if root == home() {
-        "Home".into()
-    } else if root == std::path::Path::new("/") {
-        "Macintosh HD".into()
-    } else {
-        root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into())
-    }
-}
-
-fn denied(text: &str) -> bool {
-    let t = text.to_lowercase();
-    t.contains("denied") || t.contains("not permitted")
-}
-
-/// Folders that could not be read for lack of permission. Placeholders
-/// (iCloud files not stored locally) are expected and never counted.
-fn needs_access(report: &ScanReport) -> bool {
-    report.inspection_errors.iter().any(|e| denied(&e.message))
-        || report
-            .incomplete_reasons
-            .iter()
-            .any(|r| !r.to_lowercase().contains("placeholder") && denied(r))
-}
-
-fn limited(report: &ScanReport) -> bool {
-    report.incomplete_reasons.iter().any(|r| {
-        let r = r.to_lowercase();
-        !r.contains("placeholder") && (r.contains("budget") || r.contains("entry limit"))
-    })
-}
-
-/// Reasons that make folder totals low: limits, budgets and unreadable
-/// folders. Single entries without measurable size (sockets, special files)
-/// do not change the totals and are not reported as a partial scan.
-fn material(report: &ScanReport) -> Vec<String> {
-    report
-        .incomplete_reasons
-        .iter()
-        .filter(|r| {
-            let r = r.to_lowercase();
-            !r.contains("placeholder")
-                && ["limit", "budget", "not inspectable", "denied", "not permitted"]
-                    .iter()
-                    .any(|k| r.contains(k))
-        })
-        .map(|r| r.replace(&home().display().to_string(), "~"))
-        .collect()
 }
 
 #[tauri::command]
@@ -185,50 +58,6 @@ async fn processes() -> Result<serde_json::Value, String> {
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-/// Scan `path` (default: home), keep the report, and return its top level.
-#[tauri::command]
-async fn scan(path: Option<String>, hub: State<'_, Hub>) -> Result<Folder, String> {
-    let root = path.map(PathBuf::from).unwrap_or_else(home);
-    let scan_root = root.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || {
-        let options = ScanOptions { max_entries: 2_000_000, ..ScanOptions::default() };
-        cockpit_core::scan(&[scan_root], &options)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    if root == home() {
-        growth::save_in_background(&report);
-    }
-    let result = folder(&report, &root);
-    *hub.report.lock().map_err(|e| e.to_string())? = Some(report);
-    result
-}
-
-#[tauri::command]
-fn children(path: String, hub: State<'_, Hub>) -> Result<Folder, String> {
-    let guard = hub.report.lock().map_err(|e| e.to_string())?;
-    let report = guard.as_ref().ok_or("scan first")?;
-    folder(report, &PathBuf::from(path))
-}
-
-#[tauri::command]
-fn search(query: String, hub: State<'_, Hub>) -> Result<Vec<Row>, String> {
-    let guard = hub.report.lock().map_err(|e| e.to_string())?;
-    let report = guard.as_ref().ok_or("scan first")?;
-    let request = SearchRequest { query, limit: 100, ..SearchRequest::default() };
-    let page = storage_browser::search(report, &request).map_err(|e| e.to_string())?;
-    Ok(page
-        .items
-        .into_iter()
-        .map(|item| Row {
-            is_dir: item.kind == EntryKind::Directory,
-            bytes: item.attributed_allocation_size,
-            name: item.name,
-            path: item.path,
-        })
-        .collect())
 }
 
 /// The notch's last published settings and accounts.
@@ -501,7 +330,6 @@ pub fn run() {
     builder
         // RightKit's shell asks the OS plugin for the platform (traffic-light room on macOS).
         .plugin(tauri_plugin_os::init())
-        .manage(Hub::default())
         .setup(|app| {
             // Hidden QA runs stay accessory and must not take focus; otherwise
             // the open hub shows in the Dock until its window is closed.
@@ -524,7 +352,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scanner::scan, scanner::scan_status, scanner::last_scan, growth::growth, scanner::children, scanner::search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,
             cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())

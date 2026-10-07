@@ -188,6 +188,19 @@ pub struct ScanOptions {
     pub reject_placeholders: bool,
     /// Optional readings taken by the caller before/after this read-only scan.
     pub volume_deltas: Vec<VolumeDelta>,
+    /// Lean mode for interactive callers: when set, a file is kept as a
+    /// `ScannedEntry` only if it is among the `n` largest files (by attributed
+    /// allocation) of its folder and at least `min_kept_file_bytes`. Folder
+    /// totals and `accounting` still count every file; directories are always
+    /// kept. Kept files carry no reclaim estimate, file id or owner.
+    #[serde(default)]
+    pub keep_files_per_folder: Option<usize>,
+    #[serde(default)]
+    pub min_kept_file_bytes: u64,
+    /// Set from another thread to stop the walk; the report then carries a
+    /// "scan cancelled" reason and should be discarded.
+    #[serde(skip)]
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for ScanOptions {
@@ -197,6 +210,9 @@ impl Default for ScanOptions {
             max_entries: 100_000,
             reject_placeholders: true,
             volume_deltas: Vec::new(),
+            keep_files_per_folder: None,
+            min_kept_file_bytes: 0,
+            cancel: None,
         }
     }
 }

@@ -35,6 +35,8 @@ export interface Row {
   name: string;
   is_dir: boolean;
   bytes: number;
+  /** A "smaller files" total, not a real path. */
+  summary?: boolean;
 }
 
 export interface Folder {
@@ -46,6 +48,19 @@ export interface Folder {
   needs_access: boolean;
   limited: boolean;
   root_label: string;
+  /** Unix seconds when this data was scanned. */
+  scanned_at: number;
+  /** Shown from the last saved scan rather than a scan made this session. */
+  from_snapshot: boolean;
+}
+
+export interface ScanStatus {
+  running: boolean;
+  running_root: string | null;
+  has_index: boolean;
+  root: string | null;
+  scanned_at: number | null;
+  from_snapshot: boolean;
 }
 
 export interface Volume {
@@ -189,6 +204,8 @@ export const api = {
   status: () => invoke<Status>("status"),
   processes: () => invoke<Process[]>("processes"),
   scan: (path?: string) => invoke<Folder>("scan", { path: path ?? null }),
+  scanStatus: () => invoke<ScanStatus>("scan_status"),
+  lastScan: () => invoke<Folder | null>("last_scan"),
   growth: () => invoke<Growth>("growth"),
   children: (path: string) => invoke<Folder>("children", { path }),
   search: (query: string) => invoke<Row[]>("search", { query }),

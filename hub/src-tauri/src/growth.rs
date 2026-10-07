@@ -14,7 +14,7 @@ use cockpit_core::ScanReport;
 use serde::Serialize;
 
 /// Snapshots of the same roots kept after a save.
-const KEEP: usize = 10;
+const KEEP: usize = 4;
 /// Grown / shrunk folders returned.
 const GROWN: usize = 5;
 const SHRUNK: usize = 3;
@@ -61,6 +61,24 @@ pub fn save_in_background(report: &ScanReport) {
         let _ = save_and_prune(slim);
         PENDING.fetch_sub(1, Ordering::SeqCst);
     });
+}
+
+/// The newest saved scan of exactly `root`, with its unix time. Used to show
+/// something on launch without scanning.
+pub fn latest_scan(root: &Path) -> Option<(ScanReport, u64)> {
+    // A save in progress finishes first.
+    for _ in 0..300 {
+        if PENDING.load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let dir = store::default_directory().ok()?;
+    let all = store::history(&dir).ok()?;
+    all.into_iter()
+        .rev()
+        .find(|s| s.report.roots.len() == 1 && s.report.roots[0] == root && !s.report.folders.is_empty())
+        .map(|s| (s.report, s.created_at))
 }
 
 fn save_and_prune(report: ScanReport) -> Result<(), String> {

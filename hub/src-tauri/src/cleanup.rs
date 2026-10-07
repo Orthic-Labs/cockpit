@@ -20,6 +20,8 @@ fn move_to_trash(path: &Path) -> Result<(), String> {
 #[tauri::command]
 pub async fn cleanup_scan() -> Result<cs::Report, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        // Never alongside a storage scan.
+        let _exclusive = crate::scanner::exclusive();
         let running = cs::running_process_names();
         cs::scan(&home(), &running)
     })

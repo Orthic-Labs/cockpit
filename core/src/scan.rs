@@ -107,16 +107,16 @@ struct ScanState {
     volumes: BTreeMap<u64, CachedVolume>,
     /// Directory (st_dev, st_ino) recorded at inspection time.
     #[cfg(unix)]
-    directories: BTreeMap<PathBuf, (u64, u64)>,
+    directories: HashMap<PathBuf, (u64, u64)>,
 }
 
 impl ScanState {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             #[cfg(target_os = "macos")]
             volumes: BTreeMap::new(),
             #[cfg(unix)]
-            directories: BTreeMap::new(),
+            directories: HashMap::new(),
         }
     }
 }
@@ -191,16 +191,26 @@ fn inspect_with(
     // conservative proxy. This cannot detect a swap between enumeration and
     // the first lstat — the provider seam does not return enumeration-time
     // identity — so it is a conservative post-check only.
-    let after = fs::symlink_metadata(path).map_err(map_io)?;
-    #[cfg(unix)]
-    let same_identity = {
-        use std::os::unix::fs::MetadataExt;
-        after.dev() == metadata.dev()
-            && after.ino() == metadata.ino()
-            && after.file_type() == metadata.file_type()
+    //
+    // Only directories are rechecked: a regular file is read once (one lstat
+    // per entry), and a directory that is swapped is refused again before it
+    // is listed (`children_bounded`, `directory_unchanged`).
+    let same_identity = if kind == EntryKind::Directory {
+        let after = fs::symlink_metadata(path).map_err(map_io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            after.dev() == metadata.dev()
+                && after.ino() == metadata.ino()
+                && after.file_type() == metadata.file_type()
+        }
+        #[cfg(not(unix))]
+        {
+            after.file_type() == metadata.file_type()
+        }
+    } else {
+        true
     };
-    #[cfg(not(unix))]
-    let same_identity = after.file_type() == metadata.file_type();
     if !same_identity {
         return Err(FsError::new(format!(
             "entry identity changed during inspection: {}",
@@ -269,7 +279,7 @@ pub(crate) struct CachingStdProvider {
 }
 
 impl CachingStdProvider {
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(ScanState::new()),
         }
@@ -292,6 +302,15 @@ impl CachingStdProvider {
             return platform::inspect(path, metadata);
         }
         let dev = metadata.dev();
+        // A file shares its parent directory's mount: once this st_dev has a
+        // validated volume (checked with statfs at a directory), reuse it
+        // instead of a statfs per file.
+        if kind == EntryKind::File {
+            let hit = self.lock().volumes.get(&dev).map(|c| c.volume.clone());
+            if let Some(volume) = hit {
+                return cached_native_info(path, metadata, volume);
+            }
+        }
         let key = mount_key(path, metadata);
         if let Some(key) = key.as_ref() {
             let mut state = self.lock();
@@ -358,7 +377,12 @@ fn cached_native_info(
     platform::NativeInfo {
         file_id: Some(FileIdentity {
             volume: volume.clone(),
-            id: format!("{}:{}", metadata.dev(), metadata.ino()),
+            id: {
+                use std::fmt::Write;
+                let mut id = String::with_capacity(24);
+                let _ = write!(id, "{}:{}", metadata.dev(), metadata.ino());
+                id
+            },
         }),
         volume,
         volume_stable: true,
@@ -402,7 +426,7 @@ impl FilesystemProvider for CachingStdProvider {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let expected = self.lock().directories.get(path).copied();
+            let expected = self.lock().directories.remove(path);
             if let Some(expected) = expected {
                 let current = fs::symlink_metadata(path).map_err(map_io)?;
                 if (current.dev(), current.ino()) != expected {
@@ -450,38 +474,42 @@ pub fn scan_with_provider<P: FilesystemProvider>(
         skipped_links: Vec::new(),
         incomplete_reasons: Vec::new(),
     };
-    let mut seen_paths = BTreeSet::new();
-    let mut seen_files: HashMap<FileIdentity, PathBuf> = HashMap::new();
-    let mut seen_dirs: HashSet<FileIdentity> = HashSet::new();
-    let mut volumes = BTreeSet::new();
+    let mut ctx = Ctx {
+        seen_paths: (roots.len() > 1).then(HashSet::new),
+        count: 0,
+        seen_files: HashMap::new(),
+        seen_dirs: HashSet::new(),
+        volumes: BTreeSet::new(),
+        attributed_by_volume: BTreeMap::new(),
+        folders: Vec::new(),
+        reclaim_reasons: HashSet::new(),
+        keep: options.keep_files_per_folder,
+        cancelled: false,
+    };
+    let started = std::time::Instant::now();
     for root in roots {
-        if seen_paths.len() >= options.max_entries {
+        if ctx.count >= options.max_entries {
             report
                 .incomplete_reasons
                 .push("entry limit reached across roots".into());
             break;
         }
-        walk(
-            provider,
-            root,
-            0,
-            options,
-            None,
-            &mut report,
-            &mut seen_paths,
-            &mut seen_files,
-            &mut seen_dirs,
-            &mut volumes,
-        );
+        if ctx.cancelled {
+            break;
+        }
+        let _ = walk(provider, root, 0, options, None, &mut report, &mut ctx);
     }
+    if ctx.cancelled {
+        report.incomplete_reasons.push("scan cancelled".into());
+    }
+    let Ctx {
+        volumes,
+        attributed_by_volume,
+        folders,
+        count: seen_count,
+        ..
+    } = ctx;
     let mut usage_by_volume = BTreeMap::new();
-    let mut attributed_by_volume: BTreeMap<VolumeIdentity, u64> = BTreeMap::new();
-    for entry in &report.entries {
-        let value = attributed_by_volume
-            .entry(entry.metadata.volume.clone())
-            .or_default();
-        *value = value.saturating_add(entry.attributed_allocation_bytes);
-    }
     for volume in volumes {
         match provider.volume_usage(&volume) {
             Ok(usage) => {
@@ -520,46 +548,72 @@ pub fn scan_with_provider<P: FilesystemProvider>(
             .reasons
             .push("inspection incomplete; full-selection upper bound unavailable".into());
     }
-    let mut folders: BTreeMap<PathBuf, FolderAccounting> = report
-        .entries
-        .iter()
-        .filter(|entry| entry.metadata.kind == EntryKind::Directory)
-        .map(|entry| {
-            (
-                entry.path.clone(),
-                FolderAccounting {
-                    path: entry.path.clone(),
-                    volume: entry.metadata.volume.clone(),
-                    logical_bytes: 0,
-                    attributed_allocation_bytes: 0,
-                    incomplete: report.accounting.incomplete,
-                },
-            )
-        })
-        .collect();
-    for entry in report
-        .entries
-        .iter()
-        .filter(|entry| entry.metadata.kind == EntryKind::File)
-    {
-        for ancestor in entry.path.ancestors().skip(1) {
-            if let Some(folder) = folders.get_mut(ancestor)
-                && folder.volume == entry.metadata.volume
-            {
-                folder.logical_bytes = folder.logical_bytes.saturating_add(entry.logical_bytes);
-                folder.attributed_allocation_bytes = folder
-                    .attributed_allocation_bytes
-                    .saturating_add(entry.attributed_allocation_bytes);
-            }
-        }
+    // Folder totals were summed bottom-up during the walk (one add per file,
+    // no per-ancestor path lookups).
+    let incomplete = report.accounting.incomplete;
+    report.folders = folders;
+    for folder in &mut report.folders {
+        folder.incomplete = incomplete;
     }
-    report.folders = folders.into_values().collect();
     report.folders.sort_by(|a, b| {
         b.attributed_allocation_bytes
             .cmp(&a.attributed_allocation_bytes)
             .then_with(|| a.path.cmp(&b.path))
     });
+    if std::env::var_os("COCKPIT_SCAN_LOG").is_some() {
+        eprintln!(
+            "scan: {} entries visited, {} kept, {} folders, {} ms{}",
+            seen_count,
+            report.entries.len(),
+            report.folders.len(),
+            started.elapsed().as_millis(),
+            if report.incomplete_reasons.iter().any(|r| r == "scan cancelled") {
+                " (cancelled)"
+            } else {
+                ""
+            }
+        );
+    }
     report
+}
+
+/// Mutable traversal state shared by one scan.
+struct Ctx {
+    /// Only tracked for several roots (overlapping roots would otherwise
+    /// visit a subtree twice); a single root is a tree.
+    seen_paths: Option<HashSet<PathBuf>>,
+    count: usize,
+    /// Hashed (volume, file id) -> first path (empty in lean mode).
+    seen_files: HashMap<u128, PathBuf>,
+    seen_dirs: HashSet<FileIdentity>,
+    volumes: BTreeSet<VolumeIdentity>,
+    attributed_by_volume: BTreeMap<VolumeIdentity, u64>,
+    folders: Vec<FolderAccounting>,
+    reclaim_reasons: HashSet<&'static str>,
+    keep: Option<usize>,
+    cancelled: bool,
+}
+
+impl Ctx {
+    fn add_attributed(&mut self, volume: &VolumeIdentity, bytes: u64) {
+        if let Some(slot) = self.attributed_by_volume.get_mut(volume) {
+            *slot = slot.saturating_add(bytes);
+        } else {
+            self.attributed_by_volume.insert(volume.clone(), bytes);
+        }
+    }
+}
+
+/// 128-bit digest of a file identity, used instead of storing the identity.
+fn identity_key(id: &FileIdentity) -> u128 {
+    use std::hash::{Hash, Hasher};
+    let mut a = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut a);
+    let mut b = std::collections::hash_map::DefaultHasher::new();
+    0x9e37_79b9_7f4a_7c15_u64.hash(&mut b);
+    id.id.hash(&mut b);
+    id.volume.hash(&mut b);
+    (u128::from(a.finish()) << 64) | u128::from(b.finish())
 }
 
 /// Resolve the macOS top-level aliases `/var`, `/tmp` and `/etc` (symlinks to
@@ -595,30 +649,63 @@ pub fn scan_paths(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {
     scan(paths, options)
 }
 
-#[allow(clippy::too_many_arguments)] // Traversal shares bounded scan state; no public API exposes these parameters.
+/// What one visited entry contributes to its parent folder.
+#[derive(Default)]
+struct Sub {
+    logical: u64,
+    attributed: u64,
+    /// Lean mode: a file worth keeping, handed to the parent for ranking.
+    candidate: Option<ScannedEntry>,
+}
+
+impl Sub {
+    const fn empty() -> Self {
+        Self {
+            logical: 0,
+            attributed: 0,
+            candidate: None,
+        }
+    }
+}
+
 fn walk<P: FilesystemProvider>(
     provider: &P,
     path: PathBuf,
     depth: usize,
     options: &ScanOptions,
-    expected_volume: Option<VolumeIdentity>,
+    expected_volume: Option<&VolumeIdentity>,
     report: &mut ScanReport,
-    seen_paths: &mut BTreeSet<PathBuf>,
-    seen_files: &mut HashMap<FileIdentity, PathBuf>,
-    seen_dirs: &mut HashSet<FileIdentity>,
-    volumes: &mut BTreeSet<VolumeIdentity>,
-) {
-    if seen_paths.len() >= options.max_entries {
+    ctx: &mut Ctx,
+) -> Sub {
+    if options
+        .cancel
+        .as_ref()
+        .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    {
+        ctx.cancelled = true;
+    }
+    if ctx.cancelled {
+        return Sub::empty();
+    }
+    if ctx.count >= options.max_entries {
         report
             .incomplete_reasons
             .push(format!("entry limit {} reached", options.max_entries));
-        return;
+        return Sub::empty();
     }
-    if !seen_paths.insert(path.clone()) {
-        return;
+    if let Some(seen) = ctx.seen_paths.as_mut()
+        && !seen.insert(path.clone())
+    {
+        return Sub::empty();
     }
-    // Recheck ancestors before each inspection: a previously visited parent may change.
-    if let Some((ancestor, uninspectable)) = symlink_ancestor(provider, &path, report) {
+    ctx.count += 1;
+    // Ancestors are verified once per root. Below a root every directory is
+    // rechecked immediately before and after it is listed (and the listing
+    // itself refuses symlinked components), so re-inspecting every ancestor
+    // of every entry only repeated that work.
+    if depth == 0
+        && let Some((ancestor, uninspectable)) = symlink_ancestor(provider, &path, report)
+    {
         if uninspectable {
             report.incomplete_reasons.push(format!(
                 "ancestor not inspectable, root skipped: {}",
@@ -630,7 +717,7 @@ fn walk<P: FilesystemProvider>(
                 reason: "symlink or placeholder ancestor traversal disabled".into(),
             });
         }
-        return;
+        return Sub::empty();
     }
     let (mut metadata, provider_reasons) = match provider.inspect_detailed(&path) {
         Ok(value) => value,
@@ -640,7 +727,7 @@ fn walk<P: FilesystemProvider>(
                 operation: "inspect".into(),
                 message: error.to_string(),
             });
-            return;
+            return Sub::empty();
         }
     };
     if metadata.kind == EntryKind::Symlink {
@@ -648,22 +735,22 @@ fn walk<P: FilesystemProvider>(
             path,
             reason: "symlink traversal disabled".into(),
         });
-        return;
+        return Sub::empty();
     }
     if metadata.is_placeholder && options.reject_placeholders {
         report
             .incomplete_reasons
             .push(format!("placeholder rejected: {}", path.display()));
-        return;
+        return Sub::empty();
     }
-    if let Some(parent_volume) = expected_volume.as_ref()
+    if let Some(parent_volume) = expected_volume
         && &metadata.volume != parent_volume
     {
         report.incomplete_reasons.push(format!(
             "cross-volume descendant rejected: {}",
             path.display()
         ));
-        return;
+        return Sub::empty();
     }
     // Do not trust a provider's completeness flag when required file fields
     // are absent: missing metadata is explicit, never silently zero.
@@ -697,103 +784,189 @@ fn walk<P: FilesystemProvider>(
             ));
         }
     }
-    let volume = metadata.volume.clone();
-    volumes.insert(volume.clone());
-    let is_file = metadata.kind == EntryKind::File;
-    let mut logical = 0;
-    let mut attributed = 0;
-    let mut owner = None;
-    let mut reclaim = None;
-    if is_file {
-        let mut candidate_upper = metadata.allocation_size;
-        let mut reasons = Vec::new();
-        if metadata.allocation_size.is_none() {
-            reasons.push("allocation metadata unavailable".into());
-        }
-        if !metadata.metadata_complete {
-            reasons.push("metadata incomplete".into());
-        }
-        if metadata.is_placeholder {
-            reasons.push("placeholder content is not local".into());
-        }
-        reasons.push(
-            if metadata.clone_id.is_some() {
-                "clone sharing is unknown"
-            } else {
-                "clone/snapshot sharing is not proven"
-            }
-            .into(),
-        );
-        let hardlink_owner = metadata
-            .file_id
-            .as_ref()
-            .and_then(|id| seen_files.get(id).cloned());
-        if let Some(existing) = hardlink_owner {
-            owner = Some(existing);
-            candidate_upper = Some(0);
-            reasons.push("hard-link identity already attributed".into());
-        } else {
-            logical = metadata.logical_size.unwrap_or(0);
-            if metadata.file_id.is_some() {
-                attributed = metadata.allocation_size.unwrap_or(0);
-            } else {
-                candidate_upper = None;
-                reasons.push("file identity unavailable; unique allocation not attributed".into());
-            }
-            if let Some(id) = metadata.file_id.clone() {
-                seen_files.insert(id, path.clone());
-                owner = Some(path.clone());
-            }
-        }
-        let mut estimate = ReclaimEstimate {
-            lower_bytes: 0,
-            upper_bytes: candidate_upper,
-            state: ReclaimState::Unknown,
-            reasons,
-        };
-        if estimate.reasons.is_empty() {
-            estimate
-                .reasons
-                .push("retention and sharing state are not proven".into());
-        }
-        reclaim = Some(estimate);
-        report.accounting.logical_bytes = report.accounting.logical_bytes.saturating_add(logical);
-        report.accounting.attributed_allocation_bytes = report
-            .accounting
-            .attributed_allocation_bytes
-            .saturating_add(attributed);
-        report.accounting.reclaim.upper_bytes =
-            match (report.accounting.reclaim.upper_bytes, candidate_upper) {
-                (Some(total), Some(value)) => total.checked_add(value),
-                _ => None,
-            };
-        report.accounting.reclaim.state = Some(ReclaimState::Unknown);
-        if let Some(reclaim) = reclaim.as_ref() {
-            report
-                .accounting
-                .reclaim
-                .reasons
-                .extend(reclaim.reasons.clone());
-        }
+    if !ctx.volumes.contains(&metadata.volume) {
+        ctx.volumes.insert(metadata.volume.clone());
     }
+    if metadata.kind == EntryKind::File {
+        return visit_file(path, metadata, options, report, ctx);
+    }
+    ctx.add_attributed(&metadata.volume, 0);
     report.entries.push(ScannedEntry {
         path: path.clone(),
         metadata: metadata.clone(),
+        logical_bytes: 0,
+        attributed_allocation_bytes: 0,
+        accounting_owner: None,
+        reclaim: None,
+    });
+    if metadata.kind != EntryKind::Directory {
+        return Sub::empty();
+    }
+    let slot = ctx.folders.len();
+    ctx.folders.push(FolderAccounting {
+        path: path.clone(),
+        volume: metadata.volume.clone(),
+        logical_bytes: 0,
+        attributed_allocation_bytes: 0,
+        incomplete: false,
+    });
+    let (logical, attributed) = walk_children(provider, path, depth, options, &metadata, report, ctx);
+    let folder = &mut ctx.folders[slot];
+    folder.logical_bytes = logical;
+    folder.attributed_allocation_bytes = attributed;
+    Sub {
+        logical,
+        attributed,
+        candidate: None,
+    }
+}
+
+/// Account one regular file. Returns its bytes and, in lean mode, the entry
+/// to rank among its folder's files (instead of recording it directly).
+fn visit_file(
+    path: PathBuf,
+    metadata: FileMetadata,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+    ctx: &mut Ctx,
+) -> Sub {
+    let lean = ctx.keep.is_some();
+    let mut candidate_upper = metadata.allocation_size;
+    let mut reasons: Vec<&'static str> = Vec::with_capacity(5);
+    if metadata.allocation_size.is_none() {
+        reasons.push("allocation metadata unavailable");
+    }
+    if !metadata.metadata_complete {
+        reasons.push("metadata incomplete");
+    }
+    if metadata.is_placeholder {
+        reasons.push("placeholder content is not local");
+    }
+    reasons.push(if metadata.clone_id.is_some() {
+        "clone sharing is unknown"
+    } else {
+        "clone/snapshot sharing is not proven"
+    });
+    let key = metadata.file_id.as_ref().map(identity_key);
+    let hardlink_owner = key.and_then(|k| ctx.seen_files.get(&k).cloned());
+    let mut logical = 0;
+    let mut attributed = 0;
+    let mut owner = None;
+    if let Some(existing) = hardlink_owner {
+        owner = (!lean).then_some(existing);
+        candidate_upper = Some(0);
+        reasons.push("hard-link identity already attributed");
+    } else {
+        logical = metadata.logical_size.unwrap_or(0);
+        if let Some(k) = key {
+            attributed = metadata.allocation_size.unwrap_or(0);
+            let first = if lean { PathBuf::new() } else { path.clone() };
+            if !lean {
+                owner = Some(path.clone());
+            }
+            ctx.seen_files.insert(k, first);
+        } else {
+            candidate_upper = None;
+            reasons.push("file identity unavailable; unique allocation not attributed");
+        }
+    }
+    report.accounting.logical_bytes = report.accounting.logical_bytes.saturating_add(logical);
+    report.accounting.attributed_allocation_bytes = report
+        .accounting
+        .attributed_allocation_bytes
+        .saturating_add(attributed);
+    report.accounting.reclaim.upper_bytes =
+        match (report.accounting.reclaim.upper_bytes, candidate_upper) {
+            (Some(total), Some(value)) => total.checked_add(value),
+            _ => None,
+        };
+    report.accounting.reclaim.state = Some(ReclaimState::Unknown);
+    for &reason in &reasons {
+        if ctx.reclaim_reasons.insert(reason) {
+            report.accounting.reclaim.reasons.push(reason.to_string());
+        }
+    }
+    ctx.add_attributed(&metadata.volume, attributed);
+    let sub = |candidate| Sub {
+        logical,
+        attributed,
+        candidate,
+    };
+    if lean {
+        if attributed == 0 || attributed < options.min_kept_file_bytes {
+            return sub(None);
+        }
+        let mut metadata = metadata;
+        metadata.file_id = None;
+        metadata.clone_id = None;
+        return sub(Some(ScannedEntry {
+            path,
+            metadata,
+            logical_bytes: logical,
+            attributed_allocation_bytes: attributed,
+            accounting_owner: None,
+            reclaim: None,
+        }));
+    }
+    let mut estimate = ReclaimEstimate {
+        lower_bytes: 0,
+        upper_bytes: candidate_upper,
+        state: ReclaimState::Unknown,
+        reasons: reasons.iter().map(|r| (*r).to_string()).collect(),
+    };
+    if estimate.reasons.is_empty() {
+        estimate
+            .reasons
+            .push("retention and sharing state are not proven".into());
+    }
+    report.entries.push(ScannedEntry {
+        path,
+        metadata,
         logical_bytes: logical,
         attributed_allocation_bytes: attributed,
         accounting_owner: owner,
-        reclaim,
+        reclaim: Some(estimate),
     });
-    if metadata.kind != EntryKind::Directory {
+    sub(None)
+}
+
+/// Keep the `keep` largest candidates (ties by path, so the result is stable).
+fn prune_candidates(candidates: &mut Vec<ScannedEntry>, keep: usize) {
+    if keep == 0 {
+        candidates.clear();
         return;
     }
+    if candidates.len() <= keep {
+        return;
+    }
+    let order = |a: &ScannedEntry, b: &ScannedEntry| {
+        b.attributed_allocation_bytes
+            .cmp(&a.attributed_allocation_bytes)
+            .then_with(|| a.path.cmp(&b.path))
+    };
+    candidates.select_nth_unstable_by(keep - 1, order);
+    candidates.truncate(keep);
+}
+
+/// List `path` and walk its children. Returns the summed (logical, attributed)
+/// bytes of everything below it.
+fn walk_children<P: FilesystemProvider>(
+    provider: &P,
+    path: PathBuf,
+    depth: usize,
+    options: &ScanOptions,
+    metadata: &FileMetadata,
+    report: &mut ScanReport,
+    ctx: &mut Ctx,
+) -> (u64, u64) {
+    let none = (0, 0);
     if depth >= options.max_depth {
         report.incomplete_reasons.push(format!(
             "depth limit {} reached at {}",
             options.max_depth,
             path.display()
         ));
-        return;
+        return none;
     }
     if metadata.is_placeholder {
         // Enumerating a placeholder directory can hydrate it.
@@ -801,23 +974,23 @@ fn walk<P: FilesystemProvider>(
             "placeholder directory not enumerated: {}",
             path.display()
         ));
-        return;
+        return none;
     }
     if let Some(id) = metadata.file_id.clone()
-        && !seen_dirs.insert(id)
+        && !ctx.seen_dirs.insert(id)
     {
         report.incomplete_reasons.push(format!(
             "directory identity already visited: {}",
             path.display()
         ));
-        return;
+        return none;
     }
-    let remaining = options.max_entries.saturating_sub(seen_paths.len());
+    let remaining = options.max_entries.saturating_sub(ctx.count);
     let budget = remaining.min(DIRECTORY_ENUMERATION_BUDGET);
     // Recheck this directory immediately before & after listing. Changes discard
     // the listing; pathname checks are conservative observations, not a sandbox.
-    if !directory_unchanged(provider, &path, &metadata, report) {
-        return;
+    if !directory_unchanged(provider, &path, metadata, report) {
+        return none;
     }
     let (children, truncated) = match provider.children_bounded(&path, budget) {
         Ok(children) => children,
@@ -827,11 +1000,11 @@ fn walk<P: FilesystemProvider>(
                 operation: "enumerate".into(),
                 message: error.to_string(),
             });
-            return;
+            return none;
         }
     };
-    if !directory_unchanged(provider, &path, &metadata, report) {
-        return;
+    if !directory_unchanged(provider, &path, metadata, report) {
+        return none;
     }
     if truncated && budget < remaining {
         report.incomplete_reasons.push(format!(
@@ -847,25 +1020,67 @@ fn walk<P: FilesystemProvider>(
         ));
     }
     let mut children = children;
-    children.sort();
-    children.dedup();
+    sort_children(&path, &mut children);
+    let mut logical = 0u64;
+    let mut attributed = 0u64;
+    let mut candidates: Vec<ScannedEntry> = Vec::new();
     for child in children {
-        if seen_paths.len() >= options.max_entries {
+        if ctx.count >= options.max_entries || ctx.cancelled {
             break;
         }
-        walk(
+        let sub = walk(
             provider,
             child,
             depth + 1,
             options,
-            Some(volume.clone()),
+            Some(&metadata.volume),
             report,
-            seen_paths,
-            seen_files,
-            seen_dirs,
-            volumes,
+            ctx,
         );
+        logical = logical.saturating_add(sub.logical);
+        attributed = attributed.saturating_add(sub.attributed);
+        if let (Some(entry), Some(keep)) = (sub.candidate, ctx.keep) {
+            candidates.push(entry);
+            if candidates.len() >= keep.saturating_mul(4).max(256) {
+                prune_candidates(&mut candidates, keep);
+            }
+        }
     }
+    if let Some(keep) = ctx.keep {
+        prune_candidates(&mut candidates, keep);
+        candidates.sort_by(|a, b| a.path.cmp(&b.path));
+        report.entries.append(&mut candidates);
+    }
+    (logical, attributed)
+}
+
+/// Sort and de-duplicate one directory's listing. Siblings share a parent, so
+/// on unix they are ordered by their final name bytes (the same order as a
+/// component-wise path comparison) instead of re-comparing whole paths.
+fn sort_children(parent: &Path, children: &mut Vec<PathBuf>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let prefix = parent.as_os_str().as_bytes();
+        let cut = if prefix == b"/" { 1 } else { prefix.len() + 1 };
+        let siblings = children.iter().all(|child| {
+            let bytes = child.as_os_str().as_bytes();
+            bytes.len() > cut
+                && bytes.starts_with(prefix)
+                && (cut == 1 || bytes[cut - 1] == b'/')
+                && !bytes[cut..].contains(&b'/')
+        });
+        if siblings {
+            children.sort_unstable_by(|a, b| {
+                a.as_os_str().as_bytes()[cut..].cmp(&b.as_os_str().as_bytes()[cut..])
+            });
+            children.dedup_by(|a, b| a.as_os_str() == b.as_os_str());
+            return;
+        }
+    }
+    let _ = parent;
+    children.sort();
+    children.dedup();
 }
 
 fn symlink_ancestor<P: FilesystemProvider>(
