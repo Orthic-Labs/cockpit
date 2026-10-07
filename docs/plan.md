@@ -31,6 +31,7 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 | Notch, AI usage readers, updater | [Codenotch](https://github.com/vinzdg/codenotch) (fork) | — |
 | CPU, GPU, memory, disk, network, battery, sensors | [Stats](https://github.com/exelban/stats) | [mectrics](https://github.com/farukkamcici/mectrics), [slawek19926/Vitals](https://github.com/slawek19926/Vitals) |
 | Processes / task manager | [hmarr/vitals](https://github.com/hmarr/vitals) | Stats; [TaskExplorer](https://github.com/DavidXanatos/TaskExplorer) for Windows |
+| Drive health (SMART) | [smartmontools](https://github.com/smartmontools/smartmontools) `smartctl -j` (GPL-2.0, run as a separate program) | [Scrutiny](https://github.com/AnalogJ/scrutiny) for history ideas; CrystalDiskInfo to cross-check on Windows |
 | Disk map, scan, growth | Petal (in `vendor/petal`) & existing core | — |
 | Cleanup rules | [Mole](https://github.com/tw93/Mole), [Kudu](https://github.com/AdventDevInc/kudu) `rules/` | [PureMac](https://github.com/momenbasel/PureMac), [MacSai](https://github.com/iliyami/MacSai), [purge-app](https://github.com/jithin-sabu/purge-app) |
 | Hub UI reference | Kudu (React; same idea, Electron instead of Tauri) | — |
@@ -56,6 +57,8 @@ Each phase ends with something usable on the Mac, installed as a signed, notariz
    *Status 2026-10-07:* merged (#4): Apps view with leftovers + uninstall to Trash; Monitor processes with Quit and confirmed Force Quit. Not yet tried end to end on the Mac.
 5. **Mac conveniences & launcher.** One shared event tap. Finder cut/paste → maximizer → Dock click → Auto Quit; Fn→Command through our own HID-level event tap; Tinycast launcher. Turn off each Vorssaint feature as its replacement works; then remove Vorssaint.
    *Status 2026-10-07:* merged, all off by default: launcher on a Carbon hotkey (#6); event-tap conveniences — Finder cut/paste, maximizer, Dock click minimize, per-app Auto Quit (#7). Unverified on the Mac (permissions, Finder automation). Fn remap: own HID event tap; other Fn shortcuts untouched; Karabiner dropped. Verified by the owner on the Logitech keyboard 2026-10-07: Fn+C/V copy/paste (no Control Center), Fn+Space unchanged.
+5a. **Drive health.** Core runs `smartctl -a -j` per physical drive (bundled or Homebrew), keeps timestamped raw readings, and shows temperature, wear %, total writes, power-on hours, critical warnings, media errors & self-test results in the hub's Storage view; alerts on changes. When the connection blocks it (USB NVMe on macOS has no passthrough), show "Health unavailable through this connection" and keep the last good reading with its date. Same backend on Windows.
+   *Checked 2026-10-07:* smartctl 7.5 reads the internal APPLE SSD AP0512Z (NVMe log: temperature, % used, writes, power-on hours, warnings, media errors); the external disk6 fails with "Operation not supported by device".
 6. **Windows.** Native Windows notch (Rust), same Tauri hub, Windows file system provider, Recycle Bin, uninstallers.
 
 ## Safety rules (kept from the old plan)
