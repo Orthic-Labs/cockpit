@@ -340,9 +340,21 @@ fn startup_name() -> String {
         .unwrap_or_else(|| "Macintosh HD".into())
 }
 
-/// Every mounted volume a person would recognise: the startup disk and
-/// anything under /Volumes (external drives, disk images), not system
-/// volumes or Time Machine snapshots.
+/// A mounted disk image (an installer DMG), not a drive.
+fn is_disk_image(mount: &str) -> bool {
+    std::process::Command::new("/usr/sbin/diskutil")
+        .args(["info", "-plist", mount])
+        .output()
+        .map(|o| {
+            let text = String::from_utf8_lossy(&o.stdout).replace(['\t', '\n'], "");
+            text.contains("<key>BusProtocol</key><string>Disk Image</string>")
+        })
+        .unwrap_or(false)
+}
+
+/// Every mounted drive a person would recognise: the startup disk and
+/// external drives under /Volumes, not disk images, system volumes or Time
+/// Machine snapshots.
 #[tauri::command]
 async fn volumes() -> Result<Vec<Volume>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -354,6 +366,9 @@ async fn volumes() -> Result<Vec<Volume>, String> {
                 continue;
             }
             if mount.contains("com.apple.") || out.iter().any(|v| v.mount_point == mount) {
+                continue;
+            }
+            if !internal && is_disk_image(&mount) {
                 continue;
             }
             let (Some(total), Some(available)) = (disk.total_bytes, disk.available_bytes) else {
