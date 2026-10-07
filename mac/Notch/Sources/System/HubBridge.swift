@@ -34,6 +34,8 @@ final class HubBridge {
     private let actions: Actions
     private var cancellables = Set<AnyCancellable>()
     private var pendingWrite: DispatchWorkItem?
+    private var helperError: String?
+    private var helperWatch: Timer?
 
     static var directory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -127,6 +129,8 @@ final class HubBridge {
             "providerOrder": preferences.providerOrder,
             "conveniences": actions.conveniences(),
             "launcherStatus": actions.launcherStatus() ?? NSNull(),
+            "helper": PrivilegedHelper.state,
+            "helperError": helperError ?? NSNull(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         else { return }
@@ -179,7 +183,33 @@ final class HubBridge {
         case "previewWeeklyLimitAlert": actions.previewWeeklyLimitAlert()
         case "sendTestNotification": actions.sendTestNotification()
         case "openAccessibilitySettings": actions.openAccessibilitySettings()
+        case "helperEnable":
+            helperError = PrivilegedHelper.enable()
+            watchHelper()
+        case "helperDisable":
+            helperError = PrivilegedHelper.disable()
+            watchHelper()
+        case "openLoginItems": PrivilegedHelper.openLoginItems()
         default: break
+        }
+    }
+
+    /// While the helper waits for approval in System Settings, nothing tells us
+    /// when it is given, so look again every few seconds (for up to ten minutes).
+    private func watchHelper() {
+        helperWatch?.invalidate()
+        helperWatch = nil
+        guard PrivilegedHelper.state == "requiresApproval" else { return }
+        let until = Date().addingTimeInterval(600)
+        helperWatch = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                self.scheduleWrite()
+                if PrivilegedHelper.state != "requiresApproval" || Date() > until {
+                    timer.invalidate()
+                    self.helperWatch = nil
+                }
+            }
         }
     }
 

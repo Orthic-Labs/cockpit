@@ -16,6 +16,8 @@ const paths = {
   appExecutable: join(stagingRoot, appName, 'Contents', 'MacOS', 'Cockpit'),
   helper: join(stagingRoot, appName, 'Contents', 'Helpers', 'cockpit'),
   hub: join(stagingRoot, appName, 'Contents', 'Helpers', 'Cockpit Hub.app'),
+  privilegedHelper: join(stagingRoot, appName, 'Contents', 'Helpers', 'CockpitHelper'),
+  elevate: join(stagingRoot, appName, 'Contents', 'Helpers', 'cockpit-elevate'),
   hubExecutable: join(stagingRoot, appName, 'Contents', 'Helpers', 'Cockpit Hub.app', 'Contents', 'MacOS', 'cockpit-hub'),
   raw: join(stagingRoot, 'raw'),
   output: join(repoRoot, 'dist', 'releases', 'mac', 'Cockpit.dmg')
@@ -69,6 +71,17 @@ function sourcePaths() {
   };
 }
 
+// The privileged helper (SMAppService daemon), its launchd plist and the
+// cockpit-elevate client. xcodebuild puts the two tools beside Cockpit.app.
+async function placePrivilegedHelper(app, notchApp) {
+  const products = dirname(notchApp);
+  await copyExecutable(join(products, 'CockpitHelper'), join(app, 'Contents', 'Helpers', 'CockpitHelper'), 'privileged helper');
+  await copyExecutable(join(products, 'cockpit-elevate'), join(app, 'Contents', 'Helpers', 'cockpit-elevate'), 'cockpit-elevate');
+  const plist = join(app, 'Contents', 'Library', 'LaunchDaemons', 'dev.orthic.cockpit.helper.plist');
+  await mkdir(dirname(plist), { recursive: true });
+  await cp(join(repoRoot, 'mac/Notch/Helper/dev.orthic.cockpit.helper.plist'), plist, { force: true });
+}
+
 async function writeCandidateManifest(root) {
   const manifest = {
     schema_version: 1,
@@ -110,6 +123,7 @@ async function candidate() {
   await requireFile(appExecutable, 'notch executable');
   await copyExecutable(source.helper, helper, 'Cockpit CLI');
   await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Cockpit Hub.app'), 'hub app (Tauri)');
+  await placePrivilegedHelper(app, source.notch);
   await cp(join(repoRoot, 'mac/Notch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
   await copyExecutable(appExecutable, join(root, 'raw', 'Cockpit'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'cockpit'), 'Cockpit CLI');
@@ -143,6 +157,10 @@ async function prepare() {
   // GitHub artifact handoff normalizes file modes; restore both known executables.
   await chmod(paths.appExecutable, 0o755);
   await chmod(paths.helper, 0o755);
+  for (const [file, label] of [[paths.privilegedHelper, 'privileged helper'], [paths.elevate, 'cockpit-elevate']]) {
+    await requireFile(file, `staged ${label}`);
+    await chmod(file, 0o755);
+  }
   await requireFile(paths.hubExecutable, 'staged hub executable');
   await chmod(paths.hubExecutable, 0o755);
   await mkdir(paths.raw, { recursive: true });
@@ -178,7 +196,10 @@ async function packageMac({ local = false } = {}) {
     type: 'distribution',
     // osx-sign v2 reads entitlements per file; a top-level `entitlements` is
     // ignored and Electron's defaults (camera, mic, location…) are applied.
-    optionsForFile: () => ({ hardenedRuntime: true, entitlements }),
+    // The privileged helper and cockpit-elevate need no entitlements.
+    optionsForFile: file => /\/Contents\/Helpers\/(CockpitHelper|cockpit-elevate)$/.test(file)
+      ? { hardenedRuntime: true }
+      : { hardenedRuntime: true, entitlements },
     preAutoEntitlements: false,
     preEmbedProvisioningProfile: false,
     gatekeeperAssess: false

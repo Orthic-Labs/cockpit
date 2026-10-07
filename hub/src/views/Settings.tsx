@@ -41,6 +41,8 @@ interface NotchState {
   accounts: Account[];
   providerOrder: string[];
   launcherStatus?: string | null;
+  helper?: "notRegistered" | "requiresApproval" | "enabled" | "notFound";
+  helperError?: string | null;
 }
 
 type Send = (command: Record<string, unknown>) => void;
@@ -200,6 +202,35 @@ export function Settings({ section }: { section: string }) {
       {section === "general" && (
         <>
           <Group title="Startup">{bool("launchAtLogin", "Open Cockpit at login")}</Group>
+          <Group title="Uninstalling">
+            <Row
+              label="Uninstall without password"
+              note="Lets Cockpit move root-owned apps and their files to the Trash with no administrator password. Approve once in System Settings."
+            >
+              <Toggle
+                checked={state.helper === "enabled" || state.helper === "requiresApproval"}
+                onChange={(v) => send({ command: v ? "helperEnable" : "helperDisable" })}
+                label="Uninstall without password"
+              />
+            </Row>
+            {state.helper === "requiresApproval" && (
+              <Row label="Approve Cockpit in System Settings → Login Items" note="Switch Cockpit on under Allow in the Background.">
+                <Button size="sm" variant="secondary" onClick={() => send({ command: "openLoginItems" })}>
+                  Open Login Items
+                </Button>
+              </Row>
+            )}
+            <div className="muted small">
+              {state.helper === "enabled"
+                ? "On. Root-owned items go to the Trash without a password."
+                : state.helper === "requiresApproval"
+                  ? "Waiting for your approval in System Settings."
+                  : state.helper === "notFound"
+                    ? "This build of Cockpit does not include the helper."
+                    : "Off. Root-owned items ask for an administrator password in Finder."}
+            </div>
+            {state.helperError ? <div className="error">{state.helperError}</div> : null}
+          </Group>
           <Group title="Launcher">
             {bool("launcherEnabled", "Enable the launcher",
               "Search apps, files and Cockpit commands, and calculate. Off by default.")}

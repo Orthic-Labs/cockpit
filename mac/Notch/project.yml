@@ -100,11 +100,46 @@ targets:
         # together if the Desktop source is ever dropped.
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Codenotch-Bridging-Header.h
 
+  CockpitHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Helper
+        excludes:
+          - "*.plist"
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: CockpitHelper
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit.helper
+        # The identifier is embedded so codesign signs it under this name, which
+        # the helper's connection requirement matches.
+        GENERATE_INFOPLIST_FILE: "YES"
+        CREATE_INFOPLIST_SECTION_IN_BINARY: "YES"
+        SKIP_INSTALL: "YES"
+
+  CockpitElevate:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Elevate
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: cockpit-elevate
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit.elevate
+        # The identifier is embedded so codesign signs it under this name, which
+        # the helper's connection requirement matches.
+        GENERATE_INFOPLIST_FILE: "YES"
+        CREATE_INFOPLIST_SECTION_IN_BINARY: "YES"
+        SKIP_INSTALL: "YES"
 
 schemes:
   Cockpit:
     build:
       targets:
         Cockpit: all
+        CockpitHelper: all
+        CockpitElevate: all
     run:
       config: Debug

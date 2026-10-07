@@ -39,10 +39,23 @@ if (action === 'admit') {
   const root=env.RIGHT_GIT_ARTIFACT_ROOT;
   const app=env.COCKPIT_CHECK_APP || path.join(root,'cockpit','mac','Cockpit.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
-  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Helpers/Cockpit Hub.app/Contents/MacOS/cockpit-hub','Contents/Helpers/Cockpit Hub.app/Contents/Info.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Helpers/Cockpit Hub.app/Contents/MacOS/cockpit-hub','Contents/Helpers/Cockpit Hub.app/Contents/Info.plist','Contents/Helpers/CockpitHelper','Contents/Helpers/cockpit-elevate','Contents/Library/LaunchDaemons/dev.orthic.cockpit.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
   const plist=run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Info.plist')],{encoding:'utf8',stdio:'pipe'});
   const info=JSON.parse(plist);
   if(info.CFBundleIdentifier!=='dev.orthic.cockpit'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');
+  // The daemon plist: BundleProgram must name the helper inside the bundle.
+  const daemon=JSON.parse(run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Library/LaunchDaemons/dev.orthic.cockpit.helper.plist')],{encoding:'utf8',stdio:'pipe'}));
+  if(daemon.Label!=='dev.orthic.cockpit.helper'||!daemon.MachServices?.['dev.orthic.cockpit.helper']||!(daemon.AssociatedBundleIdentifiers||[]).includes('dev.orthic.cockpit'))throw new Error('Helper plist: wrong label, Mach service or associated bundle');
+  if(typeof daemon.BundleProgram!=='string'||daemon.BundleProgram.startsWith('/')||daemon.BundleProgram.split('/').includes('..'))throw new Error('Helper plist: BundleProgram must be a relative path inside the bundle');
+  const program=path.join(app,daemon.BundleProgram);
+  if(!existsSync(program)||!statSync(program).isFile())throw new Error(`Helper plist: BundleProgram ${daemon.BundleProgram} is not a file in the bundle`);
+  if(env.COCKPIT_CHECK_APP){
+    // Signed: each tool carries the identifier the helper's connection requirement names, and Cockpit's team.
+    for(const [f,id] of [['Contents/Helpers/CockpitHelper','dev.orthic.cockpit.helper'],['Contents/Helpers/cockpit-elevate','dev.orthic.cockpit.elevate']]){
+      const d=spawnSync('codesign',['-dv','--verbose=2',path.join(app,f)],{encoding:'utf8'}).stderr||'';
+      if(!d.includes(`Identifier=${id}\n`)||!d.includes('TeamIdentifier=6KLGD3LLKF')||!/flags=0x[0-9a-f]+\(.*runtime/.test(d))throw new Error(`${f}: expected identifier ${id}, team 6KLGD3LLKF and hardened runtime`);
+    }
+  }
   if(env.COCKPIT_CHECK_APP){
     // Signed app: exactly the entitlements Cockpit needs, never Electron's defaults.
     const ent=spawnSync('codesign',['-d','--entitlements','-','--xml',app],{encoding:'utf8'}).stdout||'';

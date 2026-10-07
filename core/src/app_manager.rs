@@ -1484,17 +1484,67 @@ fn trash_batch_with_finder(paths: &[&Path], limit: Duration) -> Result<(), Strin
     run_with_timeout(command, limit).map(|_| ())
 }
 
-/// One Finder request for all root-owned items; each is then verified on its
-/// own. A refused batch fails every item with the reason.
+/// `cockpit-elevate` next to this program or in the app's `Contents/Helpers`.
+fn elevate_tool() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors().skip(1).take(6).find_map(|dir| {
+        [dir.join("cockpit-elevate"), dir.join("Helpers/cockpit-elevate")]
+            .into_iter()
+            .find(|p| p.is_file())
+    })
+}
+
+/// The notch publishes the privileged helper's state ("enabled" once approved).
+fn helper_enabled() -> bool {
+    std::fs::read_to_string(home().join("Library/Application Support/Cockpit/notch-state.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .is_some_and(|v| v["helper"] == "enabled")
+}
+
+/// Move root-owned items through the privileged helper (no password). `None`
+/// when the helper is off, not approved, or fails; otherwise the paths it moved.
+fn trash_batch_with_helper(paths: &[&Path]) -> Option<Vec<PathBuf>> {
+    if !helper_enabled() {
+        return None;
+    }
+    let mut command = Command::new(elevate_tool()?);
+    for p in paths {
+        command.arg(p);
+    }
+    let out = run_with_timeout(command, Duration::from_secs(90)).ok()?;
+    let rows = serde_json::from_str::<serde_json::Value>(&out).ok()?;
+    let rows = rows["results"].as_array()?;
+    Some(
+        rows.iter()
+            .filter(|r| r["status"] == "moved")
+            .filter_map(|r| r["path"].as_str().map(PathBuf::from))
+            .collect(),
+    )
+}
+
+/// Root-owned items: first through the privileged helper when it is approved,
+/// then one Finder request for whatever is left (the administrator password is
+/// asked once). Each item is verified on its own. A refused batch fails every
+/// remaining item with the reason.
 fn move_admin_batch_to_trash(paths: &[&Path]) -> Vec<Result<(), String>> {
     if paths.is_empty() {
         return Vec::new();
     }
-    let refused = trash_batch_with_finder(paths, Duration::from_secs(620)).err();
+    let gone = |p: &Path| std::fs::symlink_metadata(p).is_err();
+    let mut left: Vec<&Path> = paths.to_vec();
+    if trash_batch_with_helper(paths).is_some() {
+        left.retain(|p| !gone(p));
+    }
+    let refused = if left.is_empty() {
+        None
+    } else {
+        trash_batch_with_finder(&left, Duration::from_secs(620)).err()
+    };
     paths
         .iter()
         .map(|path| {
-            if std::fs::symlink_metadata(path).is_err() {
+            if gone(path) {
                 return Ok(());
             }
             Err(match &refused {
