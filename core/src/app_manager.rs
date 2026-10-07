@@ -1382,7 +1382,13 @@ fn trash_with_finder(path: &Path, limit: Duration) -> Result<(), String> {
         // is Finder's own term and fails with -1728.
         .arg("set f to (POSIX file (item 1 of argv)) as alias")
         .arg("-e")
+        // Finder waits on the administrator password; AppleScript's default
+        // two-minute event timeout would give up first (-1712).
+        .arg("with timeout of 600 seconds")
+        .arg("-e")
         .arg("tell application \"Finder\" to delete f")
+        .arg("-e")
+        .arg("end timeout")
         .arg("-e")
         .arg("end run")
         .arg(path);
@@ -1410,7 +1416,7 @@ fn trash_by_rename(path: &Path) -> Result<(), String> {
 /// password, and if that is refused the item is reported, never removed.
 fn move_to_trash(path: &Path) -> Result<(), String> {
     let admin = needs_admin(path);
-    let limit = Duration::from_secs(if admin { 180 } else { 60 });
+    let limit = Duration::from_secs(if admin { 620 } else { 60 });
     if let Err(first) = trash_with_finder(path, limit) {
         if admin {
             let reason = if first.is_empty() {
