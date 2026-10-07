@@ -75,7 +75,10 @@ pub struct CleanupPack {
 pub fn load_pack() -> Result<CleanupPack, String> {
     let pack: CleanupPack = serde_json::from_str(PACK_JSON).map_err(|e| e.to_string())?;
     if pack.schema_version != 1 {
-        return Err(format!("unsupported cleanup pack schema {}", pack.schema_version));
+        return Err(format!(
+            "unsupported cleanup pack schema {}",
+            pack.schema_version
+        ));
     }
     Ok(pack)
 }
@@ -252,7 +255,9 @@ fn measure(path: &Path) -> (u64, bool) {
     let mut seen = 0usize;
     let mut stack = vec![path.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(md) = current.symlink_metadata() else { continue };
+        let Ok(md) = current.symlink_metadata() else {
+            continue;
+        };
         total = total.saturating_add(allocated(&md));
         seen += 1;
         if seen >= MAX_ENTRIES_PER_ITEM {
@@ -327,7 +332,10 @@ fn display_name(path: &Path) -> String {
 
 pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
     let pack = load_pack()?;
-    let mut report = Report { scanned_at: now_millis() / 1000, ..Report::default() };
+    let mut report = Report {
+        scanned_at: now_millis() / 1000,
+        ..Report::default()
+    };
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
     for rule in &pack.rules {
@@ -338,7 +346,9 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                 if excluded(rule, &name) || seen.contains(&path) {
                     continue;
                 }
-                let Ok(md) = path.symlink_metadata() else { continue };
+                let Ok(md) = path.symlink_metadata() else {
+                    continue;
+                };
                 if md.file_type().is_symlink() {
                     continue;
                 }
@@ -531,7 +541,9 @@ fn revalidate(
     if excluded(rule, &display_name(&path)) {
         return Err("Excluded by the rule".into());
     }
-    let md = path.symlink_metadata().map_err(|_| "Already gone".to_string())?;
+    let md = path
+        .symlink_metadata()
+        .map_err(|_| "Already gone".to_string())?;
     if md.file_type().is_symlink() {
         return Err("Is now a link".into());
     }
@@ -573,13 +585,19 @@ pub fn apply(
         let (path, bytes, wanted) = match revalidate(request, &pack, home, running) {
             Ok(ok) => ok,
             Err(reason) => {
-                result.skipped.push(Skipped { path: request.path.clone(), reason });
+                result.skipped.push(Skipped {
+                    path: request.path.clone(),
+                    reason,
+                });
                 continue;
             }
         };
         let before = listing(&trash_dir);
         if let Err(reason) = trasher(&path) {
-            result.skipped.push(Skipped { path: request.path.clone(), reason });
+            result.skipped.push(Skipped {
+                path: request.path.clone(),
+                reason,
+            });
             continue;
         }
         // A rename keeps the inode, so the new Trash entry that carries the
@@ -597,7 +615,12 @@ pub fn apply(
             .map(|p| p.to_string_lossy().into_owned());
         result.moved_items += 1;
         result.moved_bytes += bytes;
-        items.push(ActivityItem { path: request.path.clone(), trash_path, bytes, restored: false });
+        items.push(ActivityItem {
+            path: request.path.clone(),
+            trash_path,
+            bytes,
+            restored: false,
+        });
     }
 
     if !items.is_empty() {
@@ -632,15 +655,17 @@ pub fn restore(home: &Path, activity_id: &str) -> Result<RestoreResult, String> 
         if item.restored {
             continue;
         }
-        let skip = |reason: &str| Skipped { path: item.path.clone(), reason: reason.to_string() };
+        let skip = |reason: &str| Skipped {
+            path: item.path.clone(),
+            reason: reason.to_string(),
+        };
         let Some(trash_path) = item.trash_path.clone() else {
             result.skipped.push(skip("Trash location wasn't recorded"));
             continue;
         };
         let from = PathBuf::from(&trash_path);
         let to = PathBuf::from(&item.path);
-        let allowed_target =
-            to.starts_with(home) || to.starts_with("/private/var/folders");
+        let allowed_target = to.starts_with(home) || to.starts_with("/private/var/folders");
         if !from.starts_with(&trash_dir) || !allowed_target {
             result.skipped.push(skip("Location not allowed"));
             continue;
@@ -650,7 +675,9 @@ pub fn restore(home: &Path, activity_id: &str) -> Result<RestoreResult, String> 
             continue;
         }
         if to.symlink_metadata().is_ok() {
-            result.skipped.push(skip("Something is already at the original location"));
+            result
+                .skipped
+                .push(skip("Something is already at the original location"));
             continue;
         }
         if let Some(parent) = to.parent()
