@@ -37,10 +37,13 @@ describe("Cockpit hub sections", () => {
         await item.waitForExist({ timeout: 10_000 });
         await item.click();
       }
-      await browser.waitUntil(async () => (await pageTitle()) === section.title, {
-        timeout: 15_000,
-        timeoutMsg: `title never became ${section.title}`,
-      });
+      try {
+        await browser.waitUntil(async () => (await pageTitle()) === section.title, { timeout: 15_000 });
+      } catch {
+        const dom = await browser.execute(() => `${location.href}\n${document.body.innerHTML.slice(0, 2500)}`);
+        await browser.saveScreenshot(path.join(shots, `FAIL-${section.id}.png`)).catch(() => {});
+        throw new Error(`title never became ${section.title}; page was:\n${dom}`);
+      }
 
       if (section.settings) {
         // CI has no notch, so Settings must degrade to its explanatory state.
