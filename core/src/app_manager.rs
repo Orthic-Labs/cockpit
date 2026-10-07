@@ -32,8 +32,13 @@ const LIBRARY_DIRS: [&str; 10] = [
 ];
 const NAME_MATCH_DIRS: [&str; 3] = ["Application Support", "Caches", "Logs"];
 /// Suffixes after `<bundle id>.` that still belong to that exact app.
-const EXACT_SUFFIXES: [&str; 5] =
-    ["plist", "savedstate", "binarycookies", "lssharedfilelist.plist", "plist.lockfile"];
+const EXACT_SUFFIXES: [&str; 5] = [
+    "plist",
+    "savedstate",
+    "binarycookies",
+    "lssharedfilelist.plist",
+    "plist.lockfile",
+];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppEntry {
@@ -92,7 +97,9 @@ pub struct BundleInfo {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// The outermost `.app` directory in `path`, if any.
@@ -130,7 +137,11 @@ pub fn bundle_info(root: &Path) -> Option<BundleInfo> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    Some(BundleInfo { bundle_id, name, version })
+    Some(BundleInfo {
+        bundle_id,
+        name,
+        version,
+    })
 }
 
 /// Disk space used by a file or folder (allocated blocks; symlinks not followed).
@@ -138,7 +149,9 @@ pub fn disk_size(path: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(meta) = std::fs::symlink_metadata(&current) else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(&current) else {
+            continue;
+        };
         total += meta.blocks() * 512;
         if meta.is_dir() {
             if let Ok(entries) = std::fs::read_dir(&current) {
@@ -183,13 +196,19 @@ pub fn quit_bundle(bundle_id: &str) -> Result<(), String> {
         return Err("Unrecognised bundle id; not sending a quit request.".into());
     }
     let mut command = Command::new("/usr/bin/osascript");
-    command.arg("-e").arg(format!("tell application id \"{bundle_id}\" to quit"));
+    command
+        .arg("-e")
+        .arg(format!("tell application id \"{bundle_id}\" to quit"));
     run_with_timeout(command, Duration::from_secs(6)).map(|_| ())
 }
 
 fn running_roots() -> HashSet<PathBuf> {
     let mut system = System::new();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::everything());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::everything(),
+    );
     system
         .processes()
         .values()
@@ -221,7 +240,9 @@ fn parse_spotlight_date(text: &str) -> Option<i64> {
 
 fn last_used(path: &Path) -> Option<i64> {
     let mut command = Command::new("/usr/bin/mdls");
-    command.args(["-raw", "-name", "kMDItemLastUsedDate"]).arg(path);
+    command
+        .args(["-raw", "-name", "kMDItemLastUsedDate"])
+        .arg(path);
     let text = run_with_timeout(command, Duration::from_secs(5)).ok()?;
     parse_spotlight_date(&text)
 }
@@ -231,10 +252,16 @@ fn protected_reason(root: &Path, bundle_id: Option<&str>) -> Option<String> {
     if text.starts_with("/System/") {
         return Some("System app.".into());
     }
-    if bundle_id.map(|b| b.starts_with("com.apple.")).unwrap_or(false) {
+    if bundle_id
+        .map(|b| b.starts_with("com.apple."))
+        .unwrap_or(false)
+    {
         return Some("Apple app that macOS protects.".into());
     }
-    if bundle_id.map(|b| b.starts_with("dev.orthic.cockpit")).unwrap_or(false) {
+    if bundle_id
+        .map(|b| b.starts_with("dev.orthic.cockpit"))
+        .unwrap_or(false)
+    {
         return Some("This is Cockpit.".into());
     }
     if bundle_id.is_none() {
@@ -247,7 +274,10 @@ fn inspect(root: &Path, running: &HashSet<PathBuf>) -> AppEntry {
     let info = bundle_info(root);
     let bundle_id = info.as_ref().and_then(|i| i.bundle_id.clone());
     AppEntry {
-        name: root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+        name: root
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         path: root.to_string_lossy().into_owned(),
         protected: protected_reason(root, bundle_id.as_deref()),
         bundle_id,
@@ -265,7 +295,9 @@ fn app_dirs() -> Vec<PathBuf> {
 fn find_apps() -> Vec<PathBuf> {
     let mut found = Vec::new();
     for dir in app_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -342,10 +374,14 @@ fn related_items(bundle_id: Option<&str>, name: &str) -> Vec<RelatedItem> {
     let library = home().join("Library");
     let mut items = Vec::new();
     for dir in LIBRARY_DIRS {
-        let Ok(entries) = std::fs::read_dir(library.join(dir)) else { continue };
+        let Ok(entries) = std::fs::read_dir(library.join(dir)) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let file_name = entry.file_name().to_string_lossy().into_owned();
-            let Some(exact) = classify(dir, &file_name, bundle_id, name) else { continue };
+            let Some(exact) = classify(dir, &file_name, bundle_id, name) else {
+                continue;
+            };
             let path = entry.path();
             items.push(RelatedItem {
                 size_bytes: disk_size(&path),
@@ -371,7 +407,8 @@ fn validate_app_path(path: &str) -> Result<PathBuf, String> {
     if !inside || root.extension().map(|x| x != "app").unwrap_or(true) {
         return Err("Only apps in /Applications or ~/Applications can be uninstalled.".into());
     }
-    let meta = std::fs::symlink_metadata(&root).map_err(|_| "That app is no longer there.".to_string())?;
+    let meta =
+        std::fs::symlink_metadata(&root).map_err(|_| "That app is no longer there.".to_string())?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err("That is not an app bundle.".into());
     }
@@ -413,7 +450,11 @@ fn trash_with_finder(path: &Path) -> Result<(), String> {
 }
 
 fn trash_by_rename(path: &Path) -> Result<(), String> {
-    let name = path.file_name().ok_or("No file name.")?.to_string_lossy().into_owned();
+    let name = path
+        .file_name()
+        .ok_or("No file name.")?
+        .to_string_lossy()
+        .into_owned();
     let trash = trash_dir();
     let mut target = trash.join(&name);
     let mut n = 2;
@@ -444,7 +485,10 @@ fn log_activity(app: &AppEntry, result: &UninstallResult) {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
-    let time = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     entries.push(serde_json::json!({
         "time": time,
         "action": "move_to_trash",
@@ -462,9 +506,8 @@ fn log_activity(app: &AppEntry, result: &UninstallResult) {
         return;
     }
     let temp = path.with_extension("json.tmp");
-    let write = std::fs::File::create(&temp).and_then(|mut f| {
-        f.write_all(&serde_json::to_vec_pretty(&entries).unwrap_or_default())
-    });
+    let write = std::fs::File::create(&temp)
+        .and_then(|mut f| f.write_all(&serde_json::to_vec_pretty(&entries).unwrap_or_default()));
     if write.is_ok() {
         let _ = std::fs::rename(temp, path);
     }
@@ -483,13 +526,20 @@ pub fn uninstall(
     let root = validate_app_path(app_path)?;
     let fresh = app_detail(app_path)?;
     if let Some(reason) = &fresh.app.protected {
-        return Err(format!("{} is not removable here: {reason}", fresh.app.name));
+        return Err(format!(
+            "{} is not removable here: {reason}",
+            fresh.app.name
+        ));
     }
     if fresh.app.bundle_id.as_deref() != expected_bundle_id {
         return Err("The app changed since it was listed; nothing was moved.".into());
     }
     if fresh.app.running {
-        let bundle_id = fresh.app.bundle_id.as_deref().ok_or("Cannot quit an app without a bundle id.")?;
+        let bundle_id = fresh
+            .app
+            .bundle_id
+            .as_deref()
+            .ok_or("Cannot quit an app without a bundle id.")?;
         quit_bundle(bundle_id)?;
         let start = Instant::now();
         while running_roots().contains(&root) {
@@ -506,7 +556,11 @@ pub fn uninstall(
     // Bundle first: if it cannot be moved, its data stays where it is.
     let mut ordered: Vec<&String> = items.iter().filter(|p| **p == fresh.app.path).collect();
     ordered.extend(items.iter().filter(|p| **p != fresh.app.path));
-    let mut result = UninstallResult { moved: Vec::new(), failed: Vec::new(), moved_bytes: 0 };
+    let mut result = UninstallResult {
+        moved: Vec::new(),
+        failed: Vec::new(),
+        moved_bytes: 0,
+    };
     let mut bundle_failed = false;
     for item in ordered {
         let is_bundle = *item == fresh.app.path;
@@ -517,17 +571,22 @@ pub fn uninstall(
             });
             continue;
         }
-        let outcome = revalidate(&fresh, item).and_then(|bytes| {
-            move_to_trash(Path::new(item)).map(|_| bytes)
-        });
+        let outcome = revalidate(&fresh, item)
+            .and_then(|bytes| move_to_trash(Path::new(item)).map(|_| bytes));
         match outcome {
             Ok(bytes) => {
                 result.moved_bytes += bytes;
-                result.moved.push(MovedItem { path: item.clone(), bytes });
+                result.moved.push(MovedItem {
+                    path: item.clone(),
+                    bytes,
+                });
             }
             Err(error) => {
                 bundle_failed |= is_bundle;
-                result.failed.push(FailedItem { path: item.clone(), error });
+                result.failed.push(FailedItem {
+                    path: item.clone(),
+                    error,
+                });
             }
         }
     }

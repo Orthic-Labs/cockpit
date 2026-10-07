@@ -16,7 +16,14 @@ use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System};
 use crate::ProcessIdentity;
 use crate::app_manager::{app_root_of, bundle_info, quit_bundle};
 
-const SYSTEM_PREFIXES: [&str; 6] = ["/System/", "/usr/", "/sbin/", "/bin/", "/Library/Apple/", "/private/"];
+const SYSTEM_PREFIXES: [&str; 6] = [
+    "/System/",
+    "/usr/",
+    "/sbin/",
+    "/bin/",
+    "/Library/Apple/",
+    "/private/",
+];
 const NEVER_QUIT_BUNDLES: [&str; 4] = [
     "com.apple.finder",
     "com.apple.dock",
@@ -82,12 +89,19 @@ fn snapshot(with_cpu: bool) -> Vec<Snap> {
         system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
     }
     let me = current_uid();
-    system.processes().values().map(|p| snap_of(p, me)).collect()
+    system
+        .processes()
+        .values()
+        .map(|p| snap_of(p, me))
+        .collect()
 }
 
 fn snap_of(p: &Process, me: u32) -> Snap {
     Snap {
-        identity: ProcessIdentity { pid: p.pid().as_u32(), start_time: p.start_time() },
+        identity: ProcessIdentity {
+            pid: p.pid().as_u32(),
+            start_time: p.start_time(),
+        },
         name: p.name().to_string_lossy().into_owned(),
         parent: p.parent().map(|pid| pid.as_u32()),
         exe: p.exe().map(Path::to_path_buf),
@@ -102,11 +116,15 @@ fn is_system_path(path: &Path) -> bool {
     if text.starts_with("/usr/local/") {
         return false;
     }
-    SYSTEM_PREFIXES.iter().any(|prefix| text.starts_with(prefix))
+    SYSTEM_PREFIXES
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
 }
 
 fn is_cockpit(root: Option<&Path>, bundle_id: Option<&str>, name: &str) -> bool {
-    bundle_id.map(|b| b.starts_with("dev.orthic.cockpit")).unwrap_or(false)
+    bundle_id
+        .map(|b| b.starts_with("dev.orthic.cockpit"))
+        .unwrap_or(false)
         || root
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().starts_with("Cockpit"))
@@ -207,12 +225,19 @@ fn build_rows(snaps: &[Snap]) -> Vec<ProcessRow> {
         let info = cached_info(&root);
         let bundle_id = info.as_ref().map(|i| i.0.clone());
         let name = info.map(|i| i.1).unwrap_or_else(|| {
-            root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+            root.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
         });
         let main_prefix = root.join("Contents/MacOS");
         let Some(lead) = members
             .iter()
-            .filter(|m| m.exe.as_deref().map(|e| e.starts_with(&main_prefix)).unwrap_or(false))
+            .filter(|m| {
+                m.exe
+                    .as_deref()
+                    .map(|e| e.starts_with(&main_prefix))
+                    .unwrap_or(false)
+            })
             .min_by_key(|m| m.identity.start_time)
             .or_else(|| members.iter().min_by_key(|m| m.identity.start_time))
             .map(|m| m.identity.clone())
@@ -277,7 +302,10 @@ fn alive(id: &ProcessIdentity) -> bool {
     let mut system = System::new();
     let pid = Pid::from_u32(id.pid);
     system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    system.process(pid).map(|p| p.start_time() == id.start_time).unwrap_or(false)
+    system
+        .process(pid)
+        .map(|p| p.start_time() == id.start_time)
+        .unwrap_or(false)
 }
 
 fn wait_gone(id: &ProcessIdentity, limit: Duration) -> bool {
@@ -297,7 +325,11 @@ fn signal(id: &ProcessIdentity, sig: i32) -> Result<(), String> {
         return Ok(());
     }
     let result = unsafe { libc::kill(id.pid as libc::pid_t, sig) };
-    if result == 0 { Ok(()) } else { Err(std::io::Error::last_os_error().to_string()) }
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
 }
 
 /// Graceful quit. Apps get a Quit Apple event; plain processes get SIGTERM.
