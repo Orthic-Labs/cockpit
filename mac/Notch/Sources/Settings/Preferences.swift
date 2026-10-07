@@ -663,7 +663,7 @@ final class Preferences: ObservableObject {
         // Both default to on, so `bool(forKey:)` — which answers false for a
         // key that was never written — cannot stand in for the default.
         self.announceSessionEnd = defaults.object(forKey: Keys.announceSessionEnd) as? Bool ?? true
-        self.sessionEndSound = defaults.object(forKey: Keys.sessionEndSound) as? Bool ?? true
+        self.sessionEndSound = defaults.object(forKey: Keys.sessionEndSound) as? Bool ?? false
         self.peekDuration = defaults.string(forKey: Keys.peekDuration)
             .flatMap(PeekDuration.init(rawValue:)) ?? .standard
         self.sessionEndSoundName = defaults.string(forKey: Keys.sessionEndSoundName)
@@ -671,12 +671,12 @@ final class Preferences: ObservableObject {
         self.sessionBlockedSoundName = defaults.string(forKey: Keys.sessionBlockedSoundName)
             ?? SessionChime.defaultBlocked
         self.announceUsageReset = defaults.object(forKey: Keys.announceUsageReset) as? Bool ?? true
-        self.usageResetSound = defaults.object(forKey: Keys.usageResetSound) as? Bool ?? true
+        self.usageResetSound = defaults.object(forKey: Keys.usageResetSound) as? Bool ?? false
         self.usageResetSoundName = defaults.string(forKey: Keys.usageResetSoundName)
             ?? SessionChime.defaultFinished
         self.announceSessionLimitReached = defaults.object(forKey: Keys.announceSessionLimitReached) as? Bool ?? true
         self.announceWeeklyLimitReached = defaults.object(forKey: Keys.announceWeeklyLimitReached) as? Bool ?? true
-        self.limitReachedSound = defaults.object(forKey: Keys.limitReachedSound) as? Bool ?? true
+        self.limitReachedSound = defaults.object(forKey: Keys.limitReachedSound) as? Bool ?? false
         self.limitReachedSoundName = defaults.string(forKey: Keys.limitReachedSoundName)
             ?? SessionChime.defaultBlocked
         // Read from the system rather than from our own store: the user can turn
