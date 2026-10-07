@@ -55,7 +55,7 @@ Each phase ends with something usable on the Mac, installed as a signed, notariz
 4. **Apps & processes.** App inventory, uninstall with leftovers, process list with Quit then explicit Force Quit.
    *Status 2026-10-07:* merged (#4): Apps view with leftovers + uninstall to Trash; Monitor processes with Quit and confirmed Force Quit. Not yet tried end to end on the Mac.
 5. **Mac conveniences & launcher.** One shared event tap. Finder cut/paste → maximizer → Dock click → Auto Quit; Fn→Command through our own HID-level event tap; Tinycast launcher. Turn off each Vorssaint feature as its replacement works; then remove Vorssaint.
-   *Status 2026-10-07:* merged, all off by default: launcher on a Carbon hotkey (#6); event-tap conveniences — Finder cut/paste, maximizer, Dock click minimize, per-app Auto Quit (#7). Unverified on the Mac (permissions, Finder automation). Fn remap: own HID event tap; other Fn shortcuts untouched; Karabiner dropped (unverified on the Mac; Globe shortcuts like Fn+C may still fire).
+   *Status 2026-10-07:* merged, all off by default: launcher on a Carbon hotkey (#6); event-tap conveniences — Finder cut/paste, maximizer, Dock click minimize, per-app Auto Quit (#7). Unverified on the Mac (permissions, Finder automation). Fn remap: own HID event tap; other Fn shortcuts untouched; Karabiner dropped. Verified by the owner on the Logitech keyboard 2026-10-07: Fn+C/V copy/paste (no Control Center), Fn+Space unchanged.
 6. **Windows.** Native Windows notch (Rust), same Tauri hub, Windows file system provider, Recycle Bin, uninstallers.
 
 ## Safety rules (kept from the old plan)
