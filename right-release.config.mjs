@@ -10,7 +10,7 @@ export default {
  targets:{mac:{
   signed:true,signingContract:'macos-developer-id-notarized-portable-v1',packageKind:'dmg',architecture:'arm64',publishBlocked:'Preview installer delivery; publication is separate',
   prePackage:{cmd:'pnpm',args:['run','rightkit:prepare:mac']},
-  sign:{prePackageFiles:['dist/staging/Cockpit.app/Contents/MacOS/Cockpit','dist/staging/Cockpit.app/Contents/Helpers/cockpit','dist/staging/Cockpit.app/Contents/Helpers/Cockpit Hub.app/Contents/MacOS/cockpit-hub'],receipt:'.right-release/receipts/macos-signing.json'},
+  sign:{prePackageFiles:['dist/staging/Cockpit.app/Contents/Helpers/CockpitHelper','dist/staging/Cockpit.app/Contents/Helpers/cockpit-elevate','dist/staging/Cockpit.app/Contents/MacOS/Cockpit','dist/staging/Cockpit.app/Contents/Helpers/cockpit','dist/staging/Cockpit.app/Contents/Helpers/Cockpit Hub.app/Contents/MacOS/cockpit-hub'],receipt:'.right-release/receipts/macos-signing.json'},
   package:{cmd:'pnpm',args:['run','rightkit:package:mac']},
   artifacts:['dist/releases/mac/Cockpit.dmg'],
   notarize:{file:'dist/releases/mac/Cockpit.dmg',receipt:'.right-release/receipts/macos-notarization.json'},
