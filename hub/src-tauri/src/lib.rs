@@ -152,7 +152,10 @@ pub fn run() {
             // No Dock icon: Cockpit lives in the notch.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            let _ = app;
+            // An accessory app is not brought forward on launch; do it here.
+            if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+                let _ = window.set_focus();
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![status, processes, scan, children, search, reveal])
