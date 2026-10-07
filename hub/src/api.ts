@@ -66,6 +66,7 @@ export interface CleanupFinding {
   name: string;
   path: string;
   bytes: number;
+  apparent_bytes?: number;
   partial: boolean;
   risk: "safe" | "review" | "info";
   eligible: boolean;
@@ -76,7 +77,18 @@ export interface CleanupFinding {
   ino: string;
 }
 
+export interface ChromeSnapshots {
+  count: number;
+  apparent_bytes: number;
+  reclaimable_bytes: number;
+  reclaimable_known: boolean;
+  running: boolean;
+  since_at: number | null;
+  since_count: number | null;
+}
+
 export interface CleanupReport {
+  chrome_snapshots?: ChromeSnapshots | null;
   findings: CleanupFinding[];
   safe_bytes: number;
   review_bytes: number;

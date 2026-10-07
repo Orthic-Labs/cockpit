@@ -14,6 +14,7 @@ import {
   type Volume,
 } from "../api";
 import { KINDS, kindOf, squarify } from "../chart";
+import { ChromeSnapshotsLine } from "./ChromeSnapshots";
 
 const shortPath = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
 const VISIBLE_GROUPS = 6;
@@ -258,6 +259,7 @@ export function Storage() {
               </Button>
             )}
           </div>
+          <ChromeSnapshotsLine info={report?.chrome_snapshots} />
           {undo && (
             <div className="notice small">
               <span>{undo.text}</span>

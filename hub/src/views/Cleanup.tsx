@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { bytes } from "../api";
+import { bytes, type ChromeSnapshots } from "../api";
+import { ChromeSnapshotsLine } from "./ChromeSnapshots";
 
 interface Finding {
   id: string;
@@ -20,6 +21,7 @@ interface Finding {
 }
 
 interface Report {
+  chrome_snapshots?: ChromeSnapshots | null;
   findings: Finding[];
   safe_bytes: number;
   review_bytes: number;
@@ -186,6 +188,7 @@ export function Cleanup() {
         Nothing is deleted. Items go to the Trash, where you can put them back or empty it yourself.
       </div>
 
+      <ChromeSnapshotsLine info={report?.chrome_snapshots} />
       {notice && <div className="strong">{notice}</div>}
       {error && (
         <div className="error" style={{ whiteSpace: "pre-wrap" }}>

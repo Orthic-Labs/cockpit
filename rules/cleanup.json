@@ -158,11 +158,24 @@
       "action": "Move to Trash"
     },
     {
-      "id": "chrome-signing-copies", "name": "Chrome signing copies", "category": "Browser caches", "risk": "review",
-      "paths": ["/private/var/folders/*/*/T/com.google.Chrome.code_sign_clone/*", "/private/var/folders/*/*/X/com.google.Chrome.code_sign_clone/*"],
-      "liveness": "owners", "owners": ["Google Chrome"],
-      "min_age_days": 1,
-      "reason": "Temporary copies Chrome makes while updating. They share storage with the real app, so the size shown is an upper bound.",
+      "id": "chrome-signing-copies", "name": "Chrome signing snapshots", "category": "Browser caches", "risk": "review",
+      "paths": [
+        "/private/var/folders/*/*/X/com.google.Chrome.code_sign_clone/*",
+        "/private/var/folders/*/*/T/com.google.Chrome.code_sign_clone/*",
+        "/private/var/folders/*/*/X/com.google.Chrome.beta.code_sign_clone/*",
+        "/private/var/folders/*/*/T/com.google.Chrome.beta.code_sign_clone/*",
+        "/private/var/folders/*/*/X/com.google.Chrome.dev.code_sign_clone/*",
+        "/private/var/folders/*/*/T/com.google.Chrome.dev.code_sign_clone/*",
+        "/private/var/folders/*/*/X/com.google.Chrome.canary.code_sign_clone/*",
+        "/private/var/folders/*/*/T/com.google.Chrome.canary.code_sign_clone/*",
+        "/private/var/folders/*/*/X/com.google.chrome.for.testing.code_sign_clone/*",
+        "/private/var/folders/*/*/T/com.google.chrome.for.testing.code_sign_clone/*",
+        "/private/var/folders/*/*/X/org.chromium.Chromium.code_sign_clone/*",
+        "/private/var/folders/*/*/T/org.chromium.Chromium.code_sign_clone/*"
+      ],
+      "liveness": "owners", "owners": ["Google Chrome", "Google Chrome for Testing", "Google Chrome Canary", "Google Chrome Beta", "Google Chrome Dev", "Chromium", "Chrome", "chrome-headless-shell"],
+      "measurement": "clone_aware",
+      "reason": "Temporary copies of the Chrome app that a killed Chrome left behind. They are clones that share storage with the real app, so the size you get back is far smaller than the size shown.",
       "action": "Move to Trash"
     },
     {

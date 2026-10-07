@@ -45,6 +45,21 @@ pub enum LivenessCheck {
     Age,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Measurement {
+    /// Allocated blocks, as `du` counts them.
+    #[default]
+    Allocated,
+    /// Bytes no APFS clone shares: what deleting the item gives back.
+    CloneAware,
+}
+
+/// The rule whose items are Chrome's leftover signing snapshots.
+pub const CHROME_SNAPSHOT_RULE: &str = "chrome-signing-copies";
+/// Most files whose private size is read in one scan; the rest stay unmeasured.
+const CLONE_AWARE_BUDGET: usize = 600_000;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CleanupRule {
     pub id: String,
@@ -63,6 +78,8 @@ pub struct CleanupRule {
     pub keep_newest: usize,
     pub reason: String,
     pub action: String,
+    #[serde(default)]
+    pub measurement: Measurement,
     /// Build outputs sit inside projects, so no fixed path names them. A
     /// rule with `discover` finds directories by name and project marker.
     #[serde(default)]
@@ -203,7 +220,13 @@ pub struct Finding {
     pub category: String,
     pub name: String,
     pub path: String,
+    /// What moving it can give back. For clone-aware rules this is the
+    /// unshared part only; 0 when that could not be measured.
     pub bytes: u64,
+    /// Allocated size as `du` shows it, counting blocks shared with clones.
+    /// Equals `bytes` for rules that are not clone-aware.
+    #[serde(default)]
+    pub apparent_bytes: u64,
     /// The size is a lower bound because the walk hit its entry limit.
     pub partial: bool,
     pub risk: RuleRisk,
@@ -218,10 +241,87 @@ pub struct Finding {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Report {
+    #[serde(default)]
+    pub chrome_snapshots: Option<ChromeSnapshots>,
     pub findings: Vec<Finding>,
     pub safe_bytes: u64,
     pub review_bytes: u64,
     pub scanned_at: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ChromeSnapshots {
+    pub count: u64,
+    pub apparent_bytes: u64,
+    /// Unshared bytes; only meaningful when `reclaimable_known`.
+    pub reclaimable_bytes: u64,
+    pub reclaimable_known: bool,
+    /// A Chrome-family process is running, so none are offered.
+    pub running: bool,
+    /// Count and time of the earlier sample the change is measured from.
+    pub since_at: Option<u64>,
+    pub since_count: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CountSample {
+    at: u64,
+    count: u64,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct CountLog {
+    #[serde(default)]
+    samples: Vec<CountSample>,
+}
+
+const COUNT_SAMPLE_GAP_SECS: u64 = 86_400;
+const COUNT_WINDOW_SECS: u64 = 30 * 86_400;
+const COUNT_KEEP: usize = 60;
+
+fn count_log_path(home: &Path) -> PathBuf {
+    home.join("Library/Application Support/Cockpit/chrome-snapshots.json")
+}
+
+/// Add a sample when the last one is a day old or more, and pick the baseline
+/// the change is shown from: the oldest earlier sample inside 30 days.
+fn track_count(log: &mut CountLog, count: u64, now: u64) -> (bool, Option<CountSample>) {
+    let due = log
+        .samples
+        .last()
+        .is_none_or(|last| now >= last.at.saturating_add(COUNT_SAMPLE_GAP_SECS));
+    let baseline = log
+        .samples
+        .iter()
+        .find(|s| s.at < now && now - s.at <= COUNT_WINDOW_SECS)
+        .cloned();
+    if due {
+        log.samples.push(CountSample { at: now, count });
+        let extra = log.samples.len().saturating_sub(COUNT_KEEP);
+        log.samples.drain(..extra);
+    }
+    (due, baseline)
+}
+
+fn record_chrome_count(home: &Path, count: u64, now: u64) -> Option<CountSample> {
+    let path = count_log_path(home);
+    let mut log: CountLog = fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let (due, baseline) = track_count(&mut log, count, now);
+    if due && (count > 0 || log.samples.len() > 1) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let temp = path.with_extension("json.tmp");
+        if let Ok(body) = serde_json::to_vec_pretty(&log)
+            && fs::write(&temp, body).is_ok()
+        {
+            let _ = fs::rename(&temp, &path);
+        }
+    }
+    baseline
 }
 
 /// Names (lowercased) of running processes; the liveness evidence.
@@ -387,6 +487,46 @@ fn measure(path: &Path) -> (u64, bool) {
     (total, false)
 }
 
+/// Apparent (allocated) bytes under `path` and, when the file system can say,
+/// the bytes no clone shares. The second value is `None` if any file could not
+/// be asked or the budget ran out: a partial sum would understate, so the
+/// answer is "unknown", never a smaller number.
+fn measure_clone_aware(path: &Path, budget: &mut usize) -> (u64, Option<u64>) {
+    let mut apparent = 0u64;
+    let mut unique = Some(0u64);
+    let mut seen = 0usize;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(md) = current.symlink_metadata() else {
+            continue;
+        };
+        apparent = apparent.saturating_add(allocated(&md));
+        seen += 1;
+        if seen >= MAX_ENTRIES_PER_ITEM {
+            unique = None;
+            break;
+        }
+        if md.is_file() {
+            if *budget == 0 {
+                unique = None;
+            } else {
+                *budget -= 1;
+                match (unique, crate::platform::private_size(&current)) {
+                    (Some(total), Some(bytes)) => unique = Some(total.saturating_add(bytes)),
+                    _ => unique = None,
+                }
+            }
+        } else if md.is_dir()
+            && let Ok(entries) = fs::read_dir(&current)
+        {
+            for entry in entries.flatten() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    (apparent, unique)
+}
+
 fn age_days(md: &fs::Metadata) -> Option<u64> {
     let modified = md.modified().ok()?;
     let elapsed = SystemTime::now().duration_since(modified).ok()?;
@@ -450,6 +590,12 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
         ..Report::default()
     };
     let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut clone_budget = CLONE_AWARE_BUDGET;
+    let mut snapshots = ChromeSnapshots {
+        reclaimable_known: true,
+        ..ChromeSnapshots::default()
+    };
+    let mut snapshots_seen = false;
 
     for rule in &pack.rules {
         let groups: Vec<Vec<PathBuf>> = match &rule.discover {
@@ -477,6 +623,10 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                 });
                 let _ = matched.drain(..rule.keep_newest.min(matched.len()));
             }
+            if rule.id == CHROME_SNAPSHOT_RULE {
+                snapshots_seen = true;
+                snapshots.running = matches!(in_use(rule, "", running), Ok(Some(_)));
+            }
             for (path, md) in matched {
                 if let Some(min) = rule.min_age_days {
                     match age_days(&md) {
@@ -484,8 +634,23 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                         _ => continue,
                     }
                 }
-                let (bytes, partial) = measure(&path);
-                if bytes == 0 && rule.risk != RuleRisk::Info {
+                let clone_aware = rule.measurement == Measurement::CloneAware;
+                let (bytes, apparent_bytes, partial) = if clone_aware {
+                    let (apparent, unique) = measure_clone_aware(&path, &mut clone_budget);
+                    if rule.id == CHROME_SNAPSHOT_RULE {
+                        snapshots.count += 1;
+                        snapshots.apparent_bytes += apparent;
+                        match unique {
+                            Some(u) => snapshots.reclaimable_bytes += u,
+                            None => snapshots.reclaimable_known = false,
+                        }
+                    }
+                    (unique.unwrap_or(0), apparent, unique.is_none())
+                } else {
+                    let (b, p) = measure(&path);
+                    (b, b, p)
+                };
+                if bytes == 0 && !clone_aware && rule.risk != RuleRisk::Info {
                     continue;
                 }
                 let name = display_name(&path);
@@ -514,6 +679,7 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                     },
                     path: path_text,
                     bytes,
+                    apparent_bytes,
                     partial,
                     risk: rule.risk,
                     eligible,
@@ -524,6 +690,15 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                     ino: ino.to_string(),
                 });
             }
+        }
+    }
+    if snapshots_seen {
+        let now = report.scanned_at;
+        let baseline = record_chrome_count(home, snapshots.count, now);
+        snapshots.since_at = baseline.as_ref().map(|b| b.at);
+        snapshots.since_count = baseline.map(|b| b.count);
+        if snapshots.count > 0 {
+            report.chrome_snapshots = Some(snapshots);
         }
     }
     report
@@ -687,7 +862,13 @@ fn revalidate(
     match in_use(rule, &display_name(&path), running)? {
         Some(process) => Err(format!("In use: {process} is running")),
         None => {
-            let bytes = measure(&path).0;
+            let bytes = match rule.measurement {
+                Measurement::Allocated => measure(&path).0,
+                Measurement::CloneAware => {
+                    let mut budget = CLONE_AWARE_BUDGET;
+                    measure_clone_aware(&path, &mut budget).1.unwrap_or(0)
+                }
+            };
             Ok((path, bytes, wanted))
         }
     }
@@ -822,4 +1003,37 @@ pub fn restore(home: &Path, activity_id: &str) -> Result<RestoreResult, String> 
     }
     write_log(home, &log)?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_log_samples_daily_and_reports_change() {
+        let mut log = CountLog::default();
+        let day = 86_400;
+        let (due, base) = track_count(&mut log, 100, 10 * day);
+        assert!(due && base.is_none());
+        let (due, _) = track_count(&mut log, 120, 10 * day + 3600);
+        assert!(!due);
+        let (due, base) = track_count(&mut log, 133, 12 * day);
+        assert!(due);
+        let base = base.expect("baseline");
+        assert_eq!((base.at, base.count), (10 * day, 100));
+        assert_eq!(log.samples.len(), 2);
+    }
+
+    #[test]
+    fn chrome_clone_paths_match_the_rule() {
+        let pack = load_pack().unwrap();
+        let rule = pack.rules.iter().find(|r| r.id == CHROME_SNAPSHOT_RULE).unwrap();
+        let home = Path::new("/Users/x");
+        for id in ["com.google.Chrome", "com.google.chrome.for.testing", "org.chromium.Chromium"] {
+            let p = PathBuf::from(format!("/private/var/folders/ab/cd/X/{id}.code_sign_clone/code_sign_clone.AbC123"));
+            assert!(rule.paths.iter().any(|pat| path_matches(pat, &p, home)), "{id}");
+        }
+        let other = PathBuf::from("/private/var/folders/ab/cd/X/com.example.App.code_sign_clone/code_sign_clone.1");
+        assert!(!rule.paths.iter().any(|pat| path_matches(pat, &other, home)));
+    }
 }

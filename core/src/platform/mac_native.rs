@@ -13,6 +13,8 @@ const ATTR_BIT_MAP_COUNT: u16 = 5;
 const ATTR_VOL_INFO: u32 = 0x8000_0000;
 const ATTR_VOL_UUID: u32 = 0x0004_0000;
 const FSOPT_NOFOLLOW: u32 = 0x0000_0001;
+const FSOPT_ATTR_CMN_EXTENDED: u32 = 0x0000_0020;
+const ATTR_CMNEXT_PRIVATESIZE: u32 = 0x0000_0008;
 
 #[repr(C)]
 struct AttrList {
@@ -36,6 +38,39 @@ unsafe extern "C" {
         attr_buf_size: usize,
         options: u32,
     ) -> c_int;
+}
+
+/// Bytes of a file that no clone shares (APFS ATTR_CMNEXT_PRIVATESIZE): what
+/// deleting it would actually give back. `None` when the file system cannot say.
+pub(super) fn private_size(path: &Path) -> Option<u64> {
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut list = AttrList {
+        bitmapcount: ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: 0,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: ATTR_CMNEXT_PRIVATESIZE,
+    };
+    let mut buffer = Buffer([0; 64]);
+    let status = unsafe {
+        getattrlist(
+            c_path.as_ptr(),
+            &mut list,
+            buffer.0.as_mut_ptr().cast(),
+            buffer.0.len(),
+            FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let length = u32::from_ne_bytes(buffer.0[0..4].try_into().ok()?) as usize;
+    if length < 12 {
+        return None;
+    }
+    Some(u64::from_ne_bytes(buffer.0[4..12].try_into().ok()?))
 }
 
 fn volume_uuid(path: &Path) -> Result<[u8; 16], String> {

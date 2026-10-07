@@ -68,6 +68,19 @@ pub fn inspect(path: &Path, metadata: &fs::Metadata) -> NativeInfo {
 
 /// Volume identity for a mount point or path, used to map scanned volumes to
 /// mount accounting. Returns `(identity, stable)`; `None` when unsupported.
+/// Bytes of a file not shared with any APFS clone; `None` where unknown.
+pub fn private_size(path: &Path) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        mac_native::private_size(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 pub fn volume_identity_for_path(path: &Path) -> Option<(VolumeIdentity, bool)> {
     #[cfg(unix)]
     {
