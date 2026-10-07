@@ -22,7 +22,7 @@ const sections = [
 const BROKEN = /\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/;
 const NO_NOTCH = "notch isn't running";
 
-const pageTitle = () => browser.execute(() => document.querySelector(".rk-page__head h1")?.textContent?.trim() ?? "");
+const pageTitle = () => browser.execute(() => document.querySelector(".rk-top__title")?.textContent?.trim() ?? "");
 const bodyText = () => browser.execute(() => document.body.innerText);
 
 describe("Cockpit hub sections", () => {
