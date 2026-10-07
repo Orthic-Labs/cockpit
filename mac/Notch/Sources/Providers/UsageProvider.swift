@@ -2,7 +2,6 @@ import Foundation
 
 enum ProviderKind: Equatable {
     case usage
-    case localRuntime
     /// Cockpit fork: CPU, memory and disk readings sampled on this Mac.
     case system
 }
@@ -100,8 +99,6 @@ protocol UsageProvider {
     /// so users see sign-in guidance; local daemon providers return `false`
     /// so an inactive service does not take up a ring in the notch.
     var isVisibleWhenAbsent: Bool { get }
-    /// Optional custom icon image filename saved on disk.
-    var customIconFilename: String? { get }
 }
 
 extension UsageProvider {
@@ -114,8 +111,6 @@ extension UsageProvider {
     func presentAccountSwitch() { presentSignIn() }
 
     var isVisibleWhenAbsent: Bool { true }
-
-    var customIconFilename: String? { nil }
 }
 
 extension UsageProvider {

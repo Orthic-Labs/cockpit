@@ -12,7 +12,9 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 | Presence | `LSUIElement`; accessory from launch; Settings never promotes to a Dock app; status item never shown; app-icon picker removed | `project.yml`, `App/AppDelegate.swift`, `Settings/SettingsWindowController.swift`, `Settings/SettingsView.swift` |
 | Right-click | One item: Quit Cockpit | `Notch/NotchWindowController.swift` |
 | Updater | Sparkle removed; `Updater` is an inert stub so no Codenotch update can install over Cockpit | `App/Updater.swift`, `project.yml` |
-| Providers | Claude and Codex only (other provider code still compiled, not instantiated) | `App/AppDelegate.swift` |
+| Providers | Claude and Codex only. Every other provider (Cursor, Antigravity, GLM, MiniMax, Grok, Devin, OpenCode, Command Code, Copilot, Kimi, Kiro, Amp, Apify, Kilo, Ollama, LM Studio, Gemini, DeepSeek, Qianwen, custom endpoints, web-session sign-in) is deleted, with its activity monitors, glyph assets and outlines, and the local-model/cost/usage-detail fields of `ProviderSnapshot` and the card layout. Provider glyphs left: Claude, OpenAI, CPU, memory, disk | `App/AppDelegate.swift`, `Providers/`, `Sessions/`, `Model/`, `Features/`, `Notch/`, `Settings/Preferences.swift`, `Assets.xcassets` |
+| Trimmed | PhoneLink (folder, server, SwiftNIO dependency, ATS and local-network plist keys), Costs (folder, "What used it" card section), the never-shown menu-bar status item and its preferences, the app-presence preference, Codenotch's string resources and licences for removed icons | `project.yml`, `Info.plist`, `Settings/Preferences.swift` |
+| Hidden sampling | System and Disks refresh every 10 s (not 2 s) while the notch is hidden: visibility Hide, or folded away by a full-screen app on every display. Back to 2 s, with an immediate reading, when it shows again | `Model/UsageStore.swift`, `Notch/NotchFleet.swift`, `Notch/NotchWindowController.swift`, `App/AppDelegate.swift` |
 | System cells | System cell (memory pressure + CPU) and Disks cell (external + internal, all drives in the hover card, re-read each refresh). `ProviderKind.system`, 2 s refresh, no archive, no refresh spinner, excluded from usage alerts; SF Symbol glyphs | `System/SystemProviders.swift`, `Model/UsageStore.swift`, `Providers/UsageProvider.swift`, `Providers/ProviderGlyph.swift`, `Settings/Preferences.swift`, `App/AppDelegate.swift` |
 | Ring pairs | Main (outer) ring: weekly limit, external drive, memory pressure. Thin inner ring: five-hour session, internal drive, CPU. Weekly leads by default; inner ring stays visible while an agent works | `Settings/Preferences.swift`, `Features/ProviderRing.swift`, `System/SystemProviders.swift` |
 | Platform | Minimum macOS 26 (Liquid Glass always available); built with Xcode 27 | `project.yml` |
@@ -29,5 +31,5 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 
 ## Not yet done
 
-- Remove unused provider, phone-link and costs code.
-- Sampling does not yet slow while the notch is hidden for fullscreen.
+- `Localizable.xcstrings` still carries translations for strings only removed code used; they are inert.
+- The Claude and Codex activity monitors, usage alerts and `PiResponseMonitor` are unchanged; Pi's provider-name map still lists removed providers, which simply never match a ring.

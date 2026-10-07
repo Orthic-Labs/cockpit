@@ -13,7 +13,6 @@ struct ProviderRing: View {
     /// there is no arc to draw, and inventing one would be a lie in a shape.
     let usedFraction: Double?
     let glyph: ProviderGlyph
-    var customIconFilename: String? = nil
     var isStale: Bool = false
     /// Blocked right now. Shown as spent whatever the arc says, because that is
     /// what it means for you — a ring reading 16% while the account is paused
@@ -22,10 +21,6 @@ struct ProviderRing: View {
     var activity: ActivitySummary?
     /// A fetch this cell asked for, in flight.
     var isRefreshing: Bool = false
-    var localPerformance: LocalModelPerformance?
-    /// A local model's arc: how full its context was on the last request. Nil
-    /// draws the whole ring, which is what a runtime that does not say gets.
-    var localContextFraction: Double?
     /// The weekly limit, when the provider has one. Nil is the ordinary case
     /// for a provider with a single window, and draws nothing.
     var weeklyFraction: Double?
@@ -48,13 +43,6 @@ struct ProviderRing: View {
         return UsageBand.band(for: usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
     }
     private var sweep: CGFloat { CGFloat(min(max(usedFraction ?? 0, 0), 1)) }
-    private var localSweep: CGFloat { Self.localSweep(for: localContextFraction) }
-    /// The floor is a drawing decision only — the number under the ring and in
-    /// the card stays true.
-    static func localSweep(for contextFraction: Double?) -> CGFloat {
-        guard let contextFraction else { return 1 }
-        return max(NotchLayout.localArcMinimumSweep, CGFloat(min(max(contextFraction, 0), 1)))
-    }
     private var primaryColor: Color {
         isStale ? Palette.textSecondary : band.color(accent: accentColor)
     }
@@ -98,25 +86,7 @@ struct ProviderRing: View {
                 Circle()
                     .strokeBorder(Palette.ringTrack, lineWidth: NotchLayout.trackStroke)
 
-                if localPerformance != nil || localContextFraction != nil {
-                    // Two facts on one ring: the arc is the context filling up,
-                    // the colour is the last response's speed. Inset by half the
-                    // stroke so a full arc lands exactly where the solid
-                    // `strokeBorder` ring used to, and a runtime with no context
-                    // reading looks as it always did. Grey until a speed exists:
-                    // the quota colours would say something a local model has
-                    // no quota to mean.
-                    Circle()
-                        .inset(by: NotchLayout.progressStroke / 2)
-                        .trim(from: 0, to: localSweep)
-                        .stroke(
-                            localPerformance?.band.color ?? Palette.textSecondary,
-                            style: StrokeStyle(lineWidth: NotchLayout.progressStroke, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .animation(NotchMotion.reading, value: localSweep)
-                        .animation(NotchMotion.reading, value: localPerformance?.band)
-                } else if usedFraction != nil {
+                if usedFraction != nil {
                     Circle()
                         .inset(by: NotchLayout.trackStroke / 2)
                         .trim(from: 0, to: sweep)
@@ -177,7 +147,7 @@ struct ProviderRing: View {
                         .animation(NotchMotion.reading, value: weeklyBand)
                 }
 
-                ProviderGlyphView(glyph: glyph, customIconFilename: customIconFilename)
+                ProviderGlyphView(glyph: glyph)
                     .foregroundStyle(Palette.textPrimary)
                     // A spent limit dims its glyph so the ring reads as "waiting".
                     // Under reduce-transparency, boost opacity so it stays legible without low alpha.
@@ -306,15 +276,12 @@ struct ProviderCell: View {
     var body: some View {
         VStack(spacing: NotchLayout.ringLabelGap) {
             ProviderRing(
-                usedFraction: snapshot.localModel == nil && snapshot.hasReading ? snapshot.ringFraction : nil,
+                usedFraction: snapshot.hasReading ? snapshot.ringFraction : nil,
                 glyph: snapshot.glyph,
-                customIconFilename: snapshot.customIconFilename,
                 isStale: snapshot.status.isStale || !snapshot.hasReading,
                 isBlocked: snapshot.block != nil,
                 activity: activity,
                 isRefreshing: isRefreshing,
-                localPerformance: snapshot.localPerformance,
-                localContextFraction: snapshot.localContextFraction,
                 weeklyFraction: snapshot.hasReading ? snapshot.weeklyFraction : nil,
                 weeklyRing: weeklyRing,
                 bandOverride: snapshot.bandOverride
@@ -328,23 +295,9 @@ struct ProviderCell: View {
 
     /// Everything the cell says, as one sentence for VoiceOver and the tests.
     var accessibilityText: String {
-        snapshot.localModel.map {
-            "\($0.brand.map { "\($0.displayName), " } ?? "")\($0.name), \(snapshot.displayName) local, \(snapshot.showsLocalPerformance ? (snapshot.localPerformance.map { "Last generation speed \($0.speedText), \($0.band.label)" } ?? "Speed not measured") : "Loaded"), \($0.detail)\(localActivityText)\(localLedgerText)"
-        } ?? "\(snapshot.displayName), \(readingText)"
+        "\(snapshot.displayName), \(readingText)"
     }
 
-    /// What the model is doing, the way the tooltip's header says it.
-    private var localActivityText: String {
-        guard let activity, activity.state == .working else { return "" }
-        let phase = activity.sessions.first?.name ?? "Working"
-        return activity.queued > 0 ? ", \(phase), \(activity.queued) queued" : ", \(phase)"
-    }
-
-    private var localLedgerText: String {
-        guard let ledger = snapshot.localLedger else { return "" }
-        let context = snapshot.localContextFraction.map { ", Context \(Percent.text(for: $0))% full" } ?? ""
-        return "\(context), Tokens today \(ledger.tokensTodayText), \(ledger.requestsTodayText) requests"
-    }
 }
 
 private struct WeeklyRingDashedKey: EnvironmentKey {
@@ -498,7 +451,7 @@ struct ProviderReading: View {
     /// Only after a percentage: a count or a cost with a percentage after it
     /// would read as one quantity, and it is not.
     private var weeklyReading: Double? {
-        guard showsWeeklyReading, weeklyRing != .off, snapshot.localModel == nil,
+        guard showsWeeklyReading, weeklyRing != .off,
               snapshot.usedFraction != nil, snapshot.headline?.prefersUsedText != true
         else { return nil }
         return snapshot.weeklyFraction
@@ -520,8 +473,7 @@ struct ProviderReading: View {
             Text(text)
                 .font(isPair ? Typography.percentPairAcross : Typography.percentAcross)
                 .monospacedDigit()
-                .foregroundStyle(snapshot.showsLocalPerformance && snapshot.localPerformance == nil
-                                 ? Palette.textSecondary : Palette.textPrimary)
+                .foregroundStyle(Palette.textPrimary)
                 .lineLimit(1)
                 // Never into the side's own curved end: smaller before that.
                 .minimumScaleFactor(0.4)
@@ -536,15 +488,10 @@ struct ProviderReading: View {
     private var underTheRing: some View {
         Text(text)
             .font(snapshot.hasReading && weeklyReading != nil ? Typography.percentPair : Typography.percent)
-            .foregroundStyle(snapshot.showsLocalPerformance && snapshot.localPerformance == nil
-                             ? Palette.textSecondary : Palette.textPrimary)
-            // Keep local speeds inside the ring's column so longer units
-            // cannot consume the notch's existing side margins.
+            .foregroundStyle(Palette.textPrimary)
             .lineLimit(1)
-            .minimumScaleFactor(snapshot.localModel == nil ? 1 : 0.5)
-            .fixedSize(horizontal: snapshot.localModel == nil, vertical: false)
-            .frame(width: snapshot.localModel == nil ? nil : NotchLayout.ringDiameter,
-                   height: NotchLayout.percentLineHeight)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(height: NotchLayout.percentLineHeight)
             .contentTransition(.numericText())
             .animation(NotchMotion.reading, value: text)
     }

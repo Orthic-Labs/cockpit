@@ -611,12 +611,10 @@ private struct ProviderTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TooltipHeader(title: snapshot.kind == .localRuntime
-                          ? L10n.t("\(snapshot.localModel?.brand?.displayName ?? snapshot.displayName) · Local")
-                          : L10n.t("\(snapshot.displayName) Usage"),
+            TooltipHeader(title: L10n.t("\(snapshot.displayName) Usage"),
                           subtitle: snapshot.plan,
-                          note: activityNote ?? (snapshot.localModel?.brand != nil ? snapshot.displayName : readingAge)) {
-                ProviderGlyphView(glyph: snapshot.glyph, customIconFilename: snapshot.customIconFilename)
+                          note: activityNote ?? readingAge) {
+                ProviderGlyphView(glyph: snapshot.glyph)
                     .foregroundStyle(Palette.textPrimary)
             }
 
@@ -631,10 +629,6 @@ private struct ProviderTooltip: View {
                     .foregroundStyle(secondaryInk)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, NotchLayout.headerToBlock)
-            } else if let localModel = snapshot.localModel {
-                RuntimeModelDetails(model: localModel, performance: snapshot.localPerformance,
-                                    showsPerformance: snapshot.showsLocalPerformance,
-                                    ledger: snapshot.localLedger, now: now)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(groupedWindows.enumerated()), id: \.element.id) { groupIndex, group in
@@ -670,52 +664,6 @@ private struct ProviderTooltip: View {
                 .padding(.bottom, groupedWindows.contains(where: { $0.title != nil }) ? Design.px(8) : 0)
             }
         }
-    }
-}
-
-private struct RuntimeModelDetails: View {
-    let model: LocalRuntimeReading.Model
-    let performance: LocalModelPerformance?
-    let showsPerformance: Bool
-    /// Present for a runtime that logs its requests; five more rows, counted
-    /// in `ProviderSnapshot.localLedgerRowCount`.
-    let ledger: LocalTokenLedger.Summary?
-    let now: Date
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(model.name)
-                .foregroundStyle(Palette.textPrimary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(height: NotchLayout.modelNameHeight(model.name), alignment: .topLeading)
-                .padding(.top, NotchLayout.headerToBlock)
-                .accessibilityLabel(model.name)
-            VStack(spacing: NotchLayout.sessionRowGap) {
-                if showsPerformance {
-                    SplitRow(leading: "Last speed (derived)", trailing: performance?.speedText ?? "Not measured",
-                             trailingColor: performance?.band.color)
-                    SplitRow(leading: "Speed band", trailing: performance?.band.label ?? "—")
-                }
-                SplitRow(leading: model.memoryLabel, trailing: model.displayedMemoryBytes == nil ? "Unavailable" : model.memoryText)
-                SplitRow(leading: "Context limit", trailing: model.contextText)
-                SplitRow(leading: "Quantization", trailing: model.quantizationText)
-                SplitRow(leading: "Unloads", trailing: model.unloadText(now: now))
-                if showsPerformance {
-                    SplitRow(leading: "Measured", trailing: performance.map { ElapsedCopy.ago(since: $0.measuredAt, now: now) } ?? "—")
-                }
-                if let ledger {
-                    SplitRow(leading: "Context used", trailing: ledger.contextText(contextLength: model.contextLength))
-                    SplitRow(leading: "Tokens today", trailing: ledger.tokensTodayText)
-                    SplitRow(leading: "Requests today", trailing: ledger.requestsTodayText)
-                    SplitRow(leading: "Reasoning share", trailing: ledger.reasoningShareText)
-                    SplitRow(leading: "Draft accepted", trailing: ledger.draftAcceptanceText)
-                }
-            }
-            .padding(.top, NotchLayout.blockSpacing)
-        }
-        .font(Typography.cardBody)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1093,23 +1041,12 @@ struct TooltipCard: View {
     /// How many sessions this screen has room to list. Solved from the display
     /// rather than fixed, so a big screen hides nothing.
     var sessionCap: Int = NotchLayout.defaultSessionCap
-    /// Project rows the cost section may list, as the view model solved it.
-    var costRows: Int = 0
     var resetTimeFormat: ResetTimeFormat = .automatic
-    var deepSeekPricingEnabled: Bool = true
-    var deepSeekPricingSchedule: DeepSeekPricing.Schedule = .current
     var tailOffset: CGFloat = 0
     /// A tap on a session row jumps to that session's terminal — nil leaves
     /// the rows as plain text.
     var onFocusSession: ((pid_t) -> Void)? = nil
     @AppStorage(Preferences.showUsagePaceKey) private var showUsagePace = false
-
-    /// The phase a local model is in, and the queue behind it, for the header.
-    /// Ollama's relay only knows thinking; LM Studio's poll names the phase.
-    private var localActivityNote: String? {
-        guard snapshot.localModel != nil, let activity, activity.state == .working else { return nil }
-        return activity.note ?? activity.sessions.first?.name ?? L10n.t("Thinking")
-    }
 
     /// The same figure the hover region uses, so what is drawn and what is
     /// reachable can never drift apart.
@@ -1118,20 +1055,14 @@ struct TooltipCard: View {
             windowCount: snapshot.windows.count,
             groupCount: snapshot.windowGroupCount,
             moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
-            usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
-            sessionCount: snapshot.localModel == nil ? (activity?.sessions.count ?? 0) : 0,
+            sessionCount: activity?.sessions.count ?? 0,
             sessionCap: sessionCap,
             statusMessage: snapshot.statusMessage,
             blockMessage: snapshot.block?.summary(now: now),
-            hasTokenUsage: snapshot.tokenUsage != nil || snapshot.customUsageHistory != nil,
+            hasTokenUsage: snapshot.tokenUsage != nil,
             hasPlan: snapshot.plan != nil,
             hasResetCredits: snapshot.availableResetCredits(at: now) != nil,
-            localModelName: snapshot.localModel?.name,
-            showsLocalPerformance: snapshot.showsLocalPerformance,
-                localLedgerRows: snapshot.localLedgerRowCount,
-            compactRowCount: snapshot.compactRowCount,
-            showsDeepSeekPricing: deepSeekPricingEnabled,
-            costRows: costRows
+            compactRowCount: snapshot.compactRowCount
         )
     }
 
@@ -1143,27 +1074,17 @@ struct TooltipCard: View {
             // drifts while the card resizes around them.
             ZStack(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ProviderTooltip(activityNote: localActivityNote, snapshot: snapshot, now: now, resetTimeFormat: resetTimeFormat,
+                    ProviderTooltip(activityNote: nil, snapshot: snapshot, now: now, resetTimeFormat: resetTimeFormat,
                                     showUsagePace: showUsagePace)
                     if let resetCredits = snapshot.availableResetCredits(at: now) {
                         UsageResetCreditsSection(credits: resetCredits, now: now)
                     }
                     if let tokenUsage = snapshot.tokenUsage {
                         CodexUsageSection(usage: tokenUsage, now: now)
-                    } else if let history = snapshot.customUsageHistory {
-                        CodexUsageSection(usage: history.codexUsage, now: now)
                     }
-                    if let usageDetail = snapshot.usageDetail, usageDetail.hasUsage {
-                        DeepSeekUsageDetail(detail: usageDetail, now: now,
-                                            schedule: deepSeekPricingSchedule,
-                                            showsPricing: deepSeekPricingEnabled)
-                    }
-                    if let activity, snapshot.localModel == nil {
+                    if let activity {
                         SessionList(summary: activity, now: now, cap: sessionCap,
                                     onFocus: onFocusSession)
-                    }
-                    if costRows > 0, let model = CostModels.model(for: snapshot.id) {
-                        CostSection(model: model, rows: costRows)
                     }
                 }
                 // An identity, so one provider's rows are never interpolated

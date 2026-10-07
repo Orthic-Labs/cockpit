@@ -56,6 +56,12 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   COCKPIT_TEST_HELPER="$(cargo build --locked --bin cockpit --message-format=json | python3 -c 'import json,sys; paths=[r["executable"] for line in sys.stdin if (r:=json.loads(line)).get("reason")=="compiler-artifact" and r.get("target",{}).get("name")=="cockpit" and r.get("executable")]; assert paths, "Missing cockpit compiler artifact"; print(paths[-1])')"
   export COCKPIT_TEST_HELPER
   # mac/Sources (salvage services) is reference-only until reviewed; see mac/README.md.
+  # Cockpit hub (Tauri): type-check and bundle the page, then compile the
+  # Rust backend (its own workspace, pinned to the RightKit toolchain).
+  pnpm --dir hub install --ignore-workspace --no-frozen-lockfile
+  pnpm --dir hub exec tsc --noEmit
+  pnpm --dir hub run build
+  cargo check --manifest-path hub/src-tauri/Cargo.toml
   # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
   xcodebuild -version
   command -v xcodegen >/dev/null || brew install xcodegen

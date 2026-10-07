@@ -143,10 +143,21 @@ final class NotchWindowController {
     /// fold reads as the notch refusing to stay put, not as it tidying up.
     var foldsForFullScreen = true
 
+    /// Cockpit fork: whether a full-screen app is currently folding this notch
+    /// away. The fleet reads it to slow the System and Disks sampling while
+    /// nobody can see them.
+    private(set) var isFoldedForFullScreen = false
+    var onFoldChange: (() -> Void)?
+
     /// When a full-screen app is active on the current space, auto-folds the notch.
     /// When returning to a desktop space with `isAlwaysOn`, restores the unfolded state.
     func handleActiveSpaceOrAppChange() {
-        if foldsForFullScreen && isFullScreenActive() && !model.isPinned {
+        let folded = foldsForFullScreen && isFullScreenActive()
+        if folded != isFoldedForFullScreen {
+            isFoldedForFullScreen = folded
+            onFoldChange?()
+        }
+        if folded && !model.isPinned {
             if let panel {
                 let local = localCursor(in: panel.frame)
                 let overTooltip = model.hoveredIndex
@@ -1244,20 +1255,14 @@ final class NotchWindowController {
             windowCount: snapshot.windows.count,
             groupCount: snapshot.windowGroupCount,
             moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
-            usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
-            sessionCount: snapshot.localModel == nil ? (model.activity(for: snapshot.id)?.sessions.count ?? 0) : 0,
+            sessionCount: model.activity(for: snapshot.id)?.sessions.count ?? 0,
             sessionCap: model.sessionCap,
             statusMessage: snapshot.statusMessage,
             blockMessage: snapshot.block?.summary(now: model.now),
             hasTokenUsage: snapshot.tokenUsage != nil,
             hasPlan: snapshot.plan != nil,
             hasResetCredits: snapshot.hasAvailableResetCredits,
-            localModelName: snapshot.localModel?.name,
-            showsLocalPerformance: snapshot.showsLocalPerformance,
-                localLedgerRows: snapshot.localLedgerRowCount,
-            compactRowCount: snapshot.compactRowCount,
-            showsDeepSeekPricing: model.deepSeekPricingEnabled
-        )
+            compactRowCount: snapshot.compactRowCount)
         // Across the stack the region is the card, its tail, and the gap the
         // pointer has to cross. Along it, the card's own extent.
         let cardAcross = model.edge.isVertical ? NotchLayout.cardWidth : cardHeight
