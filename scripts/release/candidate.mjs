@@ -30,14 +30,19 @@ if (action === 'admit') {
   writeFileSync(path.join(root,'stage-summary.json'),JSON.stringify({schema_version:1,stage:env.RIGHT_GIT_STAGE,producer:env.RIGHT_GIT_STAGE_PRODUCER,status:env.RIGHT_GIT_STAGE_STATUS||'STARTED',version:env.RIGHT_GIT_RELEASE_VERSION,source_revision:revision,platform:env.RIGHT_GIT_RELEASE_PLATFORM,architecture:env.RIGHT_GIT_RELEASE_ARCHITECTURE,run_id:env.RIGHT_GIT_RUN_ID,run_attempt:env.RIGHT_GIT_RUN_ATTEMPT,artifacts:hashes},null,2)+'\n');
 } else if(action==='build') {
   if(process.platform!=='darwin') throw new Error('Mac native host required');
-  run('bash',['scripts/gate.sh']);
+  run('bash',['scripts/gate.sh']); // also builds the notch (xcodebuild) into $RUNNER_TEMP
   run('cargo',['build','--locked','--release','--bin','cockpit']);
+  run('pnpm',['--dir','hub','install','--ignore-workspace','--no-frozen-lockfile']);
+  run('pnpm',['--dir','hub','tauri','build','--bundles','app','--no-sign']);
   run('node',['scripts/release/mac-payload.mjs','candidate']);
 } else if(action==='check') {
   const root=env.RIGHT_GIT_ARTIFACT_ROOT;
   const app=env.COCKPIT_CHECK_APP || path.join(root,'cockpit','mac','Cockpit.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
-  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Resources/dashboard/index.html','Contents/Resources/dashboard/app.js','Contents/Resources/dashboard/style.css']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Helpers/Cockpit Hub.app/Contents/MacOS/cockpit-hub','Contents/Helpers/Cockpit Hub.app/Contents/Info.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  const plist=run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Info.plist')],{encoding:'utf8',stdio:'pipe'});
+  const info=JSON.parse(plist);
+  if(info.CFBundleIdentifier!=='dev.orthic.cockpit'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');
   const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-smoke-')));
   const state=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-state-')));
   try{
@@ -45,7 +50,5 @@ if (action === 'admit') {
     const out=run(path.join(app,'Contents/Helpers/cockpit'),['scan',fixture,'--save','--state-dir',state,'--json'],{encoding:'utf8',stdio:'pipe'});
     const scan=JSON.parse(out);
     if(!scan.snapshot?.report?.entries?.some(e=>e.path.endsWith('/example.txt')))throw new Error('Bundled scanner smoke failed');
-    const launch=spawnSync(path.join(app,'Contents/MacOS/Cockpit'),['--package-smoke-root',fixture],{encoding:'utf8',timeout:150_000});
-    if(launch.status!==0 || !launch.stderr?.includes('dashboard_smoke_pass'))throw new Error(`Native dashboard smoke failed: ${launch.stderr || launch.error}`);
   } finally {rmSync(fixture,{recursive:true,force:true});rmSync(state,{recursive:true,force:true});}
 } else throw new Error(`Unknown action: ${action}`);

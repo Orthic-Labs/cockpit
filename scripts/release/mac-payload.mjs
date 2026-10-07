@@ -15,7 +15,8 @@ const paths = {
   app: join(stagingRoot, appName),
   appExecutable: join(stagingRoot, appName, 'Contents', 'MacOS', 'Cockpit'),
   helper: join(stagingRoot, appName, 'Contents', 'Helpers', 'cockpit'),
-  dashboard: join(stagingRoot, appName, 'Contents', 'Resources', 'dashboard'),
+  hub: join(stagingRoot, appName, 'Contents', 'Helpers', 'Cockpit Hub.app'),
+  hubExecutable: join(stagingRoot, appName, 'Contents', 'Helpers', 'Cockpit Hub.app', 'Contents', 'MacOS', 'cockpit-hub'),
   raw: join(stagingRoot, 'raw'),
   output: join(repoRoot, 'dist', 'releases', 'mac', 'Cockpit.dmg')
 };
@@ -57,17 +58,15 @@ async function copyTree(source, target, label) {
   await cp(source, target, { recursive: true, force: true });
 }
 
+// Cockpit.app is the notch (Codenotch fork, xcodebuild) with the CLI and the
+// hub (Tauri) inside Contents/Helpers. The notch's own Info.plist is kept.
 function sourcePaths() {
+  const temp = process.env.RUNNER_TEMP || '/tmp';
   return {
-    appExecutable: process.env.COCKPIT_MAC_APP_BINARY || join(repoRoot, 'mac', '.build', 'release', 'cockpit-mac-prototype'),
+    notch: process.env.COCKPIT_NOTCH_APP || join(temp, 'cockpit-notch', 'Build', 'Products', 'Release', appName),
     helper: process.env.COCKPIT_CLI_BINARY || join(repoRoot, 'target', 'release', 'cockpit'),
-    dashboard: process.env.COCKPIT_DASHBOARD_ROOT || join(repoRoot, 'dashboard')
+    hub: process.env.COCKPIT_HUB_APP || join(repoRoot, 'hub', 'src-tauri', 'target', 'release', 'bundle', 'macos', 'Cockpit Hub.app')
   };
-}
-
-async function writeInfoPlist(target) {
-  await mkdir(dirname(target), { recursive: true });
-  await cp(join(releaseRoot, 'Info.plist'), target, { force: true });
 }
 
 async function writeCandidateManifest(root) {
@@ -104,23 +103,15 @@ async function candidate() {
   const app = join(root, appName);
   const appExecutable = join(app, 'Contents', 'MacOS', 'Cockpit');
   const helper = join(app, 'Contents', 'Helpers', 'cockpit');
-  const dashboard = join(app, 'Contents', 'Resources', 'dashboard');
 
   await mkdir(root, { recursive: true });
-  await copyExecutable(source.appExecutable, appExecutable, 'Mac app executable');
+  await rm(app, { recursive: true, force: true });
+  await copyTree(source.notch, app, 'notch app (xcodebuild)');
+  await requireFile(appExecutable, 'notch executable');
   await copyExecutable(source.helper, helper, 'Cockpit CLI');
-  await copyTree(source.dashboard, dashboard, 'dashboard assets');
-  // WKWebView file origins cannot depend on ES-module fetch semantics. This file
-  // has no imports; preserve exact implementation inside a classic-script closure.
-  const moduleSource = await readFile(join(dashboard, 'app.mjs'), 'utf8');
-  const classicSource = moduleSource.replace(/^export (?=(?:const|function)\b)/gm, '');
-  if (/^\s*(?:import|export)\s/m.test(classicSource)) fail('Dashboard requires an explicit module bundler');
-  await writeFile(join(dashboard, 'app.js'), `(() => {\n${classicSource}\n})();\n`);
-  const index = await readFile(join(dashboard, 'index.html'), 'utf8');
-  await writeFile(join(dashboard, 'index.html'), index.replace('<script type="module" src="./app.mjs"></script>', '<script src="./app.js"></script>'));
-  await writeInfoPlist(join(app, 'Contents', 'Info.plist'));
-  await cp(join(repoRoot, 'upstream/codenotch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
-  await copyExecutable(source.appExecutable, join(root, 'raw', 'Cockpit'), 'Mac app executable');
+  await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Cockpit Hub.app'), 'hub app (Tauri)');
+  await cp(join(repoRoot, 'mac/Notch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
+  await copyExecutable(appExecutable, join(root, 'raw', 'Cockpit'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'cockpit'), 'Cockpit CLI');
   await dittoZip(app, join(root, `${appName}.zip`));
   await writeCandidateManifest(root);
@@ -152,7 +143,8 @@ async function prepare() {
   // GitHub artifact handoff normalizes file modes; restore both known executables.
   await chmod(paths.appExecutable, 0o755);
   await chmod(paths.helper, 0o755);
-  await requireDirectory(paths.dashboard, 'staged dashboard assets');
+  await requireFile(paths.hubExecutable, 'staged hub executable');
+  await chmod(paths.hubExecutable, 0o755);
   await mkdir(paths.raw, { recursive: true });
   await copyExecutable(paths.appExecutable, join(paths.raw, 'Cockpit'), 'staged app executable');
   await copyExecutable(paths.helper, join(paths.raw, 'cockpit'), 'staged Cockpit CLI');
@@ -170,7 +162,7 @@ async function packageMac({ local = false } = {}) {
   await requireDirectory(paths.app, 'staged Cockpit.app');
   await requireFile(paths.appExecutable, 'staged app executable');
   await requireFile(paths.helper, 'staged Cockpit CLI');
-  await requireDirectory(paths.dashboard, 'staged dashboard assets');
+  await requireFile(paths.hubExecutable, 'staged hub executable');
   const identity = process.env.APPLE_DEVELOPER_ID;
   if (!identity) fail('APPLE_DEVELOPER_ID is required; refusing unconfigured signing identity');
 

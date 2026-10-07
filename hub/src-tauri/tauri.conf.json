@@ -1,0 +1,41 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Cockpit Hub",
+  "mainBinaryName": "cockpit-hub",
+  "version": "0.1.0",
+  "identifier": "dev.orthic.cockpit.hub",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:5191",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Cockpit",
+        "width": 760,
+        "height": 480,
+        "minWidth": 720,
+        "minHeight": 400,
+        "resizable": true,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "publisher": "Damned Ventures LLC",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png"],
+    "macOS": {
+      "minimumSystemVersion": "26.0"
+    }
+  }
+}

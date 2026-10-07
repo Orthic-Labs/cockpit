@@ -3,7 +3,7 @@
 name: notch-preview
 on:
   push:
-    branches: [notch-codenotch-fork]
+    branches: [main, hub-rightkit]
     paths: ["mac/Notch/**", ".github/workflows/notch-preview.yml"]
   workflow_dispatch:
 permissions:
