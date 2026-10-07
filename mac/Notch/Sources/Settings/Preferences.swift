@@ -190,6 +190,10 @@ final class Preferences: ObservableObject {
     @Published var convDockClickMinimize: Bool {
         didSet { defaults.set(convDockClickMinimize, forKey: Keys.convDockClickMinimize) }
     }
+    /// Fn works as Command (see `Keyboard/FnCommand.swift`).
+    @Published var convFnCommand: Bool {
+        didSet { defaults.set(convFnCommand, forKey: Keys.convFnCommand) }
+    }
     @Published var convAutoQuit: Bool {
         didSet { defaults.set(convAutoQuit, forKey: Keys.convAutoQuit) }
     }
@@ -417,6 +421,7 @@ final class Preferences: ObservableObject {
         static let convFinderCutPaste = "convFinderCutPaste"
         static let convWindowMaximizer = "convWindowMaximizer"
         static let convDockClickMinimize = "convDockClickMinimize"
+        static let convFnCommand = "convFnCommand"
         static let convAutoQuit = "convAutoQuit"
         static let convAutoQuitApps = "convAutoQuitApps"
         static let launcherEnabled = "launcherEnabled"
@@ -600,6 +605,7 @@ final class Preferences: ObservableObject {
         self.convFinderCutPaste = defaults.bool(forKey: Keys.convFinderCutPaste)
         self.convWindowMaximizer = defaults.bool(forKey: Keys.convWindowMaximizer)
         self.convDockClickMinimize = defaults.bool(forKey: Keys.convDockClickMinimize)
+        self.convFnCommand = defaults.bool(forKey: Keys.convFnCommand)
         self.convAutoQuit = defaults.bool(forKey: Keys.convAutoQuit)
         self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
         self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)

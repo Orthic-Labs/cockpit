@@ -52,7 +52,7 @@ final class EventTapHub {
     @discardableResult
     func start() -> Bool {
         if isRunning { return true }
-        let events: [CGEventType] = [.keyDown, .leftMouseDown, .leftMouseUp]
+        let events: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp]
         var mask = CGEventMask(0)
         for event in events { mask |= CGEventMask(1) << CGEventMask(event.rawValue) }
         let callback: CGEventTapCallBack = { _, type, event, info in

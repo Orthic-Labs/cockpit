@@ -20,6 +20,9 @@ final class ConveniencesService {
     private let finder = FinderCutPaste()
     private let maximizer = WindowMaximizer()
     private let dock = DockClickMinimize()
+    private let fn = FnCommand()
+    private var fnFailure: String?
+    private var fnApplied = false
     private let autoQuit = AutoQuit()
     private var tokens: [String: EventTapToken] = [:]
     private var cancellables = Set<AnyCancellable>()
@@ -71,6 +74,7 @@ final class ConveniencesService {
 
     private var wantsEvents: Bool {
         preferences.convFinderCutPaste || preferences.convWindowMaximizer || preferences.convDockClickMinimize
+            || preferences.convFnCommand
     }
 
     private var wantsAnything: Bool { wantsEvents || preferences.convAutoQuit }
@@ -101,15 +105,54 @@ final class ConveniencesService {
                  handler: { [maximizer] in maximizer.handle($0, $1) }, off: { [maximizer] in maximizer.reset() })
             sync("dock", preferences.convDockClickMinimize, priority: 10,
                  handler: { [dock] in dock.handle($0, $1) }, off: { [dock] in dock.reset() })
+            syncFn()
         } else if hub.isRunning {
             unregisterAll()
             hub.stop()
         }
+        if !preferences.convFnCommand && (fnApplied || fnFailure != nil) { removeFnMapping() }
 
         if preferences.convAutoQuit {
             autoQuit.start(bundleIDs: preferences.convAutoQuitApps)
         } else if autoQuit.isRunning {
             autoQuit.stop()
+        }
+    }
+
+    /// Fn is remapped to F18 only while the tap that reads F18 is running, so
+    /// Fn is never left dead. A keyboard connected later is mapped by a
+    /// re-check, which every reconcile (and the timer below) performs.
+    private func syncFn() {
+        if preferences.convFnCommand {
+            sync("fn", true, priority: 40,
+                 handler: { [fn] in fn.handle($0, $1) }, off: { [fn] in fn.reset() })
+            if !fnApplied || !FnKeyMapping.isApplied {
+                fnFailure = FnKeyMapping.apply()
+                fnApplied = fnFailure == nil
+            }
+            setFnWatch(fnApplied)
+        } else {
+            sync("fn", false, priority: 40, handler: { _, _ in .pass }, off: { [fn] in fn.reset() })
+            removeFnMapping()
+        }
+    }
+
+    private func removeFnMapping() {
+        setFnWatch(false)
+        fnFailure = nil
+        if fnApplied || FnKeyMapping.isApplied { FnKeyMapping.remove() }
+        fnApplied = false
+    }
+
+    private var fnWatch: Timer?
+    private func setFnWatch(_ on: Bool) {
+        if on, fnWatch == nil {
+            fnWatch = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reconcile() }
+            }
+        } else if !on {
+            fnWatch?.invalidate()
+            fnWatch = nil
         }
     }
 
@@ -129,10 +172,12 @@ final class ConveniencesService {
         finder.reset()
         maximizer.reset()
         dock.reset()
+        fn.reset()
     }
 
     private func tearDown() {
         unregisterAll()
+        removeFnMapping()
         hub.stop()
         if autoQuit.isRunning { autoQuit.stop() }
     }
@@ -151,10 +196,18 @@ final class ConveniencesService {
     // MARK: - What the hub shows
 
     private func publishIfChanged() {
-        let signature = "\(AXIsProcessTrusted())|\(hub.isRunning)|\(autoQuit.isRunning)|\(CGPreflightListenEventAccess())"
+        let signature = "\(fnStatus.state)|\(AXIsProcessTrusted())|\(hub.isRunning)|\(autoQuit.isRunning)|\(CGPreflightListenEventAccess())"
         guard signature != published else { return }
         published = signature
         onChange?()
+    }
+
+    /// state: off, running, needsAccessibility or failed.
+    private var fnStatus: (state: String, detail: String) {
+        guard preferences.convFnCommand else { return ("off", "") }
+        guard AXIsProcessTrusted() else { return ("needsAccessibility", "") }
+        if let fnFailure { return ("failed", fnFailure) }
+        return fnApplied && hub.isRunning ? ("running", "") : ("failed", "the key tap is not running")
     }
 
     func stateSnapshot() -> [String: Any] {
@@ -173,6 +226,8 @@ final class ConveniencesService {
             "accessibility": AXIsProcessTrusted(),
             "inputMonitoring": CGPreflightListenEventAccess(),
             "wanted": wantsAnything,
+            "fnStatus": fnStatus.state,
+            "fnDetail": fnStatus.detail,
             "active": hub.isRunning || autoQuit.isRunning,
             "runningApps": running,
             "autoQuitApps": listed,
