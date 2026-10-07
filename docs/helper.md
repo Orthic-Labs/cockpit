@@ -12,7 +12,7 @@ Only code signed by Apple-anchored team `6KLGD3LLKF` with identifier `dev.orthic
 
 ## What it can do
 
-One call: `moveToTrash(paths, forUser)`. Each path is renamed (`renamex_np`, `RENAME_EXCL`, so nothing is overwritten) into `/Users/<name>/.Trash` under a unique name. It never deletes, copies, chowns existing items or runs anything. Every decision is logged with os_log (subsystem `dev.orthic.cockpit.helper`).
+One call: `moveToTrash(paths, forUser)`. Each path is renamed (`renamex_np`, `RENAME_EXCL`, so nothing is overwritten) into `/Users/<name>/.Trash` under a unique name. It never deletes, copies or runs anything, and changes ownership only of the item it just moved. Every decision is logged with os_log (subsystem `dev.orthic.cockpit.helper`).
 
 ## What it refuses
 
@@ -20,7 +20,9 @@ One call: `moveToTrash(paths, forUser)`. Each path is renamed (`renamex_np`, `RE
 - Anything outside `/Applications/<item>` and `/Library/{Application Support, Caches, Preferences, LaunchAgents, LaunchDaemons, PrivilegedHelperTools, Logs, Internet Plug-Ins, PreferencePanes, Audio}/<item>` (the folders themselves are refused too). `/Library/Receipts` and `/Library/Extensions` are not allowed.
 - `/System`, `/usr`, `/bin`, `/sbin`, `/private`, `/Library/Apple`, `/Applications/Utilities`, `com.apple.*` and `Apple` entries under those /Library folders, any app (or app inside a vendor folder) whose bundle id starts `com.apple.` and has no App Store receipt, and anything containing the helper itself.
 
-Each path gets its own `moved` or `refused` (with reason) result. Moved items stay root-owned in the Trash, so emptying the Trash can still ask for a password; that is Finder's doing, not part of uninstalling.
+After a move it gives the moved item to the user: `lchown` to the caller's uid and primary gid over an `fts` walk with `FTS_PHYSICAL` (symlinks never followed) and `FTS_XDEV`, only inside the Trash path it just created. If that fails partway the item is still reported `moved`, with a note in `detail`. This is the only other write it makes, so emptying the Trash needs no password.
+
+Each path gets its own `moved` or `refused` (with reason) result.
 
 ## Remove it
 

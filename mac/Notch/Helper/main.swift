@@ -16,7 +16,7 @@ private func result(_ path: String, _ status: String, _ detail: String = "") -> 
     ["path": path, "status": status, "detail": detail]
 }
 
-private func trashDirectory(forUser uid: uid_t) -> String? {
+private func trashDirectory(forUser uid: uid_t) -> (path: String, gid: gid_t)? {
     guard uid >= 500, let pw = getpwuid(uid), let dir = pw.pointee.pw_dir else { return nil }
     let home = String(cString: dir)
     guard home.hasPrefix("/Users/"), !home.contains("..") else { return nil }
@@ -25,15 +25,38 @@ private func trashDirectory(forUser uid: uid_t) -> String? {
     if lstat(trash, &info) != 0 {
         guard mkdir(trash, 0o700) == 0 else { return nil }
         chown(trash, uid, pw.pointee.pw_gid)
-        return trash
+        return (trash, pw.pointee.pw_gid)
     }
     guard (info.st_mode & 0o170000) == 0o040000, info.st_uid == uid else { return nil }
-    return trash
+    return (trash, pw.pointee.pw_gid)
+}
+
+/// Gives the moved item (and everything inside it) to the user, so emptying the
+/// Trash needs no password. Physical walk: symlinks are changed themselves
+/// (lchown), never followed, and other volumes are not entered. Returns the
+/// number of entries that could not be changed.
+private func giveToUser(_ root: String, uid: uid_t, gid: gid_t) -> Int {
+    var failures = 0
+    guard let start = strdup(root) else { return 1 }
+    defer { free(start) }
+    var argv: [UnsafeMutablePointer<CChar>?] = [start, nil]
+    // FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV
+    guard let walk = fts_open(&argv, 0x10 | 0x04 | 0x40, nil) else { return 1 }
+    defer { fts_close(walk) }
+    while let entry = fts_read(walk) {
+        switch Int32(entry.pointee.fts_info) {
+        case 6: continue                       // FTS_DP: directory already handled
+        case 4, 7, 10: failures += 1; continue // FTS_DNR, FTS_ERR, FTS_NS
+        default: break
+        }
+        if lchown(entry.pointee.fts_path, uid, gid) != 0 { failures += 1 }
+    }
+    return failures
 }
 
 /// rename(2) into the Trash under a name that does not exist yet. Nothing is
 /// ever deleted or overwritten (RENAME_EXCL).
-private func move(_ path: String, toTrash trash: String) -> [String: String] {
+private func move(_ path: String, toTrash trash: String, uid: uid_t, gid: gid_t) -> [String: String] {
     let name = (path as NSString).lastPathComponent
     let stem = (name as NSString).deletingPathExtension
     let ext = (name as NSString).pathExtension
@@ -42,6 +65,11 @@ private func move(_ path: String, toTrash trash: String) -> [String: String] {
         let target = trash + "/" + candidate
         if renamex_np(path, target, 0x4 /* RENAME_EXCL */) == 0 {
             log.notice("moved \(path, privacy: .public) to \(target, privacy: .public)")
+            let failed = giveToUser(target, uid: uid, gid: gid)
+            if failed > 0 {
+                log.error("ownership: \(failed) entries of \(target, privacy: .public) not changed")
+                return result(path, "moved", "\(target) (ownership of \(failed) entries not changed; emptying the Trash may ask for a password)")
+            }
             return result(path, "moved", target)
         }
         if errno != EEXIST {
@@ -69,7 +97,7 @@ private final class Service: NSObject, CockpitHelperProtocol {
                 log.notice("refused \(path, privacy: .public): \(why, privacy: .public)")
                 return result(path, "refused", why)
             }
-            return move(path, toTrash: trash)
+            return move(path, toTrash: trash.path, uid: uid, gid: trash.gid)
         })
     }
 }
