@@ -1142,7 +1142,10 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
             });
             println!("{value}");
             if app_failed {
-                return Err(CliError { body: None, exit: 1 });
+                return Err(CliError {
+                    body: None,
+                    exit: 1,
+                });
             }
         }
         other => return Err(format!("unknown apps command: {other}").into()),
