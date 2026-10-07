@@ -567,7 +567,11 @@ pub fn scan_with_provider<P: FilesystemProvider>(
             report.entries.len(),
             report.folders.len(),
             started.elapsed().as_millis(),
-            if report.incomplete_reasons.iter().any(|r| r == "scan cancelled") {
+            if report
+                .incomplete_reasons
+                .iter()
+                .any(|r| r == "scan cancelled")
+            {
                 " (cancelled)"
             } else {
                 ""
@@ -633,10 +637,7 @@ pub(crate) fn canonical_root(path: &Path) -> PathBuf {
     if !fs::symlink_metadata(&top).is_ok_and(|m| m.file_type().is_symlink()) {
         return path.to_path_buf();
     }
-    fs::canonicalize(&top).map_or_else(
-        |_| path.to_path_buf(),
-        |real| real.join(parts.as_path()),
-    )
+    fs::canonicalize(&top).map_or_else(|_| path.to_path_buf(), |real| real.join(parts.as_path()))
 }
 
 pub fn scan(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {
@@ -810,7 +811,8 @@ fn walk<P: FilesystemProvider>(
         attributed_allocation_bytes: 0,
         incomplete: false,
     });
-    let (logical, attributed) = walk_children(provider, path, depth, options, &metadata, report, ctx);
+    let (logical, attributed) =
+        walk_children(provider, path, depth, options, &metadata, report, ctx);
     let folder = &mut ctx.folders[slot];
     folder.logical_bytes = logical;
     folder.attributed_allocation_bytes = attributed;
