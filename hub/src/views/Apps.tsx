@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, ConfirmDialog, Toggle } from "@rightkit/app-shell/react";
+import { invoke } from "@tauri-apps/api/core";
 import { api, bytes, type AppDetail, type AppEntry, type UninstallResult } from "../api";
 
 const DAY = 86_400;
@@ -26,6 +27,12 @@ export function Apps() {
     api.apps().then(setApps).catch((e) => setError(String(e)));
   };
   useEffect(load, []);
+  // `--app <path>` opens straight to that app's uninstall review.
+  useEffect(() => {
+    invoke<string | null>("initial_app").then((path) => {
+      if (path) api.appDetail(path).then(setDetail).catch((e) => setError(String(e)));
+    });
+  }, []);
 
   const open = (app: AppEntry) => {
     setError(null);

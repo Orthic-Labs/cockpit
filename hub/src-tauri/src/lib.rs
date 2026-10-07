@@ -264,6 +264,13 @@ fn initial_section() -> Option<String> {
     args.iter().position(|a| a == "--section").and_then(|i| args.get(i + 1).cloned())
 }
 
+/// The app passed with `--app <path>`, opened in the Apps review.
+#[tauri::command]
+fn initial_app() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter().position(|a| a == "--app").and_then(|i| args.get(i + 1).cloned())
+}
+
 /// Watch for the notch asking a running hub to show a section, and for new
 /// notch state; forward both to the page as events.
 fn watch_notch(app: tauri::AppHandle) {
@@ -489,7 +496,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,
             cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())
