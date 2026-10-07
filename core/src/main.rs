@@ -1096,8 +1096,13 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
         }
         "uninstall" => {
             let mut includes = Vec::new();
-            while let Some(value) = take_option(&mut arguments, "--include")? {
-                includes.push(value);
+            // Repeatable, so not `take_option` (which refuses repeats).
+            while let Some(index) = arguments.iter().position(|a| a == "--include") {
+                arguments.remove(index);
+                if index >= arguments.len() || arguments[index].starts_with('-') {
+                    return Err("--include requires a value".into());
+                }
+                includes.push(arguments.remove(index));
             }
             let only_preselected = arguments.iter().position(|a| a == "--only-preselected");
             if let Some(i) = only_preselected {
