@@ -39,15 +39,24 @@ fn home() -> PathBuf {
 /// Children of `path` from the held scan, largest first. Folder sizes are the
 /// scan's per-folder totals; file sizes are their attributed allocation.
 fn folder(report: &ScanReport, path: &PathBuf) -> Result<Folder, String> {
-    let page = storage_browser::drilldown_children(report, path, 0, 10_000)
-        .map_err(|e| e.to_string())?;
+    // The browser pages at most 1,000 children per request.
+    let mut items = Vec::new();
+    let mut offset = 0;
+    let (total_children, incomplete) = loop {
+        let page = storage_browser::drilldown_children(report, path, offset, 1_000)
+            .map_err(|e| e.to_string())?;
+        items.extend(page.items);
+        offset += 1_000;
+        if !page.has_more || offset >= 20_000 {
+            break (page.total_children, page.incomplete);
+        }
+    };
     let totals: HashMap<&PathBuf, u64> = report
         .folders
         .iter()
         .map(|f| (&f.path, f.attributed_allocation_bytes))
         .collect();
-    let mut rows: Vec<Row> = page
-        .items
+    let mut rows: Vec<Row> = items
         .into_iter()
         .map(|item| {
             let is_dir = item.kind == EntryKind::Directory;
@@ -65,8 +74,8 @@ fn folder(report: &ScanReport, path: &PathBuf) -> Result<Folder, String> {
         path: path.clone(),
         root: report.roots.first().cloned().unwrap_or_default(),
         rows,
-        total_children: page.total_children,
-        incomplete: page.incomplete,
+        total_children,
+        incomplete,
     })
 }
 

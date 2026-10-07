@@ -1,3 +1,5 @@
+html, body { margin: 0; height: 100%; overflow: hidden; }
+
 :root {
   --rk-brand: #0a84ff;
   --rk-brand-dark: #0a84ff;
@@ -6,7 +8,7 @@
   font-size: 13px;
 }
 
-.view { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; min-height: 0; }
+.view { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; flex: 1; min-height: 0; }
 .muted { color: var(--ink-3); }
 .small { font-size: 11px; }
 .strong { font-weight: 600; color: var(--ink); }
@@ -34,7 +36,7 @@
 .crumb { background: none; border: 0; padding: 0; color: var(--ink-2); font: inherit; cursor: pointer; }
 .crumb:last-child { color: var(--ink); font-weight: 600; }
 
-.list { display: flex; flex-direction: column; overflow: auto; min-height: 0; }
+.list { display: flex; flex-direction: column; overflow: auto; flex: 1; min-height: 0; }
 .row {
   display: grid; grid-template-columns: minmax(0, 1fr) 90px 72px; align-items: center; gap: 12px;
   padding: 6px 4px; border-bottom: 1px solid var(--hairline);
