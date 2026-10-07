@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 const version=JSON.parse(readFileSync(new URL('./package.json',import.meta.url))).version;
 export default {
- schema:1, app:'cockpit', version, packageManager:'pnpm@11.24.0', hostedWorkflows:'right-git-ci-only',
+ schema:1, app:'cockpit', version, packageManager:'pnpm', hostedWorkflows:'right-git-ci-only',
  distribution:{provider:'github-releases',repository:'Orthic-Labs/cockpit'},
  // Cockpit's native workspace is the repo-root Cargo.toml (core + CLI); the
  // hub's Tauri crate is a separate workspace under hub/src-tauri.
