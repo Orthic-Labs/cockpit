@@ -60,6 +60,7 @@ export interface Volume {
 export interface CleanupFinding {
   id: string;
   rule_id: string;
+  rule_name?: string;
   category: string;
   name: string;
   path: string;

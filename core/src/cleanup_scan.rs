@@ -197,6 +197,9 @@ pub fn load_pack() -> Result<CleanupPack, String> {
 pub struct Finding {
     pub id: String,
     pub rule_id: String,
+    /// The rule's own name: what a group of findings is called.
+    #[serde(default)]
+    pub rule_name: String,
     pub category: String,
     pub name: String,
     pub path: String,
@@ -499,6 +502,7 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                 report.findings.push(Finding {
                     id: finding_id(&rule.id, &path_text),
                     rule_id: rule.id.clone(),
+                    rule_name: rule.name.clone(),
                     category: rule.category.clone(),
                     name: if rule.discover.is_some() {
                         let project = path.parent().map(display_name).unwrap_or_default();

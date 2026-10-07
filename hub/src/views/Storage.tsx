@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, ConfirmDialog, EmptyState } from "@rightkit/app-shell/react";
-import { ChevronRight, File, Folder as FolderIcon, HardDrive, RefreshCw, ShieldCheck, Undo2, Usb } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, File, Folder as FolderIcon, HardDrive, Info, RefreshCw, ShieldCheck, Terminal, Undo2, Usb } from "lucide-react";
 import {
   api,
   bytes,
@@ -16,7 +16,48 @@ import {
 import { KINDS, kindOf, squarify } from "../chart";
 
 const shortPath = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
-const VISIBLE_FINDINGS = 4;
+const VISIBLE_GROUPS = 6;
+const VISIBLE_NOTES = 3;
+
+interface Group {
+  key: string;
+  label: string;
+  items: CleanupFinding[];
+  bytes: number;
+  partial: boolean;
+  risk: "safe" | "review";
+  reason: string;
+  discovered: boolean;
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function groupFindings(list: CleanupFinding[]): Group[] {
+  const map = new Map<string, Group>();
+  for (const f of list) {
+    let g = map.get(f.rule_id);
+    if (!g) {
+      const label = f.rule_name || f.name;
+      g = { key: f.rule_id, label, items: [], bytes: 0, partial: false, risk: "safe", reason: f.reason, discovered: f.name.startsWith(`${label} · `) };
+      map.set(f.rule_id, g);
+    }
+    g.items.push(f);
+    g.bytes += f.bytes;
+    g.partial ||= f.partial;
+    if (f.risk !== "safe") g.risk = "review";
+  }
+  return [...map.values()].sort((a, b) => b.bytes - a.bytes);
+}
+
+const groupCount = (g: Group) =>
+  g.items.length === 1 ? "" : g.discovered ? plural(g.items.length, "project") : plural(g.items.length, "item");
+
+function noteIcon(f: CleanupFinding) {
+  const text = `${f.action} ${f.reason}`.toLowerCase();
+  if (text.includes("xcrun") || text.includes("terminal") || text.includes("command")) return Terminal;
+  if (text.includes("in use") || text.includes("running")) return Activity;
+  return Info;
+}
 
 export function Storage() {
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -27,7 +68,9 @@ export function Storage() {
   const [growth, setGrowth] = useState<Growth | null>(null);
   const [report, setReport] = useState<CleanupReport | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const [pending, setPending] = useState<CleanupFinding[] | null>(null);
+  const [showNotes, setShowNotes] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState<{ label: string; items: CleanupFinding[] } | null>(null);
   const [undo, setUndo] = useState<{ id: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,12 +148,20 @@ export function Storage() {
   const others = (report?.findings ?? []).filter((f) => !f.eligible && f.bytes > 0).sort((a, b) => b.bytes - a.bytes);
   const safeItems = eligible.filter((f) => f.risk === "safe");
   const freeable = report ? report.safe_bytes + report.review_bytes : 0;
-  const shown = showAll ? eligible : eligible.slice(0, VISIBLE_FINDINGS);
+  const groups = useMemo(() => groupFindings(eligible), [eligible]);
+  const shown = showAll ? groups : groups.slice(0, VISIBLE_GROUPS);
+  const notes = showNotes ? others : others.slice(0, VISIBLE_NOTES);
+  const toggleGroup = (key: string) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   const internalActive = volumes.find((v) => v.mount_point === active)?.internal ?? active === "/";
 
   const confirmMove = () =>
     run(async () => {
-      const items = pending ?? [];
+      const items = pending?.items ?? [];
       setPending(null);
       const result = await api.cleanupApply(items);
       if (result.activity_id) {
@@ -171,7 +222,7 @@ export function Storage() {
               {!report ? "Looking for what is safe to clear…" : freeable > 0 ? `You can free ${bytes(freeable)}` : "Nothing obvious to clear"}
             </span>
             {safeItems.length > 1 && (
-              <Button size="sm" onClick={() => setPending(safeItems)} disabled={busy}>
+              <Button size="sm" onClick={() => setPending({ label: "Safe items", items: safeItems })} disabled={busy}>
                 Clear all safe ({bytes(report?.safe_bytes ?? 0)})
               </Button>
             )}
@@ -184,35 +235,84 @@ export function Storage() {
               </Button>
             </div>
           )}
-          {shown.map((f) => (
-            <div key={f.id} className="finding" title={f.path}>
-              <div className="finding-main">
-                <span className="name">
-                  {f.name} <Badge tone={f.risk === "safe" ? "ok" : "warn"}>{f.risk === "safe" ? "Safe" : "Review"}</Badge>
-                </span>
-                <span className="muted small finding-reason">{f.reason}</span>
+          <div className="findings-scroll">
+            {shown.map((g) => {
+              const expanded = openGroups.has(g.key);
+              const count = groupCount(g);
+              const single = g.items.length === 1;
+              return (
+                <div key={g.key} className="finding-group">
+                  <div className="finding" title={single ? g.items[0].path : undefined}>
+                    <button
+                      className="chev"
+                      onClick={() => toggleGroup(g.key)}
+                      disabled={single}
+                      aria-label={expanded ? "Hide items" : "Show items"}
+                      aria-expanded={expanded}
+                    >
+                      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                    </button>
+                    <div className="finding-main">
+                      <span className="name">
+                        {g.label}
+                        {count && <span className="muted"> · {count}</span>}{" "}
+                        <Badge tone={g.risk === "safe" ? "ok" : "warn"}>{g.risk === "safe" ? "Safe" : "Review"}</Badge>
+                      </span>
+                      <span className="muted small finding-reason">{g.reason}</span>
+                    </div>
+                    <span className="size strong">
+                      {g.partial ? "≥ " : ""}
+                      {bytes(g.bytes)}
+                    </span>
+                    <Button size="sm" onClick={() => setPending({ label: g.label, items: g.items })} disabled={busy}>
+                      Move to Trash
+                    </Button>
+                  </div>
+                  {expanded &&
+                    g.items.map((f) => (
+                      <div key={f.id} className="finding sub" title={f.path}>
+                        <span />
+                        <span className="name small">{f.name}</span>
+                        <span className="size small">
+                          {f.partial ? "≥ " : ""}
+                          {bytes(f.bytes)}
+                        </span>
+                        <Button size="sm" variant="ghost" onClick={() => setPending({ label: f.name, items: [f] })} disabled={busy}>
+                          Move to Trash
+                        </Button>
+                      </div>
+                    ))}
+                </div>
+              );
+            })}
+            {groups.length > VISIBLE_GROUPS && (
+              <button className="crumb more" onClick={() => setShowAll(!showAll)}>
+                {showAll ? "Show fewer" : `Show ${groups.length - VISIBLE_GROUPS} more`}
+              </button>
+            )}
+            {others.length > 0 && (
+              <div className="notes">
+                <div className="notes-head muted small">Notes</div>
+                {notes.map((f) => {
+                  const Icon = noteIcon(f);
+                  return (
+                    <div key={f.id} className="note muted small" title={f.path}>
+                      <Icon size={12} strokeWidth={1.75} />
+                      <span className="note-text">
+                        {f.rule_name || f.name} · {f.reason}
+                      </span>
+                      <span className="note-size">{bytes(f.bytes)}</span>
+                    </div>
+                  );
+                })}
+                {others.length > VISIBLE_NOTES && (
+                  <button className="crumb more" onClick={() => setShowNotes(!showNotes)}>
+                    {showNotes ? "Show fewer notes" : `Show ${others.length - VISIBLE_NOTES} more notes`}
+                  </button>
+                )}
               </div>
-              <span className="size strong">
-                {f.partial ? "≥ " : ""}
-                {bytes(f.bytes)}
-              </span>
-              <Button size="sm" onClick={() => setPending([f])} disabled={busy}>
-                Move to Trash
-              </Button>
-            </div>
-          ))}
-          {eligible.length > VISIBLE_FINDINGS && (
-            <button className="crumb more" onClick={() => setShowAll(!showAll)}>
-              {showAll ? "Show fewer" : `Show all ${eligible.length}`}
-            </button>
-          )}
-          {others.slice(0, 3).map((f) => (
-            <div key={f.id} className="muted small other">
-              <span className="name">
-                {f.name}: {bytes(f.bytes)}. {f.reason}
-              </span>
-            </div>
-          ))}
+            )}
+          </div>
         </section>
       )}
 
@@ -302,8 +402,8 @@ export function Storage() {
 
       {pending && (
         <ConfirmDialog
-          title={pending.length === 1 ? `Move ${pending[0].name} to the Trash?` : `Move ${pending.length} items to the Trash?`}
-          description={`${bytes(pending.reduce((s, f) => s + f.bytes, 0))} will move to the Trash. Nothing is deleted: you can put it back, or empty the Trash yourself.`}
+          title={pending.items.length === 1 ? `Move ${pending.items[0].name} to the Trash?` : `Move ${pending.items.length} items to the Trash?`}
+          description={`${pending.items.length > 1 ? `${pending.label}: ` : ""}${plural(pending.items.length, "item")}, ${bytes(pending.items.reduce((s, f) => s + f.bytes, 0))} will move to the Trash. Nothing is deleted: you can put it back, or empty the Trash yourself.`}
           confirmLabel="Move to Trash"
           onConfirm={confirmMove}
           onCancel={() => setPending(null)}
