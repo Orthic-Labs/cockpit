@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var resetWatcher: UsageResetWatcher?
     private var limitWatcher: UsageLimitWatcher?
     private var statusItem: StatusItemController?
+    private var hubBridge: HubBridge?
     /// Keeps the Claude keychain token from ageing out on a Mac where the CLI
     /// is never run by hand. See `ClaudeTokenRefresher`.
     private var tokenRefresher: ClaudeTokenRefresher?
@@ -406,7 +407,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 phoneLinkPairing: phonePairing, phoneLinkRegistry: phoneRegistry, phoneLinkServerStatus: serverStatus
             )
             // The gear toggles; everything else that opens settings opens it.
-            fleet.onOpenSettings = { [weak settings] in settings?.toggle() }
+            // Cockpit fork: settings live in the hub. The old window is only the
+            // fallback while no hub is installed.
+            fleet.onOpenSettings = { [weak settings] in
+                if !HubLauncher.open(section: "settings") { settings?.toggle() }
+            }
             // A session row answers where it runs by taking you there.
             fleet.onFocusSession = { pid in
                 Task { _ = await SessionFocus.focus(pid: pid) }
@@ -758,6 +763,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 .store(in: &cancellables)
             store.start()
+
+            // Cockpit fork: share settings and accounts with the hub.
+            var bridgeActions = HubBridge.Actions()
+            bridgeActions.refresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
+            bridgeActions.resetPosition = { [weak fleet, weak preferences] in
+                preferences?.setOffset(0, for: preferences?.notchEdge ?? .right)
+                fleet?.apply(alongOffset: 0)
+            }
+            bridgeActions.previewResetAlert = { [weak self] in self?.previewUsageResetAlert() }
+            bridgeActions.previewSessionLimitAlert = { [weak self] in self?.previewSessionLimitAlert() }
+            bridgeActions.previewWeeklyLimitAlert = { [weak self] in self?.previewWeeklyLimitAlert() }
+            bridgeActions.sendTestNotification = { [weak self] in self?.sendTestNotification() }
+            let bridge = HubBridge(preferences: preferences, store: store, actions: bridgeActions)
+            bridge.start()
+            self.hubBridge = bridge
             fleet.onRefresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
             fleet.onLook = { [weak store] in store?.refreshBecauseSomeoneIsLooking() }
             fleet.onRefreshProvider = { [weak store] id in
