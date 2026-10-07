@@ -1,0 +1,9 @@
+# Same pin RightKit uses: @wdio/tauri-service needs this native-utils export.
+overrides:
+  '@wdio/native-utils': 2.5.0
+
+# The QA driver's browser-driver downloads are unused; the hub drives its own webview.
+allowBuilds:
+  edgedriver: false
+  geckodriver: false
+  esbuild: false
