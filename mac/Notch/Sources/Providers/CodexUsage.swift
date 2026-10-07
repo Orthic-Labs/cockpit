@@ -97,6 +97,8 @@ enum CodexUsage {
         /// credits under a workspace spend control, which is the only
         /// allowance that account can show.
         let spend_control: SpendControl?
+        /// The prepaid balance (`credits.balance` is a decimal string).
+        let credits: CreditBalance?
 
         private enum CodingKeys: String, CodingKey {
             case rate_limit
@@ -104,6 +106,7 @@ enum CodexUsage {
             case additional_rate_limits
             case code_review_rate_limit
             case spend_control
+            case credits
         }
 
         init(from decoder: Decoder) throws {
@@ -121,6 +124,28 @@ enum CodexUsage {
                 RateLimit.self, forKey: .code_review_rate_limit
             )
             spend_control = try? container.decodeIfPresent(SpendControl.self, forKey: .spend_control)
+            credits = try? container.decodeIfPresent(CreditBalance.self, forKey: .credits)
+        }
+    }
+
+    private struct CreditBalance: Decodable {
+        let has_credits: Bool?
+        let unlimited: Bool?
+        let balance: Double?
+
+        private enum CodingKeys: String, CodingKey { case has_credits, unlimited, balance }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            has_credits = try? c.decodeIfPresent(Bool.self, forKey: .has_credits)
+            unlimited = try? c.decodeIfPresent(Bool.self, forKey: .unlimited)
+            if let d = try? c.decodeIfPresent(Double.self, forKey: .balance) {
+                balance = d
+            } else if let s = try? c.decodeIfPresent(String.self, forKey: .balance) {
+                balance = Double(s)
+            } else {
+                balance = nil
+            }
         }
     }
 
@@ -330,6 +355,20 @@ enum CodexUsage {
             throw UsageProviderError.nothingMetered(L10n.t("Codex reported no usage windows"))
         }
         return windows
+    }
+
+    /// The available credit balance as card text, or nil when the payload
+    /// carries none or the account has no credits.
+    static func creditsText(from data: Data) -> String? {
+        guard let credits = (try? JSONDecoder().decode(Response.self, from: data))?.credits
+        else { return nil }
+        if credits.unlimited == true { return L10n.t("Unlimited") }
+        guard let balance = credits.balance, balance > 0 || credits.has_credits == true
+        else { return nil }
+        let formatter = NumberFormatter()
+        formatter.locale = L10n.locale
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: balance))
     }
 
     /// The account tier the usage payload names, when it names one.

@@ -49,6 +49,26 @@ enum CodexCredentials {
         )
     }
 
+    /// When the paid subscription runs to, from the identity token's
+    /// `chatgpt_subscription_active_until` claim. Only as fresh as Codex's
+    /// last refresh; nil for free plans, when absent, or already past.
+    static func subscriptionEnd(from url: URL = authURL, now: Date = Date()) -> Date? {
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any],
+              let idToken = tokens["id_token"] as? String,
+              let claims = claims(inJWT: idToken),
+              let auth = claims["https://api.openai.com/auth"] as? [String: Any],
+              let text = auth["chatgpt_subscription_active_until"] as? String
+        else { return nil }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        guard let date = withFraction.date(from: text) ?? plain.date(from: text), date > now
+        else { return nil }
+        return date
+    }
+
     /// Claims supply identity labels and a local expiry hint. The server validates the token.
     static func claims(inJWT token: String) -> [String: Any]? {
         let parts = token.split(separator: ".")

@@ -76,16 +76,27 @@ actor CodexLocalProvider: UsageProvider {
         // extras payload cannot skip the credits row.
         async let resetCredits = Self.fetchResetCredits(session: session, credential: credential)
 
-        let windows = try CodexUsage.windows(
+        var windows = try CodexUsage.windows(
             from: data,
             includeExtras: Preferences.storedShowCodexExtraLimits()
         )
 
-        // The profile page's token statistics are the source for the chart and
-        // totals.
-        let profileUsage = try? await Self.fetchProfileUsage(
-            session: session, credential: credential
-        )
+        // Hover rows after the main pair and ahead of Spark/code review, so
+        // they stay outside those boxes. Each is omitted when there is no data.
+        var extra: [LimitWindow] = []
+        if let credits = CodexUsage.creditsText(from: data) {
+            extra.append(LimitWindow(id: "credit-balance", label: L10n.t("Available credits"),
+                                     detail: credits))
+        }
+        if let end = CodexCredentials.subscriptionEnd(from: authURL) {
+            let formatter = DateFormatter()
+            formatter.locale = L10n.locale
+            formatter.setLocalizedDateFormatFromTemplate("MMM d, y")
+            extra.append(LimitWindow(id: "plan-renewal", label: L10n.t("Plan active until"),
+                                     detail: formatter.string(from: end)))
+        }
+        windows.insert(contentsOf: extra,
+                       at: windows.firstIndex { $0.group != nil } ?? windows.count)
         retryNoEarlierThan = nil
         archive.saveBackoffUntil(nil, providerID: id)
         return ProviderSnapshot(
@@ -97,34 +108,9 @@ actor CodexLocalProvider: UsageProvider {
             headlineID: "primary",
             // The weekly ring is the account weekly, never Spark's own weekly.
             weeklyID: "secondary",
-            tokenUsage: profileUsage,
             plan: CodexUsage.plan(from: data) ?? account()?.plan?.nonEmptyPlan,
             resetCredits: await resetCredits
         )
-    }
-
-    private static func fetchProfileUsage(
-        session: URLSession,
-        credential: CodexCredentials.Credential
-    ) async throws -> CodexTokenUsage {
-        var request = URLRequest(
-            url: URL(string: "https://chatgpt.com/backend-api/wham/profiles/me")!,
-            cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: 15
-        )
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(credential.accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
-
-        let (data, response) = try await session.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 401 || status == 403 { throw UsageProviderError.needsAuth }
-        guard (200..<300).contains(status) else {
-            throw UsageProviderError.badResponse(status: status)
-        }
-        return try CodexUsage.profileUsage(from: data)
     }
 
     /// Unused rate-limit resets on this Codex account, listed by the same

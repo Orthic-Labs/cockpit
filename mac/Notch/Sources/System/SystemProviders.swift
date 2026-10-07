@@ -71,16 +71,14 @@ actor SystemLoadProvider: UsageProvider {
             extras.append(LimitWindow(id: "gpu", label: L10n.t("GPU"),
                                       detail: L10n.t("\(Percent.text(for: gpu))% busy")))
         }
-        if let celsius = SystemSensors.cpuTemperature() {
-            extras.append(LimitWindow(id: "temperature", label: L10n.t("Temperature"),
-                                      detail: DriveHealth.temperatureText(celsius)))
-        }
         // Memory pressure leads (the main, outer ring); CPU is the thin inner
         // ring. Without a memory reading, CPU leads alone.
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
                                 status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []) + extras,
                                 headlineID: memory?.id ?? cpu.id,
-                                weeklyID: memory == nil ? nil : cpu.id, kind: .system)
+                                weeklyID: memory == nil ? nil : cpu.id, kind: .system,
+                                headerAccessory: SystemSensors.cpuTemperature()
+                                    .map(DriveHealth.temperatureText))
     }
 
     private static func read() throws -> Ticks {
@@ -214,8 +212,13 @@ struct DisksProvider: UsageProvider {
         // this path and only its last result is read here.
         let health = await DriveHealth.shared.rows(
             for: ordered.compactMap { volume in volume.device.map { (device: $0, name: volume.window.label) } })
+        let usage = ordered.map { volume -> LimitWindow in
+            var window = volume.window
+            window.trailingText = volume.device.flatMap { health.temperatures[$0] }
+            return window
+        }
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
-                                status: .ok, windows: ordered.map(\.window) + health,
+                                status: .ok, windows: usage + health.rows,
                                 headlineID: lead.window.id,
                                 weeklyID: external == nil ? nil : inside.window.id,
                                 kind: .system)

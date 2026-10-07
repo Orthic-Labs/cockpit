@@ -135,6 +135,9 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     let duration: TimeInterval?
     var bandOverride: UsageBand? = nil
     var prefersUsedText: Bool = false
+    /// Cockpit fork: replaces the reset text on the right of a bar row's
+    /// title line (a drive's temperature). Not archived.
+    var trailingText: String? = nil
 
     init(id: String, group: String? = nil, label: String, usedFraction: Double? = nil,
          remaining: Int? = nil, used: Int? = nil, usedText: String? = nil, detail: String? = nil,
@@ -316,6 +319,10 @@ struct ProviderSnapshot: Identifiable, Equatable {
 
     /// Unused rate-limit resets reported for this account.
     var resetCredits: UsageResetCredits? = nil
+
+    /// Cockpit fork: short text right-aligned on the card's title line
+    /// (System's temperature).
+    var headerAccessory: String? = nil
 
     /// Whether the tooltip has a reset-credit section to draw.
     ///

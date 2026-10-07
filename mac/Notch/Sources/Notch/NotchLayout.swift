@@ -211,14 +211,7 @@ enum NotchLayout {
 
     // Codex account activity
     static let codexUsageTop   = Design.px(20)
-    static let codexMetricTop  = Design.px(14)
-    static let codexMetricRowGap = Design.px(8)
-    static let codexMetricRowHeight = Design.px(40)
-    static let codexMetricHeight = 5 * codexMetricRowHeight + 4 * codexMetricRowGap
-    static let codexMetricBottom = Design.px(14)
     static let codexUsageRowGap = Design.px(12)
-    static let codexChartTop   = Design.px(15)
-    static let codexChartHeight = Design.px(115)
     /// Title, count, and expiry. The third line is reserved so a missing
     /// expiry cannot shrink the hover region under the card.
     static var codexResetCreditsHeight: CGFloat {
@@ -427,14 +420,6 @@ enum NotchLayout {
             height += codexUsageTop + hairline + codexResetCreditsHeight
         }
 
-        if hasTokenUsage {
-            height += codexUsageTop + hairline + blockSpacing
-                + codexMetricTop + codexMetricHeight + codexMetricBottom
-                + hairline
-                + 2 * cardBodyLineHeight
-                + codexUsageRowGap
-                + codexChartTop + codexChartHeight
-        }
 
         if sessionCount > 0 {
             let shown = min(sessionCount, max(0, sessionCap))

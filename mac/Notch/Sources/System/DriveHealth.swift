@@ -54,49 +54,50 @@ actor DriveHealth {
     }
 
     /// Hover rows for the given volumes (BSD device node and display name),
-    /// and a nudge for the sampler when a run is due.
-    func rows(for volumes: [(device: String, name: String)]) -> [LimitWindow] {
+    /// the temperature per volume device for its name line, and a nudge for
+    /// the sampler when a run is due.
+    func rows(for volumes: [(device: String, name: String)])
+        -> (rows: [LimitWindow], temperatures: [String: String]) {
         refreshIfNeeded(devices: volumes.map(\.device))
         if smartctlMissing {
-            return [LimitWindow(id: "health:install", label: L10n.t("Drive health"),
-                                detail: L10n.t("Install smartmontools for drive health"))]
+            return ([LimitWindow(id: "health:install", label: L10n.t("Drive health"),
+                                 detail: L10n.t("Install smartmontools for drive health"))], [:])
         }
         var seen = Set<String>()
         var rows: [LimitWindow] = []
+        var temperatures: [String: String] = [:]
         for volume in volumes {
-            guard let whole = wholeByDevice[volume.device], seen.insert(whole).inserted,
-                  let disk = disks[whole] else { continue }
+            guard let whole = wholeByDevice[volume.device], let disk = disks[whole] else { continue }
+            if !disk.unavailable, let celsius = disk.last?.temperature {
+                temperatures[volume.device] = Self.temperatureText(celsius)
+            }
+            guard seen.insert(whole).inserted else { continue }
             rows += Self.rows(whole: whole, name: volume.name, disk: disk)
         }
-        return rows
+        return (rows, temperatures)
     }
 
+    /// One plain line per drive (empty label), temperature excluded: it sits
+    /// on the drive's name line.
     private static func rows(whole: String, name: String, disk: Disk) -> [LimitWindow] {
         var rows: [LimitWindow] = []
         if disk.unavailable {
-            rows.append(LimitWindow(id: "health:\(whole):a",
-                                    label: name,
-                                    detail: L10n.t("Health n/a over USB")))
+            rows.append(LimitWindow(id: "health:\(whole):a", label: "",
+                                    detail: "\(name): " + L10n.t("Health n/a over USB")))
             if let last = disk.last {
                 rows.append(LimitWindow(
-                    id: "health:\(whole):last",
-                    label: L10n.t("Last reading \(last.date.formatted(date: .abbreviated, time: .omitted))"),
-                    detail: summary(last)))
+                    id: "health:\(whole):last", label: "",
+                    detail: L10n.t("Last reading \(last.date.formatted(date: .abbreviated, time: .omitted))")
+                        + ": " + summary(last)))
             }
         } else if let last = disk.last {
-            var line = [last.isWarning ? L10n.t("Health Warning") : L10n.t("Health OK")]
-            if let temperature = last.temperature { line.append(temperatureText(temperature)) }
-            rows.append(LimitWindow(id: "health:\(whole):a", label: name,
-                                    detail: line.joined(separator: " · ")))
-            var wear: [String] = []
-            if let percent = last.wearPercent { wear.append(L10n.t("\(percent)% worn")) }
+            var parts = [last.isWarning ? L10n.t("Health Warning") : L10n.t("Health OK")]
+            if let percent = last.wearPercent { parts.append(L10n.t("\(percent)% worn")) }
             if let written = last.writtenBytes {
-                wear.append(L10n.t("\(ByteCountFormatter.string(fromByteCount: written, countStyle: .decimal)) written"))
+                parts.append(L10n.t("\(ByteCountFormatter.string(fromByteCount: written, countStyle: .decimal)) written"))
             }
-            if !wear.isEmpty {
-                rows.append(LimitWindow(id: "health:\(whole):b", label: L10n.t("Wear"),
-                                        detail: wear.joined(separator: " · ")))
-            }
+            rows.append(LimitWindow(id: "health:\(whole):a", label: "",
+                                    detail: "\(name): " + parts.joined(separator: " · ")))
         }
         return rows
     }
