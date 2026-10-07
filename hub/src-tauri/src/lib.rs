@@ -76,9 +76,26 @@ fn folder(report: &ScanReport, path: &PathBuf) -> Result<Folder, String> {
         root: report.roots.first().cloned().unwrap_or_default(),
         rows,
         total_children,
-        incomplete,
-        reasons: report.incomplete_reasons.iter().take(3).cloned().collect(),
+        incomplete: incomplete && !material(report).is_empty(),
+        reasons: material(report).into_iter().take(3).collect(),
     })
+}
+
+/// Reasons that make folder totals low: limits, budgets and unreadable
+/// folders. Single entries without measurable size (sockets, special files)
+/// do not change the totals and are not reported as a partial scan.
+fn material(report: &ScanReport) -> Vec<String> {
+    report
+        .incomplete_reasons
+        .iter()
+        .filter(|r| {
+            let r = r.to_lowercase();
+            ["limit", "budget", "not inspectable", "denied", "not permitted"]
+                .iter()
+                .any(|k| r.contains(k))
+        })
+        .map(|r| r.replace(&home().display().to_string(), "~"))
+        .collect()
 }
 
 #[tauri::command]
