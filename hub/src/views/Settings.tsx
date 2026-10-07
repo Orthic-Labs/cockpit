@@ -209,7 +209,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
     send({ command: "order", value: ids });
   };
   return (
-    <Group title="Accounts the notch reads">
+    <Group title="Logins Cockpit reads (it never signs in itself)">
       {accounts.map((a, i) => (
         <div key={a.id} className="account">
           <div className="account-main">
@@ -227,7 +227,8 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
                 <Button size="sm" variant="secondary" onClick={() => send({ command: "allowAccess", provider: a.id })}>Allow access…</Button>
               )}
               {a.summary && (
-                <Button size="sm" variant="ghost" onClick={() => send({ command: "signOut", provider: a.id })}>Sign out</Button>
+                <Button size="sm" variant="ghost" onClick={() => send({ command: "signOut", provider: a.id })}
+                  title={`Clears what Cockpit read. You stay signed in to ${a.name.split(" ")[0]} itself.`}>Forget reading</Button>
               )}
             </div>
           </div>
