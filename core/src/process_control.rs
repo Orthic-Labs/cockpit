@@ -162,10 +162,10 @@ fn infos() -> &'static InfoCache {
 
 /// `(bundle id, display name)` for an app bundle, cached.
 fn cached_info(root: &Path) -> Option<(String, String)> {
-    if let Ok(cache) = infos().lock() {
-        if let Some(found) = cache.get(root) {
-            return found.clone();
-        }
+    if let Ok(cache) = infos().lock()
+        && let Some(found) = cache.get(root)
+    {
+        return found.clone();
     }
     let found = bundle_info(root).and_then(|i| i.bundle_id.map(|b| (b, i.name)));
     if let Ok(mut cache) = infos().lock() {
@@ -199,10 +199,10 @@ fn refusal_for(
     {
         return Some("Cockpit does not quit itself.".into());
     }
-    if let Some(b) = bundle_id {
-        if NEVER_QUIT_BUNDLES.contains(&b) {
-            return Some("macOS restarts this automatically; quit it from the system.".into());
-        }
+    if let Some(b) = bundle_id
+        && NEVER_QUIT_BUNDLES.contains(&b)
+    {
+        return Some("macOS restarts this automatically; quit it from the system.".into());
     }
     None
 }

@@ -107,10 +107,10 @@ pub fn app_root_of(path: &Path) -> Option<PathBuf> {
     let mut root = PathBuf::new();
     for component in path.components() {
         root.push(component.as_os_str());
-        if let Component::Normal(name) = component {
-            if name.to_string_lossy().ends_with(".app") {
-                return Some(root);
-            }
+        if let Component::Normal(name) = component
+            && name.to_string_lossy().ends_with(".app")
+        {
+            return Some(root);
         }
     }
     None
@@ -153,10 +153,10 @@ pub fn disk_size(path: &Path) -> u64 {
             continue;
         };
         total += meta.blocks() * 512;
-        if meta.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&current) {
-                stack.extend(entries.flatten().map(|e| e.path()));
-            }
+        if meta.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&current)
+        {
+            stack.extend(entries.flatten().map(|e| e.path()));
         }
     }
     total
@@ -349,18 +349,18 @@ pub fn list_apps() -> Vec<AppEntry> {
 /// is an exact bundle-id match, `Some(false)` is review-only.
 fn classify(dir: &str, entry: &str, bundle_id: Option<&str>, name: &str) -> Option<bool> {
     let lower = entry.to_lowercase();
-    if let Some(bid) = bundle_id.map(str::to_lowercase) {
-        if bid.matches('.').count() >= 2 {
-            if lower == bid {
-                return Some(true);
-            }
-            if let Some(rest) = lower.strip_prefix(&format!("{bid}.")) {
-                // Sibling products such as `<id>.canary` are not assumed to be ours.
-                return Some(EXACT_SUFFIXES.contains(&rest));
-            }
-            if dir == "Group Containers" && lower.ends_with(&format!(".{bid}")) {
-                return Some(true);
-            }
+    if let Some(bid) = bundle_id.map(str::to_lowercase)
+        && bid.matches('.').count() >= 2
+    {
+        if lower == bid {
+            return Some(true);
+        }
+        if let Some(rest) = lower.strip_prefix(&format!("{bid}.")) {
+            // Sibling products such as `<id>.canary` are not assumed to be ours.
+            return Some(EXACT_SUFFIXES.contains(&rest));
+        }
+        if dir == "Group Containers" && lower.ends_with(&format!(".{bid}")) {
+            return Some(true);
         }
     }
     let wanted = name.to_lowercase();
