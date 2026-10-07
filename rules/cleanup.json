@@ -142,6 +142,13 @@
       "action": "Move to Trash"
     },
     {
+      "id": "download-installers", "name": "Installers", "category": "Downloads", "risk": "review",
+      "paths": ["~/Downloads/*.dmg", "~/Downloads/*.pkg", "~/Downloads/*.iso"],
+      "liveness": "age", "owners": [], "min_age_days": 30,
+      "reason": "An installer you have probably used already. Download it again if you need it.",
+      "action": "Move to Trash"
+    },
+    {
       "id": "old-downloads", "name": "Old downloads", "category": "Downloads", "risk": "review",
       "paths": ["~/Downloads/*"],
       "exclude_names": [".*", "*.crdownload", "*.download", "*.part", "*.partial"],
@@ -157,6 +164,34 @@
       "min_age_days": 1,
       "reason": "Temporary copies Chrome makes while updating. They share storage with the real app, so the size shown is an upper bound.",
       "action": "Move to Trash"
+    },
+    {
+      "id": "node-modules", "name": "node_modules", "category": "Build outputs", "risk": "safe",
+      "paths": [], "discover": {"dir": "node_modules", "markers": ["package.json"]},
+      "liveness": "owners", "owners": ["node", "npm", "pnpm", "yarn", "bun", "deno"], "min_age_days": 14,
+      "reason": "Your package manager reinstalls it the next time you work on the project.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "cargo-target", "name": "Rust target", "category": "Build outputs", "risk": "safe",
+      "paths": [], "discover": {"dir": "target", "markers": ["Cargo.toml"]},
+      "liveness": "owners", "owners": ["cargo", "rustc"], "min_age_days": 14,
+      "reason": "Cargo rebuilds it the next time you build the project.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "swiftpm-build", "name": "Swift .build", "category": "Build outputs", "risk": "safe",
+      "paths": [], "discover": {"dir": ".build", "markers": ["Package.swift"]},
+      "liveness": "owners", "owners": ["swift-build", "swift", "swift-package", "xcodebuild"], "min_age_days": 14,
+      "reason": "Swift rebuilds it the next time you build the package.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "simulators-info", "name": "iOS simulators", "category": "Developer", "risk": "info",
+      "paths": ["~/Library/Developer/CoreSimulator/Devices"],
+      "liveness": "age", "owners": [],
+      "reason": "Old simulators take space. Remove unused ones in Terminal with: xcrun simctl delete unavailable",
+      "action": "None"
     },
     {
       "id": "trash-info", "name": "Trash", "category": "Trash", "risk": "info",

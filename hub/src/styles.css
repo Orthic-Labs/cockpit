@@ -94,3 +94,28 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .growth-head { margin-bottom: 2px; }
 .growth-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; background: none; border: 0; border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .growth-row:hover { background: var(--fill-2); }
+
+/* Storage */
+.view.storage { overflow: auto; flex-wrap: nowrap; }
+.volumes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; flex: none; }
+.volume-card { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--hairline); background: var(--fill-2); color: var(--ink); font: inherit; cursor: pointer; }
+.volume-card.active { border-color: var(--accent); }
+.volume-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.card-block { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--fill-2); }
+.block-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.headline { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+.finding { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 5px 0; border-top: 1px solid var(--hairline); }
+.finding-main { display: flex; flex-direction: column; min-width: 0; }
+.finding-reason { white-space: normal; }
+.notice { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 7px; background: var(--fill-2); flex: none; }
+.more { align-self: flex-start; font-size: 11px; }
+.other { overflow: hidden; }
+.growth-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: none; }
+.chip { background: var(--fill-2); border: 0; border-radius: 10px; padding: 2px 8px; font: inherit; font-size: 11px; color: var(--ink); cursor: pointer; }
+.crumb-sep { margin: 0 3px; vertical-align: -1px; }
+.explorer { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; flex: none; }
+.explorer .list { overflow: visible; }
+.folder-row { grid-template-columns: minmax(0, 1fr) 80px 34px 64px; gap: 10px; }
+.kind-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+.pct { text-align: right; }
+.treemap { width: 100%; height: auto; border-radius: 8px; background: var(--fill-2); position: sticky; top: 0; }

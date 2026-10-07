@@ -43,7 +43,49 @@ export interface Folder {
   rows: Row[];
   total_children: number;
   incomplete: boolean;
-  reasons: string[];
+  needs_access: boolean;
+  limited: boolean;
+  root_label: string;
+}
+
+export interface Volume {
+  name: string;
+  mount_point: string;
+  total_bytes: number;
+  available_bytes: number;
+  removable: boolean;
+  internal: boolean;
+}
+
+export interface CleanupFinding {
+  id: string;
+  rule_id: string;
+  category: string;
+  name: string;
+  path: string;
+  bytes: number;
+  partial: boolean;
+  risk: "safe" | "review" | "info";
+  eligible: boolean;
+  preselected: boolean;
+  reason: string;
+  action: string;
+  dev: string;
+  ino: string;
+}
+
+export interface CleanupReport {
+  findings: CleanupFinding[];
+  safe_bytes: number;
+  review_bytes: number;
+  scanned_at: number;
+}
+
+export interface CleanupApplyResult {
+  moved_items: number;
+  moved_bytes: number;
+  skipped: { path: string; reason: string }[];
+  activity_id: string | null;
 }
 
 export interface AppEntry {
@@ -129,6 +171,14 @@ export const api = {
     invoke<QuitOutcome>("process_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
   forceQuit: (r: ProcessRow) =>
     invoke<QuitOutcome>("process_force_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
+  volumes: () => invoke<Volume[]>("volumes"),
+  openFullDiskAccess: () => invoke<void>("open_full_disk_access"),
+  cleanupScan: () => invoke<CleanupReport>("cleanup_scan"),
+  cleanupApply: (items: CleanupFinding[]) =>
+    invoke<CleanupApplyResult>("cleanup_apply", {
+      items: items.map((f) => ({ rule_id: f.rule_id, path: f.path, dev: f.dev, ino: f.ino })),
+    }),
+  cleanupRestore: (id: string) => invoke<unknown>("cleanup_restore", { id }),
   reveal: (path: string) => invoke<void>("reveal", { path }),
 };
 

@@ -30,3 +30,7 @@ Windows Codenotch is Tauri/WebView2, not a native notch: `windows/codenotch/src/
 Source-vendoring disposition: four pinned donor trees remain unmodified & retain original licences. Cockpit-owned code is separate; donor extraction into a combined executable must preserve applicable GPL/AGPL obligations & dependency notices. Pearcleaner remains reference-only. No donor binary is packaged or distributed by this bootstrap.
 
 Cockpit's `mac/Sources/CockpitMacPrototype/NotchPresentation.swift` adapts codeNOTCH's canonical bezel flare/corner outline & ring-stack presentation to owner's compact footprint. Provider/runtime code remains Cockpit-owned. Original MIT notice is included in app bundle; full donor motion, cutout joining & provider UI are not claimed absorbed.
+
+## Petal in Storage (2026-10-07)
+
+The hub Storage view uses Petal (MIT, `f5e5b00e`) ideas, not its GPUI code: the nine path kinds and colours from `src/classify/` (path rules in `hub/src/chart.ts`; the trained model is not ported), the squarified treemap from `src/treemap.rs` (rewritten for SVG), and the findings catalog and the rule that project `node_modules` stay out of hidden folders, `Library`, `Applications` and bundles from `src/findings.rs` (new `discover` rules in `rules/cleanup.json`, `core/src/cleanup_scan.rs`). Volumes come from core's own disk listing; `disk.rs` and `dirlist.rs` were not needed.

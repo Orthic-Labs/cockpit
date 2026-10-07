@@ -14,7 +14,7 @@ use crate::platform;
 /// truncation. Selection among the entries actually read is sorted, but when
 /// truncated it is NOT a lexicographic prefix of the directory: the OS
 /// decides which entries were read first.
-pub const DIRECTORY_ENUMERATION_BUDGET: usize = 50_000;
+pub const DIRECTORY_ENUMERATION_BUDGET: usize = 500_000;
 
 /// Filesystem boundary used by the scanner. Implementations must inspect
 /// directory entries without opening file contents and must report symlinks as

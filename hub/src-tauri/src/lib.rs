@@ -55,7 +55,12 @@ struct Folder {
     rows: Vec<Row>,
     total_children: usize,
     incomplete: bool,
-    reasons: Vec<String>,
+    /// Some folders could not be read (permission): Full Disk Access helps.
+    needs_access: bool,
+    /// A size limit was reached, so totals may be a little low.
+    limited: bool,
+    /// Label for the scan root in the breadcrumbs.
+    root_label: String,
 }
 
 fn home() -> PathBuf {
@@ -102,7 +107,42 @@ fn folder(report: &ScanReport, path: &PathBuf) -> Result<Folder, String> {
         rows,
         total_children,
         incomplete: incomplete && !material(report).is_empty(),
-        reasons: material(report).into_iter().take(3).collect(),
+        needs_access: needs_access(report),
+        limited: limited(report),
+        root_label: root_label(report),
+    })
+}
+
+fn root_label(report: &ScanReport) -> String {
+    let root = report.roots.first().cloned().unwrap_or_default();
+    if root == home() {
+        "Home".into()
+    } else if root == std::path::Path::new("/") {
+        "Macintosh HD".into()
+    } else {
+        root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into())
+    }
+}
+
+fn denied(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.contains("denied") || t.contains("not permitted")
+}
+
+/// Folders that could not be read for lack of permission. Placeholders
+/// (iCloud files not stored locally) are expected and never counted.
+fn needs_access(report: &ScanReport) -> bool {
+    report.inspection_errors.iter().any(|e| denied(&e.message))
+        || report
+            .incomplete_reasons
+            .iter()
+            .any(|r| !r.to_lowercase().contains("placeholder") && denied(r))
+}
+
+fn limited(report: &ScanReport) -> bool {
+    report.incomplete_reasons.iter().any(|r| {
+        let r = r.to_lowercase();
+        !r.contains("placeholder") && (r.contains("budget") || r.contains("entry limit"))
     })
 }
 
@@ -115,9 +155,10 @@ fn material(report: &ScanReport) -> Vec<String> {
         .iter()
         .filter(|r| {
             let r = r.to_lowercase();
-            ["limit", "budget", "not inspectable", "denied", "not permitted"]
-                .iter()
-                .any(|k| r.contains(k))
+            !r.contains("placeholder")
+                && ["limit", "budget", "not inspectable", "denied", "not permitted"]
+                    .iter()
+                    .any(|k| r.contains(k))
         })
         .map(|r| r.replace(&home().display().to_string(), "~"))
         .collect()
@@ -152,7 +193,7 @@ async fn scan(path: Option<String>, hub: State<'_, Hub>) -> Result<Folder, Strin
     let root = path.map(PathBuf::from).unwrap_or_else(home);
     let scan_root = root.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
-        let options = ScanOptions { max_entries: 1_000_000, ..ScanOptions::default() };
+        let options = ScanOptions { max_entries: 2_000_000, ..ScanOptions::default() };
         cockpit_core::scan(&[scan_root], &options)
     })
     .await
@@ -273,6 +314,85 @@ fn watch_notch(app: tauri::AppHandle) {
     });
 }
 
+#[derive(Serialize)]
+struct Volume {
+    name: String,
+    mount_point: String,
+    total_bytes: u64,
+    available_bytes: u64,
+    removable: bool,
+    /// The startup disk; its scan starts at the home folder.
+    internal: bool,
+}
+
+/// The name Finder shows for the startup disk: the entry in /Volumes that
+/// links to "/".
+fn startup_name() -> String {
+    std::fs::read_dir("/Volumes")
+        .ok()
+        .and_then(|entries| {
+            entries.flatten().find_map(|e| {
+                let target = std::fs::canonicalize(e.path()).ok()?;
+                (target == std::path::Path::new("/"))
+                    .then(|| e.file_name().to_string_lossy().into_owned())
+            })
+        })
+        .unwrap_or_else(|| "Macintosh HD".into())
+}
+
+/// Every mounted volume a person would recognise: the startup disk and
+/// anything under /Volumes (external drives, disk images), not system
+/// volumes or Time Machine snapshots.
+#[tauri::command]
+async fn volumes() -> Result<Vec<Volume>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut out: Vec<Volume> = Vec::new();
+        for disk in cockpit_core::system_status().disks {
+            let mount = disk.mount_point.clone();
+            let internal = mount == "/";
+            if !internal && !mount.starts_with("/Volumes/") {
+                continue;
+            }
+            if mount.contains("com.apple.") || out.iter().any(|v| v.mount_point == mount) {
+                continue;
+            }
+            let (Some(total), Some(available)) = (disk.total_bytes, disk.available_bytes) else {
+                continue;
+            };
+            if total == 0 {
+                continue;
+            }
+            let name = if internal {
+                startup_name()
+            } else {
+                mount.rsplit('/').next().unwrap_or(&mount).to_string()
+            };
+            out.push(Volume {
+                name,
+                mount_point: mount,
+                total_bytes: total,
+                available_bytes: available,
+                removable: disk.removable,
+                internal,
+            });
+        }
+        out.sort_by_key(|v| !v.internal);
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open System Settings at Full Disk Access. Opens a window; changes nothing.
+#[tauri::command]
+fn open_full_disk_access() -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Show a file or folder in Finder. Read-only: it only opens a window.
 #[tauri::command]
 fn reveal(path: String) -> Result<(), String> {
@@ -322,7 +442,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, notch_state, notch_command, initial_section,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, volumes, open_full_disk_access, notch_state, notch_command, initial_section,
             cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())

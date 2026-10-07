@@ -63,6 +63,97 @@ pub struct CleanupRule {
     pub keep_newest: usize,
     pub reason: String,
     pub action: String,
+    /// Build outputs sit inside projects, so no fixed path names them. A
+    /// rule with `discover` finds directories by name and project marker.
+    #[serde(default)]
+    pub discover: Option<Discover>,
+}
+
+/// Find directories called `dir` next to one of the `markers` (for example
+/// `node_modules` beside `package.json`).
+///
+/// The idea of treating project build outputs as findings comes from Petal's
+/// `findings.rs` (MIT, https://github.com/henrydennis/petal): its walk stays
+/// out of hidden folders, `Library`, `Applications` and app bundles because
+/// those `node_modules` belong to apps and cannot be reinstalled. This is a
+/// fresh implementation of that rule, not a copy of the code.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Discover {
+    pub dir: String,
+    pub markers: Vec<String>,
+}
+
+const DISCOVER_MAX_DEPTH: usize = 8;
+const DISCOVER_MAX_ENTRIES: usize = 400_000;
+const BUNDLE_EXTENSIONS: &[&str] = &[
+    "app", "appex", "framework", "bundle", "plugin", "xpc", "kext", "photoslibrary",
+    "musiclibrary", "fcpbundle", "pkg", "mpkg", "xcarchive",
+];
+
+/// Folders a project search never enters: where apps and the system keep
+/// their own trees, and media libraries.
+fn not_a_project_area(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(name, "Library" | "Applications" | "Movies" | "Music" | "Pictures")
+        || name
+            .rsplit_once('.')
+            .is_some_and(|(stem, ext)| {
+                !stem.is_empty() && BUNDLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+            })
+}
+
+fn has_marker(parent: &Path, d: &Discover) -> bool {
+    d.markers.iter().any(|m| parent.join(m).symlink_metadata().is_ok())
+}
+
+fn discover_dirs(home: &Path, d: &Discover) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut seen = 0usize;
+    let mut stack: Vec<(PathBuf, usize)> = vec![(home.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > DISCOVER_MAX_ENTRIES {
+                return found;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if !kind.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path();
+            if name == d.dir && has_marker(&dir, d) {
+                found.push(path);
+            } else if !not_a_project_area(&name) && name != "node_modules" && depth < DISCOVER_MAX_DEPTH {
+                stack.push((path, depth + 1));
+            }
+        }
+    }
+    found
+}
+
+/// Whether `path` is something `discover_dirs` would report, checked again
+/// at move time.
+fn is_discovered(path: &Path, home: &Path, d: &Discover) -> bool {
+    let Ok(rest) = path.strip_prefix(home) else {
+        return false;
+    };
+    let parts: Vec<String> = rest
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let Some((last, ancestors)) = parts.split_last() else {
+        return false;
+    };
+    last == &d.dir
+        && ancestors.len() <= DISCOVER_MAX_DEPTH + 1
+        && !ancestors.iter().any(|a| not_a_project_area(a) || a == "node_modules")
+        && path.parent().is_some_and(|p| has_marker(p, d))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -339,9 +430,13 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
     for rule in &pack.rules {
-        for pattern in &rule.paths {
+        let groups: Vec<Vec<PathBuf>> = match &rule.discover {
+            Some(d) => vec![discover_dirs(home, d)],
+            None => rule.paths.iter().map(|p| expand(p, home)).collect(),
+        };
+        for group in groups {
             let mut matched: Vec<(PathBuf, fs::Metadata)> = Vec::new();
-            for path in expand(pattern, home) {
+            for path in group {
                 let name = display_name(&path);
                 if excluded(rule, &name) || seen.contains(&path) {
                     continue;
@@ -386,7 +481,13 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                     id: finding_id(&rule.id, &path_text),
                     rule_id: rule.id.clone(),
                     category: rule.category.clone(),
-                    name: if rule.risk == RuleRisk::Info || name.is_empty() {
+                    name: if rule.discover.is_some() {
+                        let project = path
+                            .parent()
+                            .map(display_name)
+                            .unwrap_or_default();
+                        format!("{} · {}", rule.name, project)
+                    } else if rule.risk == RuleRisk::Info || name.is_empty() {
                         rule.name.clone()
                     } else {
                         name
@@ -535,7 +636,11 @@ fn revalidate(
         return Err("Not something to move".into());
     }
     let path = PathBuf::from(&request.path);
-    if !rule.paths.iter().any(|p| path_matches(p, &path, home)) {
+    let covered = match &rule.discover {
+        Some(d) => is_discovered(&path, home, d),
+        None => rule.paths.iter().any(|p| path_matches(p, &path, home)),
+    };
+    if !covered {
         return Err("Not a location this rule covers".into());
     }
     if excluded(rule, &display_name(&path)) {
