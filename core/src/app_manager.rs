@@ -1378,7 +1378,11 @@ fn trash_with_finder(path: &Path, limit: Duration) -> Result<(), String> {
         .arg("-e")
         .arg("on run argv")
         .arg("-e")
-        .arg("tell application \"Finder\" to delete (POSIX file (item 1 of argv))")
+        // Resolve the alias outside Finder's tell block: inside it, `POSIX file`
+        // is Finder's own term and fails with -1728.
+        .arg("set f to (POSIX file (item 1 of argv)) as alias")
+        .arg("-e")
+        .arg("tell application \"Finder\" to delete f")
         .arg("-e")
         .arg("end run")
         .arg(path);
