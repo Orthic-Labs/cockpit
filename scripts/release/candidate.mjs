@@ -43,6 +43,12 @@ if (action === 'admit') {
   const plist=run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Info.plist')],{encoding:'utf8',stdio:'pipe'});
   const info=JSON.parse(plist);
   if(info.CFBundleIdentifier!=='dev.orthic.cockpit'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');
+  if(env.COCKPIT_CHECK_APP){
+    // Signed app: exactly the entitlements Cockpit needs, never Electron's defaults.
+    const ent=spawnSync('codesign',['-d','--entitlements','-','--xml',app],{encoding:'utf8'}).stdout||'';
+    if(!ent.includes('com.apple.security.automation.apple-events'))throw new Error('Signed app lacks the Apple Events entitlement');
+    if(/device\.(camera|audio-input)|personal-information\.location/.test(ent))throw new Error('Signed app carries unexpected camera/microphone/location entitlements');
+  }
   const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-smoke-')));
   const state=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-state-')));
   try{

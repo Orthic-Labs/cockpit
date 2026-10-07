@@ -176,8 +176,9 @@ async function packageMac({ local = false } = {}) {
     identity: resolveMacosDeveloperIdIdentity({ env: { ...process.env, APPLE_DEVELOPER_ID: identity } }),
     platform: 'darwin',
     type: 'distribution',
-    hardenedRuntime: true,
-    entitlements,
+    // osx-sign v2 reads entitlements per file; a top-level `entitlements` is
+    // ignored and Electron's defaults (camera, mic, location…) are applied.
+    optionsForFile: () => ({ hardenedRuntime: true, entitlements }),
     preAutoEntitlements: false,
     preEmbedProvisioningProfile: false,
     gatekeeperAssess: false
