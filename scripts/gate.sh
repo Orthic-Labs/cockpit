@@ -58,7 +58,7 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   # mac/Sources (salvage services) is reference-only until reviewed; see mac/README.md.
   # Cockpit hub (Tauri): type-check and bundle the page, then compile the
   # Rust backend (its own workspace, pinned to the RightKit toolchain).
-  pnpm --dir hub install --ignore-workspace --no-frozen-lockfile
+  pnpm --dir hub install --ignore-workspace --no-frozen-lockfile --ignore-scripts
   pnpm --dir hub exec tsc --noEmit
   pnpm --dir hub run build
   (cd hub/src-tauri && cargo check)
