@@ -1,6 +1,6 @@
 # Cockpit notch — Codenotch fork
 
-Forked from [vinzdg/codenotch](https://github.com/vinzdg/codenotch) at `72fb2169ef316834ad632f85de27a415cd0d2298` (MIT, see `LICENSE`). The pristine donor stays in `upstream/codenotch` for diffing; this copy is Cockpit's own.
+Forked from [vinzdg/codenotch](https://github.com/vinzdg/codenotch) at `72fb2169ef316834ad632f85de27a415cd0d2298` (MIT, see `LICENSE`). The pristine donor stays in `vendor/codenotch` for diffing; this copy is Cockpit's own.
 
 Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, then `xcodebuild -scheme Cockpit` on the `xcode-27` runner (macOS 27, Xcode 27). CI only (see `scripts/gate.sh`).
 

@@ -31,7 +31,7 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 | Notch, AI usage readers, updater | [Codenotch](https://github.com/vinzdg/codenotch) (fork) | — |
 | CPU, GPU, memory, disk, network, battery, sensors | [Stats](https://github.com/exelban/stats) | [mectrics](https://github.com/farukkamcici/mectrics), [slawek19926/Vitals](https://github.com/slawek19926/Vitals) |
 | Processes / task manager | [hmarr/vitals](https://github.com/hmarr/vitals) | Stats; [TaskExplorer](https://github.com/DavidXanatos/TaskExplorer) for Windows |
-| Disk map, scan, growth | Petal (in `upstream/petal`) & existing core | — |
+| Disk map, scan, growth | Petal (in `vendor/petal`) & existing core | — |
 | Cleanup rules | [Mole](https://github.com/tw93/Mole), [Kudu](https://github.com/AdventDevInc/kudu) `rules/` | [PureMac](https://github.com/momenbasel/PureMac), [MacSai](https://github.com/iliyami/MacSai), [purge-app](https://github.com/jithin-sabu/purge-app) |
 | Hub UI reference | Kudu (React; same idea, Electron instead of Tauri) | — |
 | Uninstall & leftovers | Pearcleaner | Mole |
