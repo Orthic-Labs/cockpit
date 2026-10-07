@@ -1,8 +1,7 @@
 # Marks hub/ as its own pnpm workspace root, separate from the repo-root workspace.
 packages:
   - "."
-# Exact versions only, reviewed: RightKit's own release, and the bundler
-# version vite pins. Drop each once it is older than the release-age window.
+# Exact versions only, reviewed: RightKit's own release. Drop once it is older
+# than the release-age window.
 minimumReleaseAgeExclude:
   - '@rightkit/app-shell@0.1.0'
-  - 'rolldown@1.2.13'
