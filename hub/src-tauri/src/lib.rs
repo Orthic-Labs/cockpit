@@ -220,6 +220,11 @@ fn watch_notch(app: tauri::AppHandle) {
         let names = [
             ("dev.orthic.cockpit.hub.show.settings", "show-section", "settings"),
             ("dev.orthic.cockpit.hub.show.storage", "show-section", "storage"),
+            ("dev.orthic.cockpit.hub.show.monitor", "show-section", "monitor"),
+            ("dev.orthic.cockpit.hub.show.accounts", "show-section", "accounts"),
+            ("dev.orthic.cockpit.hub.show.appearance", "show-section", "appearance"),
+            ("dev.orthic.cockpit.hub.show.notifications", "show-section", "notifications"),
+            ("dev.orthic.cockpit.hub.show.general", "show-section", "general"),
             ("dev.orthic.cockpit.notch.state", "notch-state", ""),
         ];
         let mut tokens = Vec::new();
