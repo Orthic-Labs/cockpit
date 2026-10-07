@@ -23,6 +23,7 @@ Build: `xcodegen generate --spec mac/Notch/project.yml --project mac/Notch`, the
 | Clicks | A click on the open notch opens the hub: disks ring → Storage, system ring → Monitor, account ring → Accounts, elsewhere → Storage | `Notch/NotchWindowController.swift`, `Notch/NotchFleet.swift`, `App/AppDelegate.swift` |
 | Login item | Open at login on by default, once, for the copy in /Applications | `App/AppDelegate.swift` |
 | Settings window | Codenotch's Settings and What's New windows removed; every route that opened them opens the hub | `App/AppDelegate.swift`, `Settings/` |
+| Claude fallback | When Claude Desktop's cache is the only source and older than 30 min, show its last reading marked with its age instead of "Sign in" (unless a window has reset); keep the last reading through rescan waits | `Providers/ClaudeOAuthProvider.swift` |
 | First run | No What's New, no first-run Settings window | `App/AppDelegate.swift` |
 | Tests | Codenotch's unit tests not carried over | `project.yml` |
 

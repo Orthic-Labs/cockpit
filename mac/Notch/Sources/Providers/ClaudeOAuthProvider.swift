@@ -80,6 +80,8 @@ actor ClaudeOAuthProvider: UsageProvider {
     /// re-shows the last good reading, undimmed for its own fifteen minutes and
     /// dimmed and dated after that. Nothing here has to re-implement any of it.
     private let desktopFreshness: TimeInterval
+    /// Cockpit fork: the last cache reading, kept through rescan waits.
+    private var lastDesktopReading: ClaudeDesktopUsageCache.Reading?
     /// What a `.live` fetch will accept instead.
     ///
     /// Two minutes, from the same measurement that set the thirty: the session
@@ -284,6 +286,17 @@ actor ClaudeOAuthProvider: UsageProvider {
                 return snapshot(windows: desktop.windows, plan: profile.organizationPlan(),
                                 resetCredits: resets)
             }
+            // Cockpit fork: when Claude Desktop's cache is the only source (the
+            // standalone CLI is not signed in and has no keychain login), an
+            // older reading is still the account's last known numbers. Show it,
+            // marked with its age, rather than "Sign in" — unless one of its
+            // windows has already reset, which would make it wrong.
+            if let desktop, !Self.hasExpiredWindow(desktop.windows, at: now) {
+                var aged = snapshot(windows: desktop.windows, plan: profile.organizationPlan(),
+                                    resetCredits: resets)
+                aged.status = .stale(since: desktop.capturedAt)
+                return aged
+            }
             throw error
         }
     }
@@ -382,7 +395,9 @@ actor ClaudeOAuthProvider: UsageProvider {
         // A recent miss means the next read would be a full scan for something
         // that was not there a moment ago. Wait it out.
         if let lastDesktopMiss, now.timeIntervalSince(lastDesktopMiss) < desktopRescanInterval {
-            return nil
+            // Cockpit fork: hand back the last reading while waiting, so the
+            // caller can still show it (aged) instead of falling to "Sign in".
+            return lastDesktopReading
         }
         // Read per refresh rather than held: switching account in Claude Code
         // rewrites this, and a held copy would keep matching the old
@@ -409,6 +424,7 @@ actor ClaudeOAuthProvider: UsageProvider {
         // The caller rejects expired usage windows separately: the unused
         // reset grant can still be current when a five-hour window has ended.
         lastDesktopMiss = nil
+        lastDesktopReading = reading
         Log.usage.debug("\(self.id, privacy: .public): read \(reading.windows.count) windows from the claude desktop cache entry \(reading.entry.lastPathComponent, privacy: .public)")
         return reading
     }
