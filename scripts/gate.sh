@@ -61,7 +61,7 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   pnpm --dir hub install --ignore-workspace --no-frozen-lockfile
   pnpm --dir hub exec tsc --noEmit
   pnpm --dir hub run build
-  cargo check --manifest-path hub/src-tauri/Cargo.toml
+  (cd hub/src-tauri && cargo check)
   # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
   xcodebuild -version
   command -v xcodegen >/dev/null || brew install xcodegen
