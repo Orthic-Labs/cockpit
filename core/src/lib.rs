@@ -1,6 +1,8 @@
 //! Cockpit's conservative, read-only shared core.
 
 pub mod activity;
+#[cfg(unix)]
+pub mod app_manager;
 pub mod apps;
 pub mod cleanup;
 pub mod cleanup_scan;
@@ -14,6 +16,8 @@ pub mod model;
 pub mod monitor;
 pub mod platform;
 pub mod presentation;
+#[cfg(unix)]
+pub mod process_control;
 pub mod processes;
 pub mod rules;
 pub mod scan;
