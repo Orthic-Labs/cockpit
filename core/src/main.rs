@@ -81,7 +81,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     arguments.retain(|a| a != "--json");
     if arguments.is_empty() || ["help", "--help", "-h"].contains(&arguments[0].as_str()) {
         println!(
-            "Cockpit — read-only system inspection\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\nCleanup, uninstall & process actions await feasibility & safety gates."
+            "Cockpit — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\napps list [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. Cleanup & process actions await feasibility & safety gates."
         );
         return Ok(());
     }
@@ -591,6 +591,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 View::Usage,
             );
         }
+        "apps" => return apps(arguments, machine),
         "plan" | "apply" | "quit" | "force-quit" | "uninstall-plan" => {
             return Err("mutation is disabled until feasibility & safety gates pass".into());
         }
@@ -1046,4 +1047,105 @@ fn worker(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
 #[cfg(not(any(unix, windows)))]
 fn worker(_arguments: Vec<String>, _machine: bool) -> Result<(), CliError> {
     Err("worker is unsupported on this platform".into())
+}
+
+fn resolve_app(target: &str) -> Result<String, String> {
+    use cockpit_core::app_manager::list_apps;
+    if target.contains('/') || target.ends_with(".app") {
+        return Ok(resolve_path(target)?.to_string_lossy().into_owned());
+    }
+    let matches: Vec<_> = list_apps()
+        .into_iter()
+        .filter(|a| a.bundle_id.as_deref() == Some(target))
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(one.path.clone()),
+        [] => Err(format!("no installed app has bundle id {target}")),
+        many => Err(format!(
+            "ambiguous bundle id {target}; pass one of these paths: {}",
+            many.iter()
+                .map(|a| a.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
+    use cockpit_core::app_manager;
+    if arguments.is_empty() {
+        return Err("apps requires list, detail or uninstall".into());
+    }
+    let sub = arguments.remove(0);
+    match sub.as_str() {
+        "list" => {
+            require_empty(&arguments)?;
+            let apps = app_manager::list_apps();
+            emit_inspection(json!({"apps": apps}), machine);
+        }
+        "detail" => {
+            if arguments.len() != 1 {
+                return Err("apps detail requires exactly one <app-path|bundle-id>".into());
+            }
+            let path = resolve_app(&arguments[0])?;
+            let detail = app_manager::app_detail(&path)?;
+            emit_inspection(
+                serde_json::to_value(detail).map_err(|e| e.to_string())?,
+                machine,
+            );
+        }
+        "uninstall" => {
+            let mut includes = Vec::new();
+            while let Some(value) = take_option(&mut arguments, "--include")? {
+                includes.push(value);
+            }
+            let only_preselected = arguments.iter().position(|a| a == "--only-preselected");
+            if let Some(i) = only_preselected {
+                arguments.remove(i);
+                if !includes.is_empty() {
+                    return Err("--only-preselected cannot be combined with --include".into());
+                }
+            }
+            if arguments.len() != 1 {
+                return Err("apps uninstall requires exactly one <app-path|bundle-id>".into());
+            }
+            let path = resolve_app(&arguments[0])?;
+            let detail = app_manager::app_detail(&path)?;
+            let mut items: Vec<String> = detail
+                .items
+                .iter()
+                .filter(|i| i.preselected)
+                .map(|i| i.path.clone())
+                .collect();
+            for include in includes {
+                let include = resolve_path(&include)?.to_string_lossy().into_owned();
+                if !detail.items.iter().any(|i| i.path == include) {
+                    return Err(format!("not a related item of this app: {include}").into());
+                }
+                if !items.contains(&include) {
+                    items.push(include);
+                }
+            }
+            if items.is_empty() {
+                return Err("nothing is selected to move".into());
+            }
+            let result = app_manager::uninstall(&path, detail.app.bundle_id.as_deref(), &items)?;
+            let app_failed = result.failed.iter().any(|f| f.path == detail.app.path)
+                || (!result.moved.iter().any(|m| m.path == detail.app.path)
+                    && items.contains(&detail.app.path));
+            let value = json!({
+                "app": detail.app.name,
+                "moved": result.moved,
+                "failed": result.failed,
+                "bytes_freed": result.moved_bytes,
+                "activity_id": result.activity_id,
+            });
+            println!("{value}");
+            if app_failed {
+                return Err(CliError { body: None, exit: 1 });
+            }
+        }
+        other => return Err(format!("unknown apps command: {other}").into()),
+    }
+    Ok(())
 }

@@ -263,6 +263,9 @@ pub struct UninstallResult {
     pub moved: Vec<MovedItem>,
     pub failed: Vec<FailedItem>,
     pub moved_bytes: u64,
+    /// Id of the activity-log entry written for this run.
+    #[serde(default)]
+    pub activity_id: Option<String>,
 }
 
 pub struct BundleInfo {
@@ -1427,7 +1430,7 @@ fn log_path() -> PathBuf {
     home().join("Library/Application Support/Cockpit/apps-activity.json")
 }
 
-fn log_activity(app: &AppEntry, result: &UninstallResult) {
+fn log_activity(app: &AppEntry, result: &UninstallResult) -> Option<String> {
     let path = log_path();
     let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
         .ok()
@@ -1437,7 +1440,15 @@ fn log_activity(app: &AppEntry, result: &UninstallResult) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    let id = format!(
+        "{time}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    );
     entries.push(serde_json::json!({
+        "id": id,
         "time": time,
         "action": "move_to_trash",
         "app": app.name,
@@ -1449,16 +1460,15 @@ fn log_activity(app: &AppEntry, result: &UninstallResult) {
     if entries.len() > 500 {
         entries.drain(..entries.len() - 500);
     }
-    let Some(dir) = path.parent() else { return };
-    if std::fs::create_dir_all(dir).is_err() {
-        return;
-    }
+    let dir = path.parent()?;
+    std::fs::create_dir_all(dir).ok()?;
     let temp = path.with_extension("json.tmp");
     let write = std::fs::File::create(&temp)
         .and_then(|mut f| f.write_all(&serde_json::to_vec_pretty(&entries).unwrap_or_default()));
-    if write.is_ok() {
-        let _ = std::fs::rename(temp, path);
+    if write.is_ok() && std::fs::rename(temp, path).is_ok() {
+        return Some(id);
     }
+    None
 }
 
 /// Quit the app gracefully, then move the chosen items to the Trash.
@@ -1508,6 +1518,7 @@ pub fn uninstall(
         moved: Vec::new(),
         failed: Vec::new(),
         moved_bytes: 0,
+        activity_id: None,
     };
     let mut bundle_failed = false;
     for item in ordered {
@@ -1538,7 +1549,7 @@ pub fn uninstall(
             }
         }
     }
-    log_activity(&fresh.app, &result);
+    result.activity_id = log_activity(&fresh.app, &result);
     Ok(result)
 }
 
