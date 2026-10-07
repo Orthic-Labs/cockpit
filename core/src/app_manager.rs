@@ -1289,11 +1289,16 @@ fn vendor_folder(root: &Path) -> Option<PathBuf> {
         return None;
     }
     let dirs = app_dirs();
-    if dirs.iter().any(|d| d == folder) || !dirs.iter().any(|d| folder.parent() == Some(d.as_path()))
+    if dirs.iter().any(|d| d == folder)
+        || !dirs.iter().any(|d| folder.parent() == Some(d.as_path()))
     {
         return None;
     }
-    if std::fs::symlink_metadata(folder).ok()?.file_type().is_symlink() {
+    if std::fs::symlink_metadata(folder)
+        .ok()?
+        .file_type()
+        .is_symlink()
+    {
         return None;
     }
     let team = signing_info(root).1;
@@ -1488,9 +1493,12 @@ fn trash_batch_with_finder(paths: &[&Path], limit: Duration) -> Result<(), Strin
 fn elevate_tool() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     exe.ancestors().skip(1).take(6).find_map(|dir| {
-        [dir.join("cockpit-elevate"), dir.join("Helpers/cockpit-elevate")]
-            .into_iter()
-            .find(|p| p.is_file())
+        [
+            dir.join("cockpit-elevate"),
+            dir.join("Helpers/cockpit-elevate"),
+        ]
+        .into_iter()
+        .find(|p| p.is_file())
     })
 }
 
@@ -1738,17 +1746,16 @@ pub fn uninstall(
             }
         }
     }
-    let run_admin = |result: &mut UninstallResult,
-                         admin: &[(&String, u64)],
-                         bundle_failed: &mut bool| {
-        let paths: Vec<&Path> = admin.iter().map(|(p, _)| Path::new(p.as_str())).collect();
-        for ((item, bytes), outcome) in admin.iter().zip(move_admin_batch_to_trash(&paths)) {
-            let ok = record(result, item, outcome.map(|_| *bytes));
-            if !ok && **item == bundle {
-                *bundle_failed = true;
+    let run_admin =
+        |result: &mut UninstallResult, admin: &[(&String, u64)], bundle_failed: &mut bool| {
+            let paths: Vec<&Path> = admin.iter().map(|(p, _)| Path::new(p.as_str())).collect();
+            for ((item, bytes), outcome) in admin.iter().zip(move_admin_batch_to_trash(&paths)) {
+                let ok = record(result, item, outcome.map(|_| *bytes));
+                if !ok && **item == bundle {
+                    *bundle_failed = true;
+                }
             }
-        }
-    };
+        };
     let skipped = "Skipped because the app itself could not be moved.";
     let admin_first = admin.iter().any(|(p, _)| **p == bundle);
     if admin_first && !bundle_failed {
@@ -1774,7 +1781,11 @@ pub fn uninstall(
             run_admin(&mut result, &admin, &mut bundle_failed);
         }
     }
-    if folder.is_some() && result.moved.iter().any(|m| Some(&m.path) == folder.as_ref())
+    if folder.is_some()
+        && result
+            .moved
+            .iter()
+            .any(|m| Some(&m.path) == folder.as_ref())
         && items.contains(&fresh.app.path)
     {
         result.moved.push(MovedItem {
