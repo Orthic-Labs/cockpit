@@ -22,6 +22,9 @@ final class HubBridge {
         var previewSessionLimitAlert: () -> Void = {}
         var previewWeeklyLimitAlert: () -> Void = {}
         var sendTestNotification: () -> Void = {}
+        /// Mac conveniences: permission state, running apps, Auto Quit list.
+        var conveniences: () -> [String: Any] = { [:] }
+        var openAccessibilitySettings: () -> Void = {}
         /// Why the launcher hotkey is not working, when it is not.
         var launcherStatus: () -> String? = { nil }
     }
@@ -66,6 +69,9 @@ final class HubBridge {
         drainCommands()
         scheduleWrite()
     }
+
+    /// Publish again soon: something the hub shows changed outside Preferences.
+    func republish() { scheduleWrite() }
 
     // MARK: - State out
 
@@ -119,6 +125,7 @@ final class HubBridge {
             "displays": displays,
             "accounts": accounts,
             "providerOrder": preferences.providerOrder,
+            "conveniences": actions.conveniences(),
             "launcherStatus": actions.launcherStatus() ?? NSNull(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
@@ -171,6 +178,7 @@ final class HubBridge {
         case "previewSessionLimitAlert": actions.previewSessionLimitAlert()
         case "previewWeeklyLimitAlert": actions.previewWeeklyLimitAlert()
         case "sendTestNotification": actions.sendTestNotification()
+        case "openAccessibilitySettings": actions.openAccessibilitySettings()
         default: break
         }
     }
@@ -198,6 +206,17 @@ final class HubBridge {
     private static func text(_ path: ReferenceWritableKeyPath<Preferences, String>) -> Setting {
         Setting(get: { $0[keyPath: path] },
                 set: { prefs, value in if let v = value as? String { prefs[keyPath: path] = v } },
+                options: nil)
+    }
+
+    private static func stringList(_ path: ReferenceWritableKeyPath<Preferences, [String]>) -> Setting {
+        Setting(get: { $0[keyPath: path] },
+                set: { prefs, value in
+                    if let v = value as? [String] {
+                        var seen = Set<String>()
+                        prefs[keyPath: path] = v.filter { seen.insert($0).inserted }
+                    }
+                },
                 options: nil)
     }
 
@@ -252,6 +271,12 @@ final class HubBridge {
         // General
         "launchAtLogin": bool(\.launchAtLogin),
         "asksProviderOnLook": bool(\.asksProviderOnLook),
+        // Mac conveniences (all off until chosen)
+        "convFinderCutPaste": bool(\.convFinderCutPaste),
+        "convWindowMaximizer": bool(\.convWindowMaximizer),
+        "convDockClickMinimize": bool(\.convDockClickMinimize),
+        "convAutoQuit": bool(\.convAutoQuit),
+        "convAutoQuitApps": stringList(\.convAutoQuitApps),
         "launcherEnabled": bool(\.launcherEnabled),
         "launcherHotkey": choice(\.launcherHotkey),
     ]

@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var resetWatcher: UsageResetWatcher?
     private var limitWatcher: UsageLimitWatcher?
     private var hubBridge: HubBridge?
+    private var conveniences: ConveniencesService?
     private var launcher: LauncherController?
     /// Keeps the Claude keychain token from ageing out on a Mac where the CLI
     /// is never run by hand. See `ClaudeTokenRefresher`.
@@ -413,14 +414,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bridgeActions.previewSessionLimitAlert = { [weak self] in self?.previewSessionLimitAlert() }
             bridgeActions.previewWeeklyLimitAlert = { [weak self] in self?.previewWeeklyLimitAlert() }
             bridgeActions.sendTestNotification = { [weak self] in self?.sendTestNotification() }
+            let conveniences = ConveniencesService(preferences: preferences)
+            bridgeActions.conveniences = { [weak conveniences] in conveniences?.stateSnapshot() ?? [:] }
+            bridgeActions.openAccessibilitySettings = { [weak conveniences] in conveniences?.openAccessibilitySettings() }
             let launcher = LauncherController(preferences: preferences,
                                               snapshots: { [weak store] in store?.snapshots ?? [] })
             launcher.start()
             self.launcher = launcher
             bridgeActions.launcherStatus = { [weak launcher] in launcher?.status }
             let bridge = HubBridge(preferences: preferences, store: store, actions: bridgeActions)
+            conveniences.onChange = { [weak bridge] in bridge?.republish() }
             bridge.start()
             self.hubBridge = bridge
+            conveniences.start()
+            self.conveniences = conveniences
             fleet.onRefresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
             fleet.onLook = { [weak store] in store?.refreshBecauseSomeoneIsLooking() }
             fleet.onRefreshProvider = { [weak store] id in
@@ -846,6 +853,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor func openSettings() { _ = HubLauncher.open(section: "settings") }
     func applicationWillTerminate(_ notification: Notification) {
+        conveniences?.stop()
         tokenRefresher?.stop()
         piResponseMonitor?.stop()
         store?.stop()
