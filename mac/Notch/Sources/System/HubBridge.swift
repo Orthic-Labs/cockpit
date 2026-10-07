@@ -127,6 +127,7 @@ final class HubBridge {
             "providerOrder": preferences.providerOrder,
             "conveniences": actions.conveniences(),
             "launcherStatus": actions.launcherStatus() ?? NSNull(),
+            "keyboard": KarabinerRemap.status(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         else { return }
@@ -179,6 +180,9 @@ final class HubBridge {
         case "previewWeeklyLimitAlert": actions.previewWeeklyLimitAlert()
         case "sendTestNotification": actions.sendTestNotification()
         case "openAccessibilitySettings": actions.openAccessibilitySettings()
+        case "keyboardEnable": KarabinerRemap.enable()
+        case "keyboardDisable": KarabinerRemap.disable()
+        case "openKarabiner": KarabinerRemap.openApp()
         default: break
         }
     }

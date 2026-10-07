@@ -39,6 +39,7 @@ interface NotchState {
   accounts: Account[];
   providerOrder: string[];
   launcherStatus?: string | null;
+  keyboard?: { installed: boolean; running: boolean; enabled: boolean };
 }
 
 type Send = (command: Record<string, unknown>) => void;
@@ -211,6 +212,31 @@ export function Settings({ section }: { section: string }) {
               </>
             ) : null}
           </Group>
+          {state.keyboard && (
+            <Group title="Keyboard">
+              {state.keyboard.installed ? (
+                <Row
+                  label="Fn works as Command (Fn+C/V/X/A/Z/S/F/T/W), Fn+arrows move by word"
+                  note={state.keyboard.running
+                    ? "Done by Karabiner-Elements."
+                    : "Karabiner-Elements is not running. Open it once to approve its driver and permissions."}
+                >
+                  <Toggle
+                    checked={state.keyboard.enabled}
+                    onChange={(v) => send({ command: v ? "keyboardEnable" : "keyboardDisable" })}
+                    label="Fn works as Command"
+                  />
+                </Row>
+              ) : (
+                <div className="muted small">Install Karabiner-Elements first.</div>
+              )}
+              <Row label="Karabiner-Elements">
+                <Button size="sm" variant="secondary" onClick={() => send({ command: "openKarabiner" })}>
+                  Open Karabiner
+                </Button>
+              </Row>
+            </Group>
+          )}
           <Group title="Readings">
             {bool("asksProviderOnLook", "Ask the provider every time you look",
               "Spends a request each time. Useful to check against a provider's own page.")}
