@@ -121,14 +121,17 @@ fn hub_sections_render_without_errors() {
                 wait_text(&ctl, NO_NOTCH, Duration::from_secs(15), &format!("{} did not show the notch-not-running state", sec.title));
             } else {
                 if sec.id == "storage" {
-                    wait_text(&ctl, "Rescan", Duration::from_secs(30), "Storage scan of the fixture folder never finished");
-                    let text = body_text(&ctl);
-                    assert!(
-                        text.contains(FIXTURE),
-                        "Storage did not list fixture entry {FIXTURE}; fixture home {}; page text:\n{}",
-                        home.display(),
-                        text.chars().take(1500).collect::<String>()
-                    );
+                    // "Rescan" is on screen before the scan starts, so wait for the fixture row itself.
+                    let js = format!("return document.body.innerText.includes({})", json!(FIXTURE));
+                    if let Err(e) = ctl.wait_eval(&js, Duration::from_secs(60)) {
+                        let text = body_text(&ctl);
+                        panic!(
+                            "Storage did not list fixture entry {FIXTURE} ({}); fixture home {}; page text:\n{}",
+                            e.0,
+                            home.display(),
+                            text.chars().take(1500).collect::<String>()
+                        );
+                    }
                 } else {
                     // Let the view's first load settle.
                     std::thread::sleep(Duration::from_millis(1500));
