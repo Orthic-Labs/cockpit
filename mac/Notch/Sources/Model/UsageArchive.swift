@@ -22,11 +22,19 @@ struct UsageArchive {
         /// Optional so archives written before Codex token activity existed
         /// continue to open and show their last quota reading.
         let tokenUsage: CodexTokenUsage?
-        let usageDetail: ProviderUsageDetail?
         /// Whose reading this was. Optional for the same reason, and kept so a
         /// remembered one still says it — a reading restored from the archive
         /// is exactly when "which account is this?" is hardest to answer.
         let plan: String?
+    }
+
+    /// One entry that no longer decodes — a provider this copy no longer has,
+    /// written under a glyph it no longer draws — must not cost the rest.
+    private struct LossyEntry: Decodable {
+        let entry: Entry?
+        init(from decoder: Decoder) throws {
+            entry = try? Entry(from: decoder)
+        }
     }
 
     private let defaults: UserDefaults
@@ -73,8 +81,9 @@ struct UsageArchive {
 
     func load() -> [String: (snapshot: ProviderSnapshot, fetchedAt: Date)] {
         guard let data = defaults.data(forKey: key),
-              let entries = try? JSONDecoder().decode([Entry].self, from: data)
+              let lossy = try? JSONDecoder().decode([LossyEntry].self, from: data)
         else { return [:] }
+        let entries = lossy.compactMap(\.entry)
 
         var result: [String: (snapshot: ProviderSnapshot, fetchedAt: Date)] = [:]
         for entry in entries {
@@ -92,14 +101,13 @@ struct UsageArchive {
             var snapshot = ProviderSnapshot(
                 id: entry.id,
                 displayName: entry.displayName,
-                glyph: entry.id == "devin" && entry.glyph == .third ? .devin : entry.glyph,
+                glyph: entry.glyph,
                 fidelity: entry.fidelity,
                 status: .stale(since: entry.fetchedAt),
                 windows: windows,
                 headlineID: entry.headlineID,
                 weeklyID: entry.weeklyID,
-                tokenUsage: entry.tokenUsage,
-                usageDetail: entry.usageDetail
+                tokenUsage: entry.tokenUsage
             )
             snapshot.plan = entry.plan
             result[entry.id] = (snapshot, entry.fetchedAt)
@@ -126,7 +134,6 @@ struct UsageArchive {
                 headlineID: $0.snapshot.headlineID,
                 weeklyID: $0.snapshot.weeklyID,
                 tokenUsage: $0.snapshot.tokenUsage,
-                usageDetail: $0.snapshot.usageDetail,
                 plan: $0.snapshot.plan
             )
         }
