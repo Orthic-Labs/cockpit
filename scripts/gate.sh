@@ -74,7 +74,7 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots"
   qa_rc=0
   HOME="$qa_home" COCKPIT_QA_SHOTS="$qa_out/screenshots" COCKPIT_QA_FIXTURE_NAME=alpha-folder \
-    pnpm --dir hub run qa:native || qa_rc=$?
+    node "$(cd hub && node -p "fs.realpathSync('node_modules/@rightkit/qa/dist/cli.js')")" native --config hub/right-qa.config.mjs || qa_rc=$?
   find hub/.cache/rightkit-qa -name evidence.json -exec cp {} "$qa_out/" \; 2>/dev/null || true
   echo "Hub QA evidence in $qa_out:"; ls -l "$qa_out" "$qa_out/screenshots" || true
   rm -rf "$qa_home"

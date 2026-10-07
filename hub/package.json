@@ -7,8 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5191 --strictPort",
     "build": "vite build",
     "tauri": "tauri",
-    "qa:build": "tauri build --debug --no-bundle --features qa-native",
-    "qa:native": "node node_modules/@rightkit/qa/dist/cli.js native --config right-qa.config.mjs"
+    "qa:build": "tauri build --debug --no-bundle --features qa-native"
   },
   "dependencies": {
     "@rightkit/app-shell": "0.1.0",
