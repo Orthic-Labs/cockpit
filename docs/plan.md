@@ -45,13 +45,17 @@ Each phase ends with something usable on the Mac, installed as a signed, notariz
 
 1. **Notch fork.** Import Codenotch, strip other providers, add system & disk cells, no Dock/menu-bar item, right-click Quit only, launch at login. Repoint release packaging to the new app.
    *Done when:* it looks & behaves like Codenotch with Cockpit's rings, and runs a full day without issues.
-   *Status 2026-10-07:* notch built on CI (`xcode-27`) and approved by eye from a preview build — compact body, small size, rings only, paired rings, no working spinner ([mac/Notch/FORK.md](../mac/Notch/FORK.md)). Remaining: release packaging + signed install, launch at login, removing unused Codenotch provider code, full-day run.
+   *Status 2026-10-07:* done except the full-day run — signed, notarized Cockpit.app installed from the RightKit release lane; unused Codenotch code removed (#5); launch at login on by default; notch clicks open the hub.
 2. **Hub: Storage & Monitor.** Tauri hub from the approved mockup; storage list with drilldown & growth, search, monitor readings, Settings. Clicking the notch opens it.
    *Done when:* finding what's using space takes seconds, not a learning curve.
+   *Status 2026-10-07:* built (#2) on RightKit app-shell — Storage, Monitor, Settings (Accounts, Appearance, Notifications, General) via the notch bridge; Codenotch Settings window removed; installed. Growth view not yet in the hub.
 3. **Cleanup.** Rule pack from Mole & Kudu as data in core; review screen; move to Trash only; Activity list with restore.
    *Done when:* reviewing and trashing caches/build leftovers works end to end on the real disk.
+   *Status 2026-10-07:* merged (#3): 22 rules (rules/cleanup.json), review, Move to Trash with re-validation, history with Restore. Not yet tried end to end on the Mac.
 4. **Apps & processes.** App inventory, uninstall with leftovers, process list with Quit then explicit Force Quit.
+   *Status 2026-10-07:* merged (#4): Apps view with leftovers + uninstall to Trash; Monitor processes with Quit and confirmed Force Quit. Not yet tried end to end on the Mac.
 5. **Mac conveniences & launcher.** One shared event tap. Finder cut/paste → maximizer → Dock click → Auto Quit; Fn→Command via Karabiner-Elements config first, own tap only if Karabiner falls short; Tinycast launcher. Turn off each Vorssaint feature as its replacement works; then remove Vorssaint.
+   *Status 2026-10-07:* merged, all off by default: launcher on a Carbon hotkey (#6); event-tap conveniences — Finder cut/paste, maximizer, Dock click minimize, per-app Auto Quit (#7). Unverified on the Mac (permissions, Finder automation). Fn remap via Karabiner pending the owner's call on installing Karabiner.
 6. **Windows.** Native Windows notch (Rust), same Tauri hub, Windows file system provider, Recycle Bin, uninstallers.
 
 ## Safety rules (kept from the old plan)
