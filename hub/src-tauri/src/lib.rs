@@ -4,6 +4,8 @@
 
 mod apps;
 
+mod cleanup;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -293,7 +295,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, children, search, reveal, notch_state, notch_command, initial_section
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, children, search, reveal, notch_state, notch_command, initial_section,
+            cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())
         .expect("error while running Cockpit hub");

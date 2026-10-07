@@ -5,6 +5,7 @@ pub mod activity;
 pub mod app_manager;
 pub mod apps;
 pub mod cleanup;
+pub mod cleanup_scan;
 pub mod compression;
 pub mod dashboard_export;
 pub mod duplicates;
