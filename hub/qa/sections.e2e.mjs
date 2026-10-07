@@ -32,11 +32,14 @@ describe("Cockpit hub sections", () => {
 
   for (const [index, section] of sections.entries()) {
     it(`${section.title} renders its title without errors`, async () => {
+      const t0 = Date.now();
+      const lap = (what) => console.log(`[qa] ${section.id} ${what} +${Date.now() - t0}ms`);
       if (index > 0 || section.id !== "storage") {
         const item = await $(`//nav[contains(@class,'rk-nav')]//button[normalize-space(.)='${section.title}']`);
         await item.waitForExist({ timeout: 10_000 });
         await item.click();
       }
+      lap("navigated");
       try {
         await browser.waitUntil(async () => (await pageTitle()) === section.title, { timeout: 15_000 });
       } catch {
@@ -45,6 +48,7 @@ describe("Cockpit hub sections", () => {
         throw new Error(`title never became ${section.title}; page was:\n${dom}`);
       }
 
+      lap("title ok");
       if (section.settings) {
         // CI has no notch, so Settings must degrade to its explanatory state.
         await browser.waitUntil(async () => (await bodyText()).includes(NO_NOTCH), {
@@ -73,10 +77,13 @@ describe("Cockpit hub sections", () => {
         if (errors.length) throw new Error(`${section.title} shows error text: ${errors.join(" | ")}`);
       }
 
+      lap("checked");
       const text = await bodyText();
       const broken = text.match(BROKEN);
       if (broken) throw new Error(`${section.title} shows broken text "${broken[0]}"`);
+      lap("text read");
       await browser.saveScreenshot(path.join(shots, `${String(index + 1).padStart(2, "0")}-${section.id}.png`));
+      lap("screenshot saved");
     });
   }
 });
