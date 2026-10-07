@@ -1,0 +1,49 @@
+# Cockpit-owned (not managed by right-git): builds the Tauri hub and uploads an
+# ad-hoc-signed "Cockpit Hub.app" for trying on a Mac. Not a release.
+name: hub-preview
+on:
+  push:
+    branches: [main, hub-rightkit]
+    paths: ["hub/**", "core/**", ".github/workflows/hub-preview.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hub-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: ${{ !github.event.repository.private }}
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26.8.1"
+          package-manager-cache: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.24.0
+      - uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0
+        with:
+          toolchain: "1.90.0"
+      - name: Install
+        working-directory: hub
+        run: pnpm install --ignore-workspace --no-frozen-lockfile
+      - name: Build
+        working-directory: hub
+        run: pnpm tauri build --bundles app --no-sign
+      - name: Ad-hoc sign and zip
+        run: |
+          app="hub/src-tauri/target/release/bundle/macos/Cockpit Hub.app"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep "$app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/Cockpit-Hub-preview.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cockpit-hub-preview
+          path: ${{ runner.temp }}/Cockpit-Hub-preview.zip
+          if-no-files-found: error
+          retention-days: 7
