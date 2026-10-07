@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "pack_version": 1,
+  "sources": "Patterns re-implemented from Mole (tw93/Mole, lib/clean) and Kudu (AdventDevInc/kudu, rules/darwin). No code copied.",
+  "rules": [
+    {
+      "id": "user-caches", "name": "App caches", "category": "App caches", "risk": "safe",
+      "paths": ["~/Library/Caches/*"],
+      "exclude_names": ["com.apple.*", "Google", "Firefox", "Homebrew", "pip", "Yarn", "go-build", "Microsoft Edge", "BraveSoftware", "org.swift.swiftpm", "CloudKit", "FamilyCircle", "*.keychain*"],
+      "liveness": "name", "owners": [],
+      "reason": "The app rebuilds this cache the next time it needs it.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "xcode-derived-data", "name": "Xcode DerivedData", "category": "Developer", "risk": "safe",
+      "paths": ["~/Library/Developer/Xcode/DerivedData/*"],
+      "exclude_names": ["ModuleCache.noindex"],
+      "liveness": "owners", "owners": ["Xcode", "xcodebuild", "swift-build", "SourceKitService", "swift-frontend"],
+      "reason": "Build products and indexes; Xcode rebuilds them on the next build.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "xcode-archives", "name": "Xcode Archives", "category": "Developer", "risk": "review",
+      "paths": ["~/Library/Developer/Xcode/Archives/*"],
+      "liveness": "owners", "owners": ["Xcode", "xcodebuild"],
+      "min_age_days": 30,
+      "reason": "Archived app builds. Keep any you may still need to submit or symbolicate.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "device-support", "name": "iOS DeviceSupport (older versions)", "category": "Developer", "risk": "review",
+      "paths": ["~/Library/Developer/Xcode/iOS DeviceSupport/*", "~/Library/Developer/Xcode/watchOS DeviceSupport/*", "~/Library/Developer/Xcode/tvOS DeviceSupport/*"],
+      "liveness": "owners", "owners": ["Xcode"],
+      "keep_newest": 1,
+      "reason": "Debug symbols copied from a device; Xcode copies them again when it is connected. The newest version is kept.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "simulator-caches", "name": "Simulator caches", "category": "Developer", "risk": "safe",
+      "paths": ["~/Library/Developer/CoreSimulator/Caches/*"],
+      "liveness": "owners", "owners": ["Simulator", "Xcode", "simctl", "CoreSimulatorService"],
+      "reason": "Cached simulator data; rebuilt when a simulator boots.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "npm-cache", "name": "npm cache", "category": "Package caches", "risk": "safe",
+      "paths": ["~/.npm/_cacache"],
+      "liveness": "owners", "owners": ["npm", "npx"],
+      "reason": "Downloaded packages; npm fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "pnpm-store", "name": "pnpm store", "category": "Package caches", "risk": "safe",
+      "paths": ["~/Library/pnpm/store/*", "~/.pnpm-store/*"],
+      "liveness": "owners", "owners": ["pnpm"],
+      "reason": "Shared package store; pnpm downloads packages again on the next install.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "yarn-cache", "name": "Yarn cache", "category": "Package caches", "risk": "safe",
+      "paths": ["~/Library/Caches/Yarn/*"],
+      "liveness": "owners", "owners": ["yarn"],
+      "reason": "Downloaded packages; Yarn fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "pip-cache", "name": "pip cache", "category": "Package caches", "risk": "safe",
+      "paths": ["~/Library/Caches/pip/*"],
+      "liveness": "owners", "owners": ["pip", "pip3"],
+      "reason": "Downloaded wheels; pip fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "cargo-cache", "name": "Cargo registry and git caches", "category": "Package caches", "risk": "safe",
+      "paths": ["~/.cargo/registry/cache/*", "~/.cargo/registry/src/*", "~/.cargo/git/checkouts/*"],
+      "liveness": "owners", "owners": ["cargo", "rustc", "rust-analyzer"],
+      "reason": "Downloaded crates and checkouts; Cargo fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "go-cache", "name": "Go build and module caches", "category": "Package caches", "risk": "safe",
+      "paths": ["~/Library/Caches/go-build/*", "~/go/pkg/mod/cache/download/*"],
+      "liveness": "owners", "owners": ["go", "gopls"],
+      "reason": "Build output and downloaded modules; Go recreates them on demand.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "gradle-cache", "name": "Gradle caches", "category": "Package caches", "risk": "safe",
+      "paths": ["~/.gradle/caches/*"],
+      "liveness": "owners", "owners": ["gradle", "java", "Android Studio"],
+      "reason": "Downloaded dependencies and build caches; Gradle recreates them on the next build.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "homebrew-cache", "name": "Homebrew downloads", "category": "Package caches", "risk": "safe",
+      "paths": ["~/Library/Caches/Homebrew/*"],
+      "liveness": "owners", "owners": ["brew", "ruby"],
+      "reason": "Downloaded bottles and sources; Homebrew fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "chrome-cache", "name": "Chrome cache", "category": "Browser caches", "risk": "safe",
+      "paths": ["~/Library/Caches/Google/Chrome/*"],
+      "liveness": "owners", "owners": ["Google Chrome"],
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "safari-cache", "name": "Safari cache", "category": "Browser caches", "risk": "safe",
+      "paths": ["~/Library/Caches/com.apple.Safari/*"],
+      "liveness": "owners", "owners": ["Safari"],
+      "reason": "Cached web content only; never your history, bookmarks or passwords.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "firefox-cache", "name": "Firefox cache", "category": "Browser caches", "risk": "safe",
+      "paths": ["~/Library/Caches/Firefox/Profiles/*"],
+      "liveness": "owners", "owners": ["firefox"],
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "edge-cache", "name": "Edge cache", "category": "Browser caches", "risk": "safe",
+      "paths": ["~/Library/Caches/Microsoft Edge/*"],
+      "liveness": "owners", "owners": ["Microsoft Edge"],
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "brave-cache", "name": "Brave cache", "category": "Browser caches", "risk": "safe",
+      "paths": ["~/Library/Caches/BraveSoftware/Brave-Browser/*"],
+      "liveness": "owners", "owners": ["Brave Browser"],
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "user-logs", "name": "Logs", "category": "Logs", "risk": "safe",
+      "paths": ["~/Library/Logs/*"],
+      "exclude_names": ["com.apple.*"],
+      "liveness": "name", "owners": [],
+      "reason": "Old diagnostic logs; apps write new ones as they need them.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "old-downloads", "name": "Old downloads", "category": "Downloads", "risk": "review",
+      "paths": ["~/Downloads/*"],
+      "exclude_names": [".*", "*.crdownload", "*.download", "*.part", "*.partial"],
+      "liveness": "age", "owners": [],
+      "min_age_days": 90,
+      "reason": "Not modified in over 90 days. These are your own files, so look before you trash.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "chrome-signing-copies", "name": "Chrome signing copies", "category": "Browser caches", "risk": "review",
+      "paths": ["/private/var/folders/*/*/T/com.google.Chrome.code_sign_clone/*", "/private/var/folders/*/*/X/com.google.Chrome.code_sign_clone/*"],
+      "liveness": "owners", "owners": ["Google Chrome"],
+      "min_age_days": 1,
+      "reason": "Temporary copies Chrome makes while updating. They share storage with the real app, so the size shown is an upper bound.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "trash-info", "name": "Trash", "category": "Trash", "risk": "info",
+      "paths": ["~/.Trash"],
+      "liveness": "age", "owners": [],
+      "reason": "Everything moved here still takes space. Emptying the Trash is your call; do it in Finder.",
+      "action": "None"
+    }
+  ]
+}
