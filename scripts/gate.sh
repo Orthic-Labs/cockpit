@@ -66,23 +66,27 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   # (qa-native, compile-time barred from release), driven by right-qa over a
   # tiny HOME so Storage scans a fixture. Evidence lands in $RUNNER_TEMP/cockpit-hub-qa
   # (screenshots/ + evidence.json); the generated ci workflow has no artifact upload.
-  pnpm --dir hub run qa:build
-  qa_home="$(mktemp -d "$RUNNER_TEMP/cockpit-hub-qa-home.XXXXXX")"
-  mkdir -p "$qa_home/alpha-folder"
-  head -c 65536 /dev/zero > "$qa_home/alpha-folder/fixture.bin"
-  qa_out="$RUNNER_TEMP/cockpit-hub-qa"
-  rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots"
-  qa_rc=0
-  HOME="$qa_home" COCKPIT_QA_SHOTS="$qa_out/screenshots" COCKPIT_QA_FIXTURE_NAME=alpha-folder \
-    node "$(cd hub && node -p "fs.realpathSync('node_modules/@rightkit/qa/dist/cli.js')")" native --config hub/right-qa.config.mjs || qa_rc=$?
-  find hub/.cache/rightkit-qa -name evidence.json -exec cp {} "$qa_out/" \; 2>/dev/null || true
-  [[ -f "$qa_out/evidence.json" ]] && cat "$qa_out/evidence.json"
-  echo "Hub QA evidence in $qa_out:"; ls -l "$qa_out" "$qa_out/screenshots" || true
-  rm -rf "$qa_home"
-  [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
-  # A silent no-op must not pass: demand the receipt and one screenshot per section.
-  [[ -f "$qa_out/evidence.json" ]] && grep -q '"passed"' "$qa_out/evidence.json" || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
-  [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
+  if [[ -z "${COCKPIT_SKIP_HUB_QA:-}" ]]; then
+    pnpm --dir hub run qa:build
+    qa_home="$(mktemp -d "$RUNNER_TEMP/cockpit-hub-qa-home.XXXXXX")"
+    mkdir -p "$qa_home/alpha-folder"
+    head -c 65536 /dev/zero > "$qa_home/alpha-folder/fixture.bin"
+    qa_out="$RUNNER_TEMP/cockpit-hub-qa"
+    rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots"
+    qa_rc=0
+    HOME="$qa_home" COCKPIT_QA_SHOTS="$qa_out/screenshots" COCKPIT_QA_FIXTURE_NAME=alpha-folder \
+      node "$(cd hub && node -p "fs.realpathSync('node_modules/@rightkit/qa/dist/cli.js')")" native --config hub/right-qa.config.mjs || qa_rc=$?
+    find hub/.cache/rightkit-qa -name evidence.json -exec cp {} "$qa_out/" \; 2>/dev/null || true
+    [[ -f "$qa_out/evidence.json" ]] && cat "$qa_out/evidence.json"
+    echo "Hub QA evidence in $qa_out:"; ls -l "$qa_out" "$qa_out/screenshots" || true
+    rm -rf "$qa_home"
+    [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
+    # A silent no-op must not pass: demand the receipt and one screenshot per section.
+    [[ -f "$qa_out/evidence.json" ]] && grep -q '"passed"' "$qa_out/evidence.json" || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
+    [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
+  else
+    echo "Hub QA skipped (COCKPIT_SKIP_HUB_QA set: signed-build gate)"
+  fi
   # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
   xcodebuild -version
   command -v xcodegen >/dev/null || brew install xcodegen
