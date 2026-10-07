@@ -230,6 +230,12 @@ fn watch_notch(app: tauri::AppHandle) {
                 tokens.push((token, event, payload));
             }
         }
+        // A section passed at launch (`--section`) is also sent once the page
+        // has had time to load and subscribe.
+        if let Some(section) = initial_section() {
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            let _ = app.emit("show-section", section);
+        }
         loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
             for (token, event, payload) in &tokens {
