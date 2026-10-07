@@ -1027,13 +1027,28 @@ mod tests {
     #[test]
     fn chrome_clone_paths_match_the_rule() {
         let pack = load_pack().unwrap();
-        let rule = pack.rules.iter().find(|r| r.id == CHROME_SNAPSHOT_RULE).unwrap();
+        let rule = pack
+            .rules
+            .iter()
+            .find(|r| r.id == CHROME_SNAPSHOT_RULE)
+            .unwrap();
         let home = Path::new("/Users/x");
-        for id in ["com.google.Chrome", "com.google.chrome.for.testing", "org.chromium.Chromium"] {
-            let p = PathBuf::from(format!("/private/var/folders/ab/cd/X/{id}.code_sign_clone/code_sign_clone.AbC123"));
-            assert!(rule.paths.iter().any(|pat| path_matches(pat, &p, home)), "{id}");
+        for id in [
+            "com.google.Chrome",
+            "com.google.chrome.for.testing",
+            "org.chromium.Chromium",
+        ] {
+            let p = PathBuf::from(format!(
+                "/private/var/folders/ab/cd/X/{id}.code_sign_clone/code_sign_clone.AbC123"
+            ));
+            assert!(
+                rule.paths.iter().any(|pat| path_matches(pat, &p, home)),
+                "{id}"
+            );
         }
-        let other = PathBuf::from("/private/var/folders/ab/cd/X/com.example.App.code_sign_clone/code_sign_clone.1");
+        let other = PathBuf::from(
+            "/private/var/folders/ab/cd/X/com.example.App.code_sign_clone/code_sign_clone.1",
+        );
         assert!(!rule.paths.iter().any(|pat| path_matches(pat, &other, home)));
     }
 }
