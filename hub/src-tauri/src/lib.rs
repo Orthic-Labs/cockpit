@@ -458,13 +458,6 @@ fn reveal(path: String) -> Result<(), String> {
 #[cfg(all(not(debug_assertions), feature = "qa-native"))]
 compile_error!("qa-native must never be enabled in release builds");
 
-pub fn run() {
-    // QA launches (rightkit-qa) can only pass RIGHTKIT_* keys on macOS, so the isolated
-    // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_COCKPIT_QA_HOME.
-    #[cfg(all(debug_assertions, feature = "qa-native"))]
-    if let Some(home) = std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME") {
-        std::env::set_var("HOME", home);
-    }
 /// The hub has a Dock icon while its window is open; closing the window
 /// hides it and drops back to notch-only (accessory).
 fn show_in_dock(app: &tauri::AppHandle) {
@@ -485,6 +478,13 @@ fn hide_to_notch(window: &tauri::Window) {
     let _ = window.app_handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
+pub fn run() {
+    // QA launches (rightkit-qa) can only pass RIGHTKIT_* keys on macOS, so the isolated
+    // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_COCKPIT_QA_HOME.
+    #[cfg(all(debug_assertions, feature = "qa-native"))]
+    if let Some(home) = std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME") {
+        std::env::set_var("HOME", home);
+    }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     // Env-gated by the rightkit-qa launcher: inert in normal launches.
