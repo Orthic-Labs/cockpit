@@ -10,7 +10,7 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 
 | Surface | What it is | Built with |
 | --- | --- | --- |
-| Notch | Always on. Right screen edge. Four cells, each a main outer ring with a thin inner ring: Claude (weekly / 5-hour), Codex (weekly / 5-hour), System (memory pressure / CPU), Disks (external / internal). Hover card shows details. | Fork of Codenotch Mac app (Swift), `mac/Notch` |
+| Notch | Always on. Right screen edge. Four cells, each a main outer ring with a thin inner ring: Claude (weekly / 5-hour), Codex (weekly / 5-hour), System (memory pressure / CPU), Disks (external / internal). Hover card shows details: System adds GPU busy and CPU/SoC temperature; Disks adds drive health, temperature, wear and writes per physical drive. | Fork of Codenotch Mac app (Swift), `mac/Notch` |
 | Hub | Small window (about 600×400) opened by clicking the notch. Storage, Cleanup, Apps, Monitor, Settings. Closes fully when closed. | Tauri (shared with Windows later), RightKit packages |
 | CLI | `cockpit` for agents: same data & actions as the hub, JSON output. | Existing Rust core |
 
@@ -58,6 +58,7 @@ Each phase ends with something usable on the Mac, installed as a signed, notariz
 5. **Mac conveniences & launcher.** One shared event tap. Finder cut/paste → maximizer → Dock click → Auto Quit; Fn→Command through our own HID-level event tap; Tinycast launcher. Turn off each Vorssaint feature as its replacement works; then remove Vorssaint.
    *Status 2026-10-07:* merged, all off by default: launcher on a Carbon hotkey (#6); event-tap conveniences — Finder cut/paste, maximizer, Dock click minimize, per-app Auto Quit (#7). Unverified on the Mac (permissions, Finder automation). Fn remap: own HID event tap; other Fn shortcuts untouched; Karabiner dropped. Verified by the owner on the Logitech keyboard 2026-10-07: Fn+C/V copy/paste (no Control Center), Fn+Space unchanged.
 5a. **Drive health.** Core runs `smartctl -a -j` per physical drive (bundled or Homebrew), keeps timestamped raw readings, and shows temperature, wear %, total writes, power-on hours, critical warnings, media errors & self-test results in the hub's Storage view; alerts on changes. When the connection blocks it (USB NVMe on macOS has no passthrough), show "Health unavailable through this connection" and keep the last good reading with its date. Same backend on Windows.
+   *Status 2026-10-07:* notch Disks hover done (not the hub Storage view): `smartctl -a -j` every 10 min off the main actor (Homebrew, then bundled path; not bundled yet), health, temperature, wear, written; unavailable connections show the sentence above with the last good reading and date, kept in `~/Library/Application Support/Cockpit/drive-health.json`; "Install smartmontools for drive health" when absent. Unverified on the Mac until CI build is run.
    *Checked 2026-10-07:* smartctl 7.5 reads the internal APPLE SSD AP0512Z (NVMe log: temperature, % used, writes, power-on hours, warnings, media errors); the external disk6 fails with "Operation not supported by device".
 6. **Windows.** Native Windows notch (Rust), same Tauri hub, Windows file system provider, Recycle Bin, uninstallers.
 

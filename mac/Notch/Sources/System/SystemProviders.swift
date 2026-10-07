@@ -65,10 +65,20 @@ actor SystemLoadProvider: UsageProvider {
                               usedFraction: min(max(busy / total, 0), 1),
                               detail: L10n.t("\(Percent.text(for: busy / total))% busy · \(cores) cores"))
         let memory = try? MemoryProvider.window()
+        // Hover-only rows: no ring, no fraction, so they render as one line.
+        var extras: [LimitWindow] = []
+        if let gpu = SystemSensors.gpuUtilization() {
+            extras.append(LimitWindow(id: "gpu", label: L10n.t("GPU"),
+                                      detail: L10n.t("\(Percent.text(for: gpu))% busy")))
+        }
+        if let celsius = SystemSensors.cpuTemperature() {
+            extras.append(LimitWindow(id: "temperature", label: L10n.t("Temperature"),
+                                      detail: DriveHealth.temperatureText(celsius)))
+        }
         // Memory pressure leads (the main, outer ring); CPU is the thin inner
         // ring. Without a memory reading, CPU leads alone.
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
-                                status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []),
+                                status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []) + extras,
                                 headlineID: memory?.id ?? cpu.id,
                                 weeklyID: memory == nil ? nil : cpu.id, kind: .system)
     }
@@ -178,6 +188,7 @@ struct DisksProvider: UsageProvider {
 
     private struct Volume {
         let window: LimitWindow
+        let device: String?
         let isInternal: Bool
         let isStartup: Bool
     }
@@ -199,8 +210,12 @@ struct DisksProvider: UsageProvider {
         let external = volumes.first { !$0.isInternal && $0.window.id != inside.window.id }
         let lead = external ?? inside
         let ordered = [inside] + volumes.filter { $0.window.id != inside.window.id }
+        // Drive health rows follow the capacity rows; the sampler runs off
+        // this path and only its last result is read here.
+        let health = await DriveHealth.shared.rows(
+            for: ordered.compactMap { volume in volume.device.map { (device: $0, name: volume.window.label) } })
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
-                                status: .ok, windows: ordered.map(\.window),
+                                status: .ok, windows: ordered.map(\.window) + health,
                                 headlineID: lead.window.id,
                                 weeklyID: external == nil ? nil : inside.window.id,
                                 kind: .system)
@@ -223,8 +238,18 @@ struct DisksProvider: UsageProvider {
                 id: "disk:" + (values.volumeUUIDString ?? url.path), label: name,
                 usedFraction: min(Double(used) / Double(total), 1),
                 detail: L10n.t("\(SystemProviders.bytes(free)) free of \(SystemProviders.bytes(total))"))
-            return Volume(window: window, isInternal: values.volumeIsInternal == true,
+            return Volume(window: window, device: mountDevice(url.path), isInternal: values.volumeIsInternal == true,
                           isStartup: url.path == "/")
         }
+    }
+
+    /// The BSD device node a volume is mounted from ("disk3s1s1").
+    private static func mountDevice(_ path: String) -> String? {
+        var info = statfs()
+        guard statfs(path, &info) == 0 else { return nil }
+        let from = withUnsafeBytes(of: &info.f_mntfromname) {
+            String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
+        }
+        return from.hasPrefix("/dev/") ? String(from.dropFirst(5)) : nil
     }
 }
