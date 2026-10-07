@@ -1,6 +1,8 @@
 //! Cockpit hub: a small window over the read-only Rust core. Every command
 //! reads; nothing here deletes, moves or changes a file.
 
+mod cleanup;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -289,7 +291,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            status, processes, scan, children, search, reveal, notch_state, notch_command, initial_section
+            status, processes, scan, children, search, reveal, notch_state, notch_command, initial_section,
+            cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())
         .expect("error while running Cockpit hub");
