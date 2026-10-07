@@ -80,6 +80,8 @@ final class NotchFleet {
     var onLook: (() -> Void)?
     var onRefreshProvider: ((String) async -> Void)?
     var onOpenSettings: (() -> Void)?
+    /// Cockpit fork: open the hub on a section ("storage", "monitor", "accounts").
+    var onOpenHub: ((String) -> Void)?
     /// The notch's answer to an update it offered.
     var onUpdateChoice: ((UpdateChoice) -> Void)?
     private var updatePrompt: UpdatePrompt?
@@ -477,6 +479,7 @@ final class NotchFleet {
         controller.onLook = { [weak self] in self?.onLook?() }
         controller.onRefreshProvider = onRefreshProvider
         controller.onOpenSettings = onOpenSettings
+        controller.onOpenHub = onOpenHub
         controller.model.onOpenSettings = onOpenSettings
         controller.model.onFocusSession = onFocusSession
         controller.model.onUpdateChoice = { [weak self] in self?.onUpdateChoice?($0) }

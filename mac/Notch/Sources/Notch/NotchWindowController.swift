@@ -31,6 +31,7 @@ final class NotchWindowController {
     var onRefreshProvider: ((String) async -> Void)?
     /// Open the settings window, asked for by clicking the handle.
     var onOpenSettings: (() -> Void)?
+    var onOpenHub: ((String) -> Void)?
     /// An ⌥-drag on the pill settled at a new `model.alongOffset`. The
     /// controller only holds the live value; persisting it per edge is
     /// Preferences' job, the same division `apply(edge:)` already keeps.
@@ -1632,14 +1633,19 @@ final class NotchWindowController {
             setExpanded(true)
             return
         }
+        // Cockpit fork: a click on the open notch opens the hub — a ring on
+        // its own page (disks → Storage, system → Monitor, an account →
+        // Accounts), anywhere else on Storage. Readings refresh on their own.
         if notchRect.contains(local),
            let index = cellIndex(along: placement.along(of: local)),
            model.snapshots.indices.contains(index) {
-            if let onRefreshProvider {
-                let snapshot = model.snapshots[index]
-                Task { await model.refresh(snapshot, using: onRefreshProvider) }
-            }
+            let id = model.snapshots[index].providerID
+            let section = id == SystemProviders.disksID ? "storage"
+                : id == SystemProviders.cpuID ? "monitor" : "accounts"
+            onOpenHub?(section)
+            return
         }
+        if notchRect.contains(local) { onOpenHub?("storage") }
         // Anything else on an open notch does nothing. A click here used to
         // pin it, which read as the notch locking itself: the rings are small
         // targets, a click aimed at one lands beside it easily, and `isPinned`

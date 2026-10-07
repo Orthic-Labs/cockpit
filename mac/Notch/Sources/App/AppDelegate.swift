@@ -112,6 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let preferences = Preferences()
         self.preferences = preferences
 
+        // Cockpit fork: open at login by default — once, and only for the
+        // installed copy, so test builds never register themselves.
+        if Bundle.main.bundlePath.hasPrefix("/Applications/"),
+           !UserDefaults.standard.bool(forKey: "cockpitLoginItemDefaulted") {
+            UserDefaults.standard.set(true, forKey: "cockpitLoginItemDefaulted")
+            if !preferences.launchAtLogin { preferences.launchAtLogin = true }
+        }
+
         // One notch per display: the fleet owns a controller for each screen
         // the scope asks for and fans every reading out to all of them. The
         // stored edge goes in up front, before any panel is ever put up — the
@@ -412,6 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fleet.onOpenSettings = { [weak settings] in
                 if !HubLauncher.open(section: "settings") { settings?.toggle() }
             }
+            fleet.onOpenHub = { _ = HubLauncher.open(section: $0) }
             // A session row answers where it runs by taking you there.
             fleet.onFocusSession = { pid in
                 Task { _ = await SessionFocus.focus(pid: pid) }
