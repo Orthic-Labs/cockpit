@@ -13,6 +13,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   --rk-brand: #0a84ff;
   --rk-brand-dark: #0a84ff;
   --rk-wordmark: "Tanker", sans-serif;
+  --rk-wordmark-font: "Tanker", sans-serif;
   font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
   font-size: 13px;
 }
@@ -22,6 +23,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .small { font-size: 11px; }
 .strong { font-weight: 600; color: var(--ink); }
 .error { color: var(--bad); font-size: 12px; }
+/* Page titles in the titlebar use the suite face too. */
+.rk-top__title { font-family: var(--rk-wordmark); font-weight: 400; font-size: 18px; letter-spacing: 0.01em; }
 .wordmark { font-family: var(--rk-wordmark); font-weight: 400; font-size: 20px; letter-spacing: 0.01em; }
 .nav-icon { font-size: 13px; opacity: 0.8; }
 
