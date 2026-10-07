@@ -284,12 +284,32 @@ fn reveal(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(all(not(debug_assertions), feature = "qa-native"))]
+compile_error!("qa-native must never be enabled in release builds");
+
+#[cfg(all(debug_assertions, feature = "qa-native"))]
+fn rightkit_native_qa_enabled() -> bool {
+    std::env::var("RIGHTKIT_QA_NATIVE").as_deref() == Ok("1")
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    #[cfg(all(debug_assertions, feature = "qa-native"))]
+    if rightkit_native_qa_enabled() {
+        builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    }
+    builder
         // RightKit's shell asks the OS plugin for the platform (traffic-light room on macOS).
         .plugin(tauri_plugin_os::init())
         .manage(Hub::default())
         .setup(|app| {
+            #[cfg(all(debug_assertions, feature = "qa-native"))]
+            if rightkit_native_qa_enabled() {
+                app.add_capability(
+                    r#"{"identifier":"qa-native","windows":["main"],"permissions":["wdio-webdriver:default"]}"#,
+                )?;
+            }
             // No Dock icon: Cockpit lives in the notch.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);

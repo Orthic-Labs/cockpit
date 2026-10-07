@@ -71,6 +71,7 @@ export function App() {
       title={titles[active]}
       searchMode="none"
       sidebarWidth={170}
+      sidebarToggle={false}
       wordmark={<span className="wordmark">Cockpit</span>}
       onOpenSettings={() => setActive("accounts")}
       settingsActive={settingsIds.has(active)}

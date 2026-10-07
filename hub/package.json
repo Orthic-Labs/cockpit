@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5191 --strictPort",
     "build": "vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "qa:build": "tauri build --debug --no-bundle --features qa-native",
+    "qa:native": "right-qa native --config right-qa.config.mjs"
   },
   "dependencies": {
     "@rightkit/app-shell": "0.1.0",
@@ -18,6 +20,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@rightkit/qa": "0.2.1",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
