@@ -75,8 +75,8 @@ actor DriveHealth {
         var rows: [LimitWindow] = []
         if disk.unavailable {
             rows.append(LimitWindow(id: "health:\(whole):a",
-                                    label: L10n.t("Health unavailable through this connection"),
-                                    detail: name))
+                                    label: name,
+                                    detail: L10n.t("Health n/a over USB")))
             if let last = disk.last {
                 rows.append(LimitWindow(
                     id: "health:\(whole):last",
