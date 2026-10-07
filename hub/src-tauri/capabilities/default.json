@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Cockpit hub main window",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-focus"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-focus", "os:allow-platform"]
 }

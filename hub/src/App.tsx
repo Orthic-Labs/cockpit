@@ -7,25 +7,26 @@ import { Monitor } from "./views/Monitor";
 import { Apps } from "./views/Apps";
 import { Cleanup } from "./views/Cleanup";
 import { Settings } from "./views/Settings";
+import { Bell, CircleUser, Gauge, HardDrive, LayoutGrid, Palette, Settings2, Sparkles } from "lucide-react";
 
-const icon = (glyph: string) => <span className="nav-icon">{glyph}</span>;
+const icon = (Icon: typeof HardDrive) => <Icon size={15} strokeWidth={1.75} />;
 
 const groups = [
   {
     items: [
-      { id: "storage", label: "Storage", icon: icon("◧"), keywords: ["disk", "files"] },
-      { id: "cleanup", label: "Cleanup", icon: icon("◌"), keywords: ["trash", "cache", "clean"] },
-      { id: "monitor", label: "Monitor", icon: icon("◉"), keywords: ["cpu", "memory"] },
-      { id: "apps", label: "Apps", icon: icon("▦"), keywords: ["uninstall", "applications", "leftovers"] },
+      { id: "storage", label: "Storage", icon: icon(HardDrive), keywords: ["disk", "files"] },
+      { id: "cleanup", label: "Cleanup", icon: icon(Sparkles), keywords: ["trash", "cache", "clean"] },
+      { id: "monitor", label: "Monitor", icon: icon(Gauge), keywords: ["cpu", "memory"] },
+      { id: "apps", label: "Apps", icon: icon(LayoutGrid), keywords: ["uninstall", "applications", "leftovers"] },
     ],
   },
   {
     title: "Settings",
     items: [
-      { id: "accounts", label: "Accounts", icon: icon("◎"), keywords: ["claude", "codex", "sign in"] },
-      { id: "appearance", label: "Appearance", icon: icon("◐"), keywords: ["notch", "size", "edge"] },
-      { id: "notifications", label: "Notifications", icon: icon("◔"), keywords: ["alerts", "sound"] },
-      { id: "general", label: "General", icon: icon("⚙"), keywords: ["login", "startup"] },
+      { id: "accounts", label: "Accounts", icon: icon(CircleUser), keywords: ["claude", "codex", "sign in"] },
+      { id: "appearance", label: "Appearance", icon: icon(Palette), keywords: ["notch", "size", "edge"] },
+      { id: "notifications", label: "Notifications", icon: icon(Bell), keywords: ["alerts", "sound"] },
+      { id: "general", label: "General", icon: icon(Settings2), keywords: ["login", "startup"] },
     ],
   },
 ];

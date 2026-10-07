@@ -286,6 +286,8 @@ fn reveal(path: String) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        // RightKit's shell asks the OS plugin for the platform (traffic-light room on macOS).
+        .plugin(tauri_plugin_os::init())
         .manage(Hub::default())
         .setup(|app| {
             // No Dock icon: Cockpit lives in the notch.
