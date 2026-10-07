@@ -298,39 +298,13 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// windows: it is not a measurement, it is a door being shut.
     var block: UsageBlock?
     var kind: ProviderKind = .usage
-    var localRuntime: LocalRuntimeReading?
-    var localModel: LocalRuntimeReading.Model?
-    var localPerformance: LocalModelPerformance?
-    var showsLocalPerformance = false
-    /// How full the loaded context was on the last request, from the runtime's
-    /// own log. The local ring's arc: a window filling up is the one fraction
-    /// a local model has, where a cloud ring has a quota.
-    var localContextFraction: Double?
-    /// Today's tokens and requests and the shape of the last response, when
-    /// the runtime logs them. Read by the tooltip; absent for runtimes that
-    /// do not.
-    var localLedger: LocalTokenLedger.Summary?
-    /// The runtime measures responses itself, so speed is shown without the
-    /// Ollama relay switch.
-    var localRuntimeMeasuresSpeed = false
     /// A model cell has its own display preference, but polling belongs to the
     /// runtime that supplied it.
     var sourceProviderID: String?
-    var customIconFilename: String?
 
     var providerID: String { sourceProviderID ?? id }
 
-    var notchSnapshots: [ProviderSnapshot] {
-        guard kind == .localRuntime, localModel == nil else { return [self] }
-        return (localRuntime?.models ?? []).map { model in
-            ProviderSnapshot(id: "\(id):model:\(model.id)", displayName: displayName,
-                             glyph: model.brand?.glyph ?? glyph,
-                             fidelity: fidelity, status: status, windows: [],
-                             kind: kind, localModel: model,
-                             localRuntimeMeasuresSpeed: localRuntime?.measuresSpeed ?? false,
-                             sourceProviderID: id)
-        }
-    }
+    var notchSnapshots: [ProviderSnapshot] { [self] }
     /// Codex's account-wide token activity, when its profile endpoint returned
     /// it. The optional top model is an enrichment from the desktop breakdown
     /// endpoint; it never changes the profile token buckets. Other providers
@@ -354,13 +328,6 @@ struct ProviderSnapshot: Identifiable, Equatable {
         guard let credits = resetCredits?.unexpired(at: now), credits.availableCount > 0 else { return nil }
         return credits
     }
-
-    /// Provider-owned online usage detail, such as DeepSeek's API key/model
-    /// breakdown and daily token/cost series.
-    var usageDetail: ProviderUsageDetail? = nil
-
-    /// Locally sampled cumulative token usage for a custom endpoint.
-    var customUsageHistory: [CustomEndpointUsageDay]? = nil
 
     /// The number on the cell: the provider's declared primary window — for
     /// Claude, the current session.
@@ -433,10 +400,6 @@ struct ProviderSnapshot: Identifiable, Equatable {
 
     /// What the cell prints under the ring.
     var headlineText: String {
-        if kind == .localRuntime {
-            return showsLocalPerformance ? (localPerformance?.headlineText ?? "— tok/s")
-                : (localModel?.memoryText ?? "—")
-        }
         if headline?.prefersUsedText == true, let usedText = headline?.usedText { return usedText }
         if let usedFraction { return Percent.text(for: usedFraction) + "%" }
         if let remaining = headline?.remaining { return LimitWindow.compact(remaining) }
@@ -445,9 +408,7 @@ struct ProviderSnapshot: Identifiable, Equatable {
         return "—"
     }
 
-    /// An empty local inventory still confirms server connectivity; an absent
-    /// reading must not be shown as measured zero usage.
-    var hasReading: Bool { localRuntime != nil || localModel != nil || !windows.isEmpty }
+    var hasReading: Bool { !windows.isEmpty }
 
     /// Group headings occupy space in both the card and its hover region.
     var windowGroupCount: Int { Set(windows.compactMap(\.group)).count }
@@ -458,14 +419,8 @@ struct ProviderSnapshot: Identifiable, Equatable {
         windows.filter { $0.usedFraction == nil && ($0.used != nil || $0.detail != nil) }.count
     }
 
-    /// A ring can only be drawn when the provider said what the limit was. A
-    /// local model has no limit; its arc is how full the context was.
-    var ringFraction: Double? { kind == .localRuntime ? localContextFraction : usedFraction }
-
-    /// Rows the tooltip adds for a logged runtime: context used, tokens and
-    /// requests today, reasoning share, draft acceptance. Counted here so the
-    /// card's budget and its contents cannot disagree.
-    var localLedgerRowCount: Int { localLedger == nil ? 0 : 5 }
+    /// A ring can only be drawn when the provider said what the limit was.
+    var ringFraction: Double? { usedFraction }
 
     /// Signing in means something different per provider, so the prompt has to
     /// say which door to knock on.
@@ -478,44 +433,16 @@ struct ProviderSnapshot: Identifiable, Equatable {
         case _ where ClaudeProfile.isClaude(providerID: id):
             let slug = ClaudeProfile.slug(fromProviderID: id) ?? ""
             return L10n.t("Sign in to Claude Code in ~/.claude-\(slug) to read your usage", locale: locale)
-        case "cursor":     return L10n.t("Sign in to Cursor in the editor", locale: locale)
         case "codex":      return L10n.t("Sign in to Codex to read your usage", locale: locale)
-        case "deepseek":   return L10n.t("Sign in to DeepSeek Platform to read your usage", locale: locale)
-        case "qianwenai":  return L10n.t("Sign in to QianwenAI to read your Token Plan usage", locale: locale)
         case _ where CodexProfile.slug(fromProviderID: id) != nil:
             let slug = CodexProfile.slug(fromProviderID: id)!
             return L10n.t("Sign in to Codex in ~/.codex-\(slug) to read your usage", locale: locale)
-        case "gemini":     return L10n.t("Sign in to Antigravity to read your usage", locale: locale)
-        case _ where AntigravityProfile.slug(fromProviderID: id) != nil:
-            let slug = AntigravityProfile.slug(fromProviderID: id)!
-            return L10n.t("Sign in to Antigravity in ~/.gemini/antigravity-\(slug) to read your usage", locale: locale)
-        case "glm":        return L10n.t("Set up a GLM Coding Plan key for a coding tool to read your usage", locale: locale)
-        case "copilot":    return L10n.t("Sign in with GitHub CLI to read your Copilot usage", locale: locale)
-        case "opencode":   return L10n.t("Connect the Go plan in OpenCode to read your usage", locale: locale)
-        case "commandcode": return L10n.t("Sign in with the Command Code app to read your usage", locale: locale)
-        case "kiro":       return L10n.t("Sign in with kiro-cli to read your usage", locale: locale)
-        case "amp":        return L10n.t("Run amp login in Terminal to read your usage", locale: locale)
-        case "apify":      return L10n.t("Run apify login in Terminal, or paste an Apify API token in Settings", locale: locale)
-        case "kilo":       return L10n.t("Sign in with the Kilo CLI to read your usage", locale: locale)
-        // Two Ollamas, and they are stuck for different reasons: the hosted
-        // one wants a key, the local one wants the daemon running.
-        case "ollama":       return L10n.t("Enter an Ollama API key in Settings, or export OLLAMA_API_KEY", locale: locale)
-        case "ollama-local": return L10n.t("Start Ollama to monitor your local models", locale: locale)
-        case "lmstudio":     return L10n.t("Start LM Studio's server to monitor your local models", locale: locale)
         default:           return L10n.t("Sign in to \(displayName) to read your usage", locale: locale)
         }
     }
 
     /// What the tooltip says instead of limit rows when there is nothing to show.
     var statusMessage: String? {
-        if kind == .localRuntime {
-            if localModel != nil { return nil }
-            if let localRuntime {
-                return localRuntime.models.isEmpty ? localRuntime.summary : nil
-            }
-            if case .error(let why) = status { return why }
-            return "Connecting to \(displayName)…"
-        }
         if hasReading { return nil }
         let locale = L10n.locale
         switch status {

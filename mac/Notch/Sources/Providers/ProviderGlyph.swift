@@ -3,51 +3,13 @@ import SwiftUI
 /// Which mark a provider cell draws.
 enum ProviderGlyph: String, Codable, Equatable {
     case claude
-    case devin
     case openai
-    case third
-    case cursor
-    /// The raw value stays `gemini`: it is the key archived readings were
-    /// written under, and renaming it would make every stored reading for this
-    /// provider undecodable.
-    case antigravity = "gemini"
-    /// Gemini's own sparkle, for the provider that meters a raw API key.
-    ///
-    /// It cannot be called `gemini`: that raw value already names Antigravity's
-    /// arch inside every archived snapshot, and swapping its meaning would
-    /// redraw old readings as a mark they were never written for. So the
-    /// sparkle gets a key of its own instead.
-    case geminiSpark = "gemini-spark"
-    case glm
-    case qwen
-    case gemma
-    case meta
-    case deepseek
-    case mistral
-    case grok
-    case opencode
-    case commandcode
-    case copilot
-    case kimi
-    case kilo
-    case kiro
-    case amp
-    case apify
-    case minimax
-    case ollama
-    case ollamaLocal = "ollama-local"
-    case lmstudio
-    case llamaCpp = "llamacpp"
-    /// The QianwenAI platform's own console mark, which is a different emblem
-    /// from the local Qwen model brand in `.qwen` — a ring wearing this one is
-    /// the platform account, not a model.
-    case qianwenAI = "qianwenai"
     /// Cockpit fork: the machine's own readings, drawn with SF Symbols.
     case cpu
     case memory
     case disk
 
-    /// An SF Symbol for marks that have no traced outline or asset.
+    /// An SF Symbol for marks that have no traced outline.
     var symbolName: String? {
         switch self {
         case .cpu: return "cpu"
@@ -57,52 +19,13 @@ enum ProviderGlyph: String, Codable, Equatable {
         }
     }
 
-    /// If an asset with this name is in the bundle it wins over the traced
-    /// outline — drop a PDF/SVG export from Figma in and it is picked up.
-    var assetName: String { self == .ollamaLocal ? "glyph-ollama" : "glyph-\(rawValue)" }
-
     /// How much to scale this mark so it reads the same size as the others.
-    ///
-    /// Every outline is normalised into the same unit box, which makes their
-    /// *boxes* identical and their marks anything but: measured on screen at
-    /// 16pt, the OpenAI knot covered 32px while the Gemini spark covered 25 —
-    /// a fifth smaller — because a spark's points are thin and its corners are
-    /// mostly empty. Boxes of equal size are not marks of equal size, and the
-    /// eye reads the mark.
-    ///
-    /// Measured from a render rather than guessed: each value brings that
-    /// glyph's ink to the same extent as Claude's.
+    /// Measured from a render: each value brings that glyph's ink to the same
+    /// extent as Claude's.
     var opticalScale: CGFloat {
         switch self {
         case .claude: return 0.97
-        case .cursor: return 0.97
         case .openai: return 0.94
-        case .antigravity: return 1.0
-        case .geminiSpark: return 1.0
-        case .glm:    return 0.95
-        case .grok:   return 1.0
-        case .opencode: return 0.95
-        case .commandcode: return 0.96
-        case .copilot: return 0.96
-        case .kimi:   return 0.95
-        case .kilo:   return 0.97
-        case .kiro:   return 0.95
-        case .amp:    return 1.0
-        // The asset's viewBox is cropped to the ink, so the mark fills its box
-        // the way Claude's outline does and takes the same scale.
-        case .apify:  return 0.97
-        case .minimax: return 0.95
-        case .ollama: return 0.95
-        case .third:  return 1.0
-        case .ollamaLocal: return 0.98
-        case .lmstudio: return 0.96
-        case .llamaCpp: return 1.0
-        // The one value here measured off a render of the asset file rather
-        // than of the app: this mark's ink fills 0.996 of its box, rasterised
-        // with `rsvg-convert -w 512`. Claude's outline fills 0.997 at 0.97, so
-        // the same scale brings this ink to the same extent.
-        case .qianwenAI: return 0.97
-        case .devin, .qwen, .gemma, .meta, .deepseek, .mistral: return 1.0
         case .cpu, .memory, .disk: return 0.9
         }
     }
@@ -111,25 +34,7 @@ enum ProviderGlyph: String, Codable, Equatable {
         switch self {
         case .claude: return GlyphOutline.claude
         case .openai: return GlyphOutline.openai
-        case .third:  return GlyphOutline.third
-        case .cursor: return GlyphOutline.cursor
-        case .antigravity: return GlyphOutline.antigravity
-        case .geminiSpark: return GlyphOutline.gemini
-        // Fallbacks only: glyph-glm, glyph-opencode, glyph-commandcode and
-        // glyph-kimi in the asset catalogue are drawn instead.
-        case .glm:    return GlyphOutline.glm
-        case .devin, .qwen, .gemma, .meta, .deepseek, .mistral, .lmstudio,
-             .qianwenAI, .amp, .apify, .llamaCpp, .cpu, .memory, .disk: return []
-        case .grok:   return GlyphOutline.grok
-        case .opencode: return GlyphOutline.opencode
-        case .commandcode: return GlyphOutline.commandcode
-        case .copilot: return GlyphOutline.copilot
-        case .kimi:   return GlyphOutline.kimi
-        case .kilo:   return GlyphOutline.kilo
-        case .kiro:   return GlyphOutline.kiro
-        // A fallback only: glyph-minimax in the asset catalogue is drawn instead.
-        case .minimax: return GlyphOutline.minimax
-        case .ollama, .ollamaLocal: return GlyphOutline.ollama
+        case .cpu, .memory, .disk: return []
         }
     }
 }
@@ -157,23 +62,12 @@ struct GlyphShape: Shape {
 
 struct ProviderGlyphView: View {
     let glyph: ProviderGlyph
-    var customIconFilename: String? = nil
     var size: CGFloat = Design.px(46)
 
     var body: some View {
         Group {
-            if let customIconFilename,
-               let image = CustomIconStore.loadIcon(filename: customIconFilename) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-            } else if let symbol = glyph.symbolName {
+            if let symbol = glyph.symbolName {
                 Image(systemName: symbol)
-                    .resizable()
-                    .scaledToFit()
-            } else if let image = NSImage(named: glyph.assetName) {
-                Image(nsImage: image)
-                    .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
             } else {
