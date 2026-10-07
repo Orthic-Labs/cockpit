@@ -309,10 +309,7 @@ fn watch_notch(app: tauri::AppHandle) {
                 let mut changed = 0i32;
                 if unsafe { notify_check(*token, &mut changed) } == 0 && changed != 0 {
                     if *event == "show-section" {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        show_in_dock(&app);
                     }
                     let _ = app.emit(event, payload.to_string());
                 }
@@ -468,6 +465,26 @@ pub fn run() {
     if let Some(home) = std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME") {
         std::env::set_var("HOME", home);
     }
+/// The hub has a Dock icon while its window is open; closing the window
+/// hides it and drops back to notch-only (accessory).
+fn show_in_dock(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
+        let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    });
+}
+
+fn hide_to_notch(window: &tauri::Window) {
+    let _ = window.hide();
+    #[cfg(target_os = "macos")]
+    let _ = window.app_handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     // Env-gated by the rightkit-qa launcher: inert in normal launches.
@@ -486,19 +503,24 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .manage(Hub::default())
         .setup(|app| {
-            // No Dock icon: Cockpit lives in the notch.
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            // An accessory app is not brought forward on launch; do it here.
-            // (Hidden QA runs must not take focus.)
+            // Hidden QA runs stay accessory and must not take focus; otherwise
+            // the open hub shows in the Dock until its window is closed.
             let qa_hidden = cfg!(feature = "qa-native") && std::env::var("RIGHTKIT_QA_HIDDEN").as_deref() == Ok("1");
-            if !qa_hidden {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_focus();
-                }
+            if qa_hidden {
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            } else {
+                show_in_dock(app.handle());
             }
             watch_notch(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing the window keeps the hub running for the notch.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                hide_to_notch(window);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
