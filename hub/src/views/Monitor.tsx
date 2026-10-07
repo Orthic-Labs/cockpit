@@ -81,16 +81,6 @@ export function Monitor() {
           value={swapTotal ? `${bytes(swapUsed)} of ${bytes(swapTotal)}` : "None"}
           fraction={swapTotal ? swapUsed / swapTotal : 0}
         />
-        {status.disks
-          .filter((d) => d.total_bytes && !d.mount_point.startsWith("/System/"))
-          .map((d) => (
-            <Gauge
-              key={d.mount_point}
-              label={d.mount_point === "/" ? "Macintosh HD" : d.mount_point.split("/").pop() || d.mount_point}
-              value={`${bytes(d.available_bytes)} free`}
-              fraction={1 - (d.available_bytes ?? 0) / (d.total_bytes ?? 1)}
-            />
-          ))}
       </div>
 
       <div className="section">Apps and processes, most memory first</div>
