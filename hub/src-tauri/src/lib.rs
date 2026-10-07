@@ -1,5 +1,8 @@
-//! Cockpit hub: a small window over the read-only Rust core. Every command
-//! reads; nothing here deletes, moves or changes a file.
+//! Cockpit hub: a small window over the Rust core. Storage and monitor
+//! commands only read. The only commands that change anything are in `apps`:
+//! uninstall (move to Trash) and process Quit / Force Quit.
+
+mod apps;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -289,7 +292,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            status, processes, scan, children, search, reveal, notch_state, notch_command, initial_section
+            status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, children, search, reveal, notch_state, notch_command, initial_section
         ])
         .run(tauri::generate_context!())
         .expect("error while running Cockpit hub");

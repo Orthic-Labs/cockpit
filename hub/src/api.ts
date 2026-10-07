@@ -46,12 +46,73 @@ export interface Folder {
   reasons: string[];
 }
 
+export interface AppEntry {
+  name: string;
+  path: string;
+  bundle_id: string | null;
+  version: string | null;
+  size_bytes: number;
+  last_used: number | null;
+  running: boolean;
+  protected: string | null;
+}
+
+export interface RelatedItem {
+  path: string;
+  label: string;
+  exact: boolean;
+  size_bytes: number;
+  preselected: boolean;
+}
+
+export interface AppDetail {
+  app: AppEntry;
+  items: RelatedItem[];
+}
+
+export interface UninstallResult {
+  moved: { path: string; bytes: number }[];
+  failed: { path: string; error: string }[];
+  moved_bytes: number;
+}
+
+export interface ProcessMember {
+  identity: { pid: number; start_time: number };
+  name: string;
+  cpu_usage_percent: number;
+  memory_bytes: number;
+}
+
+export interface ProcessRow {
+  key: string;
+  name: string;
+  bundle_id: string | null;
+  app_path: string | null;
+  lead: { pid: number; start_time: number };
+  cpu_usage_percent: number;
+  memory_bytes: number;
+  members: ProcessMember[];
+  can_act: boolean;
+  refusal: string | null;
+}
+
+export type QuitOutcome = "quit" | "still_running";
+
 export const api = {
   status: () => invoke<Status>("status"),
   processes: () => invoke<Process[]>("processes"),
   scan: (path?: string) => invoke<Folder>("scan", { path: path ?? null }),
   children: (path: string) => invoke<Folder>("children", { path }),
   search: (query: string) => invoke<Row[]>("search", { query }),
+  apps: () => invoke<AppEntry[]>("apps_list"),
+  appDetail: (path: string) => invoke<AppDetail>("app_detail", { path }),
+  uninstall: (path: string, bundleId: string | null, items: string[]) =>
+    invoke<UninstallResult>("app_uninstall", { path, bundleId, items }),
+  processRows: () => invoke<ProcessRow[]>("process_rows"),
+  quit: (r: ProcessRow) =>
+    invoke<QuitOutcome>("process_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
+  forceQuit: (r: ProcessRow) =>
+    invoke<QuitOutcome>("process_force_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
   reveal: (path: string) => invoke<void>("reveal", { path }),
 };
 

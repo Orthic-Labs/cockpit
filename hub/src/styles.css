@@ -69,3 +69,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .mini { width: 22px; height: 22px; border: 0; border-radius: 5px; background: none; color: var(--ink-3); cursor: pointer; }
 .mini:hover:not(:disabled) { background: var(--fill-2); color: var(--ink); }
 .mini:disabled { opacity: 0.3; }
+
+/* Apps and processes */
+.row.apps { grid-template-columns: minmax(0, 1fr) 90px 72px; }
+.row.procs { grid-template-columns: minmax(0, 1fr) 56px 72px auto; }
+.row.items { grid-template-columns: 18px minmax(0, 1fr) 72px; }
+.row.sub { padding-left: 22px; }
+.dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); }
+.actions { display: flex; gap: 4px; justify-content: flex-end; min-width: 120px; }
+.section-row { display: flex; justify-content: space-between; align-items: center; }
+.note { color: var(--ink-2); font-size: 12px; }
+.ok-note { color: var(--ok); font-size: 12px; }

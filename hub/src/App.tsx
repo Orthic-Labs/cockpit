@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { AppShell } from "@rightkit/app-shell/react";
 import { Storage } from "./views/Storage";
 import { Monitor } from "./views/Monitor";
+import { Apps } from "./views/Apps";
 import { Settings } from "./views/Settings";
 
 const icon = (glyph: string) => <span className="nav-icon">{glyph}</span>;
@@ -13,6 +14,7 @@ const groups = [
     items: [
       { id: "storage", label: "Storage", icon: icon("◧"), keywords: ["disk", "files"] },
       { id: "monitor", label: "Monitor", icon: icon("◉"), keywords: ["cpu", "memory"] },
+      { id: "apps", label: "Apps", icon: icon("▦"), keywords: ["uninstall", "applications", "leftovers"] },
     ],
   },
   {
@@ -29,6 +31,7 @@ const groups = [
 const titles: Record<string, string> = {
   storage: "Storage",
   monitor: "Monitor",
+  apps: "Apps",
   accounts: "Accounts",
   appearance: "Appearance",
   notifications: "Notifications",
@@ -68,7 +71,7 @@ export function App() {
       onOpenSettings={() => setActive("accounts")}
       settingsActive={settingsIds.has(active)}
     >
-      {active === "storage" ? <Storage /> : active === "monitor" ? <Monitor /> : <Settings section={active} />}
+      {active === "storage" ? <Storage /> : active === "monitor" ? <Monitor /> : active === "apps" ? <Apps /> : <Settings section={active} />}
     </AppShell>
   );
 }
