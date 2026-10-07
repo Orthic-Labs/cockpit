@@ -6,6 +6,8 @@ mod apps;
 
 mod cleanup;
 
+mod growth;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -155,6 +157,9 @@ async fn scan(path: Option<String>, hub: State<'_, Hub>) -> Result<Folder, Strin
     })
     .await
     .map_err(|e| e.to_string())?;
+    if root == home() {
+        growth::save_in_background(&report);
+    }
     let result = folder(&report, &root);
     *hub.report.lock().map_err(|e| e.to_string())? = Some(report);
     result
@@ -295,7 +300,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, children, search, reveal, notch_state, notch_command, initial_section,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scan, growth::growth, children, search, reveal, notch_state, notch_command, initial_section,
             cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())

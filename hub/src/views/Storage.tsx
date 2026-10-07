@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, bytes, tone, type Folder, type Row, type Status } from "../api";
+import { api, bytes, signedBytes, tone, type Folder, type Growth, type Row, type Status } from "../api";
 
 export function Storage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [folder, setFolder] = useState<Folder | null>(null);
   const [results, setResults] = useState<Row[] | null>(null);
   const [query, setQuery] = useState("");
+  const [growth, setGrowth] = useState<Growth | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,7 +22,12 @@ export function Storage() {
     }
   };
 
-  const scan = () => run(async () => setFolder(await api.scan()));
+  const scan = () =>
+    run(async () => {
+      setFolder(await api.scan());
+      // Not awaited: the list is usable while the comparison loads.
+      api.growth().then(setGrowth).catch(() => setGrowth(null));
+    });
   const open = (path: string) => run(async () => setFolder(await api.children(path)));
 
   useEffect(() => {
@@ -72,6 +78,34 @@ export function Storage() {
           />
         </div>
       ) : null}
+
+      {growth?.available && (growth.grown.length > 0 || growth.shrunk.length > 0) && (
+        <div className="growth">
+          <div className="growth-head muted small">
+            Since last scan
+            {growth.since
+              ? ` (${new Date(growth.since * 1000).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })})`
+              : ""}
+          </div>
+          {[...growth.grown, ...growth.shrunk].map((c) => (
+            <button
+              key={c.path}
+              className="growth-row"
+              onClick={() => open(c.path)}
+              disabled={busy}
+              title={c.path}
+            >
+              <span className="name">{folder && c.path.startsWith(folder.root) ? "~" + c.path.slice(folder.root.length) : c.path}</span>
+              <span className="size" style={{ color: c.bytes > 0 ? "var(--warn)" : "var(--ok)" }}>
+                {signedBytes(c.bytes)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="toolbar">
         <input

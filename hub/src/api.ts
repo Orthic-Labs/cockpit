@@ -96,12 +96,28 @@ export interface ProcessRow {
   refusal: string | null;
 }
 
+export interface Change {
+  path: string;
+  /** Signed change in bytes. */
+  bytes: number;
+}
+
+export interface Growth {
+  available: boolean;
+  /** Unix seconds of the scan compared against. */
+  since: number | null;
+  grown: Change[];
+  shrunk: Change[];
+  reason: string | null;
+}
+
 export type QuitOutcome = "quit" | "still_running";
 
 export const api = {
   status: () => invoke<Status>("status"),
   processes: () => invoke<Process[]>("processes"),
   scan: (path?: string) => invoke<Folder>("scan", { path: path ?? null }),
+  growth: () => invoke<Growth>("growth"),
   children: (path: string) => invoke<Folder>("children", { path }),
   search: (query: string) => invoke<Row[]>("search", { query }),
   apps: () => invoke<AppEntry[]>("apps_list"),
@@ -133,4 +149,8 @@ export function tone(fraction: number): string {
   if (fraction >= 0.85) return "var(--bad)";
   if (fraction >= 0.6) return "var(--warn)";
   return "var(--ok)";
+}
+
+export function signedBytes(n: number): string {
+  return `${n < 0 ? "−" : "+"}${bytes(Math.abs(n))}`;
 }
