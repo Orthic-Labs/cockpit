@@ -1279,6 +1279,47 @@ fn loaded_jobs(identity: &Identity) -> Vec<BackgroundEntry> {
 
 /// An app path is acceptable only when it is a real (non-symlink) `.app`
 /// inside an application folder.
+/// The subfolder of /Applications (or ~/Applications) that holds this app,
+/// when everything else in it is the vendor's own uninstaller or helper apps
+/// (same team id, or named "Uninstall..."), the folder icon file, .DS_Store
+/// or .localized. Never the Applications folder itself.
+fn vendor_folder(root: &Path) -> Option<PathBuf> {
+    let folder = root.parent()?;
+    if folder.extension().is_some_and(|x| x == "app") {
+        return None;
+    }
+    let dirs = app_dirs();
+    if dirs.iter().any(|d| d == folder) || !dirs.iter().any(|d| folder.parent() == Some(d.as_path()))
+    {
+        return None;
+    }
+    if std::fs::symlink_metadata(folder).ok()?.file_type().is_symlink() {
+        return None;
+    }
+    let team = signing_info(root).1;
+    for entry in std::fs::read_dir(folder).ok()? {
+        let path = entry.ok()?.path();
+        if path == root {
+            continue;
+        }
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        if matches!(name.as_str(), "Icon\r" | ".DS_Store" | ".localized") {
+            continue;
+        }
+        let is_app = path.extension().is_some_and(|x| x == "app");
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        if meta.file_type().is_symlink() || !is_app {
+            return None;
+        }
+        let same_team = team.is_some() && signing_info(&path).1 == team;
+        if same_team || name.to_lowercase().contains("uninstall") {
+            continue;
+        }
+        return None;
+    }
+    Some(folder.to_path_buf())
+}
+
 fn validate_app_path(path: &str) -> Result<PathBuf, String> {
     let root = PathBuf::from(path);
     if root.components().any(|c| matches!(c, Component::ParentDir)) {
@@ -1314,6 +1355,21 @@ pub fn app_detail(path: &str) -> Result<AppDetail, String> {
     }];
     let mut background = Vec::new();
     let mut receipts = Vec::new();
+    if app.protected.is_none()
+        && let Some(folder) = vendor_folder(&root)
+    {
+        items.push(RelatedItem {
+            path: folder.to_string_lossy().into_owned(),
+            label: "Application".into(),
+            location: "Application".into(),
+            exact: true,
+            confidence: "exact".into(),
+            reason: "The vendor folder holding only this app and its uninstaller".into(),
+            admin: needs_admin(&folder),
+            size_bytes: disk_size(&folder),
+            preselected: true,
+        });
+    }
     if app.protected.is_none() {
         let (others, other_roots) = other_apps(&root);
         let (identity, embedded) = build_identity(&root, app.bundle_id.as_deref(), others);
@@ -1393,6 +1449,65 @@ fn trash_with_finder(path: &Path, limit: Duration) -> Result<(), String> {
         .arg("end run")
         .arg(path);
     run_with_timeout(command, limit).map(|_| ())
+}
+
+/// Move several root-owned items to the Trash in one Finder request, so the
+/// administrator password is asked once.
+fn trash_batch_with_finder(paths: &[&Path], limit: Duration) -> Result<(), String> {
+    let mut command = Command::new("/usr/bin/osascript");
+    command
+        .arg("-e")
+        .arg("on run argv")
+        .arg("-e")
+        .arg("set l to {}")
+        .arg("-e")
+        .arg("repeat with p in argv")
+        .arg("-e")
+        // Resolve aliases outside Finder's tell block: inside it, `POSIX file`
+        // is Finder's own term and fails with -1728.
+        .arg("set end of l to ((POSIX file (contents of p)) as alias)")
+        .arg("-e")
+        .arg("end repeat")
+        .arg("-e")
+        // Finder waits on the administrator password; AppleScript's default
+        // two-minute event timeout would give up first (-1712).
+        .arg("with timeout of 600 seconds")
+        .arg("-e")
+        .arg("tell application \"Finder\" to delete l")
+        .arg("-e")
+        .arg("end timeout")
+        .arg("-e")
+        .arg("end run");
+    for p in paths {
+        command.arg(p);
+    }
+    run_with_timeout(command, limit).map(|_| ())
+}
+
+/// One Finder request for all root-owned items; each is then verified on its
+/// own. A refused batch fails every item with the reason.
+fn move_admin_batch_to_trash(paths: &[&Path]) -> Vec<Result<(), String>> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let refused = trash_batch_with_finder(paths, Duration::from_secs(620)).err();
+    paths
+        .iter()
+        .map(|path| {
+            if std::fs::symlink_metadata(path).is_err() {
+                return Ok(());
+            }
+            Err(match &refused {
+                Some(reason) => {
+                    let reason = if reason.is_empty() { "No response" } else { reason };
+                    format!(
+                        "Root-owned: needs administrator approval in Finder, which did not complete ({reason})."
+                    )
+                }
+                None => "Still in its original place after moving to Trash.".into(),
+            })
+        })
+        .collect()
 }
 
 fn trash_by_rename(path: &Path) -> Result<(), String> {
@@ -1521,43 +1636,101 @@ pub fn uninstall(
         }
     }
 
+    // The vendor folder (when selected) is trashed whole, in place of the app.
+    let folder: Option<String> = fresh
+        .items
+        .iter()
+        .map(|i| i.path.clone())
+        .find(|p| *p != fresh.app.path && Path::new(&fresh.app.path).starts_with(p))
+        .filter(|p| items.contains(p));
+    let bundle = folder.clone().unwrap_or_else(|| fresh.app.path.clone());
     // Bundle first: if it cannot be moved, its data stays where it is.
-    let mut ordered: Vec<&String> = items.iter().filter(|p| **p == fresh.app.path).collect();
-    ordered.extend(items.iter().filter(|p| **p != fresh.app.path));
+    let mut ordered: Vec<&String> = items.iter().filter(|p| **p == bundle).collect();
+    ordered.extend(items.iter().filter(|p| **p != bundle));
     let mut result = UninstallResult {
         moved: Vec::new(),
         failed: Vec::new(),
         moved_bytes: 0,
         activity_id: None,
     };
-    let mut bundle_failed = false;
-    for item in ordered {
-        let is_bundle = *item == fresh.app.path;
-        if bundle_failed && !is_bundle {
-            result.failed.push(FailedItem {
-                path: item.clone(),
-                error: "Skipped because the app itself could not be moved.".into(),
-            });
-            continue;
-        }
-        let outcome = revalidate(&fresh, item)
-            .and_then(|bytes| move_to_trash(Path::new(item)).map(|_| bytes));
+    fn record(result: &mut UninstallResult, item: &str, outcome: Result<u64, String>) -> bool {
         match outcome {
             Ok(bytes) => {
                 result.moved_bytes += bytes;
                 result.moved.push(MovedItem {
-                    path: item.clone(),
+                    path: item.to_string(),
                     bytes,
                 });
+                true
             }
             Err(error) => {
-                bundle_failed |= is_bundle;
                 result.failed.push(FailedItem {
-                    path: item.clone(),
+                    path: item.to_string(),
                     error,
                 });
+                false
             }
         }
+    }
+    let mut bundle_failed = false;
+    let mut plain: Vec<(&String, u64)> = Vec::new();
+    let mut admin: Vec<(&String, u64)> = Vec::new();
+    for item in ordered {
+        if folder.is_some() && *item == fresh.app.path {
+            continue; // goes with its folder
+        }
+        match revalidate(&fresh, item) {
+            Ok(bytes) if needs_admin(Path::new(item)) => admin.push((item, bytes)),
+            Ok(bytes) => plain.push((item, bytes)),
+            Err(error) => {
+                bundle_failed |= *item == bundle;
+                record(&mut result, item, Err(error));
+            }
+        }
+    }
+    let run_admin = |result: &mut UninstallResult,
+                         admin: &[(&String, u64)],
+                         bundle_failed: &mut bool| {
+        let paths: Vec<&Path> = admin.iter().map(|(p, _)| Path::new(p.as_str())).collect();
+        for ((item, bytes), outcome) in admin.iter().zip(move_admin_batch_to_trash(&paths)) {
+            let ok = record(result, item, outcome.map(|_| *bytes));
+            if !ok && **item == bundle {
+                *bundle_failed = true;
+            }
+        }
+    };
+    let skipped = "Skipped because the app itself could not be moved.";
+    let admin_first = admin.iter().any(|(p, _)| **p == bundle);
+    if admin_first && !bundle_failed {
+        run_admin(&mut result, &admin, &mut bundle_failed);
+    }
+    for (item, bytes) in &plain {
+        if bundle_failed && **item != bundle {
+            record(&mut result, item, Err(skipped.into()));
+            continue;
+        }
+        let outcome = move_to_trash(Path::new(item.as_str())).map(|_| *bytes);
+        if outcome.is_err() && **item == bundle {
+            bundle_failed = true;
+        }
+        record(&mut result, item, outcome);
+    }
+    if !admin_first {
+        if bundle_failed {
+            for (item, _) in &admin {
+                record(&mut result, item, Err(skipped.into()));
+            }
+        } else {
+            run_admin(&mut result, &admin, &mut bundle_failed);
+        }
+    }
+    if folder.is_some() && result.moved.iter().any(|m| Some(&m.path) == folder.as_ref())
+        && items.contains(&fresh.app.path)
+    {
+        result.moved.push(MovedItem {
+            path: fresh.app.path.clone(),
+            bytes: 0,
+        });
     }
     result.activity_id = log_activity(&fresh.app, &result);
     Ok(result)
