@@ -58,7 +58,7 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   # mac/Sources (salvage services) is reference-only until reviewed; see mac/README.md.
   # Cockpit hub (Tauri): type-check and bundle the page, then compile the
   # Rust backend (its own workspace, pinned to the RightKit toolchain).
-  pnpm --dir hub install --no-frozen-lockfile --ignore-scripts
+  pnpm --dir hub install --no-frozen-lockfile
   pnpm --dir hub exec tsc --noEmit
   pnpm --dir hub run build
   (cd hub/src-tauri && cargo check)
@@ -75,30 +75,26 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
     exit 1
   fi
   test -x "$RUNNER_TEMP/cockpit-notch/Build/Products/Release/Cockpit.app/Contents/MacOS/Cockpit"
-  # Headless dogfood of the hub: debug-only build with the WebDriver plugin
-  # (qa-native, compile-time barred from release), driven by right-qa over a
-  # tiny HOME so Storage scans a fixture. Evidence lands in $RUNNER_TEMP/cockpit-hub-qa
-  # (screenshots/ + evidence.json); the generated ci workflow has no artifact upload.
+  # Headless dogfood of the hub on rightkit-qa: the debug-only qa-native build
+  # (compile-time barred from release) is launched hidden and driven through its
+  # in-app control server (rightkit-control). The test makes its own fixture HOME so
+  # Storage scans a tiny folder. UI tests must run from the user's login session
+  # (macOS `open` needs a GUI session), the same reason tools/rightkit/scripts/run-ui-tests.sh
+  # builds through the broker and then runs the binary itself. That script needs the
+  # `rightkit` CLI, which this runner does not have, so we do the equivalent directly:
+  # plain `cargo test` (builds the qa-native bin, runs the test here, not in a wrapper).
+  # Evidence lands in $RUNNER_TEMP/cockpit-hub-qa (screenshots/ + evidence/); the
+  # generated ci workflow has no artifact upload.
   if [[ -z "${COCKPIT_SKIP_HUB_QA:-}" ]]; then
-    pnpm --dir hub run qa:build
-    qa_home="$(mktemp -d "$RUNNER_TEMP/cockpit-hub-qa-home.XXXXXX")"
-    mkdir -p "$qa_home/alpha-folder"
-    head -c 65536 /dev/zero > "$qa_home/alpha-folder/fixture.bin"
     qa_out="$RUNNER_TEMP/cockpit-hub-qa"
-    rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots"
+    rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots" "$qa_out/evidence"
     qa_rc=0
-    HOME="$qa_home" COCKPIT_QA_SHOTS="$qa_out/screenshots" COCKPIT_QA_FIXTURE_NAME=alpha-folder \
-      node hub/qa/run.mjs || qa_rc=$?
-    find hub/.cache/rightkit-qa -name evidence.json -exec cp {} "$qa_out/" \; 2>/dev/null || true
-    if [[ $qa_rc -ne 0 ]]; then
-      find hub/.cache/rightkit-qa/runs \( -path '*/service/*' -o -path '*/wdio/*' \) -type f | while read -r f; do echo "=== $f"; tail -n 60 "$f"; done
-    fi
-    [[ -f "$qa_out/evidence.json" ]] && cat "$qa_out/evidence.json"
-    echo "Hub QA evidence in $qa_out:"; ls -l "$qa_out" "$qa_out/screenshots" || true
-    rm -rf "$qa_home"
+    (cd hub/src-tauri && COCKPIT_QA_SHOTS="$qa_out/screenshots" RIGHTKIT_QA_EVIDENCE="$qa_out/evidence" \
+      cargo test --features qa-native,custom-protocol --test ui -- --nocapture) || qa_rc=$?
+    echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
     [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
-    # A silent no-op must not pass: demand the receipt and one screenshot per section.
-    [[ -f "$qa_out/evidence.json" ]] && grep -q '"passed"' "$qa_out/evidence.json" || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
+    # A silent no-op (skipped scenario) must not pass: demand the receipt and one screenshot per section.
+    grep -rq '"passed"' "$qa_out/evidence" --include=evidence.json || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
     [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
   else
     echo "Hub QA skipped (COCKPIT_SKIP_HUB_QA set: signed-build gate)"

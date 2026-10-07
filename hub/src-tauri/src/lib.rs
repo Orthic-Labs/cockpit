@@ -461,35 +461,44 @@ fn reveal(path: String) -> Result<(), String> {
 #[cfg(all(not(debug_assertions), feature = "qa-native"))]
 compile_error!("qa-native must never be enabled in release builds");
 
-#[cfg(all(debug_assertions, feature = "qa-native"))]
-fn rightkit_native_qa_enabled() -> bool {
-    std::env::var("RIGHTKIT_QA_NATIVE").as_deref() == Ok("1")
-}
-
 pub fn run() {
+    // QA launches (rightkit-qa) can only pass RIGHTKIT_* keys on macOS, so the isolated
+    // HOME (a fixture folder Storage scans) is derived from the QA data dir here.
+    #[cfg(all(debug_assertions, feature = "qa-native"))]
+    if let Some(dir) = std::env::var_os("RIGHTKIT_QA_DATA_DIR") {
+        let home = std::path::Path::new(&dir).join("home");
+        if home.is_dir() {
+            std::env::set_var("HOME", home);
+        }
+    }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
+    // Env-gated by the rightkit-qa launcher: inert in normal launches.
     #[cfg(all(debug_assertions, feature = "qa-native"))]
-    if rightkit_native_qa_enabled() {
-        builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    {
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.activate_ignoring_other_apps(false);
+        }
+        if let Some(plugin) = rightkit_control::embedded::Control::<tauri::Wry>::new().build_if_enabled() {
+            builder = builder.plugin(plugin);
+        }
     }
     builder
         // RightKit's shell asks the OS plugin for the platform (traffic-light room on macOS).
         .plugin(tauri_plugin_os::init())
         .manage(Hub::default())
         .setup(|app| {
-            #[cfg(all(debug_assertions, feature = "qa-native"))]
-            if rightkit_native_qa_enabled() {
-                app.add_capability(
-                    r#"{"identifier":"qa-native","windows":["main"],"permissions":["wdio-webdriver:default"]}"#,
-                )?;
-            }
             // No Dock icon: Cockpit lives in the notch.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             // An accessory app is not brought forward on launch; do it here.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
+            // (Hidden QA runs must not take focus.)
+            let qa_hidden = cfg!(feature = "qa-native") && std::env::var("RIGHTKIT_QA_HIDDEN").as_deref() == Ok("1");
+            if !qa_hidden {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_focus();
+                }
             }
             watch_notch(app.handle().clone());
             Ok(())
