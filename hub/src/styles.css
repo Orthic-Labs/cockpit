@@ -1,9 +1,18 @@
 html, body { margin: 0; height: 100%; overflow: hidden; }
 
+/* Suite-wide wordmark face (same as the other Right Suite apps). */
+@font-face {
+  font-family: "Tanker";
+  src: url("/fonts/Tanker-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   --rk-brand: #0a84ff;
   --rk-brand-dark: #0a84ff;
-  --rk-wordmark: -apple-system, system-ui, sans-serif;
+  --rk-wordmark: "Tanker", sans-serif;
   font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
   font-size: 13px;
 }
@@ -13,7 +22,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .small { font-size: 11px; }
 .strong { font-weight: 600; color: var(--ink); }
 .error { color: var(--bad); font-size: 12px; }
-.wordmark { font-weight: 600; color: var(--ink-2); }
+.wordmark { font-family: var(--rk-wordmark); font-weight: 400; font-size: 20px; letter-spacing: 0.01em; }
 .nav-icon { font-size: 13px; opacity: 0.8; }
 
 .volume-head, .gauge-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
