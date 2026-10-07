@@ -75,8 +75,19 @@ if [[ -n "$OWNED" ]]; then
   TARGET="$IMAGE_DEVICE"
   [[ -n "$TARGET" ]] || TARGET="$(printf '%s\n' "$OWNED" | sed -n 1p)"
   [[ "$TARGET" == /dev/disk* ]] || { echo "REFUSED: no valid device to detach" >&2; exit 3; }
-  bounded 120 hdiutil detach "$TARGET" >/dev/null 2>&1 \
-    || bounded 120 hdiutil detach -force "$TARGET" >/dev/null
+  # macOS 27 runners briefly hold a fresh volume busy (indexing, fseventsd);
+  # retry with a short wait rather than failing the gate on the first try.
+  detached=""
+  for attempt in 1 2 3 4 5 6; do
+    if bounded 120 hdiutil detach "$TARGET" >/dev/null 2>&1 \
+      || bounded 120 hdiutil detach -force "$TARGET" >/dev/null 2>&1; then
+      detached=1
+      break
+    fi
+    echo "detach attempt $attempt: $TARGET busy; retrying" >&2
+    sleep 5
+  done
+  [[ -n "$detached" ]] || { echo "detach failed: $TARGET still busy" >&2; exit 4; }
 else
   echo "image not attached (never attached or already detached); skipping detach"
 fi

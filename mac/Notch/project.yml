@@ -1,0 +1,122 @@
+name: Cockpit
+options:
+  bundleIdPrefix: dev.orthic
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  defaultLocalization: en
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    # Sparkle compares CFBundleVersion to decide what is newer, and
+    # Sources/Info.plist reads both from here — hardcoding them there instead
+    # silently pins every build to one version, so no customer ever sees an
+    # update. Bump CURRENT_PROJECT_VERSION on every release.
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Signed with a stable identity on purpose. The app reads Claude Code's
+    # OAuth token out of the login keychain, and the keychain's ACL remembers
+    # *which signed binary* was allowed. Ad-hoc or unsigned builds get a new
+    # identity on every rebuild, so "Always Allow" would be forgotten each time
+    # and the prompt would come back after every `make run`.
+    # Cockpit fork: built unsigned in CI; the RightKit release pipeline signs
+    # and notarizes with Cockpit's own Developer ID.
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    # Required by notarization. Worth knowing what it does *not* break here:
+    # the keychain read is unaffected (the ACL keys on the signing identity,
+    # which is unchanged), and reading Cursor's and Codex's SQLite files is
+    # ordinary file access. It is the App Sandbox that would break both, which
+    # is why that stays off — Developer ID distribution does not require it.
+    ENABLE_HARDENED_RUNTIME: "YES"
+    ENABLE_APP_SANDBOX: "NO"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+
+packages:
+  SwiftNIO:
+    url: https://github.com/apple/swift-nio
+    from: "2.102.0"
+
+targets:
+  Cockpit:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+        excludes:
+          # Notes for whoever next re-generates the vendored decoder. Left in the
+          # navigator beside the code it describes, but Xcode would otherwise
+          # copy any unrecognised file into the app bundle's Resources, and a
+          # developer README has no business shipping to users.
+          - "Vendor/**/README.md"
+    dependencies:
+      - package: SwiftNIO
+        product: NIOHTTP1
+      - package: SwiftNIO
+        product: NIOPosix
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleName: Cockpit
+        CFBundleDisplayName: Cockpit
+        CFBundleExecutable: Cockpit
+        # Cockpit fork: no Dock icon and no menu-bar item, ever. The notch is
+        # the only surface; right-click on it offers Quit.
+        LSUIElement: true
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations:
+          - en
+          - fr
+          - de
+          - id
+          - ja
+          - ko
+          - pt-BR
+          - ru
+          - zh-Hans
+          - zh-Hant
+          - uk
+          - uz
+          - tr
+        LSMinimumSystemVersion: "26.0"
+        # Sources/Info.plist is *generated* from this block, so editing that
+        # file directly is undone by the next `make gen`. Pointing both at the
+        # build settings keeps one place to bump.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # HTTP endpoints on Tailscale use shared address space. Keep the ATS
+        # exception scoped to that range; other destinations retain defaults.
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            "100.64.0.0/10":
+              NSExceptionAllowsInsecureHTTPLoads: true
+        NSLocalNetworkUsageDescription: "Cockpit answers your phone on this network so it can show your usage."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit
+        PRODUCT_NAME: Cockpit
+        GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_EMIT_LOC_STRINGS: "YES"
+        DEVELOPMENT_LANGUAGE: en
+        # The only C in the project is the vendored Zstandard decoder, and this
+        # is how Swift sees it. It is needed because Claude Desktop's HTTP cache
+        # stores bodies with `content-encoding: zstd` and macOS ships no zstd
+        # anywhere a signed, notarized app can reach — see
+        # Sources/Vendor/zstd/README.md. Delete this line and that directory
+        # together if the Desktop source is ever dropped.
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Codenotch-Bridging-Header.h
+
+
+schemes:
+  Cockpit:
+    build:
+      targets:
+        Cockpit: all
+    run:
+      config: Debug

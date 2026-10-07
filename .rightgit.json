@@ -7,7 +7,7 @@
   ],
   "matrix": {
     "os": [
-      "macos-latest"
+      "xcode-27"
     ],
     "node": [
       "26.8.1"
@@ -33,11 +33,11 @@
     "stageSummaryScript": "release:summary",
     "artifactRoot": "cockpit-candidate",
     "os": [
-      "macos-15"
+      "xcode-27"
     ],
     "targets": [
       {
-        "os": "macos-15",
+        "os": "xcode-27",
         "platform": "macos",
         "architecture": "arm64"
       }

@@ -34,7 +34,6 @@ gate_exit() {
 }
 trap gate_exit EXIT
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
-node --test dashboard/app.test.mjs
 cargo fmt --all
 cargo test --locked --workspace --no-fail-fast
 cargo clippy --locked --workspace --all-targets --keep-going -- -D warnings
@@ -56,6 +55,18 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   unset COCKPIT_APFS_FIXTURE_STATE
   COCKPIT_TEST_HELPER="$(cargo build --locked --bin cockpit --message-format=json | python3 -c 'import json,sys; paths=[r["executable"] for line in sys.stdin if (r:=json.loads(line)).get("reason")=="compiler-artifact" and r.get("target",{}).get("name")=="cockpit" and r.get("executable")]; assert paths, "Missing cockpit compiler artifact"; print(paths[-1])')"
   export COCKPIT_TEST_HELPER
-  swift build --package-path mac -c release
-  swift test --package-path mac
+  # mac/Sources (salvage services) is reference-only until reviewed; see mac/README.md.
+  # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
+  xcodebuild -version
+  command -v xcodegen >/dev/null || brew install xcodegen
+  xcodegen generate --spec mac/Notch/project.yml --project mac/Notch
+  notch_log="$RUNNER_TEMP/cockpit-notch-build.log"
+  if ! xcodebuild -project mac/Notch/Cockpit.xcodeproj -scheme Cockpit -configuration Release \
+    -destination 'generic/platform=macOS' -derivedDataPath "$RUNNER_TEMP/cockpit-notch" \
+    CODE_SIGNING_ALLOWED=NO build > "$notch_log" 2>&1; then
+    grep -E "(error|warning: unreachable):" "$notch_log" | sort -u | head -n 150 || true
+    tail -n 40 "$notch_log"
+    exit 1
+  fi
+  test -x "$RUNNER_TEMP/cockpit-notch/Build/Products/Release/Cockpit.app/Contents/MacOS/Cockpit"
 fi

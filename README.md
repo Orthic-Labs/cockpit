@@ -1,8 +1,8 @@
 # Cockpit
 
-Native system gauges & controls for macOS & Windows. CodeNOTCH-inspired native notch, shared Rust core & on-demand storage dashboard.
+Native system gauges & controls for macOS (Windows later): Codenotch-fork notch, Tauri hub & shared Rust core. Plan: [docs/plan.md](docs/plan.md).
 
-Current implementation: read-only storage scanner, filename search, folder map, file inspector, report-only findings & native notch. Mac app bundles dashboard & scanner; generated hosted workflow produces installer candidates.
+Current state (2026-10-07): Rust core & read-only CLI are kept. The notch is a Codenotch fork in [`mac/Notch`](mac/Notch/FORK.md), built in CI on the `xcode-27` runner; `notch-preview` uploads an ad-hoc-signed build for trying. Mac release packaging still needs repointing to it before a signed installer. The Tauri hub (phase 2) comes next.
 
 ## CLI
 

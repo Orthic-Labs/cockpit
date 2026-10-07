@@ -1,5 +1,7 @@
 # Mac + Windows system tool: decision & implementation plan
 
+> **Superseded 2026-10-07 by [plan.md](plan.md).** Kept for history; do not use as the source plan.
+
 Date: 2026-10-02; revised 2026-10-05 (source & machine validation, then owner direction). Status: draft, reviewed (see Review status). Implementation has not started.
 
 ## Decision

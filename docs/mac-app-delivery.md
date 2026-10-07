@@ -1,5 +1,7 @@
 # Cockpit macOS app delivery
 
+> **Historical (2026-10-07):** describes the removed Swift notch & JS dashboard. Current direction: [plan.md](plan.md).
+
 macOS payload assembly uses source-only `scripts/release/mac-payload.mjs` modes. SwiftPM & Rust binaries must already exist; script never builds, signs with shell tools, notarizes, or publishes.
 
 `candidate` assembles `Cockpit.app` under `$RIGHT_GIT_ARTIFACT_ROOT/cockpit/mac/`, copies dashboard assets, emits `app.js` from import-free module inside a classic-script closure for WKWebView file loading, writes `Cockpit.app.zip`, & preserves raw Mach-O files at `raw/Cockpit` & `raw/cockpit`. Inputs default to `mac/.build/release/cockpit-mac-prototype`, `target/release/cockpit`, & `dashboard/`; `COCKPIT_MAC_APP_BINARY`, `COCKPIT_CLI_BINARY`, & `COCKPIT_DASHBOARD_ROOT` override paths.
