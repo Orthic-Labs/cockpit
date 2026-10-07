@@ -22,6 +22,8 @@ final class HubBridge {
         var previewSessionLimitAlert: () -> Void = {}
         var previewWeeklyLimitAlert: () -> Void = {}
         var sendTestNotification: () -> Void = {}
+        /// Why the launcher hotkey is not working, when it is not.
+        var launcherStatus: () -> String? = { nil }
     }
 
     private let preferences: Preferences
@@ -117,6 +119,7 @@ final class HubBridge {
             "displays": displays,
             "accounts": accounts,
             "providerOrder": preferences.providerOrder,
+            "launcherStatus": actions.launcherStatus() ?? NSNull(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         else { return }
@@ -249,6 +252,8 @@ final class HubBridge {
         // General
         "launchAtLogin": bool(\.launchAtLogin),
         "asksProviderOnLook": bool(\.asksProviderOnLook),
+        "launcherEnabled": bool(\.launcherEnabled),
+        "launcherHotkey": choice(\.launcherHotkey),
     ]
 }
 

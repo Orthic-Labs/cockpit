@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var resetWatcher: UsageResetWatcher?
     private var limitWatcher: UsageLimitWatcher?
     private var hubBridge: HubBridge?
+    private var launcher: LauncherController?
     /// Keeps the Claude keychain token from ageing out on a Mac where the CLI
     /// is never run by hand. See `ClaudeTokenRefresher`.
     private var tokenRefresher: ClaudeTokenRefresher?
@@ -412,6 +413,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bridgeActions.previewSessionLimitAlert = { [weak self] in self?.previewSessionLimitAlert() }
             bridgeActions.previewWeeklyLimitAlert = { [weak self] in self?.previewWeeklyLimitAlert() }
             bridgeActions.sendTestNotification = { [weak self] in self?.sendTestNotification() }
+            let launcher = LauncherController(preferences: preferences,
+                                              snapshots: { [weak store] in store?.snapshots ?? [] })
+            launcher.start()
+            self.launcher = launcher
+            bridgeActions.launcherStatus = { [weak launcher] in launcher?.status }
             let bridge = HubBridge(preferences: preferences, store: store, actions: bridgeActions)
             bridge.start()
             self.hubBridge = bridge

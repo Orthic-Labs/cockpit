@@ -22,6 +22,7 @@ interface NotchState {
   displays: { id: string; name: string }[];
   accounts: Account[];
   providerOrder: string[];
+  launcherStatus?: string | null;
 }
 
 type Send = (command: Record<string, unknown>) => void;
@@ -181,6 +182,19 @@ export function Settings({ section }: { section: string }) {
       {section === "general" && (
         <>
           <Group title="Startup">{bool("launchAtLogin", "Open Cockpit at login")}</Group>
+          <Group title="Launcher">
+            {bool("launcherEnabled", "Enable the launcher",
+              "Search apps, files and Cockpit commands, and calculate. Off by default.")}
+            {s.launcherEnabled ? (
+              <>
+                {choice("launcherHotkey", "Shortcut")}
+                <div className="muted small">
+                  Command space only works after Spotlight's shortcut is turned off in System Settings.
+                </div>
+                {state.launcherStatus ? <div className="error">{state.launcherStatus}</div> : null}
+              </>
+            ) : null}
+          </Group>
           <Group title="Readings">
             {bool("asksProviderOnLook", "Ask the provider every time you look",
               "Spends a request each time. Useful to check against a provider's own page.")}
