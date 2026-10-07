@@ -17,6 +17,7 @@ mac/Notch/Cockpit.xcodeproj/
 hub/node_modules/
 hub/dist/
 hub/src-tauri/target/
+hub/qa-e2e/target/
 hub/src-tauri/gen/
 
 hub/.cache/

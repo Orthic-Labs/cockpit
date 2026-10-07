@@ -3,10 +3,13 @@
 //! Nothing here clicks a destructive control.
 //!
 //! Run from the user's login session (the launcher needs a GUI session for `open`):
-//!   cargo test --features qa-native,custom-protocol --test ui -- --nocapture
+//!   (cd hub/src-tauri && cargo build --features qa-native,custom-protocol)
+//!   (cd hub/qa-e2e && cargo test --test ui -- --nocapture)
+//! The binary is `$COCKPIT_HUB_BIN`, else the hub's debug build under `src-tauri/target`
+//! (or `$CARGO_TARGET_DIR`).
 //! Screenshots go to `$COCKPIT_QA_SHOTS` (default: the scenario scratch dir).
 
-#![cfg(all(target_os = "macos", feature = "qa-native"))]
+#![cfg(target_os = "macos")]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -56,6 +59,16 @@ fn wait_text(ctl: &Control, needle: &str, timeout: Duration, what: &str) {
     ctl.wait_eval(&js, timeout).unwrap_or_else(|e| panic!("{what}: {}", e.0));
 }
 
+fn hub_binary() -> PathBuf {
+    if let Some(p) = std::env::var_os("COCKPIT_HUB_BIN") {
+        return PathBuf::from(p);
+    }
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../src-tauri/target"));
+    target.join("debug/cockpit-hub")
+}
+
 #[test]
 fn hub_sections_render_without_errors() {
     let h = Harness::new("cockpit-hub", env!("CARGO_MANIFEST_DIR")).expect("rightkit-qa harness");
@@ -73,7 +86,7 @@ fn hub_sections_render_without_errors() {
         std::fs::create_dir_all(&shots).expect("screenshots dir");
 
         let spec = LaunchSpec {
-            binary: Path::new(env!("CARGO_BIN_EXE_cockpit-hub")).to_path_buf(),
+            binary: hub_binary(),
             mode: Mode::Hidden,
             env: Vec::new(),
             startup_timeout: Duration::from_secs(90),

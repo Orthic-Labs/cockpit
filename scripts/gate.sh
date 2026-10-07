@@ -82,15 +82,19 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   # (macOS `open` needs a GUI session), the same reason tools/rightkit/scripts/run-ui-tests.sh
   # builds through the broker and then runs the binary itself. That script needs the
   # `rightkit` CLI, which this runner does not have, so we do the equivalent directly:
-  # plain `cargo test` (builds the qa-native bin, runs the test here, not in a wrapper).
+  # plain `cargo build` of the qa-native bin, then `cargo test` of hub/qa-e2e here (not in a wrapper).
+  # hub/qa-e2e is its own cargo workspace: rightkit-qa's exact pins clash with cockpit-core's.
   # Evidence lands in $RUNNER_TEMP/cockpit-hub-qa (screenshots/ + evidence/); the
   # generated ci workflow has no artifact upload.
   if [[ -z "${COCKPIT_SKIP_HUB_QA:-}" ]]; then
     qa_out="$RUNNER_TEMP/cockpit-hub-qa"
     rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots" "$qa_out/evidence"
     qa_rc=0
-    (cd hub/src-tauri && COCKPIT_QA_SHOTS="$qa_out/screenshots" RIGHTKIT_QA_EVIDENCE="$qa_out/evidence" \
-      cargo test --features qa-native,custom-protocol --test ui -- --nocapture) || qa_rc=$?
+    (cd hub/src-tauri && cargo build --features qa-native,custom-protocol) || qa_rc=$?
+    if [[ $qa_rc -eq 0 ]]; then
+      (cd hub/qa-e2e && COCKPIT_QA_SHOTS="$qa_out/screenshots" RIGHTKIT_QA_EVIDENCE="$qa_out/evidence" \
+        cargo test --test ui -- --nocapture) || qa_rc=$?
+    fi
     echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
     [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
     # A silent no-op (skipped scenario) must not pass: demand the receipt and one screenshot per section.
