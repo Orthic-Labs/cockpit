@@ -18,3 +18,5 @@ hub/node_modules/
 hub/dist/
 hub/src-tauri/target/
 hub/src-tauri/gen/
+
+hub/.cache/

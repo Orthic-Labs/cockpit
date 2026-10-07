@@ -62,6 +62,23 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   pnpm --dir hub exec tsc --noEmit
   pnpm --dir hub run build
   (cd hub/src-tauri && cargo check)
+  # Headless dogfood of the hub: debug-only build with the WebDriver plugin
+  # (qa-native, compile-time barred from release), driven by right-qa over a
+  # tiny HOME so Storage scans a fixture. Evidence lands in $RUNNER_TEMP/cockpit-hub-qa
+  # (screenshots/ + evidence.json); the generated ci workflow has no artifact upload.
+  pnpm --dir hub run qa:build
+  qa_home="$(mktemp -d "$RUNNER_TEMP/cockpit-hub-qa-home.XXXXXX")"
+  mkdir -p "$qa_home/alpha-folder"
+  head -c 65536 /dev/zero > "$qa_home/alpha-folder/fixture.bin"
+  qa_out="$RUNNER_TEMP/cockpit-hub-qa"
+  rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots"
+  qa_rc=0
+  HOME="$qa_home" COCKPIT_QA_SHOTS="$qa_out/screenshots" COCKPIT_QA_FIXTURE_NAME=alpha-folder \
+    pnpm --dir hub run qa:native || qa_rc=$?
+  find hub/.cache/rightkit-qa -name evidence.json -exec cp {} "$qa_out/" \; 2>/dev/null || true
+  echo "Hub QA evidence in $qa_out:"; ls -l "$qa_out" "$qa_out/screenshots" || true
+  rm -rf "$qa_home"
+  [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
   # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
   xcodebuild -version
   command -v xcodegen >/dev/null || brew install xcodegen
