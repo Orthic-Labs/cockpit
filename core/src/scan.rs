@@ -562,16 +562,27 @@ pub fn scan_with_provider<P: FilesystemProvider>(
     report
 }
 
-/// Resolve platform alias prefixes in a scan root (macOS `/var` ->
-/// `/private/var`, `/tmp`, `/etc`) by canonicalizing the parent. The final
-/// component is kept so a root that is itself a symlink is still refused.
-fn canonical_root(path: &Path) -> PathBuf {
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
-            fs::canonicalize(parent).map_or_else(|_| path.to_path_buf(), |p| p.join(name))
-        }
-        _ => path.to_path_buf(),
+/// Resolve the macOS top-level aliases `/var`, `/tmp` and `/etc` (symlinks to
+/// `/private/...`) at the start of a path. Only that first component is
+/// resolved, so any other symlink in the path is still refused by the scan.
+pub(crate) fn canonical_root(path: &Path) -> PathBuf {
+    let mut parts = path.components();
+    let (Some(std::path::Component::RootDir), Some(std::path::Component::Normal(first))) =
+        (parts.next(), parts.next())
+    else {
+        return path.to_path_buf();
+    };
+    if !matches!(first.to_str(), Some("var" | "tmp" | "etc")) {
+        return path.to_path_buf();
     }
+    let top = Path::new("/").join(first);
+    if !fs::symlink_metadata(&top).is_ok_and(|m| m.file_type().is_symlink()) {
+        return path.to_path_buf();
+    }
+    fs::canonicalize(&top).map_or_else(
+        |_| path.to_path_buf(),
+        |real| real.join(parts.as_path()),
+    )
 }
 
 pub fn scan(paths: &[PathBuf], options: &ScanOptions) -> ScanReport {

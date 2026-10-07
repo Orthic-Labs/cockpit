@@ -371,18 +371,13 @@ fn root_contains(roots: &[PathBuf], path: &Path) -> bool {
 }
 
 /// Resolve platform alias prefixes (macOS /var -> /private/var) in a caller
-/// supplied path so it compares equal to scanned (canonical) paths. The final
-/// component is kept as-is so a symlink leaf is never followed.
+/// supplied path so it compares equal to scanned (canonical) paths. Resolves the top-level
+/// alias only; other symlinks are not resolved.
 fn normalize_input(report: &ScanReport, path: &Path) -> PathBuf {
     if root_contains(&report.roots, path) {
         return path.to_path_buf();
     }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
-            std::fs::canonicalize(parent).map_or_else(|_| path.to_path_buf(), |p| p.join(name))
-        }
-        _ => path.to_path_buf(),
-    }
+    crate::scan::canonical_root(path)
 }
 
 fn validate_path(report: &ScanReport, path: &Path) -> Result<(), StorageBrowserError> {
