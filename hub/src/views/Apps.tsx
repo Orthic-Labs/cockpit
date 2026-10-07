@@ -92,6 +92,17 @@ export function Apps() {
   );
 }
 
+const LOCATIONS = ["Application", "User Library", "System Library", "Installer receipt"];
+const CONFIDENCE: Record<string, string> = {
+  exact: "Exact id",
+  helper: "Helper id",
+  group: "App group",
+  prefix: "Id prefix",
+  team: "Team id",
+  name: "Name",
+  receipt: "Receipt",
+};
+
 function Detail({ initial, onBack }: { initial: AppDetail; onBack: () => void }) {
   const { app } = initial;
   const [items, setItems] = useState(initial.items);
@@ -101,15 +112,16 @@ function Detail({ initial, onBack }: { initial: AppDetail; onBack: () => void })
   const [result, setResult] = useState<UninstallResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const exact = items.filter((i) => i.exact);
-  const review = items.filter((i) => !i.exact);
   const total = items.filter((i) => picked.has(i.path)).reduce((n, i) => n + i.size_bytes, 0);
+  const adminPicked = items.filter((i) => picked.has(i.path) && i.admin).length;
 
-  const toggle = (path: string, on: boolean) =>
+  const set = (paths: string[], on: boolean) =>
     setPicked((prev) => {
       const next = new Set(prev);
-      if (on) next.add(path);
-      else next.delete(path);
+      for (const p of paths) {
+        if (on) next.add(p);
+        else next.delete(p);
+      }
       return next;
     });
 
@@ -130,29 +142,46 @@ function Detail({ initial, onBack }: { initial: AppDetail; onBack: () => void })
     }
   };
 
-  const group = (title: string, note: string, rows: typeof items) =>
-    rows.length > 0 && (
-      <>
-        <div className="section">
-          {title} <span className="muted">· {note}</span>
+  const group = (location: string) => {
+    const rows = items.filter((i) => i.location === location);
+    if (rows.length === 0) return null;
+    const paths = rows.map((i) => i.path);
+    const allOn = paths.every((p) => picked.has(p));
+    return (
+      <div key={location}>
+        <div className="section-row">
+          <span className="section">
+            {location} <span className="muted">· {rows.length} · {bytes(rows.reduce((n, i) => n + i.size_bytes, 0))}</span>
+          </span>
+          {rows.length > 1 && (
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => set(paths, !allOn)}>
+              {allOn ? "Clear" : "Select all"}
+            </Button>
+          )}
         </div>
         {rows.map((i) => (
-          <label key={i.path} className="row items" title={i.path}>
+          <label key={i.path} className="row items" title={`${i.path}\n${i.reason}`}>
             <input
               type="checkbox"
               checked={picked.has(i.path)}
               disabled={busy}
-              onChange={(e) => toggle(i.path, e.target.checked)}
+              onChange={(e) => set([i.path], e.target.checked)}
             />
             <span className="name">
               {i.path.replace(/^\/Users\/[^/]+/, "~")}
-              <span className="muted small"> {i.label}</span>
+              <span className="muted small">
+                {" "}
+                {i.label} · {CONFIDENCE[i.confidence] ?? i.confidence}
+                {i.admin ? " · admin" : ""}
+                {i.preselected ? "" : " · review"}
+              </span>
             </span>
             <span className="size">{bytes(i.size_bytes)}</span>
           </label>
         ))}
-      </>
+      </div>
     );
+  };
 
   return (
     <div className="view">
@@ -173,21 +202,37 @@ function Detail({ initial, onBack }: { initial: AppDetail; onBack: () => void })
       )}
       {error && <div className="error">{error}</div>}
       {result && (
-        <div className="ok-note">
-          Moved to Trash: {bytes(result.moved_bytes)}
-          {result.failed.length > 0 && (
-            <span className="error"> · {result.failed.length} left in place: {result.failed[0].error}</span>
-          )}
+        <div className="result">
+          <div className="ok-note">
+            Moved {result.moved.length} to Trash · freed {bytes(result.moved_bytes)}
+            {result.failed.length > 0 && <span className="error"> · {result.failed.length} failed</span>}
+          </div>
+          {result.failed.map((f) => (
+            <div key={f.path} className="error small" title={f.path}>
+              {f.path.replace(/^\/Users\/[^/]+/, "~")}: {f.error}
+            </div>
+          ))}
         </div>
       )}
-      <div className="list">
-        {group("Found by bundle id", "selected", exact)}
-        {group("Name matches", "review, not selected", review)}
-      </div>
+      <div className="list">{LOCATIONS.map(group)}</div>
+      {initial.background.length > 0 && (
+        <div className="note">
+          <div className="section">Login and background items</div>
+          {initial.background.map((b) => (
+            <div key={`${b.kind}:${b.label}`} className="small muted" title={b.path ?? ""}>
+              {b.kind} · {b.label}
+            </div>
+          ))}
+        </div>
+      )}
+      {initial.receipts.length > 0 && (
+        <div className="small muted">Installer packages: {initial.receipts.join(", ")}</div>
+      )}
       {!app.protected && (
         <div className="section-row">
           <span className="muted small">
             {picked.size} selected · {bytes(total)}
+            {adminPicked > 0 && ` · ${adminPicked} need an administrator password`}
           </span>
           <Button size="sm" variant="danger" disabled={busy || picked.size === 0} onClick={() => setConfirm(true)}>
             {busy ? "Working…" : "Move to Trash"}
@@ -200,7 +245,7 @@ function Detail({ initial, onBack }: { initial: AppDetail; onBack: () => void })
           title={`Move ${picked.size} item${picked.size === 1 ? "" : "s"} to Trash?`}
           description={`${app.name} and the selected files, ${bytes(total)} in all. Everything goes to the Trash, so it can be put back.${
             app.running ? " The app will be asked to quit first." : ""
-          }`}
+          }${adminPicked > 0 ? " Root-owned items make Finder ask for your password." : ""}`}
           confirmLabel="Move to Trash"
           onConfirm={run}
           onCancel={() => setConfirm(false)}

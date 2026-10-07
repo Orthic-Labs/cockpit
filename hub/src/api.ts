@@ -101,15 +101,31 @@ export interface AppEntry {
 
 export interface RelatedItem {
   path: string;
+  /** Library folder, or "Application". */
   label: string;
+  /** "Application", "User Library", "System Library" or "Installer receipt". */
+  location: string;
   exact: boolean;
+  /** exact, helper, group, prefix, team, name or receipt. */
+  confidence: string;
+  reason: string;
+  /** Root-owned: Finder asks for an administrator password. */
+  admin: boolean;
   size_bytes: number;
   preselected: boolean;
+}
+
+export interface BackgroundEntry {
+  kind: string;
+  label: string;
+  path: string | null;
 }
 
 export interface AppDetail {
   app: AppEntry;
   items: RelatedItem[];
+  background: BackgroundEntry[];
+  receipts: string[];
 }
 
 export interface UninstallResult {
