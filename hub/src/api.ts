@@ -43,6 +43,7 @@ export interface Folder {
   rows: Row[];
   total_children: number;
   incomplete: boolean;
+  reasons: string[];
 }
 
 export const api = {

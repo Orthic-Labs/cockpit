@@ -102,7 +102,7 @@ export function Storage() {
 
       {folder?.incomplete && !results && (
         <div className="muted small">
-          Partial scan: the file limit was reached or some folders couldn't be read, so sizes may be low.
+          Partial scan, so sizes may be low{folder.reasons.length ? `: ${folder.reasons.join("; ")}` : "."}
         </div>
       )}
       {error && <div className="error">{error}</div>}

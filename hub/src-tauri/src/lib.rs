@@ -30,6 +30,7 @@ struct Folder {
     rows: Vec<Row>,
     total_children: usize,
     incomplete: bool,
+    reasons: Vec<String>,
 }
 
 fn home() -> PathBuf {
@@ -76,6 +77,7 @@ fn folder(report: &ScanReport, path: &PathBuf) -> Result<Folder, String> {
         rows,
         total_children,
         incomplete,
+        reasons: report.incomplete_reasons.iter().take(3).cloned().collect(),
     })
 }
 
@@ -108,7 +110,7 @@ async fn scan(path: Option<String>, hub: State<'_, Hub>) -> Result<Folder, Strin
     let root = path.map(PathBuf::from).unwrap_or_else(home);
     let scan_root = root.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
-        let options = ScanOptions { max_entries: 400_000, ..ScanOptions::default() };
+        let options = ScanOptions { max_entries: 1_000_000, ..ScanOptions::default() };
         cockpit_core::scan(&[scan_root], &options)
     })
     .await
