@@ -22,7 +22,8 @@ final class ConveniencesService {
     private let dock = DockClickMinimize()
     private let fn = FnCommand()
     private var fnFailure: String?
-    private var fnApplied = false
+    private let fnHub = EventTapHub(location: .cghidEventTap, events: [.keyDown, .keyUp, .flagsChanged])
+    private var fnToken: EventTapToken?
     private let autoQuit = AutoQuit()
     private var tokens: [String: EventTapToken] = [:]
     private var cancellables = Set<AnyCancellable>()
@@ -74,10 +75,9 @@ final class ConveniencesService {
 
     private var wantsEvents: Bool {
         preferences.convFinderCutPaste || preferences.convWindowMaximizer || preferences.convDockClickMinimize
-            || preferences.convFnCommand
     }
 
-    private var wantsAnything: Bool { wantsEvents || preferences.convAutoQuit }
+    private var wantsAnything: Bool { wantsEvents || preferences.convFnCommand || preferences.convAutoQuit }
 
     private func reconcile() {
         defer { publishIfChanged() }
@@ -94,6 +94,8 @@ final class ConveniencesService {
         }
         setRecheck(false)
 
+        syncFn()
+
         if wantsEvents {
             if !hub.isRunning && !hub.start() {
                 setRecheck(true)
@@ -105,12 +107,10 @@ final class ConveniencesService {
                  handler: { [maximizer] in maximizer.handle($0, $1) }, off: { [maximizer] in maximizer.reset() })
             sync("dock", preferences.convDockClickMinimize, priority: 10,
                  handler: { [dock] in dock.handle($0, $1) }, off: { [dock] in dock.reset() })
-            syncFn()
         } else if hub.isRunning {
             unregisterAll()
             hub.stop()
         }
-        if !preferences.convFnCommand && (fnApplied || fnFailure != nil) { removeFnMapping() }
 
         if preferences.convAutoQuit {
             autoQuit.start(bundleIDs: preferences.convAutoQuitApps)
@@ -119,41 +119,33 @@ final class ConveniencesService {
         }
     }
 
-    /// Fn is remapped to F18 only while the tap that reads F18 is running, so
-    /// Fn is never left dead. A keyboard connected later is mapped by a
-    /// re-check, which every reconcile (and the timer below) performs.
+    /// Fn as Command runs on its own tap at the HID level, ahead of the
+    /// system's hotkey handling. All or nothing: when the tap cannot be
+    /// created nothing is applied and the status says so.
     private func syncFn() {
-        if preferences.convFnCommand {
-            sync("fn", true, priority: 40,
-                 handler: { [fn] in fn.handle($0, $1) }, off: { [fn] in fn.reset() })
-            if !fnApplied || !FnKeyMapping.isApplied {
-                fnFailure = FnKeyMapping.apply()
-                fnApplied = fnFailure == nil
-            }
-            setFnWatch(fnApplied)
-        } else {
-            sync("fn", false, priority: 40, handler: { _, _ in .pass }, off: { [fn] in fn.reset() })
-            removeFnMapping()
+        guard preferences.convFnCommand else {
+            stopFn()
+            return
         }
-    }
-
-    private func removeFnMapping() {
-        setFnWatch(false)
+        if !fnHub.isRunning {
+            guard fnHub.start() else {
+                fnFailure = "could not create the HID event tap"
+                setRecheck(true)
+                return
+            }
+        }
         fnFailure = nil
-        if fnApplied || FnKeyMapping.isApplied { FnKeyMapping.remove() }
-        fnApplied = false
+        if fnToken == nil {
+            fnToken = fnHub.register(priority: 0, handler: { [fn] in fn.handle($0, $1) })
+        }
     }
 
-    private var fnWatch: Timer?
-    private func setFnWatch(_ on: Bool) {
-        if on, fnWatch == nil {
-            fnWatch = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.reconcile() }
-            }
-        } else if !on {
-            fnWatch?.invalidate()
-            fnWatch = nil
-        }
+    private func stopFn() {
+        if let token = fnToken { fnHub.unregister(token) }
+        fnToken = nil
+        fnHub.stop()
+        fn.reset()
+        fnFailure = nil
     }
 
     private func sync(_ name: String, _ on: Bool, priority: Int,
@@ -172,12 +164,11 @@ final class ConveniencesService {
         finder.reset()
         maximizer.reset()
         dock.reset()
-        fn.reset()
     }
 
     private func tearDown() {
         unregisterAll()
-        removeFnMapping()
+        stopFn()
         hub.stop()
         if autoQuit.isRunning { autoQuit.stop() }
     }
@@ -196,7 +187,7 @@ final class ConveniencesService {
     // MARK: - What the hub shows
 
     private func publishIfChanged() {
-        let signature = "\(fnStatus.state)|\(AXIsProcessTrusted())|\(hub.isRunning)|\(autoQuit.isRunning)|\(CGPreflightListenEventAccess())"
+        let signature = "\(fnStatus.state)|\(AXIsProcessTrusted())|\(hub.isRunning)|\(fnHub.isRunning)|\(autoQuit.isRunning)|\(CGPreflightListenEventAccess())"
         guard signature != published else { return }
         published = signature
         onChange?()
@@ -207,7 +198,7 @@ final class ConveniencesService {
         guard preferences.convFnCommand else { return ("off", "") }
         guard AXIsProcessTrusted() else { return ("needsAccessibility", "") }
         if let fnFailure { return ("failed", fnFailure) }
-        return fnApplied && hub.isRunning ? ("running", "") : ("failed", "the key tap is not running")
+        return fnHub.isRunning ? ("running", "") : ("failed", "the key tap is not running")
     }
 
     func stateSnapshot() -> [String: Any] {

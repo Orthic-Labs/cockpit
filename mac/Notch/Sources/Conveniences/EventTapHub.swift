@@ -21,6 +21,15 @@ final class EventTapHub {
         let handler: TapHandler
     }
 
+    private let location: CGEventTapLocation
+    private let events: [CGEventType]
+
+    init(location: CGEventTapLocation = .cgSessionEventTap,
+         events: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp]) {
+        self.location = location
+        self.events = events
+    }
+
     private let lock = NSLock()
     private var entries: [Entry] = []
     private var tap: CFMachPort?
@@ -52,7 +61,6 @@ final class EventTapHub {
     @discardableResult
     func start() -> Bool {
         if isRunning { return true }
-        let events: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp]
         var mask = CGEventMask(0)
         for event in events { mask |= CGEventMask(1) << CGEventMask(event.rawValue) }
         let callback: CGEventTapCallBack = { _, type, event, info in
@@ -60,7 +68,7 @@ final class EventTapHub {
             return Unmanaged<EventTapHub>.fromOpaque(info).takeUnretainedValue().dispatch(type, event)
         }
         guard let port = CGEvent.tapCreate(
-            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+            tap: location, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque())
         else { return false }
