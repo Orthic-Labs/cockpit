@@ -122,9 +122,12 @@ fn hub_sections_render_without_errors() {
             } else {
                 if sec.id == "storage" {
                     wait_text(&ctl, "Rescan", Duration::from_secs(30), "Storage scan of the fixture folder never finished");
+                    let text = body_text(&ctl);
                     assert!(
-                        body_text(&ctl).contains(FIXTURE),
-                        "Storage did not list fixture entry {FIXTURE}"
+                        text.contains(FIXTURE),
+                        "Storage did not list fixture entry {FIXTURE}; fixture home {}; page text:\n{}",
+                        home.display(),
+                        text.chars().take(1500).collect::<String>()
                     );
                 } else {
                     // Let the view's first load settle.
