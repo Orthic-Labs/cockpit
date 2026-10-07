@@ -62,6 +62,19 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   pnpm --dir hub exec tsc --noEmit
   pnpm --dir hub run build
   (cd hub/src-tauri && cargo check)
+  # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
+  xcodebuild -version
+  command -v xcodegen >/dev/null || brew install xcodegen
+  xcodegen generate --spec mac/Notch/project.yml --project mac/Notch
+  notch_log="$RUNNER_TEMP/cockpit-notch-build.log"
+  if ! xcodebuild -project mac/Notch/Cockpit.xcodeproj -scheme Cockpit -configuration Release \
+    -destination 'generic/platform=macOS' -derivedDataPath "$RUNNER_TEMP/cockpit-notch" \
+    CODE_SIGNING_ALLOWED=NO build > "$notch_log" 2>&1; then
+    grep -E "(error|warning: unreachable):" "$notch_log" | sort -u | head -n 150 || true
+    tail -n 40 "$notch_log"
+    exit 1
+  fi
+  test -x "$RUNNER_TEMP/cockpit-notch/Build/Products/Release/Cockpit.app/Contents/MacOS/Cockpit"
   # Headless dogfood of the hub: debug-only build with the WebDriver plugin
   # (qa-native, compile-time barred from release), driven by right-qa over a
   # tiny HOME so Storage scans a fixture. Evidence lands in $RUNNER_TEMP/cockpit-hub-qa
@@ -100,17 +113,4 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   else
     echo "Hub QA skipped (COCKPIT_SKIP_HUB_QA set: signed-build gate)"
   fi
-  # Cockpit notch: Codenotch fork, built unsigned (release signing is RightKit's).
-  xcodebuild -version
-  command -v xcodegen >/dev/null || brew install xcodegen
-  xcodegen generate --spec mac/Notch/project.yml --project mac/Notch
-  notch_log="$RUNNER_TEMP/cockpit-notch-build.log"
-  if ! xcodebuild -project mac/Notch/Cockpit.xcodeproj -scheme Cockpit -configuration Release \
-    -destination 'generic/platform=macOS' -derivedDataPath "$RUNNER_TEMP/cockpit-notch" \
-    CODE_SIGNING_ALLOWED=NO build > "$notch_log" 2>&1; then
-    grep -E "(error|warning: unreachable):" "$notch_log" | sort -u | head -n 150 || true
-    tail -n 40 "$notch_log"
-    exit 1
-  fi
-  test -x "$RUNNER_TEMP/cockpit-notch/Build/Products/Release/Cockpit.app/Contents/MacOS/Cockpit"
 fi
