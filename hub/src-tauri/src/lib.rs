@@ -232,6 +232,10 @@ fn watch_notch(app: tauri::AppHandle) {
             let Ok(cname) = std::ffi::CString::new(name) else { continue };
             let mut token = 0i32;
             if unsafe { notify_register_check(cname.as_ptr(), &mut token) } == 0 {
+                // The first check after registering always reports a change;
+                // consume it so only real posts reach the page.
+                let mut changed = 0i32;
+                unsafe { notify_check(token, &mut changed) };
                 tokens.push((token, event, payload));
             }
         }
