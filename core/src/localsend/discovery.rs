@@ -1,9 +1,11 @@
 //! Multicast discovery (UDP 224.0.0.167:53317). The socket is shared so
 //! another LocalSend app on the same Mac can run beside Pulse.
 
+use super::net;
 use super::proto::{self, DeviceInfo};
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::io::{self, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// IPv4 addresses of this Mac's network interfaces, loopback excluded.
@@ -192,4 +194,124 @@ pub fn scan(me: &DeviceInfo, window: Duration) -> io::Result<Vec<Heard>> {
         }
     }
     Ok(heard)
+}
+
+/// Interfaces that never carry a LAN: loopback, VPN and point-to-point tunnels,
+/// Apple's peer-to-peer links.
+fn skips_interface(name: &str) -> bool {
+    ["lo", "utun", "ppp", "ipsec", "gif", "stf", "awdl", "llw"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// Every host worth probing: the private networks this Mac is on, narrowed to
+/// at most a /24 around its own address, without this Mac's own addresses.
+pub fn sweep_targets() -> Vec<Ipv4Addr> {
+    let networks = sysinfo::Networks::new_with_refreshed_list();
+    let own = local_ipv4s();
+    let mut targets: Vec<Ipv4Addr> = Vec::new();
+    for (name, data) in networks.iter() {
+        if skips_interface(name) {
+            continue;
+        }
+        for network in data.ip_networks() {
+            let IpAddr::V4(ip) = network.addr else {
+                continue;
+            };
+            if !ip.is_private() || network.prefix >= 31 {
+                continue;
+            }
+            let prefix = u32::from(network.prefix).max(24);
+            let base = u32::from(ip) & (u32::MAX << (32 - prefix));
+            for offset in 1..(1u32 << (32 - prefix)) - 1 {
+                let host = Ipv4Addr::from(base + offset);
+                if !own.contains(&host) && !targets.contains(&host) {
+                    targets.push(host);
+                }
+            }
+        }
+    }
+    targets
+}
+
+/// One request to a LocalSend port, answered with the device's own info.
+fn exchange(
+    ip: Ipv4Addr,
+    https: bool,
+    method: &str,
+    endpoint: &str,
+    body: Option<&[u8]>,
+) -> Option<DeviceInfo> {
+    let mut wire = net::connect_within(
+        IpAddr::V4(ip),
+        proto::PORT,
+        https,
+        "",
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+    )
+    .ok()?;
+    let payload = body.unwrap_or(&[]);
+    let reply = net::call(
+        &mut wire,
+        method,
+        &format!("{ip}:{}", proto::PORT),
+        &format!("{}{endpoint}", proto::API),
+        body.map(|_| "application/json"),
+        payload.len() as u64,
+        &mut |w| w.write_all(payload),
+    );
+    wire.finish();
+    let reply = reply.ok().filter(|r| r.status == 200)?;
+    let mut info: DeviceInfo = serde_json::from_slice(&reply.body).ok()?;
+    if info.alias.is_empty() || info.fingerprint.is_empty() {
+        return None;
+    }
+    info.port = proto::PORT;
+    info.protocol = if https { "https" } else { "http" }.to_string();
+    Some(info)
+}
+
+/// Ask one address whether a LocalSend device lives there, the way the
+/// LocalSend app's HTTP discovery does: register with it (so it lists this Mac
+/// too) and fall back to reading its info. https first, then http.
+pub fn probe(me: &DeviceInfo, ip: Ipv4Addr) -> Option<DeviceInfo> {
+    let address = SocketAddr::new(IpAddr::V4(ip), proto::PORT);
+    TcpStream::connect_timeout(&address, Duration::from_secs(1)).ok()?;
+    let mut mine = me.clone();
+    mine.announce = None;
+    let body = serde_json::to_vec(&mine).ok()?;
+    for https in [true, false] {
+        let found = exchange(ip, https, "POST", "/register", Some(&body))
+            .or_else(|| exchange(ip, https, "GET", "/info", None));
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// Probe every host of the local networks from a bounded pool of threads,
+/// handing each responder to `found`. Ends early when `stop` is set.
+pub fn sweep(me: &DeviceInfo, stop: &AtomicBool, found: &(dyn Fn(Heard) + Sync)) {
+    let targets = sweep_targets();
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..targets.len().min(48) {
+            scope.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(&ip) = targets.get(index) else {
+                        break;
+                    };
+                    if let Some(info) = probe(me, ip) {
+                        found(Heard {
+                            info,
+                            ip: IpAddr::V4(ip),
+                        });
+                    }
+                }
+            });
+        }
+    });
 }

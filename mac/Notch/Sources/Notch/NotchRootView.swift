@@ -138,10 +138,10 @@ struct NotchRootView: View {
                     // the ordinary cards until it is answered or goes.
                     DiskImageCard(prompt: disk,
                                   direction: model.edge.tooltipDirection,
-                                  tailOffset: model.notchMiddleAlong - diskImageCardAlong,
+                                  tailOffset: model.diskImageTailTarget(for: disk) - model.diskImageCardAlong(for: disk),
                                   onChoice: { model.onDiskImageChoice?($0) })
                         .onHover { model.onDiskImageHover?($0) }
-                        .position(diskImageCardCentre(place))
+                        .position(diskImageCardCentre(place, prompt: disk))
                         .transition(.opacity.combined(with: .offset(
                             x: model.edge.outward.x * Design.px(24),
                             y: model.edge.outward.y * Design.px(24)
@@ -653,17 +653,11 @@ struct NotchRootView: View {
     }
 
     /// Where the disk image card is centred along the notch: on its middle,
-    /// kept on the screen — see `DiskImageCard`.
-    private var diskImageCardAlong: CGFloat {
-        let size = DiskImageCard.size(for: model.edge.tooltipDirection)
-        return model.cardAlong(centredOn: model.notchMiddleAlong,
-                               length: model.edge.isVertical ? size.height : size.width)
-    }
-
-    private func diskImageCardCentre(_ place: NotchPlacement) -> CGPoint {
-        let size = DiskImageCard.size(for: model.edge.tooltipDirection)
+    /// kept on the screen — or on the Send ring for a nearby sharing card.
+    private func diskImageCardCentre(_ place: NotchPlacement, prompt: DiskImagePrompt) -> CGPoint {
+        let size = DiskImageCard.size(for: model.edge.tooltipDirection, prompt: prompt)
         let across = model.edge.isVertical ? size.width : size.height
-        return place.point(along: diskImageCardAlong,
+        return place.point(along: model.diskImageCardAlong(for: prompt),
                            across: model.tooltipInset + (NotchLayout.tailLength + across) / 2)
     }
 

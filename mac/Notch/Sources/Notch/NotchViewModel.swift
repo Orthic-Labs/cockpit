@@ -206,6 +206,28 @@ final class NotchViewModel: ObservableObject {
     /// The notch's middle, along the panel — what the update card hangs from.
     var notchMiddleAlong: CGFloat { cellWing.lead + cellWing.length / 2 }
 
+    /// Where the disk image card (or a nearby sharing card) is centred along the
+    /// notch: on its middle, kept on the screen — but a Send card hangs from the
+    /// Send ring, wherever the notch has been carried.
+    func diskImageCardAlong(for prompt: DiskImagePrompt) -> CGFloat {
+        let size = DiskImageCard.size(for: edge.tooltipDirection, prompt: prompt)
+        let length = edge.isVertical ? size.height : size.width
+        if prompt.send != nil,
+           let index = snapshots.firstIndex(where: { $0.providerID == SystemProviders.sendID }) {
+            return tooltipAlong(index: index, length: length)
+        }
+        return cardAlong(centredOn: notchMiddleAlong, length: length)
+    }
+
+    /// Where a disk image card's tail points: the Send ring for a Send card.
+    func diskImageTailTarget(for prompt: DiskImagePrompt) -> CGFloat {
+        if prompt.send != nil,
+           let index = snapshots.firstIndex(where: { $0.providerID == SystemProviders.sendID }) {
+            return ringAlong(index: index, in: cellWing)
+        }
+        return notchMiddleAlong
+    }
+
     /// A card `length` long centred on `centre`, kept on the screen.
     func cardAlong(centredOn centre: CGFloat, length: CGFloat) -> CGFloat {
         guard let range = visibleAlongRange else { return centre }

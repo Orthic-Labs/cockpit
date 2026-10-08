@@ -1344,11 +1344,11 @@ final class NotchWindowController {
 
     /// Where the disk image card is, on the notch's middle — see `DiskImageCard`.
     private var diskImageCardRect: CGRect? {
-        guard model.isExpanded, model.diskImagePrompt != nil else { return nil }
-        let size = DiskImageCard.size(for: model.edge.tooltipDirection)
+        guard model.isExpanded, let prompt = model.diskImagePrompt else { return nil }
+        let size = DiskImageCard.size(for: model.edge.tooltipDirection, prompt: prompt)
         let across = model.edge.isVertical ? size.width : size.height
         let along = model.edge.isVertical ? size.height : size.width
-        let centre = model.cardAlong(centredOn: model.notchMiddleAlong, length: along)
+        let centre = model.diskImageCardAlong(for: prompt)
         return placement.rect(
             along: centre - along / 2,
             across: model.notchDrawnDepth,

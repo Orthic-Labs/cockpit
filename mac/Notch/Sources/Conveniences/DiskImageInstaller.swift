@@ -253,6 +253,8 @@ final class DiskImageInstaller {
         case .showImage:
             if let mount = current?.mountURL { NSWorkspace.shared.open(mount) }
             clearCard()
+        case .sendTo, .refresh:
+            break
         case .cancel:
             control?.requestCancel()
         case .dismiss:

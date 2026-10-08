@@ -249,7 +249,19 @@ pub fn connect(
     fingerprint: &str,
     read_timeout: Duration,
 ) -> io::Result<Wire> {
-    let socket = TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_secs(5))?;
+    connect_within(ip, port, https, fingerprint, Duration::from_secs(5), read_timeout)
+}
+
+/// `connect` with its own limit on how long the TCP connection may take.
+pub fn connect_within(
+    ip: IpAddr,
+    port: u16,
+    https: bool,
+    fingerprint: &str,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> io::Result<Wire> {
+    let socket = TcpStream::connect_timeout(&SocketAddr::new(ip, port), connect_timeout)?;
     socket.set_read_timeout(Some(read_timeout))?;
     socket.set_write_timeout(Some(Duration::from_secs(30)))?;
     let _ = socket.set_nodelay(true);

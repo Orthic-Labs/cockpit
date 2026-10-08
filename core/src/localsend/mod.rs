@@ -16,7 +16,7 @@ pub use send::{Entry, Peer, SendItem};
 use proto::DeviceInfo;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -117,6 +117,8 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
     /// "unknown", "granted" or "blocked" (macOS Local Network access).
     pub local_network: String,
+    /// A sweep of the local networks is running.
+    pub scanning: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +189,12 @@ pub(crate) struct Inner {
     pub warnings: Mutex<Vec<String>>,
     /// 0 unknown, 1 reachable, 2 macOS is refusing local network access.
     pub local_network: std::sync::atomic::AtomicU8,
+    /// A sweep of the local networks is running.
+    pub scanning: AtomicBool,
+    /// Someone asked for a sweep; the scanner thread takes it.
+    pub scan_requested: AtomicBool,
+    /// This Mac's own addresses and when they were read.
+    pub own_ips: Mutex<(Instant, Vec<Ipv4Addr>)>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -211,10 +219,29 @@ impl Inner {
         lock(&self.cfg).clone()
     }
 
-    /// Record a device heard from `ip`. Emits `Devices` when the list changed.
-    pub fn upsert(&self, info: &DeviceInfo, ip: IpAddr) {
-        if info.fingerprint == self.me.fingerprint {
-            return;
+    /// Whether `ip` is one of this Mac's own addresses.
+    fn is_own_ip(&self, ip: IpAddr) -> bool {
+        let IpAddr::V4(v4) = ip else {
+            return ip.is_loopback();
+        };
+        if v4.is_loopback() {
+            return true;
+        }
+        let mut own = lock(&self.own_ips);
+        if own.0.elapsed() > Duration::from_secs(30) {
+            *own = (Instant::now(), discovery::local_ipv4s());
+        }
+        own.1.contains(&v4)
+    }
+
+    /// Record a device heard from `ip`, unless it is this Mac itself. Emits
+    /// `Devices` when the list changed. Returns whether the device was taken.
+    pub fn upsert(&self, info: &DeviceInfo, ip: IpAddr) -> bool {
+        if info.fingerprint.is_empty()
+            || info.fingerprint == self.me.fingerprint
+            || self.is_own_ip(ip)
+        {
+            return false;
         }
         let device = Device {
             fingerprint: info.fingerprint.clone(),
@@ -254,6 +281,18 @@ impl Inner {
         if changed {
             self.emit(Event::Devices);
         }
+        true
+    }
+
+    /// Sweep the local networks for devices multicast didn't find.
+    fn scan(&self) {
+        self.scanning.store(true, Ordering::Relaxed);
+        self.emit(Event::Changed);
+        discovery::sweep(&self.me, &self.stop, &|heard| {
+            self.upsert(&heard.info, heard.ip);
+        });
+        self.scanning.store(false, Ordering::Relaxed);
+        self.emit(Event::Changed);
     }
 
     pub fn device_list(&self) -> Vec<Device> {
@@ -414,6 +453,9 @@ impl Service {
             connections: AtomicUsize::new(0),
             warnings: Mutex::new(Vec::new()),
             local_network: std::sync::atomic::AtomicU8::new(0),
+            scanning: AtomicBool::new(false),
+            scan_requested: AtomicBool::new(false),
+            own_ips: Mutex::new((Instant::now(), discovery::local_ipv4s())),
         });
 
         spawn_acceptor(inner.clone(), listener);
@@ -424,6 +466,7 @@ impl Service {
             )),
         }
         spawn_announcer(inner.clone());
+        spawn_scanner(inner.clone());
         spawn_liveness(inner.clone());
         Ok(Service { inner })
     }
@@ -451,7 +494,18 @@ impl Service {
                 _ => "unknown",
             }
             .to_string(),
+            scanning: inner.scanning.load(Ordering::Relaxed),
         }
+    }
+
+    /// Look for devices again now: announce on multicast and sweep the local
+    /// networks (the sweep is skipped while one is already running).
+    pub fn refresh(&self) {
+        let inner = self.inner.clone();
+        thread::spawn(move || {
+            let _ = discovery::announce(&inner.me, inner.config().port, true);
+        });
+        self.inner.scan_requested.store(true, Ordering::Relaxed);
     }
 
     pub fn devices(&self) -> Vec<Device> {
@@ -619,10 +673,9 @@ fn spawn_discovery(inner: Arc<Inner>, socket: UdpSocket) {
             let Some(heard) = discovery::parse(&buffer[..n], from) else {
                 continue;
             };
-            if heard.info.fingerprint == inner.me.fingerprint {
+            if !inner.upsert(&heard.info, heard.ip) {
                 continue;
             }
-            inner.upsert(&heard.info, heard.ip);
             if heard.info.announce.unwrap_or(false) {
                 let inner = inner.clone();
                 thread::spawn(move || answer_announcement(&inner, &heard));
@@ -674,6 +727,29 @@ fn spawn_announcer(inner: Arc<Inner>) {
             while Instant::now() < until && !inner.stop.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(100));
             }
+        }
+    });
+}
+
+/// Sweep the local networks shortly after start (multicast gets the first
+/// word), when asked, and every minute while no device is known.
+fn spawn_scanner(inner: Arc<Inner>) {
+    thread::spawn(move || {
+        let mut due = Instant::now() + Duration::from_secs(2);
+        let mut first = true;
+        while !inner.stop.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(100));
+            let asked = inner.scan_requested.load(Ordering::Relaxed);
+            let waited = Instant::now() >= due;
+            if !asked && !waited {
+                continue;
+            }
+            if asked || first || lock(&inner.devices).is_empty() {
+                inner.scan();
+                inner.scan_requested.store(false, Ordering::Relaxed);
+                first = false;
+            }
+            due = Instant::now() + Duration::from_secs(60);
         }
     });
 }

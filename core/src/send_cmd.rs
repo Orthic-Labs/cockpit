@@ -45,8 +45,18 @@ fn identity() -> DeviceInfo {
 }
 
 fn nearby(me: &DeviceInfo) -> Result<Vec<(Peer, DeviceInfo)>, String> {
-    let heard = discovery::scan(me, Duration::from_millis(2500))
+    let mut heard = discovery::scan(me, Duration::from_millis(2500))
         .map_err(|e| format!("Couldn't look for nearby devices: {e}"))?;
+    if heard.is_empty() {
+        // Multicast can be lost on busy networks; ask the local hosts directly.
+        let found = std::sync::Mutex::new(Vec::new());
+        discovery::sweep(me, &std::sync::atomic::AtomicBool::new(false), &|device| {
+            if let Ok(mut list) = found.lock() {
+                list.push(device);
+            }
+        });
+        heard = found.into_inner().unwrap_or_default();
+    }
     Ok(heard
         .into_iter()
         .map(|h| {

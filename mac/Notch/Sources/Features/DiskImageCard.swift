@@ -4,6 +4,8 @@ import SwiftUI
 /// What the notch's disk image card can be asked to do.
 enum DiskImageChoice: Equatable, Sendable {
     case install, replace, quitAndUpdate, undo, openInstaller, showImage, cancel, dismiss
+    /// Nearby sharing's device list: send to this device (its fingerprint), or look again.
+    case sendTo(String), refresh
 }
 
 /// **A disk image, as the notch shows it**: an app installed on its own (with
@@ -34,9 +36,14 @@ struct DiskImagePrompt: Equatable {
     var style: Style
     var primary: Button?
     var secondary: Button?
+    /// Nearby sharing's device list or transfer, drawn in place of the icon layout
+    /// and anchored to the Send ring — see `SendCardContent`.
+    var send: SendCardContent?
 
     init(iconPath: String, title: String, detail: String, warning: String? = nil,
-         style: Style, primary: Button? = nil, secondary: Button? = nil) {
+         style: Style, primary: Button? = nil, secondary: Button? = nil,
+         send: SendCardContent? = nil) {
+        self.send = send
         self.iconPath = iconPath
         self.title = title
         self.detail = detail
@@ -78,14 +85,24 @@ struct DiskImageCard: View {
         CGSize(width: cardWidth, height: cardHeight)
     }
 
+    /// The same for a prompt: a nearby sharing card is narrower, and its list
+    /// sets its height.
+    static func size(for direction: NotchEdge.TooltipDirection, prompt: DiskImagePrompt) -> CGSize {
+        guard let send = prompt.send else { return size(for: direction) }
+        return CGSize(width: SendCardContent.cardWidth, height: send.cardHeight)
+    }
+
+    private var width: CGFloat { Self.size(for: direction, prompt: prompt).width }
+    private var height: CGFloat { Self.size(for: direction, prompt: prompt).height }
+
     private var clampedTailOffset: CGFloat {
         let size = TooltipTail.size(for: direction)
         switch direction {
         case .leading, .trailing:
-            let most = max(0, Self.cardHeight / 2 - NotchLayout.cardCorner - size.height / 2)
+            let most = max(0, height / 2 - NotchLayout.cardCorner - size.height / 2)
             return min(max(tailOffset, -most), most)
         case .up, .down:
-            let most = max(0, Self.cardWidth / 2 - NotchLayout.cardCorner - size.width / 2)
+            let most = max(0, width / 2 - NotchLayout.cardCorner - size.width / 2)
             return min(max(tailOffset, -most), most)
         }
     }
@@ -114,11 +131,21 @@ struct DiskImageCard: View {
 
     private var detailInk: Color { prompt.style == .problem ? Palette.watch : secondaryInk }
 
-    private var card: some View {
+    @ViewBuilder private var card: some View {
+        if let send = prompt.send {
+            SendCardBody(prompt: prompt, send: send, width: width, height: height,
+                         surfaceFill: surfaceFill, secondaryInk: secondaryInk,
+                         reduceTransparency: reduceTransparency, onChoice: onChoice)
+        } else {
+            diskCard
+        }
+    }
+
+    private var diskCard: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: NotchLayout.cardCorner, style: .circular)
                 .fill(surfaceFill)
-                .frame(width: Self.cardWidth, height: Self.cardHeight)
+                .frame(width: width, height: height)
 
             HStack(alignment: .center, spacing: Design.px(30)) {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: prompt.iconPath))
@@ -170,9 +197,9 @@ struct DiskImageCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(NotchLayout.cardPadding)
-            .frame(width: Self.cardWidth, height: Self.cardHeight, alignment: .leading)
+            .frame(width: width, height: height, alignment: .leading)
         }
-        .frame(width: Self.cardWidth, height: Self.cardHeight, alignment: .top)
+        .frame(width: width, height: height, alignment: .top)
         .clipShape(RoundedRectangle(cornerRadius: NotchLayout.cardCorner, style: .circular))
         .overlay {
             if reduceTransparency {
@@ -213,6 +240,8 @@ struct DiskImageCard: View {
         case .showImage:     return "folder"
         case .cancel:        return "stop.circle"
         case .dismiss:       return "clock"
+        case .sendTo:        return "paperplane"
+        case .refresh:       return "arrow.clockwise"
         }
     }
 

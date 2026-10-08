@@ -62,6 +62,8 @@ struct ShareState: Decodable, Equatable {
     var warnings: [String]?
     var localNetwork: String?
     var notice: ShareNotice?
+    /// The hub is announcing and scanning the subnet for devices right now.
+    var scanning: Bool?
     /// Milliseconds since 1970, when the hub last wrote this.
     var updatedAt: Double
 }
@@ -102,11 +104,20 @@ final class NearbySharing {
         case saved([String])
         case note
         case choose
+        case sending
     }
     private var card = Card.none
     private var cardTimer: Timer?
     private var cardHovered = false
     private var pending: (urls: [URL], text: String?)?
+    private var lastChoose: DiskImagePrompt?
+    /// The send the card follows: to whom, which transfer once the hub lists it,
+    /// and the transfers that already existed (so it is not mistaken for one).
+    private var sendPeer: ShareDevice?
+    private var sendSummary = ""
+    private var sendBaseline = Set<String>()
+    private var sendTransferID: String?
+    private var sendFinished = false
 
     private var hovering = Set<ObjectIdentifier>()
     private var tap: EventTapHub?
@@ -181,7 +192,6 @@ final class NearbySharing {
         selected = fingerprint
         if let waiting = pending, let device = devices.first(where: { $0.fingerprint == fingerprint }) {
             pending = nil
-            if card == .choose { clearCard() }
             deliver(waiting.urls, waiting.text, to: device)
         }
         onChange?()
@@ -198,14 +208,11 @@ final class NearbySharing {
                      problem: true)
             return
         }
-        guard !live.devices.isEmpty else {
-            showNote(title: L10n.t("No devices nearby"),
-                     detail: L10n.t("Open LocalSend on the other device."), problem: true)
-            return
-        }
         guard let device = target else {
+            // Several devices, or none yet: list them on the card (looking again
+            // when there are none) and send when one is clicked.
             pending = (files, text)
-            showChoose()
+            showChoose(refreshing: live.devices.isEmpty)
             return
         }
         deliver(files, text, to: device)
@@ -218,6 +225,7 @@ final class NearbySharing {
         ]
         if let text, !text.isEmpty { body["text"] = text }
         command(body)
+        beginSending(to: device, urls: urls, text: text)
         onChange?()
     }
 
@@ -269,6 +277,11 @@ final class NearbySharing {
         guard dropTargeting != on else { return }
         dropTargeting = on
         onChange?()
+    }
+
+    /// Ask the hub to announce itself and scan the subnet again.
+    func refreshDevices() {
+        command(["command": "refresh"])
     }
 
     func cancelCurrent() {
@@ -446,7 +459,25 @@ final class NearbySharing {
             }
             clearCard()
         case .choose:
-            pending = nil
+            switch choice {
+            case .sendTo(let fingerprint):
+                if let waiting = pending, let device = devices.first(where: { $0.fingerprint == fingerprint }) {
+                    pending = nil
+                    deliver(waiting.urls, waiting.text, to: device)
+                }
+            case .refresh:
+                refreshDevices()
+            default:
+                pending = nil
+                clearCard()
+            }
+        case .sending:
+            if choice == .cancel, let id = sendTransferID,
+               fresh(state)?.transfers.first(where: { $0.id == id })?.isOpen == true {
+                command(["command": "cancel", "id": id])
+            }
+            // The close only puts the card away: the transfer carries on and
+            // is announced when it ends.
             clearCard()
         case .note, .none:
             clearCard()
@@ -459,6 +490,11 @@ final class NearbySharing {
         case .saved, .note:
             cardTimer?.invalidate()
             if !on { scheduleExpiry(after: 3) }
+        case .choose:
+            cardTimer?.invalidate()
+            if !on { scheduleExpiry(after: 30) }
+        case .sending:
+            if on { cardTimer?.invalidate() } else if sendFinished { scheduleExpiry(after: 2) }
         default:
             break
         }
@@ -469,6 +505,8 @@ final class NearbySharing {
         cardTimer = nil
         cardHovered = false
         guard card != .none else { return }
+        if card == .choose { lastChoose = nil }
+        if card == .sending { sendPeer = nil; sendTransferID = nil; sendFinished = false }
         card = .none
         _ = present?(nil)
     }
@@ -497,6 +535,8 @@ final class NearbySharing {
             for transfer in new.transfers where !transfer.isOpen { seenFinished.insert(transfer.id) }
             lastNoticeID = new.notice?.id ?? 0
         }
+        if card == .choose { refreshChooseCard() }
+        if card == .sending { updateSending(new) }
         if case .incoming(let id) = card, !new.incoming.contains(where: { $0.id == id }) {
             clearCard()
         }
@@ -571,10 +611,140 @@ final class NearbySharing {
         scheduleExpiry(after: problem ? 8 : 4)
     }
 
-    private func showChoose() {
-        show(DiskImagePrompt(iconPath: iconPath(nil), title: L10n.t("Choose a device"),
-                             detail: L10n.t("Hover the Send ring and click a device."), style: .ask),
-             as: .choose)
+    // MARK: - The device list and the transfer, on the card
+
+    private func symbol(of device: ShareDevice) -> String {
+        switch device.deviceType {
+        case "mobile": return "iphone"
+        case "desktop": return "laptopcomputer"
+        case "web": return "globe"
+        case "headless": return "terminal"
+        case "server": return "server.rack"
+        default: return "display"
+        }
+    }
+
+    private func summary(urls: [URL], text: String?) -> String {
+        if urls.isEmpty { return L10n.t("Text") }
+        if urls.count == 1 { return urls[0].lastPathComponent }
+        return L10n.t("\(urls.count) files")
+    }
+
+    private var pendingSummary: String {
+        guard let pending else { return "" }
+        return summary(urls: pending.urls, text: pending.text)
+    }
+
+    private func choosePrompt() -> DiskImagePrompt {
+        let live = fresh(state)
+        let list = live?.devices ?? []
+        let rows = list.map {
+            SendCardContent.Row(id: $0.fingerprint, alias: $0.alias,
+                                model: $0.deviceModel ?? kind(of: $0), symbol: symbol(of: $0))
+        }
+        let title = list.isEmpty ? L10n.t("Looking for devices…") : L10n.t("Send to…")
+        let detail = list.isEmpty
+            ? L10n.t("Open LocalSend on the other device.") : pendingSummary
+        return DiskImagePrompt(iconPath: iconPath(nil), title: title, detail: detail, style: .ask,
+                               send: SendCardContent(rows: rows, scanning: live?.scanning ?? false))
+    }
+
+    private func showChoose(refreshing: Bool) {
+        let prompt = choosePrompt()
+        lastChoose = prompt
+        show(prompt, as: .choose)
+        scheduleExpiry(after: 30)
+        if refreshing || fresh(state)?.devices.isEmpty == true { refreshDevices() }
+    }
+
+    /// Devices come and go, and a scan starts and ends, while the card is up.
+    private func refreshChooseCard() {
+        let prompt = choosePrompt()
+        guard prompt != lastChoose else { return }
+        lastChoose = prompt
+        _ = present?(prompt)
+    }
+
+    private func beginSending(to device: ShareDevice, urls: [URL], text: String?) {
+        // A request waiting for an answer keeps the card; the Send ring still shows this.
+        if case .incoming = card { return }
+        sendPeer = device
+        sendSummary = summary(urls: urls, text: text)
+        sendBaseline = Set(state?.transfers.map(\.id) ?? [])
+        sendTransferID = nil
+        sendFinished = false
+        cardTimer?.invalidate()
+        show(sendingPrompt(nil, peer: device), as: .sending)
+        // The hub should list the transfer at once; if it never does, let go.
         scheduleExpiry(after: 20)
+    }
+
+    private func sendingPrompt(_ transfer: ShareTransfer?, peer: ShareDevice) -> DiskImagePrompt {
+        let deviceSymbol = symbol(of: peer)
+        func prompt(_ title: String, _ detail: String, _ style: DiskImagePrompt.Style,
+                    _ state: SendCardContent.Transfer.State, symbol: String,
+                    fraction: Double? = nil, cancel: Bool = false) -> DiskImagePrompt {
+            DiskImagePrompt(iconPath: iconPath(nil), title: title, detail: detail, style: style,
+                            send: SendCardContent(
+                                rows: [], scanning: false,
+                                transfer: .init(state: state, symbol: symbol, fraction: fraction,
+                                                canCancel: cancel)))
+        }
+        let waiting = L10n.t("Waiting for \(peer.alias) to accept…")
+        guard let transfer else {
+            return prompt(waiting, sendSummary, .working, .waiting, symbol: deviceSymbol, cancel: false)
+        }
+        switch transfer.state {
+        case "active":
+            var detail = L10n.t("\(size(transfer.doneBytes)) of \(size(transfer.totalBytes))")
+            if transfer.filesTotal > 1 {
+                detail += " · " + L10n.t("\(min(transfer.filesDone + 1, transfer.filesTotal)) of \(transfer.filesTotal) files")
+            } else if let current = transfer.current, !current.isEmpty {
+                detail = current + " · " + detail
+            }
+            let fraction = transfer.totalBytes > 0
+                ? min(max(Double(transfer.doneBytes) / Double(transfer.totalBytes), 0), 1) : 0
+            return prompt(L10n.t("Sending to \(peer.alias)"), detail, .working, .active,
+                          symbol: deviceSymbol, fraction: fraction, cancel: true)
+        case "done":
+            let count = max(transfer.filesTotal, 1)
+            let detail = L10n.t("To \(peer.alias)") + " · "
+                + (count == 1 ? sendSummary : L10n.t("\(count) files"))
+            return prompt(L10n.t("Sent"), detail, .done, .done, symbol: "checkmark.circle")
+        case "declined":
+            return prompt(L10n.t("Declined"), L10n.t("\(peer.alias) declined. Nothing was sent."),
+                          .problem, .problem, symbol: "hand.raised")
+        case "failed":
+            return prompt(L10n.t("Couldn't send"), transfer.error ?? "", .problem, .problem,
+                          symbol: "exclamationmark.triangle")
+        default:
+            return prompt(waiting, sendSummary, .working, .waiting, symbol: deviceSymbol, cancel: true)
+        }
+    }
+
+    /// Follows the transfer this card started, from "waiting" to its end.
+    private func updateSending(_ new: ShareState) {
+        guard let peer = sendPeer else { return }
+        if sendTransferID == nil {
+            guard let started = new.transfers.last(where: {
+                $0.direction == "send" && !sendBaseline.contains($0.id)
+            }) else { return }
+            sendTransferID = started.id
+            cardTimer?.invalidate()
+        }
+        guard let transfer = new.transfers.first(where: { $0.id == sendTransferID }) else { return }
+        switch transfer.state {
+        case "cancelled":
+            seenFinished.insert(transfer.id)
+            clearCard()
+        case "done", "declined", "failed":
+            seenFinished.insert(transfer.id)
+            sendFinished = true
+            let problem = transfer.state != "done"
+            _ = present?(sendingPrompt(transfer, peer: peer))
+            if !cardHovered { scheduleExpiry(after: problem ? 6 : 2) }
+        default:
+            _ = present?(sendingPrompt(transfer, peer: peer))
+        }
     }
 }

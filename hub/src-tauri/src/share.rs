@@ -222,7 +222,7 @@ fn state_value() -> Value {
         Some(service) => serde_json::to_value(service.snapshot()).unwrap_or(Value::Null),
         None => json!({
             "devices": [], "incoming": [], "transfers": [], "warnings": [],
-            "localNetwork": "unknown",
+            "localNetwork": "unknown", "scanning": false,
         }),
     };
     if let Some(object) = value.as_object_mut() {
@@ -311,6 +311,7 @@ fn apply(command: &Value) {
             service.cancel(id);
         }
         Some("dismiss") => service.dismiss(id),
+        Some("refresh") => service.refresh(),
         _ => {}
     }
 }
