@@ -170,7 +170,7 @@ final class UsageStore: ObservableObject {
     private let archive: UsageArchive
     private var lastGood: [String: (snapshot: ProviderSnapshot, fetchedAt: Date)] = [:]
     private var timer: Timer?
-    /// Cockpit fork: CPU, memory and disk rings, read every two seconds.
+    /// Pulse fork: CPU, memory and disk rings, read every two seconds.
     private var systemTimer: Timer?
     private var fetchTasks: [String: Task<Void, Never>] = [:]
     private var generations: [String: Int] = [:]
@@ -281,7 +281,7 @@ final class UsageStore: ObservableObject {
         return ProviderOrder.arrange(summaries, by: order, id: \.id)
     }
 
-    /// Cockpit fork: how often the System and Disks cells are re-read. Two
+    /// Pulse fork: how often the System and Disks cells are re-read. Two
     /// seconds while the notch can be seen; ten while it is hidden — folded
     /// away for a full-screen app, or set to Hide — since nobody is looking.
     private static let systemIntervalVisible: TimeInterval = 2

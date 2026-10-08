@@ -1,6 +1,6 @@
-use cockpit_core::Accounting;
-use cockpit_core::model::ScanReport;
-use cockpit_core::store::{self, Snapshot};
+use pulse_core::Accounting;
+use pulse_core::model::ScanReport;
+use pulse_core::store::{self, Snapshot};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -15,7 +15,7 @@ impl Temp {
         let base = fs::canonicalize(std::env::temp_dir()).unwrap();
         let n = UNIQUE.fetch_add(1, Ordering::Relaxed);
         let path = base.join(format!(
-            "cockpit-store-safety-{tag}-{}-{n}",
+            "pulse-store-safety-{tag}-{}-{n}",
             std::process::id()
         ));
         // Unique per process and call: nothing pre-existing is ever removed.

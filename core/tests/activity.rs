@@ -1,4 +1,4 @@
-use cockpit_core::activity::*;
+use pulse_core::activity::*;
 
 fn event(id: &str, at: u64, kind: ActivityKind) -> ActivityEvent {
     ActivityEvent {

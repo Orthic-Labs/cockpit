@@ -179,7 +179,7 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(asksProviderOnLook, forKey: Keys.asksProviderOnLook) }
     }
 
-    // Cockpit fork: Mac conveniences. Every one is off until chosen, and each
+    // Pulse fork: Mac conveniences. Every one is off until chosen, and each
     // needs Accessibility (see `Conveniences/ConveniencesService.swift`).
     @Published var convFinderCutPaste: Bool {
         didSet { defaults.set(convFinderCutPaste, forKey: Keys.convFinderCutPaste) }
@@ -210,7 +210,7 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(convAutoQuitApps, forKey: Keys.convAutoQuitApps) }
     }
 
-    /// Cockpit fork: the launcher is off until switched on.
+    /// Pulse fork: the launcher is off until switched on.
     @Published var launcherEnabled: Bool {
         didSet { defaults.set(launcherEnabled, forKey: Keys.launcherEnabled) }
     }
@@ -578,7 +578,7 @@ final class Preferences: ObservableObject {
         // designed around — not hidden, which would make a fresh install look
         // like it failed to start.
         self.notchVisibility = defaults.string(forKey: Keys.visibility)
-            // Cockpit fork: the notch is always on screen by default.
+            // Pulse fork: the notch is always on screen by default.
             .flatMap(NotchVisibility.init(rawValue:)) ?? .alwaysShow
         // Absent means the fold that has shipped since full-screen detection
         // exists — the setting silences it, it does not introduce it.
@@ -594,7 +594,7 @@ final class Preferences: ObservableObject {
         // Medium is the design frame at 1:1, so an install that predates this
         // choice keeps exactly the notch it already had.
         self.notchSize = defaults.string(forKey: Keys.size)
-            // Cockpit fork: small by default.
+            // Pulse fork: small by default.
             .flatMap(NotchSize.init(rawValue:)) ?? .small
         // Absent means never chosen, and the presets are what every earlier
         // version had — so the slider is opt-in rather than the default.
@@ -627,7 +627,7 @@ final class Preferences: ObservableObject {
         // choice for whoever budgets their week that way.
         self.claudeDailyPaceRing = defaults.bool(forKey: Keys.claudeDailyPaceRing)
         // Off by default for the same reason: it changes what every ring means.
-        // Cockpit fork: the weekly limit leads (main, outer ring); the
+        // Pulse fork: the weekly limit leads (main, outer ring); the
         // five-hour session is the thin inner ring.
         self.weeklyHeadline = defaults.object(forKey: Keys.weeklyHeadline) as? Bool ?? true
         self.showCodexExtraLimits = Self.storedShowCodexExtraLimits(defaults: defaults)
@@ -640,12 +640,12 @@ final class Preferences: ObservableObject {
         // Off by default: an extra arc in a 44pt circle is a change to how
         // every reading looks, and nobody asked for it on their behalf.
         self.weeklyRingDashed = defaults.object(forKey: Keys.weeklyRingDashed) as? Bool ?? false
-        // Cockpit fork: rings only by default; numbers are in the hover card.
+        // Pulse fork: rings only by default; numbers are in the hover card.
         self.showsNotchReadings = defaults.object(forKey: Keys.showsNotchReadings) as? Bool ?? false
         self.weeklyReading = defaults.object(forKey: Keys.weeklyReading) as? Bool ?? false
 
         self.weeklyRing = defaults.string(forKey: Keys.weeklyRing)
-            // Cockpit fork: one cell per reading pair — the main ring outside,
+            // Pulse fork: one cell per reading pair — the main ring outside,
             // the second reading as a thinner ring inside it.
             .flatMap(WeeklyRing.init(rawValue:)) ?? .inside
         // On unless turned off: it is how the notch is carried to another edge,
@@ -843,7 +843,7 @@ final class Preferences: ObservableObject {
     /// update, and wiping data on every Sparkle update would be catastrophic.
     /// It has to be something the user asks for.
     static func eraseAllData() {
-        let bundleID = Bundle.main.bundleIdentifier ?? "dev.orthic.cockpit"
+        let bundleID = Bundle.main.bundleIdentifier ?? "dev.orthic.pulse"
         UserDefaults.standard.removePersistentDomain(forName: bundleID)
         UserDefaults.standard.synchronize()
 
@@ -877,7 +877,7 @@ final class Preferences: ObservableObject {
             // Commonly refused for an app running from a build directory rather
             // than /Applications, which is worth saying plainly.
             Log.usage.error("launch at login failed: \(error.localizedDescription, privacy: .public)")
-            launchAtLoginProblem = L10n.t("macOS refused this — try moving Cockpit to /Applications.")
+            launchAtLoginProblem = L10n.t("macOS refused this — try moving Pulse to /Applications.")
             launchAtLogin = Self.isRegisteredForLogin
         }
     }

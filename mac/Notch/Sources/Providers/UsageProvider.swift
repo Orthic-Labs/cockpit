@@ -2,7 +2,7 @@ import Foundation
 
 enum ProviderKind: Equatable {
     case usage
-    /// Cockpit fork: CPU, memory and disk readings sampled on this Mac.
+    /// Pulse fork: CPU, memory and disk readings sampled on this Mac.
     case system
 }
 

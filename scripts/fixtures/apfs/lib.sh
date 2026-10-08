@@ -50,7 +50,7 @@ attach_entries() {
 # equals IMAGE_PATH exactly (whole image disk first). Empty when the image is not attached.
 owned_devices() {
   local img="$1" info i=0 j p dev
-  info="$(mktemp "${HARNESS_TMP:?}/cockpit-apfs-info.XXXXXX")"
+  info="$(mktemp "${HARNESS_TMP:?}/pulse-apfs-info.XXXXXX")"
   if ! bounded 30 hdiutil info -plist >"$info" 2>/dev/null; then
     rm -f "$info"
     return 1
@@ -71,7 +71,7 @@ owned_devices() {
 # snapshot_records DEVICE : print "uuid<TAB>name" per APFS snapshot of the volume device.
 snapshot_records() {
   local dev="$1" out i=0 u n
-  out="$(mktemp "${HARNESS_TMP:?}/cockpit-apfs-snap.XXXXXX")"
+  out="$(mktemp "${HARNESS_TMP:?}/pulse-apfs-snap.XXXXXX")"
   if ! bounded 60 diskutil apfs listSnapshots -plist "$dev" >"$out" 2>/dev/null; then
     rm -f "$out"
     return 0

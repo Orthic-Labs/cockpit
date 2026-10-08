@@ -2,7 +2,7 @@
 //!
 //! All adversarial fixtures live under the process temp directory; no user
 //! volume is ever touched. Assertions are against the production adapter
-//! through the public `cockpit_core::platform` seam.
+//! through the public `pulse_core::platform` seam.
 
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ impl Fixture {
     fn new(name: &str) -> Self {
         let root = std::fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("cockpit-race-{name}-{}", std::process::id()));
+            .join(format!("pulse-race-{name}-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         Self(root)
     }
@@ -28,7 +28,7 @@ impl Drop for Fixture {
 #[cfg(unix)]
 mod unix {
     use super::Fixture;
-    use cockpit_core::platform::children_bounded;
+    use pulse_core::platform::children_bounded;
     use std::fs;
     use std::os::unix::fs::symlink;
 
@@ -132,7 +132,7 @@ mod unix {
 #[cfg(windows)]
 mod windows {
     use super::Fixture;
-    use cockpit_core::platform::children_bounded;
+    use pulse_core::platform::children_bounded;
     use std::fs;
     use std::os::windows::fs::symlink_dir;
 

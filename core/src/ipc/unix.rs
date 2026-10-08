@@ -103,10 +103,12 @@ fn default_dir() -> Result<PathBuf, IpcError> {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .ok_or_else(|| unsafe_endpoint("HOME is unset or not absolute"))?;
+    crate::state_migration::migrate_mac_state(&home)
+        .map_err(|error| unsafe_endpoint(format!("state migration failed: {error}")))?;
     Ok(home
         .join("Library")
         .join("Application Support")
-        .join("Cockpit")
+        .join("Pulse")
         .join("run"))
 }
 
@@ -116,7 +118,7 @@ fn default_dir() -> Result<PathBuf, IpcError> {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .ok_or_else(|| unsafe_endpoint("XDG_RUNTIME_DIR is unset or not absolute"))?;
-    Ok(runtime.join("cockpit"))
+    Ok(runtime.join("pulse"))
 }
 
 /// Validates (creating fresh with 0700 if absent) the endpoint's parent.

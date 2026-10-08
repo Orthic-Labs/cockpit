@@ -1,6 +1,8 @@
-# Cockpit plan
+# Pulse plan
 
 Date: 2026-10-07. Replaces [implementation-plan.md](implementation-plan.md) (kept for history only).
+
+Product renamed to Pulse on 2026-10-08; [migration & identifiers](rename-pulse.md). Dated status lines retain prior names.
 
 ## Goal
 
@@ -12,14 +14,14 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 | --- | --- | --- |
 | Notch | Always on. Right screen edge. Four cells, each a main outer ring with a thin inner ring: Claude (weekly / 5-hour), Codex (weekly / 5-hour), System (memory pressure / CPU), Disks (external / internal). Hover card shows details: System adds GPU busy and CPU/SoC temperature; Disks adds drive health, temperature, wear and writes per physical drive. | Fork of Codenotch Mac app (Swift), `mac/Notch` |
 | Hub | Small window (about 600×400) opened by clicking the notch. Storage, Cleanup, Apps, Monitor, Settings. Closes fully when closed. | Tauri (shared with Windows later), RightKit packages |
-| CLI | `cockpit` for agents: same data & actions as the hub, JSON output. | Existing Rust core |
+| CLI | `pulse` for agents: same data & actions as the hub, JSON output. | Existing Rust core |
 
 **App presence:** no Dock icon & no menu-bar item, ever. The notch is the only surface. Right-click on the notch shows one item: **Quit**, which exits notch & hub. Launch at login brings it back. The hub runs as an accessory window (no Dock icon while open).
 
 ## Architecture
 
 - **Notch:** Codenotch Mac fork, cut to Claude & Codex, plus resource & disk rings. Keeps Codenotch's design, hover card, Option-drag along the edge, settings orb (opens hub Settings) & updater. Swift samples its own cheap counters; nothing heavy runs in the notch.
-- **Hub:** Tauri app bundled inside Cockpit.app. Its Rust backend links `cockpit-core` directly; no bridge layer, no separate worker for the hub.
+- **Hub:** Tauri app bundled inside Pulse.app. Its Rust backend links `pulse-core` directly; no bridge layer, no separate worker for the hub.
 - **Core:** existing `core/` crate: scanner, APFS-aware accounting, filename index, duplicates, growth history, monitor readings, process groups, rule engine, cleanup state machine, CLI & local socket.
 - **Storage:** versioned JSON files (current). Move to SQLite only if a feature needs queries JSON can't serve.
 - **Not used:** UniFFI, always-running worker, menu-bar/Dock presence.
@@ -45,7 +47,7 @@ One owned tool that replaces Vorssaint, CodexBar & manual disk cleanup. Mac firs
 Each phase ends with something usable on the Mac, installed as a signed, notarized build.
 
 1. **Notch fork.** Import Codenotch, strip other providers, add system & disk cells, no Dock/menu-bar item, right-click Quit only, launch at login. Repoint release packaging to the new app.
-   *Done when:* it looks & behaves like Codenotch with Cockpit's rings, and runs a full day without issues.
+   *Done when:* it looks & behaves like Codenotch with Pulse's rings, and runs a full day without issues.
    *Status 2026-10-07:* done except the full-day run — signed, notarized Cockpit.app installed from the RightKit release lane; unused Codenotch code removed (#5); launch at login on by default; notch clicks open the hub.
 2. **Hub: Storage & Monitor.** Tauri hub from the approved mockup; storage list with drilldown & growth, search, monitor readings, Settings. Clicking the notch opens it.
    *Done when:* finding what's using space takes seconds, not a learning curve.

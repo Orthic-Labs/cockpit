@@ -1,4 +1,4 @@
-# Cockpit
+# Pulse
 
 Native system gauges & controls for macOS (Windows later): Codenotch-fork notch, Tauri hub & shared Rust core. Plan: [docs/plan.md](docs/plan.md).
 
@@ -7,14 +7,14 @@ Current state (2026-10-07): Rust core & read-only CLI are kept. The notch is a C
 ## CLI
 
 ```text
-cockpit status --json
-cockpit scan /explicit/path --max-entries 100000 --json
-cockpit scan /explicit/path --save --json
-cockpit findings --json
-cockpit explain chrome-signing-copies --json
-cockpit history --json
-cockpit procs --sort ram --json
-cockpit usage --json
+pulse status --json
+pulse scan /explicit/path --max-entries 100000 --json
+pulse scan /explicit/path --save --json
+pulse findings --json
+pulse explain chrome-signing-copies --json
+pulse history --json
+pulse procs --sort ram --json
+pulse usage --json
 ```
 
 Default scan does not persist anything. `--save` records private metadata snapshots in platform application-support storage; `--state-dir` chooses a fixture/history directory. History compares attribution only when scan scopes & provider volume identities agree. No file contents are read, links are not traversed & cloud placeholders are skipped. Missing accounting, sharing, usage & liveness evidence remains unknown. Reported allocation does not promise reclaimed bytes.
@@ -24,3 +24,5 @@ Default scan does not persist anything. `--save` records private metadata snapsh
 Public repository: compilation & tests run exclusively in generated RightKit GitHub Actions. Toolchains are pinned in `rust-toolchain.toml` & `package.json`. Rust dependency/compiler caches use `rust-cache` & `sccache`; Swift native prototype builds on Mac runner. Primary agent owns integration & pushes. Follow [AGENTS.md](AGENTS.md).
 
 See [implementation plan](docs/implementation-plan.md), [Mac app delivery](docs/mac-app-delivery.md) & [Windows prototype](windows/README.md). Donor feature extraction, cleanup, uninstallation & update integration remain planned work. Hardware qualification covers footprint, fullscreen occupancy, keyboard events & permission identity.
+
+Upgrade from prior name: [Pulse migration & permissions](docs/rename-pulse.md).

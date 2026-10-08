@@ -205,7 +205,7 @@ function Detail({ initial, onBack }: { initial: AppDetail; onBack: () => void })
       </div>
       {app.protected && <div className="note">{app.protected} Uninstall is not offered.</div>}
       {app.running && !app.protected && (
-        <div className="note">Running. Cockpit will ask it to quit first, and will not remove anything if it stays open.</div>
+        <div className="note">Running. Pulse will ask it to quit first, and will not remove anything if it stays open.</div>
       )}
       {error && <div className="error">{error}</div>}
       {result && (

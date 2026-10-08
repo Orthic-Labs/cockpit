@@ -1,10 +1,10 @@
 #![cfg(unix)]
 
-use cockpit_core::duplicates::{
+use pulse_core::duplicates::{
     ContentHandle, ContentMetadata, ContentReader, DuplicateOptions, find_duplicates,
     find_duplicates_with_reader,
 };
-use cockpit_core::platform;
+use pulse_core::platform;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +21,7 @@ fn fixture() -> PathBuf {
     let process = std::process::id();
     let path = fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("cockpit-duplicates-{process}-{stamp}-{sequence}"));
+        .join(format!("pulse-duplicates-{process}-{stamp}-{sequence}"));
     fs::create_dir(&path).unwrap();
     path
 }

@@ -1,1 +1,1 @@
-{"schema_version":1,"kind":"cockpit.probe.sample","status":"ok","pid":4242,"start_time":{"sec":1,"usec":2},"physical_footprint_bytes":-5}
+{"schema_version":1,"kind":"pulse.probe.sample","status":"ok","pid":4242,"start_time":{"sec":1,"usec":2},"physical_footprint_bytes":-5}

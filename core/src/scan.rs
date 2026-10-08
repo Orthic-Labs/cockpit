@@ -560,7 +560,7 @@ pub fn scan_with_provider<P: FilesystemProvider>(
             .cmp(&a.attributed_allocation_bytes)
             .then_with(|| a.path.cmp(&b.path))
     });
-    if std::env::var_os("COCKPIT_SCAN_LOG").is_some() {
+    if std::env::var_os("PULSE_SCAN_LOG").or_else(|| std::env::var_os("COCKPIT_SCAN_LOG")).is_some() {
         eprintln!(
             "scan: {} entries visited, {} kept, {} folders, {} ms{}",
             seen_count,
@@ -1165,7 +1165,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let root = base.join(format!(
-            "cockpit-scan-identity-{}-{nanos}",
+            "pulse-scan-identity-{}-{nanos}",
             std::process::id()
         ));
         fs::create_dir(&root).unwrap();
@@ -1199,7 +1199,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let canon_var = fs::canonicalize(var).unwrap();
-        let real = canon_var.join(format!("cockpit-alias-{}-{nanos}", std::process::id()));
+        let real = canon_var.join(format!("pulse-alias-{}-{nanos}", std::process::id()));
         if fs::create_dir(&real).is_err() {
             return; // not writable here
         }

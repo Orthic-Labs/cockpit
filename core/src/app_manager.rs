@@ -529,10 +529,10 @@ fn protected_reason(root: &Path, bundle_id: Option<&str>) -> Option<String> {
         return Some("System app that macOS protects.".into());
     }
     if bundle_id
-        .map(|b| b.starts_with("dev.orthic.cockpit"))
+        .map(|b| b.starts_with("dev.orthic.pulse"))
         .unwrap_or(false)
     {
-        return Some("This is Cockpit.".into());
+        return Some("This is Pulse.".into());
     }
     if bundle_id.is_none() {
         return Some("No bundle identifier, so leftovers cannot be matched safely.".into());
@@ -1489,13 +1489,13 @@ fn trash_batch_with_finder(paths: &[&Path], limit: Duration) -> Result<(), Strin
     run_with_timeout(command, limit).map(|_| ())
 }
 
-/// `cockpit-elevate` next to this program or in the app's `Contents/Helpers`.
+/// `pulse-elevate` next to this program or in the app's `Contents/Helpers`.
 fn elevate_tool() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     exe.ancestors().skip(1).take(6).find_map(|dir| {
         [
-            dir.join("cockpit-elevate"),
-            dir.join("Helpers/cockpit-elevate"),
+            dir.join("pulse-elevate"),
+            dir.join("Helpers/pulse-elevate"),
         ]
         .into_iter()
         .find(|p| p.is_file())
@@ -1504,10 +1504,10 @@ fn elevate_tool() -> Option<PathBuf> {
 
 /// The notch publishes the privileged helper's state ("enabled" once approved).
 fn helper_enabled() -> bool {
-    std::fs::read_to_string(home().join("Library/Application Support/Cockpit/notch-state.json"))
+    std::fs::read_to_string(home().join("Library/Application Support/Pulse/notch-state.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .is_some_and(|v| v["helper"] == "enabled")
+        .is_some_and(|v| v["product"] == "Pulse" && v["helper"] == "enabled")
 }
 
 /// Move root-owned items through the privileged helper (no password). `None`
@@ -1610,7 +1610,7 @@ fn move_to_trash(path: &Path) -> Result<(), String> {
 }
 
 fn log_path() -> PathBuf {
-    home().join("Library/Application Support/Cockpit/apps-activity.json")
+    home().join("Library/Application Support/Pulse/apps-activity.json")
 }
 
 fn log_activity(app: &AppEntry, result: &UninstallResult) -> Option<String> {

@@ -133,26 +133,29 @@ pub fn default_directory() -> io::Result<PathBuf> {
     #[cfg(target_os = "windows")]
     let root = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .map(|p| p.join("Cockpit"));
+        .map(|p| p.join("Pulse"));
     #[cfg(target_os = "macos")]
     let root = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|p| p.join("Library/Application Support/Cockpit"));
+        .map(|p| p.join("Library/Application Support/Pulse"));
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let root = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .map(|p| p.join("cockpit"))
+        .map(|p| p.join("pulse"))
         .or_else(|| {
             std::env::var_os("HOME")
                 .map(PathBuf::from)
-                .map(|p| p.join(".local/state/cockpit"))
+                .map(|p| p.join(".local/state/pulse"))
         });
-    root.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "local metadata directory unavailable",
-        )
-    })
+    let root = root.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "local metadata directory unavailable")
+    })?;
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let legacy = root.with_file_name("Cockpit");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let legacy = root.with_file_name("cockpit");
+    crate::state_migration::migrate_directory(&legacy, &root)?;
+    Ok(root)
 }
 
 fn is_link(meta: &fs::Metadata) -> bool {
@@ -332,13 +335,13 @@ mod pinned {
             if st.st_uid != unsafe { libc::geteuid() } {
                 return Err(denied(
                     "metadata directory is not owned by the current user; \
-                     ownership is never changed by Cockpit",
+                     ownership is never changed by Pulse",
                 ));
             }
             if st.st_mode & 0o022 != 0 {
                 return Err(denied(
                     "metadata directory is writable by group or others; \
-                     permissions are never changed by Cockpit",
+                     permissions are never changed by Pulse",
                 ));
             }
             Ok(Self(file))
@@ -1209,7 +1212,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Windows every child operation is rooted at the pinned directory handle.
 /// Newly created unix directories get 0o700; existing
 /// directories must already be owned by the effective user and not writable
-/// by group or others — Cockpit refuses rather than changing ownership or
+/// by group or others — Pulse refuses rather than changing ownership or
 /// permissions of pre-existing paths (Windows creation inherits the parent
 /// ACL; existing ACLs are never rewritten). Leftover temp files from
 /// interrupted writes are never parsed; `history_report` lists them as

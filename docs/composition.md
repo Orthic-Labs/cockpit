@@ -4,17 +4,17 @@ This is a design decision record. It does not claim that any runtime gate, permi
 
 ## Mac composition root
 
-`CockpitAppDelegate` owns one `CockpitRuntime` per process. It creates one registry, injects platform dependencies, starts services in dependency order and stops them in reverse order. Donor app delegates are never called.
+`PulseAppDelegate` owns one `PulseRuntime` per process. It creates one registry, injects platform dependencies, starts services in dependency order and stops them in reverse order. Donor app delegates are never called.
 
 ```swift
-protocol CockpitService: AnyObject {
+protocol PulseService: AnyObject {
     var id: ServiceID { get }
     func start(_ context: ServiceContext) async throws
     func stop(_ reason: StopReason) async
 }
 
 @MainActor
-final class CockpitRuntime {
+final class PulseRuntime {
     let permissions: MacPermissionBroker
     let settings: SettingsStore
     let events: EventTapHub
@@ -92,7 +92,7 @@ final class EventTapHub {
 
 ## Launcher isolation
 
-`LauncherPort` is a lazy adapter around an allowlisted subset of Tinycast. It owns no app delegate, menu-bar item, updater, login item, permission prompt, activation policy or independent hotkey. The first accepted launcher event asks `AppIndex` to load; closing launcher releases search-session state while retaining only user settings and ranking data. Launcher actions call Cockpit `WorkerPort`, `SettingsStore` or typed open/launch operations; they cannot call raw cleanup or uninstall primitives.
+`LauncherPort` is a lazy adapter around an allowlisted subset of Tinycast. It owns no app delegate, menu-bar item, updater, login item, permission prompt, activation policy or independent hotkey. The first accepted launcher event asks `AppIndex` to load; closing launcher releases search-session state while retaining only user settings and ranking data. Launcher actions call Pulse `WorkerPort`, `SettingsStore` or typed open/launch operations; they cannot call raw cleanup or uninstall primitives.
 
 The hotkey is registered with `EventTapHub` at one priority. If Mac footprint evidence later requires a process boundary, `LauncherPort` becomes an XPC client without changing its interface; this is a design seam, not runtime evidence.
 
@@ -104,7 +104,7 @@ The fullscreen probe is a single `MonitorOccupancy` service. It enumerates topmo
 
 ## Shutdown contract
 
-`CockpitRuntime.stop()` executes once on application termination:
+`PulseRuntime.stop()` executes once on application termination:
 
 1. Mark registry `stopping`; reject new launcher, settings and worker requests.
 2. Hide notch surfaces and stop new sampling/drawing.
@@ -119,7 +119,7 @@ Worker shutdown is independent: it finishes or journals current job, closes its 
 
 1. **License gate.** Keep immutable pins and source notices. Preserve Tinycast AGPL-3.0-or-later & Vorssaint GPL-3.0-or-later obligations through extraction & combined distribution. Pearcleaner remains reference-only; do not copy its Commons Clause-covered source. Codenotch is MIT, Petal is MIT; Codenotch's SwiftNIO, Sparkle and vendored zstd notices remain separate obligations. See [`donors.md`](donors.md).
 2. **Owned seams.** Add registry, permission broker, event hub, usage protocol and launcher port without donor source. Preserve `runtime.md` ownership boundaries.
-3. **Petal algorithms.** Extract MIT filesystem algorithms behind Cockpit's provider interface; exclude GPUI `main.rs`, UI and `admin.rs`.
+3. **Petal algorithms.** Extract MIT filesystem algorithms behind Pulse's provider interface; exclude GPUI `main.rs`, UI and `admin.rs`.
 4. **Codenotch readers/ring references.** Adapt Mac provider readers and Swift ring into registry-owned services; disable Codenotch updater, phone link and independent composition root. Use Windows readers only behind shared core; redraw native Windows ring.
 5. **Vorssaint conveniences.** Extract one module at a time through `EventTapHub` and `MacPermissionBroker`; start with Finder cut/paste, then maximizer, Dock click and Auto Quit. Preserve GPL notices and mark changed files.
 6. **Tinycast launcher.** Only after step 1 permits it, extract allowlisted launcher model/UI pieces behind `LauncherPort`; do not copy `AppCore`, `AppDelegate`, `HotKeyManager`, updater or menu-bar composition. Keep AGPL notices and packaging decision with source receipts.

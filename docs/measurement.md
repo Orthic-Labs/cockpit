@@ -8,11 +8,11 @@ Bounded probes for the "Mac/Windows footprint" gate in `feasibility.md`. This pa
 
 | Platform | Source | Metrics |
 | --- | --- | --- |
-| macOS, `--probe-bin PATH` | `cockpit-probe --pid N` (Swift, `mac/Sources/CockpitProbe`) | physical footprint, resident size, CPU time, start time, Mach ports (own PID only) |
+| macOS, `--probe-bin PATH` | `pulse-probe --pid N` (Swift, `mac/Sources/PulseProbe`) | physical footprint, resident size, CPU time, start time, Mach ports (own PID only) |
 | macOS, default | `ps -o pid=,lstart=,rss=,time= -p PID` | RSS and CPU time only; footprint reported unavailable |
 | Windows | PowerShell `Get-Process` query | private bytes, working set, handle count, CPU time, start time; GDI objects unavailable |
 
-`--probe-bin` is an explicit path to the built `cockpit-probe` executable. It must be an executable regular file, is run without a shell, and is macOS only. Nothing is searched for or built by the runner.
+`--probe-bin` is an explicit path to the built `pulse-probe` executable. It must be an executable regular file, is run without a shell, and is macOS only. Nothing is searched for or built by the runner.
 
 ### Metric semantics
 
@@ -30,14 +30,14 @@ Unreadable values are never filled in; each is listed in the sample's `unavailab
 
 ### Probe JSON
 
-`cockpit-probe` prints one line: `schema_version` 1, `kind` `cockpit.probe.sample`, `status` (`ok`, `vanished`, `pid_reused`, `unavailable`), `pid`, `start_time {sec, usec}`, and for `ok` `physical_footprint_bytes`, `resident_bytes`, `user_cpu_ns`, `system_cpu_ns`, `mach_ports {available, count | reason}`. Exit codes: 0 ok, 1 vanished/unavailable, 2 usage, 3 pid_reused. It uses only same-user, entitlement-free Darwin calls (`proc_pidinfo` `PROC_PIDTBSDINFO`, `proc_pid_rusage`); another user's process may report `unavailable`.
+`pulse-probe` prints one line: `schema_version` 1, `kind` `pulse.probe.sample`, `status` (`ok`, `vanished`, `pid_reused`, `unavailable`), `pid`, `start_time {sec, usec}`, and for `ok` `physical_footprint_bytes`, `resident_bytes`, `user_cpu_ns`, `system_cpu_ns`, `mach_ports {available, count | reason}`. Exit codes: 0 ok, 1 vanished/unavailable, 2 usage, 3 pid_reused. It uses only same-user, entitlement-free Darwin calls (`proc_pidinfo` `PROC_PIDTBSDINFO`, `proc_pid_rusage`); another user's process may report `unavailable`.
 
 ## Usage
 
 ```
 node scripts/probes/footprint-probe.mjs --pid PID                    # smoke: 10 samples at 1 s
 node scripts/probes/footprint-probe.mjs --pid PID --duration 600 --interval 2 --out local/run.json
-node scripts/probes/footprint-probe.mjs --pid PID --probe-bin /abs/path/cockpit-probe --duration 600
+node scripts/probes/footprint-probe.mjs --pid PID --probe-bin /abs/path/pulse-probe --duration 600
 node scripts/probes/footprint-probe.mjs --pid PID --soak --duration 86400 --interval 10 --out local/soak.ndjson
 ```
 
@@ -47,7 +47,7 @@ node scripts/probes/footprint-probe.mjs --pid PID --soak --duration 86400 --inte
 - `--soak`: long run. Requires an explicit `--duration` and `--out`. Samples stream to `--out` as NDJSON (one `header` line, one `sample` line each, a final `summary` line) and are never kept in memory.
 - A text summary always goes to stderr. Exit 0 only when termination is `completed`. Ctrl-C ends the run as `interrupted` and still writes the report/summary.
 
-Pass the PID of an already-running Cockpit build; find it with Activity Monitor or Task Manager.
+Pass the PID of an already-running Pulse build; find it with Activity Monitor or Task Manager.
 
 ## Output
 
@@ -67,9 +67,9 @@ The budget (`implementation-plan.md`) is physical footprint on Mac and private b
 
 1. Use a signed release build produced by the generated RightKit workflows, on a real machine (not a hosted runner or VM), one platform at a time.
 2. Launch the notch normally, leave it idle with the notch visible and no dashboard, and wait for the 10-minute steady state.
-3. Build `cockpit-probe` in CI and copy it to the test machine (explicit path). Run the probe for the plan's windows (for example `--duration 600 --interval 2` for idle CPU), then repeat around hover/ring updates and after closing the dashboard (return to baseline within 60 s).
+3. Build `pulse-probe` in CI and copy it to the test machine (explicit path). Run the probe for the plan's windows (for example `--duration 600 --interval 2` for idle CPU), then repeat around hover/ring updates and after closing the dashboard (return to baseline within 60 s).
 4. Keep raw JSON local. Only reviewed, aggregated figures with machine class, OS version, build identity and probe schema version may be added to `feasibility.md`, replacing "Pending". Footprint/private bytes come from platform tools in the same session.
 
 ## Checks
 
-Static only locally: `node --check`, `bash -n`, `git diff --check`. CI commands: `swift build --package-path mac --product cockpit-probe` (macOS runner) and `node --test scripts/probes/footprint-report.test.mjs`. The probes are never run in CI or by agents; fixtures are synthetic format samples, not measurements.
+Static only locally: `node --check`, `bash -n`, `git diff --check`. CI commands: `swift build --package-path mac --product pulse-probe` (macOS runner) and `node --test scripts/probes/footprint-report.test.mjs`. The probes are never run in CI or by agents; fixtures are synthetic format samples, not measurements.

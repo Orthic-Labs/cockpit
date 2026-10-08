@@ -1,7 +1,7 @@
 import Foundation
 
-/// Cockpit fork: Codenotch's Sparkle updater is removed, so this copy can never
-/// fetch or install a Codenotch build over Cockpit. Cockpit's own update channel
+/// Pulse fork: Codenotch's Sparkle updater is removed, so this copy can never
+/// fetch or install a Codenotch build over Pulse. Pulse's own update channel
 /// arrives with its release pipeline (docs/plan.md). The interface is kept so
 /// the notch's update card and Settings compile unchanged; with no updater,
 /// nothing is ever offered.
@@ -19,7 +19,7 @@ final class Updater: NSObject, ObservableObject {
             switch self {
             case .idle:          return nil
             case .checking:      return L10n.t("Checking…")
-            case .upToDate:      return L10n.t("Cockpit is up to date.")
+            case .upToDate:      return L10n.t("Pulse is up to date.")
             case .found(let v):  return L10n.t("Version \(v) is available.")
             case .unreachable:   return L10n.t("Couldn't reach the update server.")
             case .failed(let why): return why
@@ -42,7 +42,7 @@ final class Updater: NSObject, ObservableObject {
     func start() {}
 
     func checkNow() {
-        outcome = .failed(L10n.t("Updates arrive with new Cockpit releases."))
+        outcome = .failed(L10n.t("Updates arrive with new Pulse releases."))
     }
 
     func reoffer() {}

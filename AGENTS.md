@@ -1,4 +1,4 @@
-# Cockpit
+# Pulse
 
 Mac notch (Codenotch fork, Swift), Tauri hub, shared Rust core & CLI; Windows later. Source plan: docs/plan.md. No Dock or menu-bar item; notch right-click shows only Quit.
 

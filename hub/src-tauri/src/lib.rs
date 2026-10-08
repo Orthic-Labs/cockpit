@@ -1,4 +1,4 @@
-//! Cockpit hub: a small window over the Rust core. Storage and monitor
+//! Pulse hub: a small window over the Rust core. Storage and monitor
 //! commands only read. The only commands that change anything are in `apps`:
 //! uninstall (move to Trash) and process Quit / Force Quit.
 
@@ -24,7 +24,7 @@ unsafe extern "C" {
 }
 
 fn bridge_dir() -> PathBuf {
-    home().join("Library/Application Support/Cockpit")
+    home().join("Library/Application Support/Pulse")
 }
 
 fn post(name: &str) {
@@ -40,7 +40,7 @@ fn home() -> PathBuf {
 #[tauri::command]
 async fn status() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        serde_json::to_value(cockpit_core::system_status()).map_err(|e| e.to_string())
+        serde_json::to_value(pulse_core::system_status()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -49,7 +49,7 @@ async fn status() -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn processes() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let mut list = cockpit_core::procs();
+        let mut list = pulse_core::procs();
         list.sort_by(|a, b| {
             b.memory.value.unwrap_or(0).cmp(&a.memory.value.unwrap_or(0))
         });
@@ -64,8 +64,16 @@ async fn processes() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn notch_state() -> Result<serde_json::Value, String> {
     let text = std::fs::read_to_string(bridge_dir().join("notch-state.json"))
-        .map_err(|_| "The Cockpit notch isn't running.".to_string())?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+        .map_err(|_| "The Pulse notch isn't running.".to_string())?;
+    let mut state: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    // A migrated snapshot cannot authorize the new privileged helper.
+    if state["product"] != "Pulse" {
+        if let Some(object) = state.as_object_mut() {
+            object.insert("helper".into(), serde_json::json!("needsReenable"));
+            object.insert("helperError".into(), serde_json::Value::Null);
+        }
+    }
+    Ok(state)
 }
 
 /// Ask the notch to change a setting or run an account action. The notch is
@@ -82,7 +90,7 @@ fn notch_command(command: serde_json::Value) -> Result<(), String> {
     std::fs::write(&temp, serde_json::to_vec(&command).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     std::fs::rename(&temp, dir.join(format!("{stamp}.json"))).map_err(|e| e.to_string())?;
-    post("dev.orthic.cockpit.hub.command");
+    post("dev.orthic.pulse.hub.command");
     Ok(())
 }
 
@@ -105,14 +113,14 @@ fn initial_app() -> Option<String> {
 fn watch_notch(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let names = [
-            ("dev.orthic.cockpit.hub.show.settings", "show-section", "settings"),
-            ("dev.orthic.cockpit.hub.show.storage", "show-section", "storage"),
-            ("dev.orthic.cockpit.hub.show.monitor", "show-section", "monitor"),
-            ("dev.orthic.cockpit.hub.show.accounts", "show-section", "accounts"),
-            ("dev.orthic.cockpit.hub.show.appearance", "show-section", "appearance"),
-            ("dev.orthic.cockpit.hub.show.notifications", "show-section", "notifications"),
-            ("dev.orthic.cockpit.hub.show.general", "show-section", "general"),
-            ("dev.orthic.cockpit.notch.state", "notch-state", ""),
+            ("dev.orthic.pulse.hub.show.settings", "show-section", "settings"),
+            ("dev.orthic.pulse.hub.show.storage", "show-section", "storage"),
+            ("dev.orthic.pulse.hub.show.monitor", "show-section", "monitor"),
+            ("dev.orthic.pulse.hub.show.accounts", "show-section", "accounts"),
+            ("dev.orthic.pulse.hub.show.appearance", "show-section", "appearance"),
+            ("dev.orthic.pulse.hub.show.notifications", "show-section", "notifications"),
+            ("dev.orthic.pulse.hub.show.general", "show-section", "general"),
+            ("dev.orthic.pulse.notch.state", "notch-state", ""),
         ];
         let mut tokens = Vec::new();
         for (name, event, payload) in names {
@@ -194,7 +202,7 @@ fn is_disk_image(mount: &str) -> bool {
 async fn volumes() -> Result<Vec<Volume>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let mut out: Vec<Volume> = Vec::new();
-        for disk in cockpit_core::system_status().disks {
+        for disk in pulse_core::system_status().disks {
             let mount = disk.mount_point.clone();
             let internal = mount == "/";
             if !internal && !mount.starts_with("/Volumes/") {
@@ -309,10 +317,15 @@ fn hide_to_notch(window: &tauri::Window) {
 
 pub fn run() {
     // QA launches (rightkit-qa) can only pass RIGHTKIT_* keys on macOS, so the isolated
-    // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_COCKPIT_QA_HOME.
+    // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_PULSE_QA_HOME.
     #[cfg(all(debug_assertions, feature = "qa-native"))]
-    if let Some(home) = std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME") {
+    if let Some(home) = std::env::var_os("RIGHTKIT_PULSE_QA_HOME").or_else(|| std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME")) {
         std::env::set_var("HOME", home);
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = pulse_core::state_migration::migrate_mac_state(&home()) {
+        eprintln!("Pulse could not migrate existing state: {error}");
+        return;
     }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -356,5 +369,5 @@ pub fn run() {
             cleanup::cleanup_scan, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Cockpit hub");
+        .expect("error while running Pulse hub");
 }

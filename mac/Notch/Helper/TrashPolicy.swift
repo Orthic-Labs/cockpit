@@ -29,12 +29,12 @@ enum TrashPolicy {
             guard parts.count >= 2 else { return "Not an item inside /Applications." }
         } else if parts[0] == "Library" {
             guard parts.count >= 3, libraryFolders.contains(parts[1]) else {
-                return "Outside the locations Cockpit may move."
+                return "Outside the locations Pulse may move."
             }
             let name = parts[2].lowercased()
             if name == "apple" || name.hasPrefix("com.apple.") { return "Apple item." }
         } else {
-            return "Outside the locations Cockpit may move."
+            return "Outside the locations Pulse may move."
         }
         // Real path must be the path itself: no symlinked parent, no symlink leaf.
         var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))

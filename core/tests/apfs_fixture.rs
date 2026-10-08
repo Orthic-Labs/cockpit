@@ -2,7 +2,7 @@
 //! otherwise it skips explicitly. See docs/apfs-fixtures.md.
 #![cfg(target_os = "macos")]
 
-use cockpit_core::{ReclaimState, ScanOptions, VolumeDelta, scan_paths};
+use pulse_core::{ReclaimState, ScanOptions, VolumeDelta, scan_paths};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -25,7 +25,7 @@ fn used_bytes(path: &Path) -> Option<u64> {
     kb.checked_mul(1024)
 }
 
-fn entry<'a>(report: &'a cockpit_core::ScanReport, suffix: &str) -> &'a cockpit_core::ScannedEntry {
+fn entry<'a>(report: &'a pulse_core::ScanReport, suffix: &str) -> &'a pulse_core::ScannedEntry {
     report
         .entries
         .iter()
@@ -35,17 +35,17 @@ fn entry<'a>(report: &'a cockpit_core::ScanReport, suffix: &str) -> &'a cockpit_
 
 #[test]
 fn apfs_fixture_accounting_is_conservative() {
-    let Some(root) = std::env::var_os("COCKPIT_APFS_FIXTURE_ROOT").map(PathBuf::from) else {
-        eprintln!("SKIP apfs_fixture: COCKPIT_APFS_FIXTURE_ROOT not set (CI-only harness)");
+    let Some(root) = std::env::var_os("PULSE_APFS_FIXTURE_ROOT").or_else(|| std::env::var_os("COCKPIT_APFS_FIXTURE_ROOT")).map(PathBuf::from) else {
+        eprintln!("SKIP apfs_fixture: PULSE_APFS_FIXTURE_ROOT not set (CI-only harness)");
         return;
     };
     assert!(root.is_dir(), "fixture root is not a directory");
 
-    let baseline: Option<u64> = std::env::var("COCKPIT_APFS_FIXTURE_BASELINE_USED")
+    let baseline: Option<u64> = std::env::var("PULSE_APFS_FIXTURE_BASELINE_USED").or_else(|_| std::env::var("COCKPIT_APFS_FIXTURE_BASELINE_USED"))
         .ok()
         .and_then(|v| v.parse().ok());
     let after = used_bytes(&root);
-    let (volume, stable) = cockpit_core::platform::volume_identity_for_path(&root)
+    let (volume, stable) = pulse_core::platform::volume_identity_for_path(&root)
         .expect("volume identity for fixture root");
     assert!(stable, "APFS volume identity must be stable");
     assert!(
@@ -84,7 +84,7 @@ fn apfs_fixture_accounting_is_conservative() {
             .entries
             .iter()
             .filter(|e| {
-                e.path.starts_with(dir) && matches!(e.metadata.kind, cockpit_core::EntryKind::File)
+                e.path.starts_with(dir) && matches!(e.metadata.kind, pulse_core::EntryKind::File)
             })
             .fold((0, 0), |(l, a), e| {
                 (l + e.logical_bytes, a + e.attributed_allocation_bytes)
@@ -193,14 +193,14 @@ fn apfs_fixture_accounting_is_conservative() {
     );
 
     // Snapshot-retained allocation: asserted only when setup actually created a snapshot.
-    let snapshot = std::env::var("COCKPIT_APFS_FIXTURE_SNAPSHOT").ok();
+    let snapshot = std::env::var("PULSE_APFS_FIXTURE_SNAPSHOT").or_else(|_| std::env::var("COCKPIT_APFS_FIXTURE_SNAPSHOT")).ok();
     let snapshot_created = snapshot.as_deref() == Some("created");
     match snapshot.as_deref() {
         Some("created") => {}
         Some(other) => eprintln!(
             "SKIP snapshot retention: snapshot {other} (unconfigured in this harness; see setup SNAPSHOT line)"
         ),
-        None => eprintln!("SKIP snapshot retention: COCKPIT_APFS_FIXTURE_SNAPSHOT not set"),
+        None => eprintln!("SKIP snapshot retention: PULSE_APFS_FIXTURE_SNAPSHOT not set"),
     }
 
     // Volume used-delta vs attributed bytes (conservative: APFS container accounting is noisy).

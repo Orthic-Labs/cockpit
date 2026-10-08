@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Cockpit: Cut and Paste for files in Finder.
+/// Pulse: Cut and Paste for files in Finder.
 ///
 /// ⌘X marks the selected items as cut: their file URLs go on the pasteboard as
 /// URLs (never text) and are remembered with the pasteboard's change count.
@@ -23,7 +23,7 @@ final class FinderCutPaste {
     private let lock = NSLock()
     private var cut: (urls: [URL], changeCount: Int)?
     private var busy = false
-    private let work = DispatchQueue(label: "dev.orthic.cockpit.finder-cutpaste")
+    private let work = DispatchQueue(label: "dev.orthic.pulse.finder-cutpaste")
 
     /// Called on the main thread after each paste with a result per item.
     var onResults: (([ItemResult]) -> Void)?

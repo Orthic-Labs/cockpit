@@ -61,7 +61,7 @@ final class NotchFleet {
     var onLook: (() -> Void)?
     var onRefreshProvider: ((String) async -> Void)?
     var onOpenSettings: (() -> Void)?
-    /// Cockpit fork: open the hub on a section ("storage", "monitor", "accounts").
+    /// Pulse fork: open the hub on a section ("storage", "monitor", "accounts").
     var onOpenHub: ((String) -> Void)?
     /// The notch's answer to an update it offered.
     var onUpdateChoice: ((UpdateChoice) -> Void)?
@@ -160,7 +160,7 @@ final class NotchFleet {
         reportHidden()
     }
 
-    /// Cockpit fork: told whenever the notch becomes invisible — set to Hide,
+    /// Pulse fork: told whenever the notch becomes invisible — set to Hide,
     /// or folded away on every display by a full-screen app — and when it is
     /// visible again, so the app can slow the System and Disks sampling.
     var onHiddenChange: ((Bool) -> Void)?

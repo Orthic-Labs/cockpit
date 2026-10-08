@@ -5,9 +5,9 @@
 //! Run from the user's login session (the launcher needs a GUI session for `open`):
 //!   (cd hub/src-tauri && cargo build --features qa-native,custom-protocol)
 //!   (cd hub/qa-e2e && cargo test --test ui -- --nocapture)
-//! The binary is `$COCKPIT_HUB_BIN`, else the hub's debug build under `src-tauri/target`
+//! The binary is `$PULSE_HUB_BIN`, else the hub's debug build under `src-tauri/target`
 //! (or `$CARGO_TARGET_DIR`).
-//! Screenshots go to `$COCKPIT_QA_SHOTS` (default: the scenario scratch dir).
+//! Screenshots go to `$PULSE_QA_SHOTS` (default: the scenario scratch dir).
 
 #![cfg(target_os = "macos")]
 
@@ -59,32 +59,32 @@ fn wait_text(ctl: &Control, needle: &str, timeout: Duration, what: &str) {
 }
 
 fn hub_binary() -> PathBuf {
-    if let Some(p) = std::env::var_os("COCKPIT_HUB_BIN") {
+    if let Some(p) = std::env::var_os("PULSE_HUB_BIN").or_else(|| std::env::var_os("COCKPIT_HUB_BIN")) {
         return PathBuf::from(p);
     }
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../src-tauri/target"));
-    target.join("debug/cockpit-hub")
+    target.join("debug/pulse-hub")
 }
 
 #[test]
 fn hub_sections_render_without_errors() {
-    let h = Harness::new("cockpit-hub", env!("CARGO_MANIFEST_DIR")).expect("rightkit-qa harness");
+    let h = Harness::new("pulse-hub", env!("CARGO_MANIFEST_DIR")).expect("rightkit-qa harness");
     h.scenario("hub sections render without errors", "fast", &["platform:darwin"], |sc| {
-        let ws = workspace::create(&sc.scratch("ws"), None, "cockpit-hub").expect("qa workspace");
+        let ws = workspace::create(&sc.scratch("ws"), None, "pulse-hub").expect("qa workspace");
         // The app derives HOME from RIGHTKIT_QA_DATA_DIR/home (macOS launches carry only
         // RIGHTKIT_* keys), so Storage scans this fixture and never the user's real home.
         // Not under the system temp dir: the scanner reports no entries for /var/folders.
         let home = std::env::var_os("RUNNER_TEMP")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME")).join("Library/Caches"))
-            .join(format!("cockpit-hub-qa-home-{}", ws.run_id));
+            .join(format!("pulse-hub-qa-home-{}", ws.run_id));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(FIXTURE)).expect("fixture dir");
         std::fs::write(home.join(FIXTURE).join("fixture.bin"), vec![0u8; 65536]).expect("fixture file");
 
-        let shots: PathBuf = std::env::var_os("COCKPIT_QA_SHOTS")
+        let shots: PathBuf = std::env::var_os("PULSE_QA_SHOTS").or_else(|| std::env::var_os("COCKPIT_QA_SHOTS"))
             .map(PathBuf::from)
             .unwrap_or_else(|| sc.scratch("screenshots"));
         std::fs::create_dir_all(&shots).expect("screenshots dir");
@@ -92,11 +92,11 @@ fn hub_sections_render_without_errors() {
         let spec = LaunchSpec {
             binary: hub_binary(),
             mode: Mode::Hidden,
-            env: vec![("RIGHTKIT_COCKPIT_QA_HOME".into(), home.to_string_lossy().into_owned())],
+            env: vec![("RIGHTKIT_PULSE_QA_HOME".into(), home.to_string_lossy().into_owned())],
             startup_timeout: Duration::from_secs(90),
-            label: "Cockpit Hub".into(),
+            label: "Pulse".into(),
         };
-        let ctl = control::launch(&spec, &ws, sc.tracker()).expect("launch cockpit-hub");
+        let ctl = control::launch(&spec, &ws, sc.tracker()).expect("launch pulse-hub");
         ctl.wait_eval("return !!document.querySelector('nav.rk-nav')", Duration::from_secs(30))
             .expect("nav.rk-nav never appeared");
 

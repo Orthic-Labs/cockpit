@@ -1,13 +1,13 @@
 [package]
-name = "cockpit-hub-qa"
+name = "pulse-hub-qa"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.98.0"
 publish = false
-description = "Headless QA of the Cockpit hub on rightkit-qa: drives the debug qa-native build through rightkit-control."
+description = "Headless QA of the Pulse hub on rightkit-qa: drives the debug qa-native build through rightkit-control."
 
 # Its own workspace: rightkit-qa's exact pins (e.g. windows =0.61.1) cannot resolve
-# next to cockpit-core's (windows =0.61.3), so this must not share the hub's resolution.
+# next to pulse-core's (windows =0.61.3), so this must not share the hub's resolution.
 [workspace]
 
 [dev-dependencies]

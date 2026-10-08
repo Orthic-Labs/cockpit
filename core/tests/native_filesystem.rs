@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use cockpit_core::{ScanOptions, scan};
+use pulse_core::{ScanOptions, scan};
 use std::fs;
 use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ impl Fixture {
     fn new(name: &str) -> Self {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("cockpit-native-{name}-{}", std::process::id()));
+            .join(format!("pulse-native-{name}-{}", std::process::id()));
         fs::create_dir(&root).unwrap();
         Self(root)
     }

@@ -2,18 +2,18 @@ import AppKit
 import Combine
 import Foundation
 
-/// Cockpit fork: the notch's settings and accounts, shared with the hub.
+/// Pulse fork: the notch's settings and accounts, shared with the hub.
 ///
 /// The notch stays the only writer of its preferences. It publishes a JSON
 /// snapshot (settings, their choices, displays, accounts) to
-/// `~/Library/Application Support/Cockpit/notch-state.json` and posts the Darwin
-/// notification `dev.orthic.cockpit.notch.state`. The hub asks for changes by
+/// `~/Library/Application Support/Pulse/notch-state.json` and posts the Darwin
+/// notification `dev.orthic.pulse.notch.state`. The hub asks for changes by
 /// dropping JSON files into `hub-commands/` and posting
-/// `dev.orthic.cockpit.hub.command`; the notch applies each one and deletes it.
+/// `dev.orthic.pulse.hub.command`; the notch applies each one and deletes it.
 @MainActor
 final class HubBridge {
-    static let stateNotification = "dev.orthic.cockpit.notch.state"
-    static let commandNotification = "dev.orthic.cockpit.hub.command"
+    static let stateNotification = "dev.orthic.pulse.notch.state"
+    static let commandNotification = "dev.orthic.pulse.hub.command"
 
     struct Actions {
         var refresh: () -> Void = {}
@@ -39,7 +39,7 @@ final class HubBridge {
 
     static var directory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Cockpit", isDirectory: true)
+            .appendingPathComponent("Pulse", isDirectory: true)
     }
 
     private static var commandsDirectory: URL {
@@ -121,6 +121,7 @@ final class HubBridge {
             }
         let state: [String: Any] = [
             "schema": 1,
+            "product": "Pulse",
             "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "?",
             "settings": settings,
             "options": options,

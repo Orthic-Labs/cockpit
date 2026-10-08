@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// Cockpit fork: the machine's own readings as two notch cells — system
+/// Pulse fork: the machine's own readings as two notch cells — system
 /// (memory pressure as the main outer ring, CPU as the thin inner ring) and
 /// disks (external drive as the main outer ring, internal as the inner). Each is a `UsageProvider` of
 /// kind `.system`, so it gets Codenotch's ring, hover card and ordering for

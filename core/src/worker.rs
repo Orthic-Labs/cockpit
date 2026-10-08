@@ -26,7 +26,7 @@ const MAX_SCAN_DEPTH: usize = 128;
 const MAX_SCAN_ENTRIES: usize = 1_000_000;
 const SCHEMA_VERSION: u32 = 1;
 
-/// Internal, read-only entry point: `cockpit worker exec-op` reads ONE
+/// Internal, read-only entry point: `pulse worker exec-op` reads ONE
 /// serialized `Request` body from stdin (bounded by `--max-request-bytes`,
 /// default `ipc::MAX_REQUEST_BYTES`), executes it with a leaf in-process
 /// `Worker`, and writes ONE serialized `Response` body to stdout (bounded
@@ -39,7 +39,7 @@ pub const EXEC_OP_SUBCOMMAND: &str = "exec-op";
 enum Execution {
     /// In-process. Used by `worker exec-op` children and by tests.
     Leaf,
-    /// In a `worker exec-op` child of the given Cockpit executable.
+    /// In a `worker exec-op` child of the given Pulse executable.
     /// Deadline expiry triggers kill plus a bounded reap attempt; inability
     /// to confirm termination disables further operations on this worker.
     Subprocess { exe: PathBuf },
@@ -79,7 +79,7 @@ impl Worker {
 
     /// Bounded worker: every supported operation runs in a fresh
     /// `worker exec-op` child of `exe` (production passes
-    /// `std::env::current_exe()`; tests pass `CARGO_BIN_EXE_cockpit`).
+    /// `std::env::current_exe()`; tests pass `CARGO_BIN_EXE_pulse`).
     /// Deadline expiry or oversize output triggers termination. Reap is
     /// bounded separately; unconfirmed termination is a typed failure &
     /// prevents this worker from launching further operations.
@@ -361,7 +361,7 @@ impl Worker {
         let cap = self.limits.max_response_bytes;
         let bytes = drive_child(&mut child, body, cap, deadline)?;
 
-        // The child is the same Cockpit binary, but a corrupt or
+        // The child is the same Pulse binary, but a corrupt or
         // mismatched reply must not be forwarded: verify version and id
         // echo before trusting the body.
         let valid = serde_json::from_slice::<Response>(&bytes)
@@ -780,7 +780,7 @@ fn drive_child(
     Ok(output)
 }
 
-/// Entry point for `cockpit worker exec-op`. Reads one bounded request
+/// Entry point for `pulse worker exec-op`. Reads one bounded request
 /// body from stdin, handles it with a leaf worker, writes one bounded
 /// response body to stdout. Returns the process exit code.
 pub fn exec_op_stdio(limits: Limits) -> u8 {

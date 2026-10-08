@@ -1,5 +1,5 @@
 {
-  "title": "Cockpit",
+  "title": "Pulse",
   "icon-size": 128,
   "window": {
     "size": {
@@ -12,7 +12,7 @@
       "x": 180,
       "y": 210,
       "type": "file",
-      "path": "Cockpit.app"
+      "path": "Pulse.app"
     },
     {
       "x": 460,

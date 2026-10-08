@@ -1,8 +1,8 @@
-use cockpit_core::model::{
+use pulse_core::model::{
     Accounting, EntryKind, FileIdentity, FileMetadata, FolderAccounting, ReclaimEstimate,
     ReclaimState, ScanReport, ScannedEntry, VolumeIdentity,
 };
-use cockpit_core::storage_browser::{
+use pulse_core::storage_browser::{
     ChildrenPage, DateAvailability, SearchRequest, StorageBrowserError, drilldown_children,
     inspect, largest_files, largest_folders, search_filenames,
 };
@@ -130,7 +130,7 @@ fn malformed_query_and_limits_are_rejected() {
         Err(StorageBrowserError::InvalidLimit(0))
     ));
     let offset = SearchRequest {
-        offset: cockpit_core::storage_browser::MAX_PAGE_OFFSET + 1,
+        offset: pulse_core::storage_browser::MAX_PAGE_OFFSET + 1,
         ..SearchRequest::default()
     };
     assert!(matches!(
@@ -138,7 +138,7 @@ fn malformed_query_and_limits_are_rejected() {
         Err(StorageBrowserError::InvalidOffset(_))
     ));
     let long = SearchRequest {
-        query: "x".repeat(cockpit_core::storage_browser::MAX_QUERY_LENGTH + 1),
+        query: "x".repeat(pulse_core::storage_browser::MAX_QUERY_LENGTH + 1),
         ..SearchRequest::default()
     };
     assert!(matches!(

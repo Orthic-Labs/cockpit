@@ -249,9 +249,9 @@ test("parseArgs soak rules", () => {
   assert.match(parseArgs(["--pid", "5", "--soak", "--duration", "60"]).error, /--out/);
   assert.equal(parseArgs(["--pid", "5", "--soak", "--duration", "86401", "--out", "f"]).ok, false);
   assert.equal(parseArgs(["--pid", "5", "--duration", "3601"]).ok, false);
-  const r = parseArgs(["--pid", "5", "--soak", "--duration", "86400", "--out", "f", "--probe-bin", "/p/cockpit-probe"]);
+  const r = parseArgs(["--pid", "5", "--soak", "--duration", "86400", "--out", "f", "--probe-bin", "/p/pulse-probe"]);
   assert.deepStrictEqual(r.options, {
-    pid: 5, durationS: 86400, intervalS: 10, out: "f", probeBin: "/p/cockpit-probe", soak: true, samples: 8641, windowKind: "soak"
+    pid: 5, durationS: 86400, intervalS: 10, out: "f", probeBin: "/p/pulse-probe", soak: true, samples: 8641, windowKind: "soak"
   });
 });
 

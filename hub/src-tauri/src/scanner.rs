@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use cockpit_core::{EntryKind, ScanOptions, ScanReport};
+use pulse_core::{EntryKind, ScanOptions, ScanReport};
 use serde::Serialize;
 
 use crate::{growth, home};
@@ -272,13 +272,13 @@ fn rss_mb() -> Option<u64> {
     Some(kb / 1024)
 }
 
-/// One line per scan in `~/Library/Application Support/Cockpit/scan.log` (and
-/// on stderr when `COCKPIT_SCAN_LOG` is set), so scan cost can be compared.
+/// One line per scan in `~/Library/Application Support/Pulse/scan.log` (and
+/// on stderr when `PULSE_SCAN_LOG` is set), so scan cost can be compared.
 fn log(line: &str) {
-    if std::env::var_os("COCKPIT_SCAN_LOG").is_some() {
+    if std::env::var_os("PULSE_SCAN_LOG").or_else(|| std::env::var_os("COCKPIT_SCAN_LOG")).is_some() {
         eprintln!("{line}");
     }
-    let dir = home().join("Library/Application Support/Cockpit");
+    let dir = home().join("Library/Application Support/Pulse");
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -306,7 +306,7 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>) -> Result<Folder, S
         ..ScanOptions::default()
     };
     let started = Instant::now();
-    let report = cockpit_core::scan(&[root.clone()], &options);
+    let report = pulse_core::scan(&[root.clone()], &options);
     let scan_ms = started.elapsed().as_millis();
     if cancel.load(Ordering::Relaxed) {
         log(&format!("scan {} cancelled after {scan_ms} ms", root.display()));
@@ -356,7 +356,7 @@ pub async fn scan(path: Option<String>) -> Result<Folder, String> {
     }
     tauri::async_runtime::spawn_blocking(move || {
         std::thread::Builder::new()
-            .name("cockpit-scan".into())
+            .name("pulse-scan".into())
             .spawn(move || run_scan(root, id, cancel))
             .map_err(|e| e.to_string())?
             .join()

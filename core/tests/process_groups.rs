@@ -1,5 +1,5 @@
-use cockpit_core::processes::{GroupEvidence, ProcessGroups, group};
-use cockpit_core::{Capability, Metric, ProcessIdentity, ProcessInfo};
+use pulse_core::processes::{GroupEvidence, ProcessGroups, group};
+use pulse_core::{Capability, Metric, ProcessIdentity, ProcessInfo};
 
 fn mem(v: Option<u64>) -> Metric<u64> {
     Metric {

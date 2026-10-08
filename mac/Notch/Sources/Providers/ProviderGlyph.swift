@@ -4,7 +4,7 @@ import SwiftUI
 enum ProviderGlyph: String, Codable, Equatable {
     case claude
     case openai
-    /// Cockpit fork: the machine's own readings, drawn with SF Symbols.
+    /// Pulse fork: the machine's own readings, drawn with SF Symbols.
     case cpu
     case memory
     case disk

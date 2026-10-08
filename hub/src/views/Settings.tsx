@@ -41,7 +41,7 @@ interface NotchState {
   accounts: Account[];
   providerOrder: string[];
   launcherStatus?: string | null;
-  helper?: "notRegistered" | "requiresApproval" | "enabled" | "notFound";
+  helper?: "notRegistered" | "needsReenable" | "requiresApproval" | "enabled" | "notFound";
   helperError?: string | null;
 }
 
@@ -201,11 +201,11 @@ export function Settings({ section }: { section: string }) {
 
       {section === "general" && (
         <>
-          <Group title="Startup">{bool("launchAtLogin", "Open Cockpit at login")}</Group>
+          <Group title="Startup">{bool("launchAtLogin", "Open Pulse at login")}</Group>
           <Group title="Uninstalling">
             <Row
               label="Uninstall without password"
-              note="Lets Cockpit move root-owned apps and their files to the Trash with no administrator password. Approve once in System Settings."
+              note="Lets Pulse move root-owned apps and their files to the Trash with no administrator password. Approve once in System Settings."
             >
               <Toggle
                 checked={state.helper === "enabled" || state.helper === "requiresApproval"}
@@ -214,7 +214,7 @@ export function Settings({ section }: { section: string }) {
               />
             </Row>
             {state.helper === "requiresApproval" && (
-              <Row label="Approve Cockpit in System Settings → Login Items" note="Switch Cockpit on under Allow in the Background.">
+              <Row label="Approve Pulse in System Settings → Login Items" note="Switch Pulse on under Allow in the Background.">
                 <Button size="sm" variant="secondary" onClick={() => send({ command: "openLoginItems" })}>
                   Open Login Items
                 </Button>
@@ -226,14 +226,16 @@ export function Settings({ section }: { section: string }) {
                 : state.helper === "requiresApproval"
                   ? "Waiting for your approval in System Settings."
                   : state.helper === "notFound"
-                    ? "This build of Cockpit does not include the helper."
-                    : "Off. Root-owned items ask for an administrator password in Finder."}
+                    ? "This build of Pulse does not include the helper."
+                    : state.helper === "needsReenable"
+                      ? "Off after rename. Re-enable here, then approve Pulse in Login Items."
+                      : "Off. Root-owned items ask for an administrator password in Finder."}
             </div>
             {state.helperError ? <div className="error">{state.helperError}</div> : null}
           </Group>
           <Group title="Launcher">
             {bool("launcherEnabled", "Enable the launcher",
-              "Search apps, files and Cockpit commands, and calculate. Off by default.")}
+              "Search apps, files and Pulse commands, and calculate. Off by default.")}
             {s.launcherEnabled ? (
               <>
                 {choice("launcherHotkey", "Shortcut")}
@@ -264,7 +266,7 @@ export function Settings({ section }: { section: string }) {
           {state.conveniences && (
             <ConveniencesGroup c={state.conveniences} s={s} set={set} send={send} />
           )}
-          <div className="muted small">Cockpit notch {state.version} · built on Codenotch (MIT)</div>
+          <div className="muted small">Pulse notch {state.version} · built on Codenotch (MIT)</div>
         </>
       )}
     </div>
@@ -363,7 +365,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
     send({ command: "order", value: ids });
   };
   return (
-    <Group title="Logins Cockpit reads (it never signs in itself)">
+    <Group title="Logins Pulse reads (it never signs in itself)">
       {accounts.map((a, i) => (
         <div key={a.id} className="account">
           <div className="account-main">
@@ -382,7 +384,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
               )}
               {a.summary && (
                 <Button size="sm" variant="ghost" onClick={() => send({ command: "signOut", provider: a.id })}
-                  title={`Clears what Cockpit read. You stay signed in to ${a.name.split(" ")[0]} itself.`}>Forget reading</Button>
+                  title={`Clears what Pulse read. You stay signed in to ${a.name.split(" ")[0]} itself.`}>Forget reading</Button>
               )}
             </div>
           </div>

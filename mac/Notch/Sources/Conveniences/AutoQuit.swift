@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Cockpit: quits apps the person opted in once their last window closes.
+/// Pulse: quits apps the person opted in once their last window closes.
 ///
 /// A window closing (an Accessibility notification), then a short debounce,
 /// then every check below must pass or nothing happens:
@@ -14,7 +14,7 @@ import ApplicationServices
 @MainActor
 final class AutoQuit {
     private static let debounce: TimeInterval = 1.5
-    private static let neverQuit: Set<String> = ["com.apple.finder", "com.apple.dock", "dev.orthic.cockpit"]
+    private static let neverQuit: Set<String> = ["com.apple.finder", "com.apple.dock", "dev.orthic.pulse"]
     nonisolated(unsafe) fileprivate static weak var current: AutoQuit?
 
     private var bundleIDs: Set<String> = []

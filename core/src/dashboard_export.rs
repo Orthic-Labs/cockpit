@@ -1,4 +1,4 @@
-//! Versioned, typed read-only payload consumed by Cockpit dashboard.
+//! Versioned, typed read-only payload consumed by Pulse dashboard.
 //!
 //! The CLI keeps the persisted [`Snapshot`] intact, then adds bounded module
 //! projections.  Module fields are concrete Rust types so an export cannot

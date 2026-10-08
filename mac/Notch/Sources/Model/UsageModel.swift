@@ -135,7 +135,7 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     let duration: TimeInterval?
     var bandOverride: UsageBand? = nil
     var prefersUsedText: Bool = false
-    /// Cockpit fork: replaces the reset text on the right of a bar row's
+    /// Pulse fork: replaces the reset text on the right of a bar row's
     /// title line (a drive's temperature). Not archived.
     var trailingText: String? = nil
 
@@ -320,7 +320,7 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// Unused rate-limit resets reported for this account.
     var resetCredits: UsageResetCredits? = nil
 
-    /// Cockpit fork: short text right-aligned on the card's title line
+    /// Pulse fork: short text right-aligned on the card's title line
     /// (System's temperature).
     var headerAccessory: String? = nil
 
@@ -464,7 +464,7 @@ struct ProviderSnapshot: Identifiable, Equatable {
             // Points at the one control that asks again. Clicking the ring
             // only refreshes, and a refresh never shows the dialogue — polls
             // are not allowed to.
-            return L10n.t("macOS refused Cockpit access to \(displayName)'s saved login. Use Allow access… in Settings to ask again.", locale: locale)
+            return L10n.t("macOS refused Pulse access to \(displayName)'s saved login. Use Allow access… in Settings to ask again.", locale: locale)
         case .unsupported(let why): return why
         case .error(let why): return L10n.t("Couldn't read usage — \(why)", locale: locale)
         case .stale, .ok:     return L10n.t("Waiting for the first reading…", locale: locale)

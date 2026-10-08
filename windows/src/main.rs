@@ -49,8 +49,8 @@ use windows::Win32::System::Threading::GetSystemTimes;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Error, PCWSTR, s, w};
 
-const PANEL_CLASS: PCWSTR = w!("CockpitM0NativePill");
-const CONTROLLER_CLASS: PCWSTR = w!("CockpitM0Controller");
+const PANEL_CLASS: PCWSTR = w!("PulseM0NativePill");
+const CONTROLLER_CLASS: PCWSTR = w!("PulseM0Controller");
 const TIMER_ID: usize = 7;
 static COORDINATES_COMPARABLE: AtomicBool = AtomicBool::new(false);
 
@@ -155,7 +155,7 @@ fn run() -> Result<(), Error> {
         Err(InstanceError::AlreadyRunning) => {
             diag::info(
                 "instance_already_running",
-                &[("mutex", "Local\\Cockpit.Pill.v1.<user-sid>")],
+                &[("mutex", "Local\\Pulse.Pill.v1.<user-sid>")],
             );
             return Ok(());
         }
@@ -246,7 +246,7 @@ fn run_pill() -> Result<(), Error> {
     let controller = OwnedWindow::create(
         WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
         CONTROLLER_CLASS,
-        &wide("Cockpit M0 Controller"),
+        &wide("Pulse M0 Controller"),
         WS_POPUP, // never shown; still a top-level window, so it receives WM_DISPLAYCHANGE
         (0, 0, 0, 0),
         instance,
@@ -647,7 +647,7 @@ fn create_panel(placed: &Placed) -> Result<Panel, Error> {
     let window = OwnedWindow::create(
         WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         PANEL_CLASS,
-        &wide(&format!("Cockpit M0 {}", spec.id)),
+        &wide(&format!("Pulse M0 {}", spec.id)),
         WS_POPUP,
         (target.left, target.top, target.width(), target.height()),
         instance,

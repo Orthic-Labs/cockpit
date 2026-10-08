@@ -72,7 +72,7 @@ export function App() {
       searchMode="none"
       sidebarWidth={170}
       sidebarToggle={false}
-      wordmark={<span className="wordmark">Cockpit</span>}
+      wordmark={<span className="wordmark">Pulse</span>}
       onOpenSettings={() => setActive("accounts")}
       settingsActive={settingsIds.has(active)}
     >

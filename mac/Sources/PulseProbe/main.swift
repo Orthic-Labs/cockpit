@@ -1,4 +1,4 @@
-// cockpit-probe --pid N: prints exactly one JSON sample line for one same-user process.
+// pulse-probe --pid N: prints exactly one JSON sample line for one same-user process.
 // Passive and read-only: no task_for_pid, no entitlements, no signals, no process control.
 //
 // Darwin names, verified against the macOS SDK headers (usr/include under
@@ -21,17 +21,17 @@ import Foundation
 func emit(_ object: [String: Any]) {
     var doc = object
     doc["schema_version"] = 1
-    doc["kind"] = "cockpit.probe.sample"
+    doc["kind"] = "pulse.probe.sample"
     guard let data = try? JSONSerialization.data(withJSONObject: doc, options: [.sortedKeys]),
           let text = String(data: data, encoding: .utf8) else {
-        FileHandle.standardError.write(Data("cockpit-probe: cannot encode output\n".utf8))
+        FileHandle.standardError.write(Data("pulse-probe: cannot encode output\n".utf8))
         exit(1)
     }
     print(text)
 }
 
 func usage() -> Never {
-    FileHandle.standardError.write(Data("usage: cockpit-probe --pid N\n".utf8))
+    FileHandle.standardError.write(Data("usage: pulse-probe --pid N\n".utf8))
     exit(2)
 }
 

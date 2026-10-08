@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
-use cockpit_core::ipc::unix::{request, serve};
-use cockpit_core::ipc::{
+use pulse_core::ipc::unix::{request, serve};
+use pulse_core::ipc::{
     ErrorCode, Handler, IpcError, Limits, Outcome, Response, ServeExit, read_frame, write_frame,
 };
 use std::fs::{self, DirBuilder};
@@ -30,7 +30,7 @@ impl Handler for Echo {
 fn private_dir(name: &str) -> PathBuf {
     let base = fs::canonicalize(std::env::temp_dir()).unwrap();
     let dir = base.join(format!(
-        "cockpit-ipc-{}-{}-{name}",
+        "pulse-ipc-{}-{}-{name}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));

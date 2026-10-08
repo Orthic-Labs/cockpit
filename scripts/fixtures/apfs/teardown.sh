@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # CI-only: detach and remove exactly what the state file names, after verification.
-# Usage: teardown.sh [STATE_FILE]   (defaults to $COCKPIT_APFS_FIXTURE_STATE)
+# Usage: teardown.sh [STATE_FILE]   (defaults to $PULSE_APFS_FIXTURE_STATE)
 set -euo pipefail
+# Accept legacy user/CI overrides without replacing explicit Pulse values.
+for pulse_legacy_key in ${!COCKPIT_@}; do
+  pulse_current_key="PULSE_${pulse_legacy_key#COCKPIT_}"
+  if [[ -z "${!pulse_current_key+x}" ]]; then
+    export "$pulse_current_key=${!pulse_legacy_key}"
+  fi
+done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-if [[ "${GITHUB_ACTIONS:-}" != "true" || "${COCKPIT_APFS_FIXTURE:-}" != "1" ]]; then
-  echo "REFUSED: requires GITHUB_ACTIONS=true and COCKPIT_APFS_FIXTURE=1" >&2
+if [[ "${GITHUB_ACTIONS:-}" != "true" || "${PULSE_APFS_FIXTURE:-}" != "1" ]]; then
+  echo "REFUSED: requires GITHUB_ACTIONS=true and PULSE_APFS_FIXTURE=1" >&2
   exit 2
 fi
 [[ "$(uname -s)" == "Darwin" ]] || { echo "REFUSED: macOS only" >&2; exit 2; }
 
-STATE="${1:-${COCKPIT_APFS_FIXTURE_STATE:-}}"
+STATE="${1:-${PULSE_APFS_FIXTURE_STATE:-}}"
 if [[ -z "$STATE" || ! -f "$STATE" ]]; then
   echo "no state file; nothing to tear down"
   exit 0
@@ -30,11 +37,11 @@ SNAPSHOT_UUID="$(state_get "$STATE" SNAPSHOT_UUID)"
 SNAPSHOT_NAME="$(state_get "$STATE" SNAPSHOT_NAME)"
 
 # Guard: the temp dir must be a harness dir that holds this very state file and the creation marker.
-case "$(basename "$TMP")" in cockpit-apfs-fixture.??????) ;; *) echo "REFUSED: unexpected temp dir name" >&2; exit 3 ;; esac
+case "$(basename "$TMP")" in pulse-apfs-fixture.??????) ;; *) echo "REFUSED: unexpected temp dir name" >&2; exit 3 ;; esac
 [[ "$TMP" == /* && "$TMP" != "/" && "$STATE" == "$TMP/state" && -d "$TMP" && ! -L "$TMP" ]] || { echo "REFUSED: state file not inside temp dir" >&2; exit 3; }
 # Ownership token: the marker must contain exactly the unique run token recorded in the state file.
 [[ -n "$RUN_TOKEN" ]] || { echo "REFUSED: state file records no run token" >&2; exit 3; }
-[[ "$(cat "$TMP/.cockpit-apfs-fixture" 2>/dev/null || true)" == "$RUN_TOKEN" ]] || { echo "REFUSED: harness creation marker does not match this run's token" >&2; exit 3; }
+[[ "$(cat "$TMP/.pulse-apfs-fixture" 2>/dev/null || true)" == "$RUN_TOKEN" ]] || { echo "REFUSED: harness creation marker does not match this run's token" >&2; exit 3; }
 [[ "$MNT" == "$TMP/mnt" && "$IMG" == "$TMP/"* && "$IMG" != *..* ]] || { echo "REFUSED: paths not under harness temp dir" >&2; exit 3; }
 HARNESS_TMP="$TMP"
 

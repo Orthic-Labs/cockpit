@@ -1,6 +1,6 @@
 # Disposable APFS fixtures (CI only)
 
-Exercises the real `cockpit_core::scan_paths` against a genuine APFS volume: sparse files, hard links,
+Exercises the real `pulse_core::scan_paths` against a genuine APFS volume: sparse files, hard links,
 clones, an unreadable directory, and an optional snapshot. Local work stays static-only; never run
 these scripts on a developer machine.
 
@@ -9,13 +9,13 @@ these scripts on a developer machine.
 - `scripts/fixtures/apfs/teardown.sh` - verify, detach and remove exactly what the state file names.
 - `scripts/fixtures/apfs/lib.sh` - `bounded` (timeout / gtimeout / perl alarm), state parsing, `df` helper.
 - `core/tests/apfs_fixture.rs` - `#[cfg(target_os = "macos")]`; prints `SKIP` and returns unless
-  `COCKPIT_APFS_FIXTURE_ROOT` is set.
+  `PULSE_APFS_FIXTURE_ROOT` is set.
 
 ## Guards
-- Both scripts refuse unless `GITHUB_ACTIONS=true`, `COCKPIT_APFS_FIXTURE=1`, the OS is Darwin; setup
+- Both scripts refuse unless `GITHUB_ACTIONS=true`, `PULSE_APFS_FIXTURE=1`, the OS is Darwin; setup
   also refuses root (it would defeat the `chmod 000` fixture).
 - The image, mountpoint, attach plist and state file live in a new `mktemp -d` dir named
-  `cockpit-apfs-fixture.XXXXXX`, which also holds a `.cockpit-apfs-fixture` marker containing a
+  `pulse-apfs-fixture.XXXXXX`, which also holds a `.pulse-apfs-fixture` marker containing a
   unique per-run token (`uuidgen`, else a pid/random fallback).
   The state file records `TMPDIR`, `MOUNTPOINT`, `IMAGE`, `RUN_TOKEN`, `ATTACH_PLIST`,
   `IMAGE_DEVICE`, `DEVICE`, `ROOT`, `BASELINE_USED_BYTES`, `SNAPSHOT`, `SNAPSHOT_KIND`,
@@ -53,15 +53,15 @@ these scripts on a developer machine.
    explicit `enumerate` inspection error on exactly that path with a non-empty message.
 7. Volume used-delta is `<= attributed + 64 MiB` and `>= half of the unique data`. Skipped explicitly if unavailable.
 8. Snapshot retention: always `SKIP snapshot retention: ...` today — no volume-confined creation
-   path is configured in this harness, so `COCKPIT_APFS_FIXTURE_SNAPSHOT` is always `unsupported`.
+   path is configured in this harness, so `PULSE_APFS_FIXTURE_SNAPSHOT` is always `unsupported`.
    The assertion path is kept for a future confined mechanism (e.g. `fs_snapshot_create` in a
    signed helper).
 
 ## Gate wiring
 
 `scripts/gate.sh` runs this harness in its macOS block, exports only validated
-`COCKPIT_APFS_FIXTURE_*` keys without evaluating shell output & runs the real APFS test.
+`PULSE_APFS_FIXTURE_*` keys without evaluating shell output & runs the real APFS test.
 Explicit teardown plus an EXIT trap covers successful & failed gates; teardown failure fails CI.
 The earlier workspace test runs skip this fixture until setup supplies its root.
 Snapshot retention, when supported, is created by overwriting an existing file after snapshot creation.
-Setup also prints `COCKPIT_APFS_FIXTURE_SNAPSHOT` (currently always `unsupported`), which matches the gate's existing key filter (no gate change needed).
+Setup also prints `PULSE_APFS_FIXTURE_SNAPSHOT` (currently always `unsupported`), which matches the gate's existing key filter (no gate change needed).

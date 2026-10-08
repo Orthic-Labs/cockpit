@@ -1,1 +1,1 @@
-{"schema_version":1,"kind":"cockpit.probe.sample","status":"unavailable","pid":4242,"reason":"proc_pidinfo_errno_1"}
+{"schema_version":1,"kind":"pulse.probe.sample","status":"unavailable","pid":4242,"reason":"proc_pidinfo_errno_1"}

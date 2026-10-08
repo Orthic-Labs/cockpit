@@ -212,11 +212,11 @@ fn sid_to_string(sid: PSID) -> Result<String, IpcError> {
     Ok(value)
 }
 
-/// `\\.\pipe\cockpit-worker-<current user SID string>`.
+/// `\\.\pipe\pulse-worker-<current user SID string>`.
 pub fn default_endpoint() -> Result<String, IpcError> {
     let sid = own_user_sid()?;
     Ok(format!(
-        "{PIPE_PREFIX}cockpit-worker-{}",
+        "{PIPE_PREFIX}pulse-worker-{}",
         sid_to_string(sid.sid())?
     ))
 }

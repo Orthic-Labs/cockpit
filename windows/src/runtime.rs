@@ -681,7 +681,7 @@ pub enum InstanceError {
     Failed(Error),
 }
 
-/// Per-user single-instance object name: `Local\Cockpit.Pill.v1.<user-sid>`.
+/// Per-user single-instance object name: `Local\Pulse.Pill.v1.<user-sid>`.
 ///
 /// Settled semantics — per-user-across-sessions *name*: the token SID keeps two
 /// different local/domain users on one machine from colliding or from blocking
@@ -693,7 +693,7 @@ pub enum InstanceError {
 /// per session. Cross-session exclusivity would need `Global\` (separate
 /// privilege/attack-surface trade-offs) and is intentionally not claimed.
 pub fn instance_mutex_name(user_sid: &str) -> String {
-    format!("Local\\Cockpit.Pill.v1.{user_sid}")
+    format!("Local\\Pulse.Pill.v1.{user_sid}")
 }
 
 /// Holds the named mutex for the life of the process; closed on drop (declare it first in
@@ -974,7 +974,7 @@ mod tests {
     fn mutex_name_is_sid_scoped() {
         assert_eq!(
             instance_mutex_name("S-1-5-21-1-2-3-1001"),
-            "Local\\Cockpit.Pill.v1.S-1-5-21-1-2-3-1001"
+            "Local\\Pulse.Pill.v1.S-1-5-21-1-2-3-1001"
         );
         assert_ne!(
             instance_mutex_name("S-1-5-21-1-2-3-1001"),
@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn live_restricted_dir_passes_and_world_dacl_is_refused() {
         let ctx = UserSecurity::current().unwrap();
-        let base = std::env::temp_dir().join(format!("cockpit-sec-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pulse-sec-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir(&base).unwrap();
         let ok_dir = base.join("ok");

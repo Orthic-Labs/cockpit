@@ -3,7 +3,11 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
-const env = process.env;
+const env = { ...process.env };
+// Legacy overrides remain usable; Pulse always takes precedence.
+for (const [key, value] of Object.entries(process.env)) {
+  if (key.startsWith('COCKPIT_')) env[key.replace(/^COCKPIT_/, 'PULSE_')] ??= value;
+}
 if (env.GITHUB_ACTIONS !== 'true') throw new Error('Release execution requires generated hosted CI');
 const action = process.argv[2];
 const run = (cmd, args, options={}) => {
@@ -30,43 +34,43 @@ if (action === 'admit') {
   writeFileSync(path.join(root,'stage-summary.json'),JSON.stringify({schema_version:1,stage:env.RIGHT_GIT_STAGE,producer:env.RIGHT_GIT_STAGE_PRODUCER,status:env.RIGHT_GIT_STAGE_STATUS||'STARTED',version:env.RIGHT_GIT_RELEASE_VERSION,source_revision:revision,platform:env.RIGHT_GIT_RELEASE_PLATFORM,architecture:env.RIGHT_GIT_RELEASE_ARCHITECTURE,run_id:env.RIGHT_GIT_RUN_ID,run_attempt:env.RIGHT_GIT_RUN_ATTEMPT,artifacts:hashes},null,2)+'\n');
 } else if(action==='build') {
   if(process.platform!=='darwin') throw new Error('Mac native host required');
-  run('bash',['scripts/gate.sh'],{env:{...env,COCKPIT_SKIP_HUB_QA:'1'}}); // also builds the notch (xcodebuild) into $RUNNER_TEMP
-  run('cargo',['build','--locked','--release','--bin','cockpit']);
+  run('bash',['scripts/gate.sh'],{env:{...env,PULSE_SKIP_HUB_QA:'1'}}); // also builds the notch (xcodebuild) into $RUNNER_TEMP
+  run('cargo',['build','--locked','--release','--bin','pulse']);
   run('pnpm',['--dir','hub','install','--frozen-lockfile']);
   run('pnpm',['--dir','hub','tauri','build','--bundles','app','--no-sign']);
   run('node',['scripts/release/mac-payload.mjs','candidate']);
 } else if(action==='check') {
   const root=env.RIGHT_GIT_ARTIFACT_ROOT;
-  const app=env.COCKPIT_CHECK_APP || path.join(root,'cockpit','mac','Cockpit.app');
+  const app=env.PULSE_CHECK_APP || path.join(root,'pulse','mac','Pulse.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
-  for(const f of ['Contents/MacOS/Cockpit','Contents/Helpers/cockpit','Contents/Helpers/Cockpit Hub.app/Contents/MacOS/cockpit-hub','Contents/Helpers/Cockpit Hub.app/Contents/Info.plist','Contents/Helpers/CockpitHelper','Contents/Helpers/cockpit-elevate','Contents/Library/LaunchDaemons/dev.orthic.cockpit.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  for(const f of ['Contents/MacOS/Pulse','Contents/Helpers/pulse','Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub','Contents/Helpers/Pulse.app/Contents/Info.plist','Contents/Helpers/PulseHelper','Contents/Helpers/pulse-elevate','Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
   const plist=run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Info.plist')],{encoding:'utf8',stdio:'pipe'});
   const info=JSON.parse(plist);
-  if(info.CFBundleIdentifier!=='dev.orthic.cockpit'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');
+  if(info.CFBundleIdentifier!=='dev.orthic.pulse'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');
   // The daemon plist: BundleProgram must name the helper inside the bundle.
-  const daemon=JSON.parse(run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Library/LaunchDaemons/dev.orthic.cockpit.helper.plist')],{encoding:'utf8',stdio:'pipe'}));
-  if(daemon.Label!=='dev.orthic.cockpit.helper'||!daemon.MachServices?.['dev.orthic.cockpit.helper']||!(daemon.AssociatedBundleIdentifiers||[]).includes('dev.orthic.cockpit'))throw new Error('Helper plist: wrong label, Mach service or associated bundle');
+  const daemon=JSON.parse(run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist')],{encoding:'utf8',stdio:'pipe'}));
+  if(daemon.Label!=='dev.orthic.pulse.helper'||!daemon.MachServices?.['dev.orthic.pulse.helper']||!(daemon.AssociatedBundleIdentifiers||[]).includes('dev.orthic.pulse'))throw new Error('Helper plist: wrong label, Mach service or associated bundle');
   if(typeof daemon.BundleProgram!=='string'||daemon.BundleProgram.startsWith('/')||daemon.BundleProgram.split('/').includes('..'))throw new Error('Helper plist: BundleProgram must be a relative path inside the bundle');
   const program=path.join(app,daemon.BundleProgram);
   if(!existsSync(program)||!statSync(program).isFile())throw new Error(`Helper plist: BundleProgram ${daemon.BundleProgram} is not a file in the bundle`);
-  if(env.COCKPIT_CHECK_APP){
-    // Signed: each tool carries the identifier the helper's connection requirement names, and Cockpit's team.
-    for(const [f,id] of [['Contents/Helpers/CockpitHelper','dev.orthic.cockpit.helper'],['Contents/Helpers/cockpit-elevate','dev.orthic.cockpit.elevate']]){
+  if(env.PULSE_CHECK_APP){
+    // Signed: each tool carries the identifier the helper's connection requirement names, and Pulse's team.
+    for(const [f,id] of [['Contents/Helpers/PulseHelper','dev.orthic.pulse.helper'],['Contents/Helpers/pulse-elevate','dev.orthic.pulse.elevate']]){
       const d=spawnSync('codesign',['-dv','--verbose=2',path.join(app,f)],{encoding:'utf8'}).stderr||'';
       if(!d.includes(`Identifier=${id}\n`)||!d.includes('TeamIdentifier=6KLGD3LLKF')||!/flags=0x[0-9a-f]+\(.*runtime/.test(d))throw new Error(`${f}: expected identifier ${id}, team 6KLGD3LLKF and hardened runtime`);
     }
   }
-  if(env.COCKPIT_CHECK_APP){
-    // Signed app: exactly the entitlements Cockpit needs, never Electron's defaults.
+  if(env.PULSE_CHECK_APP){
+    // Signed app: exactly the entitlements Pulse needs, never Electron's defaults.
     const ent=spawnSync('codesign',['-d','--entitlements','-','--xml',app],{encoding:'utf8'}).stdout||'';
     if(!ent.includes('com.apple.security.automation.apple-events'))throw new Error('Signed app lacks the Apple Events entitlement');
     if(/device\.(camera|audio-input)|personal-information\.location/.test(ent))throw new Error('Signed app carries unexpected camera/microphone/location entitlements');
   }
-  const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-smoke-')));
-  const state=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'cockpit-package-state-')));
+  const fixture=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'pulse-package-smoke-')));
+  const state=realpathSync(mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(),'pulse-package-state-')));
   try{
-    writeFileSync(path.join(fixture,'example.txt'),'Cockpit fixture');
-    const out=run(path.join(app,'Contents/Helpers/cockpit'),['scan',fixture,'--save','--state-dir',state,'--json'],{encoding:'utf8',stdio:'pipe'});
+    writeFileSync(path.join(fixture,'example.txt'),'Pulse fixture');
+    const out=run(path.join(app,'Contents/Helpers/pulse'),['scan',fixture,'--save','--state-dir',state,'--json'],{encoding:'utf8',stdio:'pipe'});
     const scan=JSON.parse(out);
     if(!scan.snapshot?.report?.entries?.some(e=>e.path.endsWith('/example.txt')))throw new Error('Bundled scanner smoke failed');
   } finally {rmSync(fixture,{recursive:true,force:true});rmSync(state,{recursive:true,force:true});}

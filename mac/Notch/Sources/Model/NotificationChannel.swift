@@ -66,17 +66,17 @@ enum ChannelNotifications {
             switch settings.authorizationStatus {
             case .notDetermined:
                 center.requestAuthorization(options: [.alert, .sound]) { ok, _ in
-                    if ok { post(title: L10n.t("Cockpit test"), body: L10n.t("This is what one looks like.")) }
+                    if ok { post(title: L10n.t("Pulse test"), body: L10n.t("This is what one looks like.")) }
                 }
             case .denied:
                 DispatchQueue.main.async {
-                    let id = Bundle.main.bundleIdentifier ?? "dev.orthic.cockpit"
+                    let id = Bundle.main.bundleIdentifier ?? "dev.orthic.pulse"
                     if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)") {
                         NSWorkspace.shared.open(url)
                     }
                 }
             default:
-                post(title: L10n.t("Cockpit test"), body: L10n.t("This is what one looks like."))
+                post(title: L10n.t("Pulse test"), body: L10n.t("This is what one looks like."))
             }
         }
     }

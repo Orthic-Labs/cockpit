@@ -1,4 +1,4 @@
-//! Cockpit's conservative, read-only shared core.
+//! Pulse's conservative, read-only shared core.
 
 pub mod activity;
 #[cfg(unix)]
@@ -21,6 +21,7 @@ pub mod process_control;
 pub mod processes;
 pub mod rules;
 pub mod scan;
+pub mod state_migration;
 pub mod storage_browser;
 pub mod store;
 pub mod worker;

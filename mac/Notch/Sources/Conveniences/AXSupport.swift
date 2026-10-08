@@ -1,7 +1,7 @@
 import ApplicationServices
 import AppKit
 
-/// Cockpit: thin Accessibility helpers shared by the Mac conveniences.
+/// Pulse: thin Accessibility helpers shared by the Mac conveniences.
 /// Every read has a short messaging timeout so a hung app cannot stall the
 /// event tap, and every failure reads as "unknown" (nil), never as a guess.
 enum AX {

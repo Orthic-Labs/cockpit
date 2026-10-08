@@ -1,9 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Cockpit Hub",
-  "mainBinaryName": "cockpit-hub",
+  "productName": "Pulse",
+  "mainBinaryName": "pulse-hub",
   "version": "0.1.0",
-  "identifier": "dev.orthic.cockpit.hub",
+  "identifier": "dev.orthic.pulse.hub",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5191",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Cockpit",
+        "title": "Pulse",
         "width": 900,
         "height": 600,
         "minWidth": 820,

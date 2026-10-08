@@ -2,9 +2,9 @@
 //! graceful; Force Quit is a separate explicit command. All identity and
 //! safety re-checks live in the core.
 
-use cockpit_core::app_manager::{self, AppDetail, AppEntry, UninstallResult};
-use cockpit_core::process_control::{self, ProcessRow, QuitOutcome};
-use cockpit_core::ProcessIdentity;
+use pulse_core::app_manager::{self, AppDetail, AppEntry, UninstallResult};
+use pulse_core::process_control::{self, ProcessRow, QuitOutcome};
+use pulse_core::ProcessIdentity;
 
 async fn blocking<T, F>(work: F) -> Result<T, String>
 where

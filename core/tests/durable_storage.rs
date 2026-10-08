@@ -1,4 +1,4 @@
-use cockpit_core::{
+use pulse_core::{
     activity::{ActivityEvent, ActivityKind, DurableActivityLedger, RecordStatus},
     cleanup::{
         CleanupAction, CleanupExecutor, CleanupItem, CleanupPlan, DurableJournal, EffectBinding,
@@ -73,7 +73,7 @@ fn durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_reject
     let root = fs::canonicalize(std::env::temp_dir())
         .unwrap()
         .join(format!(
-            "cockpit-durable-e2e-{}-{}",
+            "pulse-durable-e2e-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -138,7 +138,7 @@ fn durable_filesystem_journey_restarts_rejects_replay_holds_namespace_and_reject
     };
     assert_eq!(
         journal.apply(&replay, 20, &mut revalidator, &mut executor),
-        Err(cockpit_core::cleanup::ClaimError::Interrupted)
+        Err(pulse_core::cleanup::ClaimError::Interrupted)
     );
     assert_eq!(executor.calls, 0);
 

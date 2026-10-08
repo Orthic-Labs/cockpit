@@ -1,5 +1,5 @@
-use cockpit_core::cleanup::*;
-use cockpit_core::model::{EntryKind, FileIdentity, VolumeIdentity};
+use pulse_core::cleanup::*;
+use pulse_core::model::{EntryKind, FileIdentity, VolumeIdentity};
 use std::path::PathBuf;
 
 fn item(path: &str, id: &str) -> CleanupItem {

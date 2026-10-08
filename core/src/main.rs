@@ -1,5 +1,5 @@
-use cockpit_core::presentation::{RenderOptions, View, render};
-use cockpit_core::{
+use pulse_core::presentation::{RenderOptions, View, render};
+use pulse_core::{
     FilesystemProvider, ScanOptions, StdFilesystemProvider, rules, scan_paths, scan_with_provider,
     store,
 };
@@ -29,8 +29,8 @@ impl From<&str> for CliError {
         message.to_string().into()
     }
 }
-impl From<cockpit_core::ipc::IpcError> for CliError {
-    fn from(error: cockpit_core::ipc::IpcError) -> Self {
+impl From<pulse_core::ipc::IpcError> for CliError {
+    fn from(error: pulse_core::ipc::IpcError) -> Self {
         Self {
             body: Some(json!({"error": error.message, "code": error.code})),
             exit: 2,
@@ -61,7 +61,7 @@ fn wide(n: i128) -> Value {
         Value::String(n.to_string())
     }
 }
-fn comparison_value(c: &cockpit_core::history::Comparison) -> Value {
+fn comparison_value(c: &pulse_core::history::Comparison) -> Value {
     json!({
         "comparable": c.comparable,
         "attributed_growth_bytes": c.attributed_growth_bytes.map(wide),
@@ -81,7 +81,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     arguments.retain(|a| a != "--json");
     if arguments.is_empty() || ["help", "--help", "-h"].contains(&arguments[0].as_str()) {
         println!(
-            "Cockpit — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\napps list [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. Cleanup & process actions await feasibility & safety gates."
+            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\napps list [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. Cleanup & process actions await feasibility & safety gates."
         );
         return Ok(());
     }
@@ -90,6 +90,12 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         return worker(arguments, machine);
     }
     let state_override = take_option(&mut arguments, "--state-dir")?.map(PathBuf::from);
+    #[cfg(target_os = "macos")]
+    if state_override.is_none() {
+        let home = std::env::var_os("HOME").map(PathBuf::from)
+            .ok_or_else(|| "HOME is unset".to_string())?;
+        pulse_core::state_migration::migrate_mac_state(&home).map_err(|e| e.to_string())?;
+    }
     let directory = || {
         state_override
             .clone()
@@ -103,7 +109,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         "status" => {
             require_empty(&arguments)?;
             emit(
-                json!({"schema_version":1,"system":cockpit_core::system_status(),"snapshots":{"capability":"unavailable","reason":"snapshot provider pending"},"purgeable_bytes":null}),
+                json!({"schema_version":1,"system":pulse_core::system_status(),"snapshots":{"capability":"unavailable","reason":"snapshot provider pending"},"purgeable_bytes":null}),
                 machine,
                 View::Status,
             );
@@ -197,7 +203,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 );
                 report.incomplete_reasons.push(reason.clone());
                 report.accounting.reclaim.upper_bytes = None;
-                report.accounting.reclaim.state = Some(cockpit_core::ReclaimState::Unknown);
+                report.accounting.reclaim.state = Some(pulse_core::ReclaimState::Unknown);
                 report.accounting.reclaim.reasons.push(reason);
                 for folder in &mut report.folders {
                     folder.incomplete = true;
@@ -211,7 +217,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     total.1 = total.1.saturating_add(entry.attributed_allocation_bytes);
                 }
             }
-            let chrome_running = cockpit_core::procs()
+            let chrome_running = pulse_core::procs()
                 .iter()
                 .any(|p| p.name.to_ascii_lowercase().contains("chrome"));
             let rows: Vec<_> = report
@@ -251,13 +257,13 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 .transpose()?;
             if let Some(state_directory) = state_directory.as_deref() {
                 let mut activity =
-                    cockpit_core::activity::DurableActivityLedger::open(state_directory)
+                    pulse_core::activity::DurableActivityLedger::open(state_directory)
                         .map_err(|e| e.to_string())?;
                 activity
-                    .record(cockpit_core::activity::ActivityEvent {
+                    .record(pulse_core::activity::ActivityEvent {
                         id: snapshot.id.clone(),
                         occurred_at: snapshot.created_at,
-                        kind: cockpit_core::activity::ActivityKind::Scan {
+                        kind: pulse_core::activity::ActivityKind::Scan {
                             logical_bytes: snapshot.report.accounting.logical_bytes,
                             attributed_bytes: snapshot
                                 .report
@@ -325,9 +331,9 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
             require_empty(&arguments)?;
             let (history, diagnostics, notes, _) = load_history(&directory()?)?;
             let rows: Vec<_> = history.iter().enumerate().map(|(index, snapshot)| {
-                let comparison = index.checked_sub(1).map(|previous| cockpit_core::history::compare(&history[previous], snapshot));
+                let comparison = index.checked_sub(1).map(|previous| pulse_core::history::compare(&history[previous], snapshot));
                 let folder_comparison = index.checked_sub(1).map(|previous| {
-                    cockpit_core::folder_growth::compare_folders(&history[previous], snapshot, 100)
+                    pulse_core::folder_growth::compare_folders(&history[previous], snapshot, 100)
                 });
                 json!({"id":snapshot.id,"created_at":snapshot.created_at,"roots":snapshot.report.roots,"accounting":snapshot.report.accounting,"attributed_growth_bytes":comparison.as_ref().and_then(|c| c.attributed_growth_bytes).map(wide),"comparison":comparison.as_ref().map(comparison_value),"folder_comparison":folder_comparison,"findings_count":snapshot.findings.len()})
             }).collect();
@@ -341,7 +347,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
             let sort = take_option(&mut arguments, "--sort")?.unwrap_or_else(|| "ram".into());
             let groups = take_flag(&mut arguments, "--groups");
             require_empty(&arguments)?;
-            let mut procs = cockpit_core::procs();
+            let mut procs = pulse_core::procs();
             match sort.as_str() {
                 "ram" => procs.sort_by_key(|p| std::cmp::Reverse(p.memory.value)),
                 "cpu" => procs.sort_by(|a, b| b.cpu_usage_percent.total_cmp(&a.cpu_usage_percent)),
@@ -350,14 +356,14 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
             }
             let mut value = json!({"processes":procs,"grouping":"individual_processes","gpu":{"capability":"unavailable"},"actions_enabled":false});
             if groups {
-                value["process_groups"] = json!(cockpit_core::processes::group(&procs));
+                value["process_groups"] = json!(pulse_core::processes::group(&procs));
                 value["procs_schema"] = json!(2);
             }
             emit(value, machine, View::Procs);
         }
         "monitor" => {
             require_empty(&arguments)?;
-            let extended = cockpit_core::monitor::sample_extended();
+            let extended = pulse_core::monitor::sample_extended();
             emit_inspection(
                 json!({
                     "schema_version": 1,
@@ -371,7 +377,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         "find" | "browse" | "export" => {
             let offset = take_number(&mut arguments, "--offset", 0)?;
             let limit = take_number(&mut arguments, "--limit", 100)?;
-            cockpit_core::storage_browser::validate_page_bounds(offset, limit)
+            pulse_core::storage_browser::validate_page_bounds(offset, limit)
                 .map_err(|e| e.to_string())?;
             let requested_snapshot_id = if command == "export" {
                 if arguments.len() > 1 {
@@ -401,8 +407,8 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     let kind_text = take_option(&mut arguments, "--kind")?;
                     let kind = match kind_text.as_deref() {
                         None => None,
-                        Some("file") => Some(cockpit_core::EntryKind::File),
-                        Some("directory") => Some(cockpit_core::EntryKind::Directory),
+                        Some("file") => Some(pulse_core::EntryKind::File),
+                        Some("directory") => Some(pulse_core::EntryKind::Directory),
                         _ => return Err("kind must be file or directory".into()),
                     };
                     let min_size = take_u64_option(&mut arguments, "--min-size")?;
@@ -410,7 +416,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     if arguments.len() != 1 || arguments[0].starts_with('-') {
                         return Err("find requires one filename query".into());
                     }
-                    let request = cockpit_core::storage_browser::SearchRequest {
+                    let request = pulse_core::storage_browser::SearchRequest {
                         query: arguments.remove(0),
                         kind,
                         extension,
@@ -420,7 +426,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                         limit,
                     };
                     json!(
-                        cockpit_core::storage_browser::search(report, &request)
+                        pulse_core::storage_browser::search(report, &request)
                             .map_err(|e| e.to_string())?
                     )
                 }
@@ -442,12 +448,12 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     }
                     if let Some(path) = inspect {
                         json!(
-                            cockpit_core::storage_browser::inspect_path(report, &path)
+                            pulse_core::storage_browser::inspect_path(report, &path)
                                 .map_err(|e| e.to_string())?
                         )
                     } else if let Some(path) = folder {
                         json!(
-                            cockpit_core::storage_browser::drilldown_children(
+                            pulse_core::storage_browser::drilldown_children(
                                 report, &path, offset, limit
                             )
                             .map_err(|e| e.to_string())?
@@ -458,13 +464,13 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                         }
                         match largest.as_deref().unwrap_or("folders") {
                             "files" => json!({
-                                "items": cockpit_core::storage_browser::largest_files(report, limit)
+                                "items": pulse_core::storage_browser::largest_files(report, limit)
                                     .map_err(|e| e.to_string())?,
                                 "limit": limit,
                                 "incomplete": report.accounting.incomplete,
                             }),
                             "folders" => json!({
-                                "items": cockpit_core::storage_browser::largest_folders(report, limit)
+                                "items": pulse_core::storage_browser::largest_folders(report, limit)
                                     .map_err(|e| e.to_string())?,
                                 "limit": limit,
                                 "incomplete": report.accounting.incomplete,
@@ -476,22 +482,22 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 _ => {
                     require_empty(&arguments)?;
                     let folder_growth = snapshot_index.checked_sub(1).map(|previous| {
-                        cockpit_core::folder_growth::compare_folders(
+                        pulse_core::folder_growth::compare_folders(
                             &history[previous],
                             snapshot,
                             limit,
                         )
                     });
-                    let export = cockpit_core::dashboard_export::DashboardExport::from_snapshot(
+                    let export = pulse_core::dashboard_export::DashboardExport::from_snapshot(
                         snapshot.clone(),
                         history
                             .iter()
-                            .map(cockpit_core::dashboard_export::SnapshotSummary::from_snapshot)
+                            .map(pulse_core::dashboard_export::SnapshotSummary::from_snapshot)
                             .collect(),
                         history_skips,
                         load_activity_projection(&directory()?, snapshot.created_at)?,
                         folder_growth,
-                        cockpit_core::monitor::sample_extended(),
+                        pulse_core::monitor::sample_extended(),
                     );
                     emit_inspection(
                         serde_json::to_value(export).map_err(|e| e.to_string())?,
@@ -515,10 +521,10 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         }
         "duplicates" => {
             let min_bytes = take_u64_option(&mut arguments, "--min-size")?
-                .unwrap_or(cockpit_core::duplicates::DEFAULT_MIN_DUPLICATE_BYTES);
+                .unwrap_or(pulse_core::duplicates::DEFAULT_MIN_DUPLICATE_BYTES);
             let max_files = take_number(&mut arguments, "--max-files", 100_000)?;
             let max_total_read_bytes = take_u64_option(&mut arguments, "--max-read-bytes")?
-                .unwrap_or(cockpit_core::duplicates::DEFAULT_MAX_TOTAL_READ_BYTES);
+                .unwrap_or(pulse_core::duplicates::DEFAULT_MAX_TOTAL_READ_BYTES);
             let seconds = take_number(&mut arguments, "--seconds", 30)?;
             if max_files == 0
                 || max_files > 100_000
@@ -557,15 +563,15 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                 .entries
                 .iter()
                 .filter(|entry| {
-                    entry.metadata.kind == cockpit_core::EntryKind::File
+                    entry.metadata.kind == pulse_core::EntryKind::File
                         && !entry.metadata.is_placeholder
                         && entry.metadata.metadata_complete
                 })
                 .map(|entry| entry.path.clone())
                 .collect();
-            let duplicates = cockpit_core::duplicates::find_duplicates(
+            let duplicates = pulse_core::duplicates::find_duplicates(
                 &paths,
-                &cockpit_core::duplicates::DuplicateOptions {
+                &pulse_core::duplicates::DuplicateOptions {
                     min_bytes,
                     max_files,
                     max_total_read_bytes,
@@ -704,9 +710,9 @@ impl<P: FilesystemProvider> ExcludingProvider<P> {
         path == self.excluded || path.starts_with(&self.excluded)
     }
 
-    fn reject(&self, path: &Path) -> Result<(), cockpit_core::FsError> {
+    fn reject(&self, path: &Path) -> Result<(), pulse_core::FsError> {
         if self.is_excluded(path) {
-            Err(cockpit_core::FsError::new(format!(
+            Err(pulse_core::FsError::new(format!(
                 "excluded state directory: {}",
                 path.display()
             )))
@@ -721,7 +727,7 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
         self.inner.begin_scan();
     }
 
-    fn inspect(&self, path: &Path) -> Result<cockpit_core::FileMetadata, cockpit_core::FsError> {
+    fn inspect(&self, path: &Path) -> Result<pulse_core::FileMetadata, pulse_core::FsError> {
         self.reject(path)?;
         self.inner.inspect(path)
     }
@@ -729,12 +735,12 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
     fn inspect_detailed(
         &self,
         path: &Path,
-    ) -> Result<(cockpit_core::FileMetadata, Vec<String>), cockpit_core::FsError> {
+    ) -> Result<(pulse_core::FileMetadata, Vec<String>), pulse_core::FsError> {
         self.reject(path)?;
         self.inner.inspect_detailed(path)
     }
 
-    fn children(&self, path: &Path) -> Result<Vec<PathBuf>, cockpit_core::FsError> {
+    fn children(&self, path: &Path) -> Result<Vec<PathBuf>, pulse_core::FsError> {
         self.reject(path)?;
         Ok(self
             .inner
@@ -748,7 +754,7 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
         &self,
         path: &Path,
         limit: usize,
-    ) -> Result<(Vec<PathBuf>, bool), cockpit_core::FsError> {
+    ) -> Result<(Vec<PathBuf>, bool), pulse_core::FsError> {
         self.reject(path)?;
         let (children, truncated) = self.inner.children_bounded(path, limit)?;
         Ok((
@@ -762,8 +768,8 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
 
     fn volume_usage(
         &self,
-        volume: &cockpit_core::VolumeIdentity,
-    ) -> Result<cockpit_core::VolumeUsage, cockpit_core::FsError> {
+        volume: &pulse_core::VolumeIdentity,
+    ) -> Result<pulse_core::VolumeUsage, pulse_core::FsError> {
         self.inner.volume_usage(volume)
     }
 }
@@ -797,7 +803,7 @@ type LoadedHistory = (
     Vec<store::Snapshot>,
     Vec<Value>,
     Vec<String>,
-    Vec<cockpit_core::dashboard_export::HistorySkip>,
+    Vec<pulse_core::dashboard_export::HistorySkip>,
 );
 
 fn load_history(directory: &std::path::Path) -> Result<LoadedHistory, String> {
@@ -809,7 +815,7 @@ fn load_history(directory: &std::path::Path) -> Result<LoadedHistory, String> {
         let event = json!({"event":"snapshot_skipped","file":skipped.file,"reason":skipped.reason});
         eprintln!("{event}");
         diagnostics.push(json!({"file":event["file"],"reason":event["reason"]}));
-        skips.push(cockpit_core::dashboard_export::HistorySkip {
+        skips.push(pulse_core::dashboard_export::HistorySkip {
             file: event["file"].as_str().unwrap_or_default().to_owned(),
             reason: event["reason"].as_str().unwrap_or_default().to_owned(),
         });
@@ -825,17 +831,17 @@ fn load_history(directory: &std::path::Path) -> Result<LoadedHistory, String> {
 fn load_activity_projection(
     directory: &Path,
     timestamp: u64,
-) -> Result<cockpit_core::dashboard_export::ActivityProjection, String> {
+) -> Result<pulse_core::dashboard_export::ActivityProjection, String> {
     let activity_directory = directory.join("activity");
     match fs::symlink_metadata(&activity_directory) {
         Ok(metadata) if metadata.is_dir() => {
-            let ledger = cockpit_core::activity::DurableActivityLedger::open(directory)
+            let ledger = pulse_core::activity::DurableActivityLedger::open(directory)
                 .map_err(|e| e.to_string())?;
-            Ok(cockpit_core::dashboard_export::ActivityProjection::from_ledger(&ledger, timestamp))
+            Ok(pulse_core::dashboard_export::ActivityProjection::from_ledger(&ledger, timestamp))
         }
         Ok(_) => Err("activity state path is not a directory".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(
-            cockpit_core::dashboard_export::ActivityProjection::empty(timestamp),
+            pulse_core::dashboard_export::ActivityProjection::empty(timestamp),
         ),
         Err(error) => Err(error.to_string()),
     }
@@ -861,9 +867,9 @@ fn endpoint_from(option: Option<String>) -> Result<Endpoint, CliError> {
         Some(e) => Ok(e.into()),
         None => {
             #[cfg(unix)]
-            let default = cockpit_core::ipc::unix::default_endpoint();
+            let default = pulse_core::ipc::unix::default_endpoint();
             #[cfg(windows)]
-            let default = cockpit_core::ipc::windows::default_endpoint();
+            let default = pulse_core::ipc::windows::default_endpoint();
             Ok(default?)
         }
     }
@@ -871,7 +877,7 @@ fn endpoint_from(option: Option<String>) -> Result<Endpoint, CliError> {
 
 #[cfg(any(unix, windows))]
 fn worker(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
-    use cockpit_core::ipc::{self, Limits, Outcome, Request, Response};
+    use pulse_core::ipc::{self, Limits, Outcome, Request, Response};
     if arguments.is_empty() {
         return Err("worker requires serve or request".into());
     }
@@ -903,7 +909,7 @@ fn worker(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
             let endpoint = endpoint_from(endpoint_option)?;
             // Each operation runs in a killable `worker exec-op` child of
             // this same binary, bounded by `limits.op_deadline`.
-            let mut handler = cockpit_core::worker::Worker::bounded(
+            let mut handler = pulse_core::worker::Worker::bounded(
                 limits,
                 Box::new(|event| {
                     if let Ok(line) = serde_json::to_string(event) {
@@ -1010,7 +1016,7 @@ fn worker(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
         // Hidden internal verb spawned by `Worker::bounded`: one bounded
         // Request on stdin, one bounded Response on stdout, leaf worker.
         // Not listed in help; documented as internal in docs/runtime.md.
-        s if s == cockpit_core::worker::EXEC_OP_SUBCOMMAND => {
+        s if s == pulse_core::worker::EXEC_OP_SUBCOMMAND => {
             let mut limits = Limits::default();
             limits.max_request_bytes = take_number(
                 &mut arguments,
@@ -1032,7 +1038,7 @@ fn worker(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
                     exit: 2,
                 });
             }
-            match cockpit_core::worker::exec_op_stdio(limits) {
+            match pulse_core::worker::exec_op_stdio(limits) {
                 0 => Ok(()),
                 code => Err(CliError {
                     body: None,
@@ -1050,7 +1056,7 @@ fn worker(_arguments: Vec<String>, _machine: bool) -> Result<(), CliError> {
 }
 
 fn resolve_app(target: &str) -> Result<String, String> {
-    use cockpit_core::app_manager::list_apps;
+    use pulse_core::app_manager::list_apps;
     if target.contains('/') || target.ends_with(".app") {
         return Ok(resolve_path(target)?.to_string_lossy().into_owned());
     }
@@ -1072,7 +1078,7 @@ fn resolve_app(target: &str) -> Result<String, String> {
 }
 
 fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
-    use cockpit_core::app_manager;
+    use pulse_core::app_manager;
     if arguments.is_empty() {
         return Err("apps requires list, detail or uninstall".into());
     }

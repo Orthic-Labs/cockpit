@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Cockpit: clicking the Dock icon of the app that is already frontmost
+/// Pulse: clicking the Dock icon of the app that is already frontmost
 /// minimizes its windows. The click itself is never swallowed, so the Dock
 /// behaves as usual for every other icon and for an app with nothing to
 /// minimize (its minimized windows still come back).

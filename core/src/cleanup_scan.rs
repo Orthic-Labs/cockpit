@@ -280,7 +280,7 @@ const COUNT_WINDOW_SECS: u64 = 30 * 86_400;
 const COUNT_KEEP: usize = 60;
 
 fn count_log_path(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Cockpit/chrome-snapshots.json")
+    home.join("Library/Application Support/Pulse/chrome-snapshots.json")
 }
 
 /// Add a sample when the last one is a day old or more, and pick the baseline
@@ -777,7 +777,7 @@ struct ActivityLog {
 }
 
 fn log_path(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Cockpit/cleanup-activity.json")
+    home.join("Library/Application Support/Pulse/cleanup-activity.json")
 }
 
 fn read_log(home: &Path) -> ActivityLog {

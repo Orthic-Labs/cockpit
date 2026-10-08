@@ -1,4 +1,4 @@
-name: Cockpit
+name: Pulse
 options:
   bundleIdPrefix: dev.orthic
   deploymentTarget:
@@ -21,8 +21,8 @@ settings:
     # *which signed binary* was allowed. Ad-hoc or unsigned builds get a new
     # identity on every rebuild, so "Always Allow" would be forgotten each time
     # and the prompt would come back after every `make run`.
-    # Cockpit fork: built unsigned in CI; the RightKit release pipeline signs
-    # and notarizes with Cockpit's own Developer ID.
+    # Pulse fork: built unsigned in CI; the RightKit release pipeline signs
+    # and notarizes with Pulse's own Developer ID.
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Manual
     DEVELOPMENT_TEAM: ""
@@ -38,7 +38,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
 
 targets:
-  Cockpit:
+  Pulse:
     type: application
     platform: macOS
     sources:
@@ -50,16 +50,16 @@ targets:
           # developer README has no business shipping to users.
           - "Vendor/**/README.md"
     entitlements:
-      path: Cockpit.entitlements
+      path: Pulse.entitlements
       properties:
         com.apple.security.automation.apple-events: true
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleName: Cockpit
-        CFBundleDisplayName: Cockpit
-        CFBundleExecutable: Cockpit
-        # Cockpit fork: no Dock icon and no menu-bar item, ever. The notch is
+        CFBundleName: Pulse
+        CFBundleDisplayName: Pulse
+        CFBundleExecutable: Pulse
+        # Pulse fork: no Dock icon and no menu-bar item, ever. The notch is
         # the only surface; right-click on it offers Quit.
         LSUIElement: true
         CFBundleDevelopmentRegion: en
@@ -78,7 +78,7 @@ targets:
           - uz
           - tr
         LSMinimumSystemVersion: "26.0"
-        NSAppleEventsUsageDescription: "Cockpit asks Finder which items and folder you have selected so Cut and Paste can move files."
+        NSAppleEventsUsageDescription: "Pulse asks Finder which items and folder you have selected so Cut and Paste can move files."
         # Sources/Info.plist is *generated* from this block, so editing that
         # file directly is undone by the next `make gen`. Pointing both at the
         # build settings keeps one place to bump.
@@ -86,8 +86,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit
-        PRODUCT_NAME: Cockpit
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.pulse
+        PRODUCT_NAME: Pulse
         GENERATE_INFOPLIST_FILE: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_EMIT_LOC_STRINGS: "YES"
@@ -100,7 +100,7 @@ targets:
         # together if the Desktop source is ever dropped.
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Codenotch-Bridging-Header.h
 
-  CockpitHelper:
+  PulseHelper:
     type: tool
     platform: macOS
     sources:
@@ -110,15 +110,15 @@ targets:
       - path: Shared
     settings:
       base:
-        PRODUCT_NAME: CockpitHelper
-        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit.helper
+        PRODUCT_NAME: PulseHelper
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.pulse.helper
         # The identifier is embedded so codesign signs it under this name, which
         # the helper's connection requirement matches.
         GENERATE_INFOPLIST_FILE: "YES"
         CREATE_INFOPLIST_SECTION_IN_BINARY: "YES"
         SKIP_INSTALL: "YES"
 
-  CockpitElevate:
+  PulseElevate:
     type: tool
     platform: macOS
     sources:
@@ -126,8 +126,8 @@ targets:
       - path: Shared
     settings:
       base:
-        PRODUCT_NAME: cockpit-elevate
-        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.cockpit.elevate
+        PRODUCT_NAME: pulse-elevate
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.pulse.elevate
         # The identifier is embedded so codesign signs it under this name, which
         # the helper's connection requirement matches.
         GENERATE_INFOPLIST_FILE: "YES"
@@ -135,11 +135,11 @@ targets:
         SKIP_INSTALL: "YES"
 
 schemes:
-  Cockpit:
+  Pulse:
     build:
       targets:
-        Cockpit: all
-        CockpitHelper: all
-        CockpitElevate: all
+        Pulse: all
+        PulseHelper: all
+        PulseElevate: all
     run:
       config: Debug

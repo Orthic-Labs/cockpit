@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// Cockpit: Fn as Command, on a HID-level event tap. Only Fn+C/V/X/A/Z/S/F/T/W
+/// Pulse: Fn as Command, on a HID-level event tap. Only Fn+C/V/X/A/Z/S/F/T/W
 /// and Fn+arrows are touched: the letters become Command+key (Shift kept), the
 /// arrows become Option+arrow (Shift kept), both without the Fn flag. Every
 /// other event, Fn alone, Fn+Space, Fn+Delete and Fn+F-keys included, passes

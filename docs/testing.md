@@ -1,4 +1,4 @@
-# Cockpit behavioral verification
+# Pulse behavioral verification
 
 > **Historical (2026-10-07):** describes the removed Swift notch & JS dashboard. Current direction: [plan.md](plan.md).
 
@@ -16,9 +16,9 @@ Inside `cua_repl`, after selecting installed app & loading tool documentation:
 
 ```js
 var journey = await import(repoRoot + '/scripts/qa/mac-installed-journey.mjs');
-var app = await cua.getApp('/Applications/Cockpit.app');
+var app = await cua.getApp('/Applications/Pulse.app');
 var result = await journey.runInstalledJourney(app, {
-  appBundle: '/Applications/Cockpit.app',
+  appBundle: '/Applications/Pulse.app',
   validScan: validScanPath,
   invalidScan: malformedScanPath,
   output: evidenceDirectory,

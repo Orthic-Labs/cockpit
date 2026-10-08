@@ -9,22 +9,22 @@ import { spawn } from 'node:child_process';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const releaseRoot = join(repoRoot, 'release');
 const stagingRoot = join(repoRoot, 'dist', 'staging');
-const appName = 'Cockpit.app';
+const appName = 'Pulse.app';
 
 const paths = {
   app: join(stagingRoot, appName),
-  appExecutable: join(stagingRoot, appName, 'Contents', 'MacOS', 'Cockpit'),
-  helper: join(stagingRoot, appName, 'Contents', 'Helpers', 'cockpit'),
-  hub: join(stagingRoot, appName, 'Contents', 'Helpers', 'Cockpit Hub.app'),
-  privilegedHelper: join(stagingRoot, appName, 'Contents', 'Helpers', 'CockpitHelper'),
-  elevate: join(stagingRoot, appName, 'Contents', 'Helpers', 'cockpit-elevate'),
-  hubExecutable: join(stagingRoot, appName, 'Contents', 'Helpers', 'Cockpit Hub.app', 'Contents', 'MacOS', 'cockpit-hub'),
+  appExecutable: join(stagingRoot, appName, 'Contents', 'MacOS', 'Pulse'),
+  helper: join(stagingRoot, appName, 'Contents', 'Helpers', 'pulse'),
+  hub: join(stagingRoot, appName, 'Contents', 'Helpers', 'Pulse.app'),
+  privilegedHelper: join(stagingRoot, appName, 'Contents', 'Helpers', 'PulseHelper'),
+  elevate: join(stagingRoot, appName, 'Contents', 'Helpers', 'pulse-elevate'),
+  hubExecutable: join(stagingRoot, appName, 'Contents', 'Helpers', 'Pulse.app', 'Contents', 'MacOS', 'pulse-hub'),
   raw: join(stagingRoot, 'raw'),
-  output: join(repoRoot, 'dist', 'releases', 'mac', 'Cockpit.dmg')
+  output: join(repoRoot, 'dist', 'releases', 'mac', 'Pulse.dmg')
 };
 
 function fail(message) {
-  throw new Error(`[cockpit mac payload] ${message}`);
+  throw new Error(`[pulse mac payload] ${message}`);
 }
 
 async function requireFile(path, label) {
@@ -60,38 +60,38 @@ async function copyTree(source, target, label) {
   await cp(source, target, { recursive: true, force: true });
 }
 
-// Cockpit.app is the notch (Codenotch fork, xcodebuild) with the CLI and the
+// Pulse.app is the notch (Codenotch fork, xcodebuild) with the CLI and the
 // hub (Tauri) inside Contents/Helpers. The notch's own Info.plist is kept.
 function sourcePaths() {
   const temp = process.env.RUNNER_TEMP || '/tmp';
   return {
-    notch: process.env.COCKPIT_NOTCH_APP || join(temp, 'cockpit-notch', 'Build', 'Products', 'Release', appName),
-    helper: process.env.COCKPIT_CLI_BINARY || join(repoRoot, 'target', 'release', 'cockpit'),
-    hub: process.env.COCKPIT_HUB_APP || join(repoRoot, 'hub', 'src-tauri', 'target', 'release', 'bundle', 'macos', 'Cockpit Hub.app')
+    notch: process.env.PULSE_NOTCH_APP || process.env.COCKPIT_NOTCH_APP || join(temp, 'pulse-notch', 'Build', 'Products', 'Release', appName),
+    helper: process.env.PULSE_CLI_BINARY || process.env.COCKPIT_CLI_BINARY || join(repoRoot, 'target', 'release', 'pulse'),
+    hub: process.env.PULSE_HUB_APP || process.env.COCKPIT_HUB_APP || join(repoRoot, 'hub', 'src-tauri', 'target', 'release', 'bundle', 'macos', 'Pulse.app')
   };
 }
 
 // The privileged helper (SMAppService daemon), its launchd plist and the
-// cockpit-elevate client. xcodebuild puts the two tools beside Cockpit.app.
+// pulse-elevate client. xcodebuild puts the two tools beside Pulse.app.
 async function placePrivilegedHelper(app, notchApp) {
   const products = dirname(notchApp);
-  await copyExecutable(join(products, 'CockpitHelper'), join(app, 'Contents', 'Helpers', 'CockpitHelper'), 'privileged helper');
-  await copyExecutable(join(products, 'cockpit-elevate'), join(app, 'Contents', 'Helpers', 'cockpit-elevate'), 'cockpit-elevate');
-  const plist = join(app, 'Contents', 'Library', 'LaunchDaemons', 'dev.orthic.cockpit.helper.plist');
+  await copyExecutable(join(products, 'PulseHelper'), join(app, 'Contents', 'Helpers', 'PulseHelper'), 'privileged helper');
+  await copyExecutable(join(products, 'pulse-elevate'), join(app, 'Contents', 'Helpers', 'pulse-elevate'), 'pulse-elevate');
+  const plist = join(app, 'Contents', 'Library', 'LaunchDaemons', 'dev.orthic.pulse.helper.plist');
   await mkdir(dirname(plist), { recursive: true });
-  await cp(join(repoRoot, 'mac/Notch/Helper/dev.orthic.cockpit.helper.plist'), plist, { force: true });
+  await cp(join(repoRoot, 'mac/Notch/Helper/dev.orthic.pulse.helper.plist'), plist, { force: true });
 }
 
 async function writeCandidateManifest(root) {
   const manifest = {
     schema_version: 1,
-    product: 'cockpit',
+    product: 'pulse',
     platform: 'mac',
     app: join(root, appName),
     portable_app: join(root, `${appName}.zip`),
     raw: {
-      app: join(root, 'raw', 'Cockpit'),
-      helper: join(root, 'raw', 'cockpit')
+      app: join(root, 'raw', 'Pulse'),
+      helper: join(root, 'raw', 'pulse')
     }
   };
   await writeFile(join(root, 'candidate-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -111,29 +111,29 @@ async function dittoZip(source, target) {
 async function candidate() {
   const artifactRoot = process.env.RIGHT_GIT_ARTIFACT_ROOT;
   if (!artifactRoot) fail('RIGHT_GIT_ARTIFACT_ROOT is required for candidate mode');
-  const root = join(resolve(artifactRoot), 'cockpit', 'mac');
+  const root = join(resolve(artifactRoot), 'pulse', 'mac');
   const source = sourcePaths();
   const app = join(root, appName);
-  const appExecutable = join(app, 'Contents', 'MacOS', 'Cockpit');
-  const helper = join(app, 'Contents', 'Helpers', 'cockpit');
+  const appExecutable = join(app, 'Contents', 'MacOS', 'Pulse');
+  const helper = join(app, 'Contents', 'Helpers', 'pulse');
 
   await mkdir(root, { recursive: true });
   await rm(app, { recursive: true, force: true });
   await copyTree(source.notch, app, 'notch app (xcodebuild)');
   await requireFile(appExecutable, 'notch executable');
-  await copyExecutable(source.helper, helper, 'Cockpit CLI');
-  await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Cockpit Hub.app'), 'hub app (Tauri)');
+  await copyExecutable(source.helper, helper, 'Pulse CLI');
+  await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Pulse.app'), 'hub app (Tauri)');
   await placePrivilegedHelper(app, source.notch);
   await cp(join(repoRoot, 'mac/Notch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
-  await copyExecutable(appExecutable, join(root, 'raw', 'Cockpit'), 'Mac app executable');
-  await copyExecutable(source.helper, join(root, 'raw', 'cockpit'), 'Cockpit CLI');
+  await copyExecutable(appExecutable, join(root, 'raw', 'Pulse'), 'Mac app executable');
+  await copyExecutable(source.helper, join(root, 'raw', 'pulse'), 'Pulse CLI');
   await dittoZip(app, join(root, `${appName}.zip`));
   await writeCandidateManifest(root);
-  console.log(`[cockpit mac payload] candidate: ${root}`);
+  console.log(`[pulse mac payload] candidate: ${root}`);
 }
 
 async function findCandidateApp(root) {
-  const candidates = [join(root, 'cockpit', 'mac', appName)];
+  const candidates = [join(root, 'pulse', 'mac', appName)];
   for (const candidatePath of candidates) {
     try {
       await requireDirectory(candidatePath, 'candidate app');
@@ -153,20 +153,20 @@ async function prepare() {
   await rm(paths.app, { recursive: true, force: true });
   await cp(sourceApp, paths.app, { recursive: true, force: true });
   await requireFile(paths.appExecutable, 'staged app executable');
-  await requireFile(paths.helper, 'staged Cockpit CLI');
+  await requireFile(paths.helper, 'staged Pulse CLI');
   // GitHub artifact handoff normalizes file modes; restore both known executables.
   await chmod(paths.appExecutable, 0o755);
   await chmod(paths.helper, 0o755);
-  for (const [file, label] of [[paths.privilegedHelper, 'privileged helper'], [paths.elevate, 'cockpit-elevate']]) {
+  for (const [file, label] of [[paths.privilegedHelper, 'privileged helper'], [paths.elevate, 'pulse-elevate']]) {
     await requireFile(file, `staged ${label}`);
     await chmod(file, 0o755);
   }
   await requireFile(paths.hubExecutable, 'staged hub executable');
   await chmod(paths.hubExecutable, 0o755);
   await mkdir(paths.raw, { recursive: true });
-  await copyExecutable(paths.appExecutable, join(paths.raw, 'Cockpit'), 'staged app executable');
-  await copyExecutable(paths.helper, join(paths.raw, 'cockpit'), 'staged Cockpit CLI');
-  console.log(`[cockpit mac payload] prepared: ${stagingRoot}`);
+  await copyExecutable(paths.appExecutable, join(paths.raw, 'Pulse'), 'staged app executable');
+  await copyExecutable(paths.helper, join(paths.raw, 'pulse'), 'staged Pulse CLI');
+  console.log(`[pulse mac payload] prepared: ${stagingRoot}`);
 }
 
 function once(emitter, event) {
@@ -177,9 +177,9 @@ function once(emitter, event) {
 }
 
 async function packageMac({ local = false } = {}) {
-  await requireDirectory(paths.app, 'staged Cockpit.app');
+  await requireDirectory(paths.app, 'staged Pulse.app');
   await requireFile(paths.appExecutable, 'staged app executable');
-  await requireFile(paths.helper, 'staged Cockpit CLI');
+  await requireFile(paths.helper, 'staged Pulse CLI');
   await requireFile(paths.hubExecutable, 'staged hub executable');
   const identity = process.env.APPLE_DEVELOPER_ID;
   if (!identity) fail('APPLE_DEVELOPER_ID is required; refusing unconfigured signing identity');
@@ -196,8 +196,8 @@ async function packageMac({ local = false } = {}) {
     type: 'distribution',
     // osx-sign v2 reads entitlements per file; a top-level `entitlements` is
     // ignored and Electron's defaults (camera, mic, location…) are applied.
-    // The privileged helper and cockpit-elevate need no entitlements.
-    optionsForFile: file => /\/Contents\/Helpers\/(CockpitHelper|cockpit-elevate)$/.test(file)
+    // The privileged helper and pulse-elevate need no entitlements.
+    optionsForFile: file => /\/Contents\/Helpers\/(PulseHelper|pulse-elevate)$/.test(file)
       ? { hardenedRuntime: true }
       : { hardenedRuntime: true, entitlements },
     preAutoEntitlements: false,
@@ -206,7 +206,7 @@ async function packageMac({ local = false } = {}) {
   });
   if (!local) await new Promise((resolvePromise,reject) => {
     const child=spawn(process.execPath,[join(repoRoot,'scripts/release/candidate.mjs'),'check'],{
-      stdio:'inherit',env:{...process.env,COCKPIT_CHECK_APP:paths.app}
+      stdio:'inherit',env:{...process.env,PULSE_CHECK_APP:paths.app}
     });
     child.once('error',reject);
     child.once('exit',code=>code===0?resolvePromise():reject(new Error(`Signed app smoke exited ${code}`)));
@@ -214,10 +214,10 @@ async function packageMac({ local = false } = {}) {
 
   await mkdir(dirname(paths.output), { recursive: true });
   const specification = JSON.parse(await readFile(join(releaseRoot, 'appdmg.json'), 'utf8'));
-  specification['code-sign'] = { 'signing-identity': identity, identifier: 'dev.orthic.cockpit.dmg' };
+  specification['code-sign'] = { 'signing-identity': identity, identifier: 'dev.orthic.pulse.dmg' };
   const builder = appdmg({ target: paths.output, basepath: stagingRoot, specification });
   await once(builder, 'finish');
-  console.log(`[cockpit mac payload] package: ${paths.output}`);
+  console.log(`[pulse mac payload] package: ${paths.output}`);
 }
 
 const mode = process.argv[2];

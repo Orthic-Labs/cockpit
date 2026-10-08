@@ -1,5 +1,5 @@
 //! Pill settings: bounded hand parser/encoder for exactly the shared schema, plus the
-//! on-disk store (`%LOCALAPPDATA%\Cockpit\pill-settings.json`).
+//! on-disk store (`%LOCALAPPDATA%\Pulse\pill-settings.json`).
 //!
 //! Schema (shared with the Mac pill), schema_version 1:
 //! `{"schema_version":1,"visible":true,"cadence_seconds":2,
@@ -29,7 +29,7 @@ pub const MAX_MONITORS: usize = 64;
 pub const MAX_KEY_BYTES: usize = 256;
 const MAX_DEPTH: usize = 8;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-const DIR_NAME: &str = "Cockpit";
+const DIR_NAME: &str = "Pulse";
 const FILE_NAME: &str = "pill-settings.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -520,14 +520,33 @@ pub struct SettingsPaths {
     pub file: PathBuf,
 }
 
-/// `%LOCALAPPDATA%\Cockpit\pill-settings.json`; requires an absolute LOCALAPPDATA.
+/// `%LOCALAPPDATA%\Pulse\pill-settings.json`; requires an absolute LOCALAPPDATA.
 pub fn settings_paths() -> Result<SettingsPaths, StoreError> {
     let base = std::env::var_os("LOCALAPPDATA").ok_or(StoreError::NoBaseDirectory)?;
     let base = PathBuf::from(base);
     if !base.is_absolute() {
         return Err(StoreError::NoBaseDirectory);
     }
-    Ok(paths_under(&base))
+    let paths = paths_under(&base);
+    let legacy = base.join("Cockpit");
+    if !paths.dir.try_exists().map_err(|e| StoreError::Io("stat_pulse_dir", e))? {
+        match fs::symlink_metadata(&legacy) {
+            Ok(metadata) => {
+                if !metadata.is_dir() || is_reparse_attributes(metadata.file_attributes()) {
+                    return Err(StoreError::ReparsePoint("legacy_dir"));
+                }
+                // Windows cannot replace an existing directory with a rename.
+                if let Err(error) = fs::rename(&legacy, &paths.dir) {
+                    if !paths.dir.is_dir() {
+                        return Err(StoreError::Io("migrate_legacy_dir", error));
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(StoreError::Io("stat_legacy_dir", error)),
+        }
+    }
+    Ok(paths)
 }
 
 pub fn paths_under(base: &Path) -> SettingsPaths {
@@ -633,7 +652,7 @@ pub(crate) fn wide_path(path: &Path) -> Vec<u16> {
         .collect()
 }
 
-/// Atomically publish `settings`. Trust policy (mirrors `load`): the existing Cockpit
+/// Atomically publish `settings`. Trust policy (mirrors `load`): the existing Pulse
 /// directory or settings file must pass the ownership/DACL check — anything owned by
 /// another user or more broadly ACL'd is refused, never rewritten. Anything we create
 /// (directory, temp file, and therefore the published file, which keeps the temp file's
@@ -991,13 +1010,13 @@ mod tests {
         assert!(is_reparse_attributes(0x400 | 0x10));
         assert!(!is_reparse_attributes(0x10));
         let p = paths_under(Path::new("C:\\Users\\u\\AppData\\Local"));
-        assert!(p.file.ends_with("Cockpit\\pill-settings.json"));
+        assert!(p.file.ends_with("Pulse\\pill-settings.json"));
         assert_eq!(p.file.parent().unwrap(), p.dir);
     }
 
     #[test]
     fn load_missing_is_writable_default() {
-        let paths = paths_under(Path::new("C:\\cockpit-test-nonexistent-base-dir"));
+        let paths = paths_under(Path::new("C:\\pulse-test-nonexistent-base-dir"));
         let out = load(&paths);
         assert!(out.writable && out.problem.is_none() && !out.file_found);
         assert_eq!(out.settings, PillSettings::new());
@@ -1008,7 +1027,7 @@ mod tests {
 
     fn live_paths(tag: &str) -> (PathBuf, SettingsPaths) {
         let base =
-            std::env::temp_dir().join(format!("cockpit-settings-{tag}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("pulse-settings-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         (base.clone(), paths_under(&base))
     }

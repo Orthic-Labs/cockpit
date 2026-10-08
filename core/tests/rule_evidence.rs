@@ -3,7 +3,7 @@
 //! `Option::None` always means "unknown"; nothing here invents a value the
 //! scanner would not have supplied.
 
-use cockpit_core::rules::*;
+use pulse_core::rules::*;
 
 type Mutator = fn(&mut ScanMetadata);
 

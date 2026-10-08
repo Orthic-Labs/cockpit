@@ -115,7 +115,7 @@ struct ProviderRing: View {
                 // the case this exists for, and painting them the same colour
                 // would hide it. Held slightly back in opacity so the headline
                 // stays the one the eye lands on first.
-                // Cockpit fork: shown while an agent works too — there is no
+                // Pulse fork: shown while an agent works too — there is no
                 // spinner competing for the inner gap.
                 if let radius = weeklyRing.radius, weeklyFraction != nil {
                     let inset = NotchLayout.ringDiameter / 2 - radius
@@ -204,7 +204,7 @@ private struct ActivityArc: View {
     var body: some View {
         Group {
             switch summary.state {
-            // Cockpit fork: no spinner while an agent works — constant motion
+            // Pulse fork: no spinner while an agent works — constant motion
             // at the screen edge is noise. The hover card still lists sessions.
             case .working: EmptyView()
             case .waiting, .success: pulse

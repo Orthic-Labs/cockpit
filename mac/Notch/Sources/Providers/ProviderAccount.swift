@@ -89,7 +89,7 @@ enum SignInRoute: Equatable {
     var signOutCaveat: String {
         switch self {
         case .modal(let name):
-            return L10n.t("Signs out of \(name) — the session belongs to Cockpit.")
+            return L10n.t("Signs out of \(name) — the session belongs to Pulse.")
         case .openApp(_, let name):
             return L10n.t("You stay signed in to \(name) — end that session in \(name) itself.")
         case .guidance, .command:

@@ -1,17 +1,17 @@
 [package]
-name = "cockpit-hub"
+name = "pulse-hub"
 version = "0.1.0"
-description = "Cockpit hub: storage and monitor window opened from the notch"
+description = "Pulse hub: storage and monitor window opened from the notch"
 edition = "2021"
 rust-version = "1.98.0"
 publish = false
 
 [lib]
-name = "cockpit_hub"
+name = "pulse_hub"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "cockpit-hub"
+name = "pulse-hub"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -28,7 +28,7 @@ rightkit-control = { version = "=0.1.6", features = ["tauri-plugin"], optional =
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-cockpit-core = { path = "../../core" }
+pulse-core = { path = "../../core" }
 trash = "=5.2.9"
 tauri-plugin-os = "2"
 

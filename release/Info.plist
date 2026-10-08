@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Cockpit</string>
+	<string>Pulse</string>
 	<key>CFBundleExecutable</key>
-	<string>Cockpit</string>
+	<string>Pulse</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.orthic.cockpit</string>
+	<string>dev.orthic.pulse</string>
 	<key>CFBundleName</key>
-	<string>Cockpit</string>
+	<string>Pulse</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

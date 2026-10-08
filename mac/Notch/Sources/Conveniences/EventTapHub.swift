@@ -10,7 +10,7 @@ typealias TapHandler = (CGEventType, CGEvent) -> TapDecision
 
 struct EventTapToken: Hashable { fileprivate let id = UUID() }
 
-/// Cockpit: the one session event tap behind the Mac conveniences. Features
+/// Pulse: the one session event tap behind the Mac conveniences. Features
 /// register ordered handlers (highest priority first; the first to swallow
 /// wins). The tap lives on a thread of its own so the main thread never sits
 /// in the event path, and `stop()` returns only once that thread has finished.
@@ -88,7 +88,7 @@ final class EventTapHub {
             CFRunLoopRemoveSource(loop, source, .commonModes)
             done.signal()
         }
-        thread.name = "dev.orthic.cockpit.eventtap"
+        thread.name = "dev.orthic.pulse.eventtap"
         thread.qualityOfService = .userInteractive
         thread.start()
         ready.wait()

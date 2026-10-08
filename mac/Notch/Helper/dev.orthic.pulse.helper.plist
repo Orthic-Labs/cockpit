@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>dev.orthic.cockpit.helper</string>
+	<string>dev.orthic.pulse.helper</string>
 	<key>BundleProgram</key>
-	<string>Contents/Helpers/CockpitHelper</string>
+	<string>Contents/Helpers/PulseHelper</string>
 	<key>MachServices</key>
 	<dict>
-		<key>dev.orthic.cockpit.helper</key>
+		<key>dev.orthic.pulse.helper</key>
 		<true/>
 	</dict>
 	<key>AssociatedBundleIdentifiers</key>
 	<array>
-		<string>dev.orthic.cockpit</string>
+		<string>dev.orthic.pulse</string>
 	</array>
 </dict>
 </plist>

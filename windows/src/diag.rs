@@ -1,5 +1,5 @@
 //! Structured stderr diagnostics: one `key=value` line per event, no multi-line output.
-//! Format: `cockpit-windows level=<l> event=<e> k=v ...`; values with spaces, quotes or
+//! Format: `pulse-windows level=<l> event=<e> k=v ...`; values with spaces, quotes or
 //! control characters are double-quoted and escaped. Release builds use the Windows
 //! subsystem (no console), where stderr writes are ignored; debug/CI runs show them.
 
@@ -32,7 +32,7 @@ pub fn quote_value(value: &str) -> String {
 
 pub fn format_line(level: &str, event: &str, fields: &[(&str, &str)]) -> String {
     let mut line = format!(
-        "cockpit-windows level={} event={}",
+        "pulse-windows level={} event={}",
         quote_value(level),
         quote_value(event)
     );
@@ -135,7 +135,7 @@ mod tests {
         );
         assert_eq!(
             line,
-            "cockpit-windows level=error event=win32_failure op=CreateWindowExW \
+            "pulse-windows level=error event=win32_failure op=CreateWindowExW \
              code=0x80070005 msg=\"Access is denied.\" ctx=\"monitor=\\\\\\\\.\\\\DISPLAY2\""
         );
         assert!(!line.contains('\n') && !line.contains('\r'));

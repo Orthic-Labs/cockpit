@@ -1,16 +1,16 @@
 import Foundation
 import os
 
-// Cockpit's privileged helper. One operation: move an allowed item to the
+// Pulse's privileged helper. One operation: move an allowed item to the
 // calling user's Trash. See docs/helper.md for the boundary.
 
-private let log = Logger(subsystem: "dev.orthic.cockpit.helper", category: "trash")
+private let log = Logger(subsystem: "dev.orthic.pulse.helper", category: "trash")
 
-/// Only code signed by Cockpit's team with one of these identifiers may connect.
+/// Only code signed by Pulse's team with one of these identifiers may connect.
 private let clientRequirement =
-    "anchor apple generic and certificate leaf[subject.OU] = \"\(cockpitTeamID)\" and "
-    + "(identifier \"dev.orthic.cockpit\" or identifier \"dev.orthic.cockpit.hub\" "
-    + "or identifier \"dev.orthic.cockpit.elevate\")"
+    "anchor apple generic and certificate leaf[subject.OU] = \"\(pulseTeamID)\" and "
+    + "(identifier \"dev.orthic.pulse\" or identifier \"dev.orthic.pulse.hub\" "
+    + "or identifier \"dev.orthic.pulse.elevate\")"
 
 private func result(_ path: String, _ status: String, _ detail: String = "") -> [String: String] {
     ["path": path, "status": status, "detail": detail]
@@ -81,7 +81,7 @@ private func move(_ path: String, toTrash trash: String, uid: uid_t, gid: gid_t)
     return result(path, "refused", "No free name in the Trash.")
 }
 
-private final class Service: NSObject, CockpitHelperProtocol {
+private final class Service: NSObject, PulseHelperProtocol {
     let callerUID: uid_t
     init(callerUID: uid_t) { self.callerUID = callerUID }
 
@@ -107,7 +107,7 @@ private final class Delegate: NSObject, NSXPCListenerDelegate {
     private var idleExit: DispatchWorkItem?
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection c: NSXPCConnection) -> Bool {
-        c.exportedInterface = NSXPCInterface(with: CockpitHelperProtocol.self)
+        c.exportedInterface = NSXPCInterface(with: PulseHelperProtocol.self)
         c.exportedObject = Service(callerUID: c.effectiveUserIdentifier)
         idleExit?.cancel()
         open += 1
@@ -129,7 +129,7 @@ private final class Delegate: NSObject, NSXPCListenerDelegate {
 }
 
 private let delegate = Delegate()
-private let listener = NSXPCListener(machServiceName: cockpitHelperMachService)
+private let listener = NSXPCListener(machServiceName: pulseHelperMachService)
 listener.setConnectionCodeSigningRequirement(clientRequirement)
 listener.delegate = delegate
 listener.resume()

@@ -1,7 +1,7 @@
-use cockpit_core::history::compare;
-use cockpit_core::model::ScanReport;
-use cockpit_core::store::Snapshot;
-use cockpit_core::{Accounting, VolumeIdentity, VolumeUsage};
+use pulse_core::history::compare;
+use pulse_core::model::ScanReport;
+use pulse_core::store::Snapshot;
+use pulse_core::{Accounting, VolumeIdentity, VolumeUsage};
 use std::path::PathBuf;
 
 fn report(roots: &[&str], volumes: &[&str], logical: u64, attributed: u64) -> ScanReport {
@@ -147,7 +147,7 @@ fn differing_schema_versions_are_not_comparable() {
 fn unknown_sharing_does_not_block_comparison() {
     // Reclaim estimates may be unknown; attributed accounting still compares.
     let mut report_a = report(&["/data"], &["vol-a"], 100, 100);
-    report_a.accounting.reclaim.state = Some(cockpit_core::ReclaimState::Unknown);
+    report_a.accounting.reclaim.state = Some(pulse_core::ReclaimState::Unknown);
     let previous = snapshot(&report_a);
     let current = snapshot(&report(&["/data"], &["vol-a"], 150, 160));
     let comparison = compare(&previous, &current);

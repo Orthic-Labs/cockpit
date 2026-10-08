@@ -1,7 +1,7 @@
 //! Settled, read-only local IPC contract shared by the worker and transports.
 //!
 //! * Opt-in and on demand: nothing listens unless a caller explicitly runs
-//!   `cockpit worker serve`. Pills never start a listener.
+//!   `pulse worker serve`. Pills never start a listener.
 //! * Local only: Unix-domain sockets on macOS, per-user named pipes on
 //!   Windows. No TCP.
 //! * Read-only: the only operations are `status`, `processes` and `scan`

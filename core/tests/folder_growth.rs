@@ -1,10 +1,10 @@
-use cockpit_core::folder_growth::compare_folders;
-use cockpit_core::model::{
+use pulse_core::folder_growth::compare_folders;
+use pulse_core::model::{
     Accounting, EntryKind, FileMetadata, FolderAccounting, ScanReport, ScannedEntry, SkippedLink,
     SnapshotState,
 };
-use cockpit_core::store::Snapshot;
-use cockpit_core::{VolumeIdentity, VolumeUsage};
+use pulse_core::store::Snapshot;
+use pulse_core::{VolumeIdentity, VolumeUsage};
 use std::path::PathBuf;
 
 fn folder(volume: &str, path: &str, logical: u64, attributed: u64) -> FolderAccounting {
@@ -261,7 +261,7 @@ fn caller_limit_is_capped_and_reported() {
     );
     let result = compare_folders(&previous, &current, usize::MAX);
     assert!(result.comparable);
-    assert_eq!(result.limit, cockpit_core::folder_growth::MAX_FOLDER_LIMIT);
+    assert_eq!(result.limit, pulse_core::folder_growth::MAX_FOLDER_LIMIT);
     assert!(
         result
             .reasons

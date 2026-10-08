@@ -3,7 +3,7 @@
 //! Identity is `(pid, start_time)` and is re-checked against a fresh snapshot
 //! immediately before any signal or quit request. Quit is always graceful and
 //! never escalates; Force Quit is a separate, explicit call. Other users'
-//! processes, system processes and Cockpit itself are never listed or touched.
+//! processes, system processes and Pulse itself are never listed or touched.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -121,15 +121,15 @@ fn is_system_path(path: &Path) -> bool {
         .any(|prefix| text.starts_with(prefix))
 }
 
-fn is_cockpit(root: Option<&Path>, bundle_id: Option<&str>, name: &str) -> bool {
+fn is_pulse(root: Option<&Path>, bundle_id: Option<&str>, name: &str) -> bool {
     bundle_id
-        .map(|b| b.starts_with("dev.orthic.cockpit"))
+        .map(|b| b.starts_with("dev.orthic.pulse"))
         .unwrap_or(false)
         || root
             .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().starts_with("Cockpit"))
+            .map(|n| n.to_string_lossy().starts_with("Pulse"))
             .unwrap_or(false)
-        || name.to_lowercase().starts_with("cockpit")
+        || name.to_lowercase().starts_with("pulse")
 }
 
 /// Which app bundle a process belongs to: its own executable's outermost
@@ -195,9 +195,9 @@ fn refusal_for(
     members: &[&Snap],
 ) -> Option<String> {
     if members.iter().any(|m| m.identity.pid == std::process::id())
-        || is_cockpit(root, bundle_id, name)
+        || is_pulse(root, bundle_id, name)
     {
-        return Some("Cockpit does not quit itself.".into());
+        return Some("Pulse does not quit itself.".into());
     }
     if let Some(b) = bundle_id
         && NEVER_QUIT_BUNDLES.contains(&b)

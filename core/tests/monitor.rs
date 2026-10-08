@@ -1,5 +1,5 @@
-use cockpit_core::monitor::*;
-use cockpit_core::{Capability, Metric, ProcessIdentity, ProcessInfo};
+use pulse_core::monitor::*;
+use pulse_core::{Capability, Metric, ProcessIdentity, ProcessInfo};
 
 fn counters(received_bytes: u64, transmitted_bytes: u64) -> NetworkCounters {
     NetworkCounters {

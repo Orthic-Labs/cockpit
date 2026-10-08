@@ -4,7 +4,7 @@ import Combine
 import SwiftUI
 
 /// A panel that can take keyboard focus without activating the app, so the
-/// launcher never puts Cockpit in the Dock or in front of the app you were in.
+/// launcher never puts Pulse in the Dock or in front of the app you were in.
 private final class LauncherPanel: NSPanel {
     var onResignKey: (() -> Void)?
     override var canBecomeKey: Bool { true }

@@ -1,4 +1,4 @@
-use cockpit_core::compression::*;
+use pulse_core::compression::*;
 use std::path::PathBuf;
 
 fn request(format: CompressionFormat) -> CompressionRequest {

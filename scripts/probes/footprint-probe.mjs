@@ -2,7 +2,7 @@
 // Thin runner for footprint-report.mjs. Read-only: samples ONE explicitly supplied PID with the OS
 // process listing. Never starts/stops apps, installs anything, uses a shell, or needs admin rights.
 // Usage: node scripts/probes/footprint-probe.mjs --pid PID [--duration S] [--interval S] [--out FILE]
-//        [--probe-bin PATH]  (macOS: explicit cockpit-probe executable; otherwise ps, RSS only)
+//        [--probe-bin PATH]  (macOS: explicit pulse-probe executable; otherwise ps, RSS only)
 //        [--soak --duration S --out FILE]  (long run, S up to 86400; NDJSON stream, bounded memory)
 import { execFile } from "node:child_process";
 import { accessSync, closeSync, constants, openSync, statSync, writeFileSync, writeSync } from "node:fs";
@@ -92,8 +92,8 @@ const startedAt = new Date().toISOString();
 if (soak) {
   try { fd = openSync(options.out, "wx", 0o600); } catch { console.error("footprint-probe: cannot create --out (it must not already exist)"); process.exit(2); }
   emit({
-    kind: "cockpit.footprint.header", schema_version: SCHEMA_VERSION, platform, target_pid: options.pid, started_at: startedAt,
-    probe: options.probeBin ? "cockpit-probe" : platform === "win32" ? "powershell" : "ps",
+    kind: "pulse.footprint.header", schema_version: SCHEMA_VERSION, platform, target_pid: options.pid, started_at: startedAt,
+    probe: options.probeBin ? "pulse-probe" : platform === "win32" ? "powershell" : "ps",
     requested_duration_s: options.durationS, requested_interval_s: options.intervalS
   });
 }
@@ -106,7 +106,7 @@ for (let i = 0; i < options.samples && !interrupted; i += 1) {
   const { record, stop } = tracker.add({ at: new Date().toISOString(), monoMs: performance.now(), result });
   if (soak) {
     summary.add(record);
-    emit({ kind: "cockpit.footprint.sample", ...record });
+    emit({ kind: "pulse.footprint.sample", ...record });
     if (outputFailed) { tracker.finish("output_error"); break; }
   }
   if (stop) break;
@@ -115,7 +115,7 @@ tracker.finish(interrupted ? "interrupted" : "completed");
 const endedAt = new Date().toISOString();
 if (soak) {
   const report = buildStreamingReport({ platform, options, startedAt, endedAt, tracker, summary });
-  emit({ kind: "cockpit.footprint.summary", ...report });
+  emit({ kind: "pulse.footprint.summary", ...report });
   closeSync(fd);
   console.error(formatSummary(report));
   process.exit(report.termination === "completed" && !outputFailed ? 0 : 1);

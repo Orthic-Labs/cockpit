@@ -1,7 +1,7 @@
 #![cfg(windows)]
 
-use cockpit_core::ipc::windows::{default_endpoint, request, serve};
-use cockpit_core::ipc::{ErrorCode, Handler, Limits, Outcome, Response, ServeExit};
+use pulse_core::ipc::windows::{default_endpoint, request, serve};
+use pulse_core::ipc::{ErrorCode, Handler, Limits, Outcome, Response, ServeExit};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -22,7 +22,7 @@ fn unique(tag: &str) -> String {
         .unwrap()
         .as_nanos();
     format!(
-        r"\\.\pipe\cockpit-test-{}-{tag}-{nanos}",
+        r"\\.\pipe\pulse-test-{}-{tag}-{nanos}",
         std::process::id()
     )
 }
@@ -35,7 +35,7 @@ fn limits() -> Limits {
     }
 }
 
-type ServerThread = JoinHandle<Result<ServeExit, cockpit_core::ipc::IpcError>>;
+type ServerThread = JoinHandle<Result<ServeExit, pulse_core::ipc::IpcError>>;
 
 fn spawn_server(endpoint: &str, limits: Limits, flag: &Arc<AtomicBool>) -> ServerThread {
     let endpoint = endpoint.to_owned();
@@ -63,7 +63,7 @@ fn round_trip_and_shutdown_flag() {
 fn default_endpoint_is_a_safe_pipe_name() {
     let endpoint = default_endpoint().unwrap();
     let name = endpoint
-        .strip_prefix(r"\\.\pipe\cockpit-worker-S-1-")
+        .strip_prefix(r"\\.\pipe\pulse-worker-S-1-")
         .unwrap();
     assert!(!name.contains('\\'));
 }

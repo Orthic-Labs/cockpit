@@ -1,7 +1,7 @@
 //! Real-filesystem runtime tests for the std provider. Every test works in a
 //! unique directory under the canonical temp dir and removes only that dir.
 
-use cockpit_core::{
+use pulse_core::{
     EntryKind, FileMetadata, FilesystemProvider, FsError, ScanOptions, StdFilesystemProvider,
     VolumeIdentity, VolumeUsage, scan_paths, scan_with_provider,
 };
@@ -23,7 +23,7 @@ impl TempDir {
             .unwrap_or(0);
         let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = base.join(format!(
-            "cockpit-scan-runtime-{label}-{}-{nanos}-{unique}",
+            "pulse-scan-runtime-{label}-{}-{nanos}-{unique}",
             std::process::id()
         ));
         fs::create_dir(&path).expect("create unique temp dir");
@@ -82,7 +82,7 @@ fn per_scan_cache_is_reset_and_results_are_consistent() {
     );
     assert_eq!(first.entries.len(), 4);
     assert_eq!(first.entries.len(), second.entries.len());
-    let volumes = |report: &cockpit_core::ScanReport| {
+    let volumes = |report: &pulse_core::ScanReport| {
         report
             .entries
             .iter()

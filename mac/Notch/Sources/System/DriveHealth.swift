@@ -1,12 +1,12 @@
 import Darwin
 import Foundation
 
-/// Cockpit fork: drive health for the Disks hover card, read from
+/// Pulse fork: drive health for the Disks hover card, read from
 /// smartmontools. `smartctl -a -j` runs as a subprocess every ten minutes, off
 /// every actor the two-second timer touches; the card only ever reads what the
 /// last run left behind. A drive the connection hides (a USB enclosure
 /// without SMART passthrough) says so and keeps its last good reading, with
-/// its date, in `~/Library/Application Support/Cockpit/drive-health.json`.
+/// its date, in `~/Library/Application Support/Pulse/drive-health.json`.
 actor DriveHealth {
     static let shared = DriveHealth()
 
@@ -253,7 +253,7 @@ actor DriveHealth {
 
     private static var store: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Cockpit/drive-health.json")
+            .appendingPathComponent("Library/Application Support/Pulse/drive-health.json")
     }
 
     private func persist() {

@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import CockpitMacPrototypeCore
+@testable import PulseMacPrototypeCore
 
 @MainActor
 final class NativeCleanupJourneyTests: XCTestCase {
@@ -14,7 +14,7 @@ final class NativeCleanupJourneyTests: XCTestCase {
         fixture = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
                       ?? FileManager.default.temporaryDirectory.path,
                       isDirectory: true)
-            .appendingPathComponent("cockpit-native-cleanup-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("pulse-native-cleanup-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         try FileManager.default.createDirectory(at: state, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

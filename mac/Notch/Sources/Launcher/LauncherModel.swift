@@ -10,7 +10,7 @@ struct LauncherItem: Identifiable {
             case .answer: return "Calculator"
             case .open: return "Open"
             case .apps: return "Apps"
-            case .commands: return "Cockpit"
+            case .commands: return "Pulse"
             case .files: return "Files & folders"
             }
         }
@@ -170,7 +170,7 @@ final class LauncherModel: ObservableObject {
             let section = command.section
             return LauncherItem(
                 id: "cmd:\(command.title)", section: .commands, title: command.title,
-                subtitle: command.usageProvider.map(usageLine) ?? "Opens Cockpit",
+                subtitle: command.usageProvider.map(usageLine) ?? "Opens Pulse",
                 iconPath: nil, symbol: command.symbol,
                 run: { if let section { HubLauncher.open(section: section) } })
         }

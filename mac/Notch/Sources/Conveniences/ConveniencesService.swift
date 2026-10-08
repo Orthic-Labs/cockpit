@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import Combine
 
-/// Cockpit: Mac conveniences (Finder cut/paste, window maximizer, Dock click
+/// Pulse: Mac conveniences (Finder cut/paste, window maximizer, Dock click
 /// minimize, Auto Quit), all off until chosen in the hub.
 ///
 /// One `EventTapHub` serves the three event features; Auto Quit watches

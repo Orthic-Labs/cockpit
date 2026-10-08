@@ -1,9 +1,9 @@
 //! Transport-free protocol tests for the read-only worker.
 
-use cockpit_core::ipc::{
+use pulse_core::ipc::{
     ErrorCode, Event, Handler, Limits, Outcome, PROTOCOL_VERSION, Phase, Response,
 };
-use cockpit_core::worker::Worker;
+use pulse_core::worker::Worker;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -43,7 +43,7 @@ impl TempTree {
             .unwrap()
             .as_nanos();
         let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
-        let root = base.join(format!("cockpit-worker-{}-{nanos}", std::process::id()));
+        let root = base.join(format!("pulse-worker-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         for i in 0..files {
             std::fs::write(
@@ -262,7 +262,7 @@ fn reused_request_id_conflicts_after_version_failure() {
 fn tiny_but_viable_error_limit_uses_minimal_error() {
     // Above the minimal-response floor but below a full error message:
     // the worker must still emit a parseable, bounded error.
-    let floor = cockpit_core::ipc::minimal_response_bytes();
+    let floor = pulse_core::ipc::minimal_response_bytes();
     let limits = Limits {
         max_response_bytes: floor,
         ..Limits::default()
@@ -279,10 +279,10 @@ fn tiny_but_viable_error_limit_uses_minimal_error() {
 #[test]
 fn maximal_request_id_retains_correlation_at_error_budget_floor() {
     let limits = Limits {
-        max_response_bytes: cockpit_core::ipc::minimal_response_bytes(),
+        max_response_bytes: pulse_core::ipc::minimal_response_bytes(),
         ..Limits::default()
     };
-    let id = "x".repeat(cockpit_core::ipc::MAX_REQUEST_ID_LEN);
+    let id = "x".repeat(pulse_core::ipc::MAX_REQUEST_ID_LEN);
     let mut worker = Worker::new(limits);
     let bytes = worker
         .handle(&serde_json::to_vec(&req(&id, &"unsupported".repeat(50), Value::Null)).unwrap());
@@ -308,10 +308,10 @@ fn impossible_response_limit_closes_instead_of_overrunning() {
 
 #[test]
 fn bounded_worker_executes_ops_in_killable_child() {
-    // Exercises the real `cockpit` binary's `worker exec-op` path. The bin
+    // Exercises the real `pulse` binary's `worker exec-op` path. The bin
     // path is required: cargo supplies it for integration tests, so this
     // coverage must never silently skip.
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_cockpit"));
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_pulse"));
     let events: Arc<Mutex<Vec<Event>>> = Arc::default();
     let sink = events.clone();
     let mut worker = Worker::bounded(
@@ -348,7 +348,7 @@ fn hanging_exe() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("cockpit-hang-{}-{nanos}.sh", std::process::id()));
+    let path = std::env::temp_dir().join(format!("pulse-hang-{}-{nanos}.sh", std::process::id()));
     std::fs::write(&path, "#!/bin/sh\nexec sleep 600\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -364,7 +364,7 @@ fn flooding_exe() -> PathBuf {
         .unwrap()
         .as_nanos();
     let path =
-        std::env::temp_dir().join(format!("cockpit-flood-{}-{nanos}.sh", std::process::id()));
+        std::env::temp_dir().join(format!("pulse-flood-{}-{nanos}.sh", std::process::id()));
     std::fs::write(&path, "#!/bin/sh\nwhile :; do printf 'stdout-flood-01234567890123456789\\n'; printf 'stderr-flood-01234567890123456789\\n' >&2; done\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -427,7 +427,7 @@ fn exec_op_spawn_failure_is_typed() {
     let mut worker = Worker::bounded(
         Limits::default(),
         Box::new(|_| {}),
-        PathBuf::from("/nonexistent/cockpit-does-not-exist"),
+        PathBuf::from("/nonexistent/pulse-does-not-exist"),
     );
     let response = call(&mut worker, req("noexe-1", "status", Value::Null));
     assert_eq!(code(&response), ErrorCode::Internal);

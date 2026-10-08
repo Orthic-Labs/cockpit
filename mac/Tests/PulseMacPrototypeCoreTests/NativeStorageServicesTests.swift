@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import XCTest
-@testable import CockpitMacPrototypeCore
+@testable import PulseMacPrototypeCore
 
 @MainActor
 final class NativeStorageServicesTests: XCTestCase {
@@ -10,7 +10,7 @@ final class NativeStorageServicesTests: XCTestCase {
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
                        ?? FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path,
                        isDirectory: true)
-            .appendingPathComponent("cockpit-native-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("pulse-native-\(UUID().uuidString)", isDirectory: true)
         let input = root.appendingPathComponent("input", isDirectory: true)
         let output = root.appendingPathComponent("output", isDirectory: true)
         let state = root.appendingPathComponent("state", isDirectory: true)

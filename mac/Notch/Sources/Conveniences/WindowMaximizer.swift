@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Cockpit: the green zoom button fills the screen's visible frame instead of
+/// Pulse: the green zoom button fills the screen's visible frame instead of
 /// entering a full-screen Space. Option-click keeps macOS's own behaviour, and
 /// so do windows already full screen or that cannot be resized.
 ///

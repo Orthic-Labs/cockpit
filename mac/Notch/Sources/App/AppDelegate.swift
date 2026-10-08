@@ -89,24 +89,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the app registered as a UIElement with no Dock tile, which looked
         // exactly like the icon having failed to install. The user's choice
         // replaces this a moment later, once preferences exist.
-        // Cockpit fork: an accessory app from the first moment — no Dock tile,
+        // Pulse fork: an accessory app from the first moment — no Dock tile,
         // no menu-bar item. The notch is the only surface.
         NSApp.setActivationPolicy(.accessory)
         guard !isRunningTests else { return }
+        do {
+            try ProductMigration.run()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Pulse could not move existing state"
+            alert.informativeText = "Your existing data is preserved. Resolve this error & reopen Pulse: \(error.localizedDescription)"
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
         Self.retireOlderInstances()
         ChannelNotifications.installPresenter()
 
         // Before Preferences reads anything, or the first launch flag and
         // every choice would be read from an empty domain.
-        Preferences.migrateFromPreviousName()
         let preferences = Preferences()
         self.preferences = preferences
 
-        // Cockpit fork: open at login by default — once, and only for the
+        // Pulse fork: open at login by default — once, and only for the
         // installed copy, so test builds never register themselves.
         if Bundle.main.bundlePath.hasPrefix("/Applications/"),
-           !UserDefaults.standard.bool(forKey: "cockpitLoginItemDefaulted") {
-            UserDefaults.standard.set(true, forKey: "cockpitLoginItemDefaulted")
+           !UserDefaults.standard.bool(forKey: "pulseLoginItemDefaulted") {
+            UserDefaults.standard.set(true, forKey: "pulseLoginItemDefaulted")
             if !preferences.launchAtLogin { preferences.launchAtLogin = true }
         }
 
@@ -141,10 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ClaudeOAuthProvider(profile: $0, displayName: claudeNames[$0.id])
             }
             self.claudeProviders = claudeProviders
-            // Cockpit fork: Claude and Codex only, then the machine's own
+            // Pulse fork: Claude and Codex only, then the machine's own
             // readings — CPU, memory pressure and one ring per mounted local disk.
             let allProviders: [UsageProvider] = claudeProviders
-                // Cockpit fork: one Codex ring — the default ~/.codex profile.
+                // Pulse fork: one Codex ring — the default ~/.codex profile.
                 + codexProfiles.filter { $0.id == CodexProfile.defaultID }.map { CodexLocalProvider(profile: $0) }
                 + SystemProviders.all()
             preferences.reconcile(discoveredIDs: allProviders.map(\.id))
@@ -176,11 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .store(in: &cancellables)
             if !isRunningTests { updater.start() }
 
-            // Cockpit fork: nobody sees System and Disks while the notch is
+            // Pulse fork: nobody sees System and Disks while the notch is
             // hidden, so they are sampled five times less often.
             fleet.onHiddenChange = { [weak store] hidden in store?.setSystemSamplingSlow(hidden) }
 
-            // Cockpit fork: settings live in the hub; Codenotch's window is gone.
+            // Pulse fork: settings live in the hub; Codenotch's window is gone.
             fleet.onOpenSettings = { _ = HubLauncher.open(section: "settings") }
             fleet.onOpenHub = { _ = HubLauncher.open(section: $0) }
             // A session row answers where it runs by taking you there.
@@ -392,7 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .combineLatest(preferences.$claudeDailyPaceRing)
                 .receive(on: RunLoop.main)
                 .sink { snapshots, paced in
-                    // Cockpit fork: usage alerts are for quotas, never for
+                    // Pulse fork: usage alerts are for quotas, never for
                     // CPU, memory or disk readings.
                     let snapshots = DailyPace.apply(to: snapshots.filter { $0.kind != .system },
                                                     enabled: paced)
@@ -403,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .store(in: &cancellables)
             store.start()
 
-            // Cockpit fork: share settings and accounts with the hub.
+            // Pulse fork: share settings and accounts with the hub.
             var bridgeActions = HubBridge.Actions()
             bridgeActions.refresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
             bridgeActions.resetPosition = { [weak fleet, weak preferences] in
@@ -721,10 +730,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if preferences.sessionEndSound { SessionChime.play(preferences.sessionEndSoundName) }
-        var notice = UsageResetEvent(providerID: "codenotch", providerName: "Cockpit",
+        var notice = UsageResetEvent(providerID: "codenotch", providerName: "Pulse",
                                      windowLabel: "", glyph: .claude,
                                      previousFraction: 0, currentFraction: 0, resetsAt: nil)
-        notice.noticeTitle = L10n.t("Cockpit test")
+        notice.noticeTitle = L10n.t("Pulse test")
         notice.noticeSubtitle = L10n.t("This is what one looks like.")
         notice.noticeStatus = ""
         fleet.showResetAlert(notice, duration: 5.0)

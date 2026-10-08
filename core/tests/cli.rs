@@ -3,7 +3,7 @@ use std::process::Command;
 #[test]
 fn apply_never_accepts_paths_or_unissued_ids() {
     for argument in ["/tmp/anything", "plan-unissued"] {
-        let result = Command::new(env!("CARGO_BIN_EXE_cockpit"))
+        let result = Command::new(env!("CARGO_BIN_EXE_pulse"))
             .args(["apply", argument, "--json"])
             .output()
             .unwrap();
@@ -20,7 +20,7 @@ fn apply_never_accepts_paths_or_unissued_ids() {
 
 #[test]
 fn missing_usage_is_unavailable_not_zero() {
-    let result = Command::new(env!("CARGO_BIN_EXE_cockpit"))
+    let result = Command::new(env!("CARGO_BIN_EXE_pulse"))
         .args(["usage", "--json"])
         .output()
         .unwrap();
@@ -35,14 +35,14 @@ fn missing_usage_is_unavailable_not_zero() {
 fn scan_is_metadata_only_and_requires_opt_in_for_history() {
     let root = std::fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("cockpit-cli-fixture-{}", std::process::id()));
+        .join(format!("pulse-cli-fixture-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let data = root.join("data");
     let state = root.join("state");
     std::fs::create_dir_all(&data).unwrap();
     std::fs::write(data.join("fixture.txt"), b"unchanged contents").unwrap();
     let execute = |save| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cockpit"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pulse"));
         command
             .arg("scan")
             .arg(&data)
@@ -71,7 +71,7 @@ fn scan_is_metadata_only_and_requires_opt_in_for_history() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    let history = cockpit_core::store::history(&state).unwrap();
+    let history = pulse_core::store::history(&state).unwrap();
     assert_eq!(history.len(), 1);
     assert!(history[0].findings.iter().all(|finding| !finding.eligible));
     std::fs::remove_dir_all(root).unwrap();
@@ -81,10 +81,10 @@ fn scan_is_metadata_only_and_requires_opt_in_for_history() {
 fn corrupt_history_is_reported_without_breaking_json_stdout() {
     let root = std::fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("cockpit-cli-corrupt-{}", std::process::id()));
+        .join(format!("pulse-cli-corrupt-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("scan-bad.json"), b"{").unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_cockpit"))
+    let result = Command::new(env!("CARGO_BIN_EXE_pulse"))
         .args(["history", "--json", "--state-dir"])
         .arg(&root)
         .output()
@@ -102,13 +102,13 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_cockpit"))
+    Command::new(env!("CARGO_BIN_EXE_pulse"))
 }
 
 fn fixture_dir(name: &str) -> PathBuf {
     let root = std::fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("cockpit-cli-{name}-{}", std::process::id()));
+        .join(format!("pulse-cli-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     root
@@ -359,7 +359,7 @@ fn storage_cli_journey_is_bounded_opt_in_and_preserves_fixture_bytes() {
 
     let parent = root.join("parent");
     let parent_data = parent.join("visible");
-    let parent_state = parent.join(".cockpit-state");
+    let parent_state = parent.join(".pulse-state");
     std::fs::create_dir_all(&parent_data).unwrap();
     std::fs::create_dir_all(&parent_state).unwrap();
     std::fs::write(parent_data.join("visible.txt"), b"visible").unwrap();

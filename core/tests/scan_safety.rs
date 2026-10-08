@@ -1,7 +1,7 @@
 //! Static-provider safety tests for the metadata-only scanner. No real
 //! filesystem access: every path below is synthetic.
 
-use cockpit_core::{
+use pulse_core::{
     EntryKind, FileIdentity, FileMetadata, FilesystemProvider, FsError, ScanOptions, SnapshotState,
     VolumeIdentity, VolumeUsage, scan_with_provider,
 };
@@ -347,7 +347,7 @@ fn missing_metadata_is_incomplete_even_if_provider_claims_complete() {
         assert!(!e.metadata.metadata_complete);
         let rc = e.reclaim.as_ref().unwrap();
         assert_eq!(rc.lower_bytes, 0);
-        assert!(matches!(rc.state, cockpit_core::ReclaimState::Unknown));
+        assert!(matches!(rc.state, pulse_core::ReclaimState::Unknown));
     }
 }
 
@@ -392,7 +392,7 @@ fn scanning_never_marks_anything_cleanup_eligible() {
     for e in &r.entries {
         if let Some(rc) = &e.reclaim {
             assert_eq!(rc.lower_bytes, 0);
-            assert!(matches!(rc.state, cockpit_core::ReclaimState::Unknown));
+            assert!(matches!(rc.state, pulse_core::ReclaimState::Unknown));
         }
     }
 }

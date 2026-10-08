@@ -1,5 +1,5 @@
-use cockpit_core::apps::*;
-use cockpit_core::{
+use pulse_core::apps::*;
+use pulse_core::{
     Accounting, Capability, EntryKind, FileIdentity, FileMetadata, Metric, ScanReport,
     ScannedEntry, VolumeIdentity,
 };
@@ -220,7 +220,7 @@ fn malformed_and_unavailable_updates_are_distinct_and_network_free() {
 #[test]
 fn bounded_history_keys_samples_by_incarnation_and_session() {
     let mut history = ProcessHistory::new(2);
-    let process = cockpit_core::ProcessIdentity {
+    let process = pulse_core::ProcessIdentity {
         pid: 7,
         start_time: 42,
     };
@@ -261,7 +261,7 @@ fn bounded_history_keys_samples_by_incarnation_and_session() {
     );
     assert_eq!(history.samples_for_session(history.session_id).len(), 2);
     // A reused PID is a different process incarnation and gets its own bound.
-    let reused = cockpit_core::ProcessIdentity {
+    let reused = pulse_core::ProcessIdentity {
         pid: 7,
         start_time: 43,
     };

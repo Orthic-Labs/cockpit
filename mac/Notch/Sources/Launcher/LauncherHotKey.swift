@@ -1,7 +1,7 @@
 import Carbon.HIToolbox
 import Foundation
 
-/// Cockpit launcher: which key combination opens it.
+/// Pulse launcher: which key combination opens it.
 enum LauncherHotkeyChoice: String, CaseIterable {
     case optionSpace
     case commandSpace

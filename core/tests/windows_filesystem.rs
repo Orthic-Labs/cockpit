@@ -2,8 +2,8 @@
 //! Windows native listing and volume usage checks. Metadata only; no volume
 //! modification and no cloud-provider access.
 
-use cockpit_core::VolumeIdentity;
-use cockpit_core::platform::{children_bounded, inspect, volume_usage};
+use pulse_core::VolumeIdentity;
+use pulse_core::platform::{children_bounded, inspect, volume_usage};
 use std::fs;
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ struct TempDir(PathBuf);
 impl TempDir {
     fn new(tag: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
-            "cockpit-winfs-{tag}-{}-{}",
+            "pulse-winfs-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

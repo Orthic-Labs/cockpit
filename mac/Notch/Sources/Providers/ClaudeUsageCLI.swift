@@ -80,7 +80,7 @@ struct ClaudeUsageCLI: Sendable {
                                                            in: .userDomainMask)[0]
     ) -> URL {
         applicationSupport
-            .appendingPathComponent("Cockpit", isDirectory: true)
+            .appendingPathComponent("Pulse", isDirectory: true)
             .appendingPathComponent("usage-scratch", isDirectory: true)
     }
 

@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use cockpit_core::folder_growth::compare_folders;
-use cockpit_core::store::{self, Snapshot};
-use cockpit_core::ScanReport;
+use pulse_core::folder_growth::compare_folders;
+use pulse_core::store::{self, Snapshot};
+use pulse_core::ScanReport;
 use serde::Serialize;
 
 /// Snapshots of the same roots kept after a save.

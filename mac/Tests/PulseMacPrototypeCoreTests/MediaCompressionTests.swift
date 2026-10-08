@@ -1,5 +1,5 @@
 import XCTest
-@testable import CockpitMacPrototypeCore
+@testable import PulseMacPrototypeCore
 
 final class MediaCompressionTests: XCTestCase {
     private var root: URL!
@@ -11,7 +11,7 @@ final class MediaCompressionTests: XCTestCase {
         root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["RUNNER_TEMP"]
                    ?? FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path,
                    isDirectory: true)
-            .appendingPathComponent("cockpit-media-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("pulse-media-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: input, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
         // Disposable 1x1 RGBA PNG. Tests never touch user media.

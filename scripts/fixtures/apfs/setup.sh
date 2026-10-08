@@ -2,12 +2,19 @@
 # CI-only: create a fresh disposable APFS sparse image, mount it inside a new temp dir and
 # populate it. Never touches existing volumes. Static-only locally: do NOT run on a dev machine.
 set -euo pipefail
+# Accept legacy user/CI overrides without replacing explicit Pulse values.
+for pulse_legacy_key in ${!COCKPIT_@}; do
+  pulse_current_key="PULSE_${pulse_legacy_key#COCKPIT_}"
+  if [[ -z "${!pulse_current_key+x}" ]]; then
+    export "$pulse_current_key=${!pulse_legacy_key}"
+  fi
+done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-if [[ "${GITHUB_ACTIONS:-}" != "true" || "${COCKPIT_APFS_FIXTURE:-}" != "1" ]]; then
-  echo "REFUSED: requires GITHUB_ACTIONS=true and COCKPIT_APFS_FIXTURE=1" >&2
+if [[ "${GITHUB_ACTIONS:-}" != "true" || "${PULSE_APFS_FIXTURE:-}" != "1" ]]; then
+  echo "REFUSED: requires GITHUB_ACTIONS=true and PULSE_APFS_FIXTURE=1" >&2
   exit 2
 fi
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -41,7 +48,7 @@ on_exit() {
     if [[ -n "$STATE" && -f "$STATE" ]]; then
       "$HERE/teardown.sh" "$STATE" || true
     elif [[ -n "$TMP" && -d "$TMP" && ! -L "$TMP" \
-            && "$(cat "$TMP/.cockpit-apfs-fixture" 2>/dev/null || true)" == "$RUN_TOKEN" ]]; then
+            && "$(cat "$TMP/.pulse-apfs-fixture" 2>/dev/null || true)" == "$RUN_TOKEN" ]]; then
       # Only the bare temp dir can exist before the state file is written; the marker token
       # proves this run created it, so removing it cannot touch anything unowned.
       rm -rf "$TMP"
@@ -52,7 +59,7 @@ on_exit() {
 trap on_exit EXIT
 trap 'exit 130' INT TERM
 
-TMP="$(mktemp -d "$BASE/cockpit-apfs-fixture.XXXXXX")"
+TMP="$(mktemp -d "$BASE/pulse-apfs-fixture.XXXXXX")"
 TMP="$(cd "$TMP" && pwd -P)"
 STATE="$TMP/state"
 MNT="$TMP/mnt"
@@ -61,7 +68,7 @@ HARNESS_TMP="$TMP"
 # Marker proving this directory was created by this harness run, written before anything else so
 # every later failure path can prove ownership; teardown refuses to rm without an exact match on
 # this run's unique token (recorded in the state file as RUN_TOKEN).
-printf '%s\n' "$RUN_TOKEN" >"$TMP/.cockpit-apfs-fixture"
+printf '%s\n' "$RUN_TOKEN" >"$TMP/.pulse-apfs-fixture"
 mkdir "$MNT"
 {
   echo "TMPDIR=$TMP"
@@ -70,7 +77,7 @@ mkdir "$MNT"
   echo "RUN_TOKEN=$RUN_TOKEN"
 } >"$STATE"
 
-bounded 120 hdiutil create -size 512m -fs APFS -type SPARSE -volname CockpitFixture "$IMG" >/dev/null
+bounded 120 hdiutil create -size 512m -fs APFS -type SPARSE -volname PulseFixture "$IMG" >/dev/null
 [[ -f "$IMG" ]] || IMG="$IMG.sparseimage" # hdiutil appends the extension when absent
 [[ -f "$IMG" ]]
 sed -i '' "s|^IMAGE=.*|IMAGE=$IMG|" "$STATE"
@@ -159,14 +166,14 @@ sync
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   {
-    echo "COCKPIT_APFS_FIXTURE_STATE=$STATE"
-    echo "COCKPIT_APFS_FIXTURE_ROOT=$ROOT"
-    echo "COCKPIT_APFS_FIXTURE_BASELINE_USED=$BASELINE"
-    echo "COCKPIT_APFS_FIXTURE_SNAPSHOT=$SNAPSHOT_KIND"
+    echo "PULSE_APFS_FIXTURE_STATE=$STATE"
+    echo "PULSE_APFS_FIXTURE_ROOT=$ROOT"
+    echo "PULSE_APFS_FIXTURE_BASELINE_USED=$BASELINE"
+    echo "PULSE_APFS_FIXTURE_SNAPSHOT=$SNAPSHOT_KIND"
   } >>"$GITHUB_ENV"
 fi
-echo "COCKPIT_APFS_FIXTURE_STATE=$STATE"
-echo "COCKPIT_APFS_FIXTURE_ROOT=$ROOT"
-echo "COCKPIT_APFS_FIXTURE_BASELINE_USED=$BASELINE"
-echo "COCKPIT_APFS_FIXTURE_SNAPSHOT=$SNAPSHOT_KIND"
+echo "PULSE_APFS_FIXTURE_STATE=$STATE"
+echo "PULSE_APFS_FIXTURE_ROOT=$ROOT"
+echo "PULSE_APFS_FIXTURE_BASELINE_USED=$BASELINE"
+echo "PULSE_APFS_FIXTURE_SNAPSHOT=$SNAPSHOT_KIND"
 trap - EXIT

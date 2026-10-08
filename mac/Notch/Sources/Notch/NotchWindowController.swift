@@ -143,7 +143,7 @@ final class NotchWindowController {
     /// fold reads as the notch refusing to stay put, not as it tidying up.
     var foldsForFullScreen = true
 
-    /// Cockpit fork: whether a full-screen app is currently folding this notch
+    /// Pulse fork: whether a full-screen app is currently folding this notch
     /// away. The fleet reads it to slow the System and Disks sampling while
     /// nobody can see them.
     private(set) var isFoldedForFullScreen = false
@@ -1638,7 +1638,7 @@ final class NotchWindowController {
             setExpanded(true)
             return
         }
-        // Cockpit fork: a click on the open notch opens the hub — a ring on
+        // Pulse fork: a click on the open notch opens the hub — a ring on
         // its own page (disks → Storage, system → Monitor, an account →
         // Accounts), anywhere else on Storage. Readings refresh on their own.
         if notchRect.contains(local),
@@ -2050,13 +2050,13 @@ final class NotchWindowController {
         model.now = now
     }
 
-    /// Cockpit fork: right-click offers one thing — Quit. No Dock tile and no
+    /// Pulse fork: right-click offers one thing — Quit. No Dock tile and no
     /// menu-bar item exist, so this is the way out.
     private func contextMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(
-            withTitle: L10n.t("Quit Cockpit"),
+            withTitle: L10n.t("Quit Pulse"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         ).isEnabled = true

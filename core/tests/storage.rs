@@ -1,4 +1,4 @@
-use cockpit_core::{
+use pulse_core::{
     EntryKind, FileIdentity, FileMetadata, FilesystemProvider, FsError, ScanOptions, SnapshotState,
     VolumeIdentity, VolumeUsage, scan_with_provider,
 };

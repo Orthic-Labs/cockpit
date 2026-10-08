@@ -1,4 +1,4 @@
-use cockpit_core::presentation::{RenderOptions, View, render};
+use pulse_core::presentation::{RenderOptions, View, render};
 use serde_json::{Value, json};
 
 fn opts(max_rows: usize) -> RenderOptions {

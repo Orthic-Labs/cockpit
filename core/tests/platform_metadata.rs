@@ -1,7 +1,7 @@
 //! Native metadata adapter tests: synthetic-provider fixtures (no filesystem)
 //! plus cfg-gated real-filesystem checks under a unique temp directory.
 
-use cockpit_core::{
+use pulse_core::{
     EntryKind, FileIdentity, FileMetadata, FilesystemProvider, FsError, ScanOptions, SnapshotState,
     StdFilesystemProvider, VolumeIdentity, VolumeUsage, scan_with_provider,
 };
@@ -226,7 +226,7 @@ mod real {
             // exercises entry limits, while symlink traversal stays refused.
             let base = fs::canonicalize(std::env::temp_dir()).unwrap();
             let root = base.join(format!(
-                "cockpit-platform-{name}-{}-{}",
+                "pulse-platform-{name}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

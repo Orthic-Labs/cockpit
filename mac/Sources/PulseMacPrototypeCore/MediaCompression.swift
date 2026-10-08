@@ -622,7 +622,7 @@ public final class MediaCompressionJob {
     }
 
     private func makeJobDirectory(parent: PinnedDirectory, token: String) throws -> PinnedDirectory {
-        let name = ".cockpit-compress-\(token)"
+        let name = ".pulse-compress-\(token)"
         let made = name.withCString { Darwin.mkdirat(parent.fd, $0, 0o700) }
         guard made == 0 else { throw MediaCompressionError.outputExists }
         let fd = try openDirectoryAt(parent.fd, name: name)

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use cockpit_core::cleanup_scan as cs;
+use pulse_core::cleanup_scan as cs;
 use trash::macos::{DeleteMethod, TrashContextExtMacos};
 
 fn home() -> PathBuf {

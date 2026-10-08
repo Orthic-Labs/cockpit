@@ -409,7 +409,7 @@ public final class NativeCleanupService {
         let sourceName = URL(fileURLWithPath: parentPath).lastPathComponent
         for attempt in 0..<8 {
             let suffix = attempt == 0 ? "\(claimID.prefix(16))-\(index)" : "\(claimID.prefix(16))-\(index)-\(attempt)"
-            let candidate = "\(sourceName).cockpit-\(suffix)"
+            let candidate = "\(sourceName).pulse-\(suffix)"
             var value = stat()
             if fstatat(trashFD, candidate, &value, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT { return candidate }
         }

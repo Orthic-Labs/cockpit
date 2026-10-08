@@ -53,7 +53,7 @@ export function parseArgs(argv) {
       opts.out = value;
     }
   }
-  if (opts.pid === null) return { ok: false, error: "--pid is required: pass the PID of the Cockpit process to measure" };
+  if (opts.pid === null) return { ok: false, error: "--pid is required: pass the PID of the Pulse process to measure" };
   if (opts.soak) {
     if (opts.durationS === null) return { ok: false, error: `--soak needs an explicit --duration (1..${MAX_SOAK_DURATION_S} seconds)` };
     if (opts.out === null) return { ok: false, error: "--soak needs --out FILE (samples stream there as NDJSON; they are never kept in memory)" };
@@ -164,7 +164,7 @@ const REASON = /^[a-z0-9_]{1,64}$/;
 const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
 
 /**
- * Parse one JSON line from `cockpit-probe --pid N` (mac/Sources/CockpitProbe). Statuses: ok, vanished,
+ * Parse one JSON line from `pulse-probe --pid N` (mac/Sources/PulseProbe). Statuses: ok, vanished,
  * pid_reused (start time differed before vs after the sample), unavailable. Success sample has
  * startTime "unix:SEC.UUUUUU" (kernel process start), rss, footprint, cpu seconds and optional Mach ports.
  */
@@ -179,7 +179,7 @@ export function parseProbeOutput(stdout, expectedPid) {
     return fail("malformed", "probe_json_invalid");
   }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return fail("malformed", "probe_json_not_object");
-  if (doc.schema_version !== 1 || doc.kind !== "cockpit.probe.sample") return fail("malformed", "probe_schema_unrecognised");
+  if (doc.schema_version !== 1 || !["pulse.probe.sample", "cockpit.probe.sample"].includes(doc.kind)) return fail("malformed", "probe_schema_unrecognised");
   if (doc.pid !== expectedPid) return fail("malformed", "probe_pid_mismatch");
   if (doc.status === "vanished") return fail("vanished", "probe_process_vanished");
   if (doc.status === "pid_reused") return fail("pid_reused", "start_time_changed_during_sample");
@@ -389,11 +389,11 @@ export function createSummary({ reservoirSize = RESERVOIR_SIZE } = {}) {
 
 function metricNotes(platform, options) {
   const rss = platform === "win32" ? "WorkingSet64; not private bytes"
-    : options.probeBin ? "cockpit-probe ri_resident_size (bytes); not physical footprint"
+    : options.probeBin ? "pulse-probe ri_resident_size (bytes); not physical footprint"
       : "ps rss (KiB converted to bytes); not physical footprint";
   return {
     rss_bytes: rss,
-    footprint_bytes: "cockpit-probe ri_phys_footprint (RUSAGE_INFO_V4); macOS with --probe-bin only",
+    footprint_bytes: "pulse-probe ri_phys_footprint (RUSAGE_INFO_V4); macOS with --probe-bin only",
     private_bytes: "PowerShell PrivateMemorySize64; Windows only",
     handle_count: "PowerShell HandleCount; Windows only",
     gdi_objects: "GetGuiResources would need Add-Type; reported unavailable",
@@ -405,7 +405,7 @@ function metricNotes(platform, options) {
 function reportHeader({ platform, options, startedAt, endedAt, tracker }) {
   return {
     schema_version: SCHEMA_VERSION,
-    kind: "cockpit.footprint",
+    kind: "pulse.footprint",
     platform,
     process: tracker.identity,
     target_pid: options.pid,
