@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, ConfirmDialog, EmptyState } from "@rightkit/app-shell/react";
-import { Activity, ChevronDown, ChevronRight, File, Folder as FolderIcon, HardDrive, Info, RefreshCw, ShieldCheck, Terminal, Undo2, Usb } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { Badge, Button, ConfirmDialog, EmptyState, SegmentedControl, useContextMenu } from "@rightkit/app-shell/react";
+import { Activity, ChevronDown, ChevronRight, Copy, File, Folder as FolderIcon, FolderInput, FolderOpen, HardDrive, Info, RefreshCw, ShieldCheck, Terminal, Trash2, Undo2, Usb } from "lucide-react";
 import {
   api,
   ago,
@@ -10,13 +10,18 @@ import {
   tone,
   type CleanupFinding,
   type CleanupReport,
+  type FileIdentity,
   type Folder,
   type Growth,
+  type HealthReport,
   type Row,
   type Volume,
 } from "../api";
 import { KINDS, kindOf, squarify } from "../chart";
 import { ChromeSnapshotsLine } from "./ChromeSnapshots";
+import { DriveHealthLine, DriveHealthPanel } from "./DriveHealth";
+import { Duplicates } from "./Duplicates";
+import "./health.css";
 
 const shortPath = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
 const VISIBLE_GROUPS = 6;
@@ -39,6 +44,9 @@ let cachedReport: CleanupReport | null = null;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Menu and keyboard actions apply to real items, never the "smaller files" total. */
+const actionable = (r: Row) => !r.summary;
 
 /** The volume a saved scan belongs to: its external drive, else the startup disk. */
 const mountFor = (root: string, list: Volume[]) =>
@@ -81,8 +89,16 @@ export function Storage() {
   const [report, setReport] = useState<CleanupReport | null>(cachedReport);
   const [showAll, setShowAll] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
+  // Space is the scan view; Duplicates is the exact-content copy finder.
+  const [tab, setTab] = useState<"space" | "duplicates">("space");
+  const [health, setHealth] = useState<HealthReport | null>(null);
+  // The volume whose drive-health panel is open, by mount point.
+  const [healthOpen, setHealthOpen] = useState<string | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<{ label: string; items: CleanupFinding[] } | null>(null);
+  // One item waiting on a Trash confirmation, or on confirming a copy across drives.
+  const [itemTrash, setItemTrash] = useState<{ row: Row; id: FileIdentity } | null>(null);
+  const [itemMove, setItemMove] = useState<{ row: Row; id: FileIdentity; destination: string; target: string } | null>(null);
   const [undo, setUndo] = useState<{ id: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -196,6 +212,81 @@ export function Storage() {
 
   const open = (path: string) => run(async () => setFolder(await api.children(path)));
 
+  // Single-item actions. The identity is read when the person asks for an
+  // action; the Rust side checks it again right before anything moves.
+  const showInFinder = (path: string) => api.finderOpen(path).catch((e) => setError(String(e)));
+  const copyText = (text: string) => navigator.clipboard.writeText(text).catch((e) => setError(`Could not copy: ${String(e)}`));
+  // Drops a moved or trashed item from what is on screen. The saved scan index
+  // is not rewritten here, so a rescan (or re-drilling) shows it until then.
+  const dropRow = (path: string) => {
+    if (results) setResults(results.filter((r) => r.path !== path));
+    else setFolder((f) => (f ? { ...f, rows: f.rows.filter((r) => r.path !== path) } : f));
+  };
+  const askTrash = (row: Row) => run(async () => setItemTrash({ row, id: await api.fileIdentity(row.path) }));
+  const confirmItemTrash = () => {
+    const pending = itemTrash;
+    if (!pending) return;
+    setItemTrash(null);
+    run(async () => {
+      try {
+        await api.fileTrash(pending.row.path, pending.id);
+        dropRow(pending.row.path);
+      } finally {
+        api.volumes().then(setVolumes).catch(() => {});
+      }
+    });
+  };
+  const finishMove = async (row: Row, id: FileIdentity, destination: string, copyAcrossVolumes: boolean) => {
+    try {
+      await api.fileMove(row.path, id, destination, copyAcrossVolumes);
+      dropRow(row.path);
+    } finally {
+      api.volumes().then(setVolumes).catch(() => {});
+    }
+  };
+  // Pick a destination, then move at once within one drive, or confirm a copy across drives first.
+  const moveItem = (row: Row) =>
+    run(async () => {
+      const id = await api.fileIdentity(row.path);
+      const destination = await api.fileChooseFolder();
+      if (!destination) return;
+      const plan = await api.fileMovePlan(row.path, id, destination);
+      if (plan.same_volume) await finishMove(row, id, destination, false);
+      else setItemMove({ row, id, destination, target: plan.target });
+    });
+  const confirmItemMove = () => {
+    const pending = itemMove;
+    if (!pending) return;
+    setItemMove(null);
+    run(() => finishMove(pending.row, pending.id, pending.destination, true));
+  };
+  // Double-click and Return open in Finder; ⌘C copies the path; ⌘⌫ asks to trash.
+  const onRowKey = (e: ReactKeyboardEvent, row: Row) => {
+    if (!actionable(row)) return;
+    const command = e.metaKey && !e.altKey && !e.ctrlKey;
+    if (command && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      copyText(row.path);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      showInFinder(row.path);
+    } else if (command && e.key === "Backspace") {
+      e.preventDefault();
+      askTrash(row);
+    }
+  };
+  // Declared after the handlers above: the builder runs during render.
+  const itemMenu = useContextMenu<Row>(
+    (row) => [
+      { id: "finder", label: row.is_dir ? "Open in Finder" : "Reveal in Finder", icon: <FolderOpen size={13} />, run: () => showInFinder(row.path) },
+      { id: "copy-path", label: "Copy path", icon: <Copy size={13} />, shortcut: "mod+c", separatorBefore: true, run: () => copyText(row.path) },
+      { id: "copy-name", label: "Copy name", icon: <Copy size={13} />, run: () => copyText(row.name) },
+      { id: "move", label: "Move to…", icon: <FolderInput size={13} />, separatorBefore: true, run: () => moveItem(row) },
+      { id: "trash", label: "Move to Trash", icon: <Trash2 size={13} />, shortcut: "mod+Backspace", danger: true, separatorBefore: true, run: () => askTrash(row) },
+    ],
+    "Item actions",
+  );
+
   useEffect(() => {
     alive.current = true;
     (async () => {
@@ -235,10 +326,23 @@ export function Storage() {
       return;
     }
     const handle = setTimeout(() => {
+      // TODO(search-limit): scanner::search takes only the query today. Once the
+      // filename search lands as search(query, limit), pass a limit here and in api.ts.
       api.search(query.trim()).then(setResults).catch((e) => setError(String(e)));
     }, 200);
     return () => clearTimeout(handle);
   }, [query, folder]);
+
+  // Drive health for every drive card. The hub samples smartctl itself at most
+  // every ten minutes, so polling here only reads the saved view.
+  useEffect(() => {
+    const mounts = volumes.filter((v) => !v.disk_image).map((v) => v.mount_point);
+    if (mounts.length === 0) return;
+    const run = () => api.driveHealth(mounts).then(setHealth).catch(() => {});
+    run();
+    const handle = setInterval(run, 60_000);
+    return () => clearInterval(handle);
+  }, [volumes]);
 
   const crumbs = useMemo(() => {
     if (!folder) return [];
@@ -310,35 +414,77 @@ export function Storage() {
     api.volumes().then(setVolumes).catch(() => {});
   };
 
+  const tabBar = (
+    <SegmentedControl
+      label="Storage view"
+      value={tab}
+      options={[
+        { value: "space", label: "Space" },
+        { value: "duplicates", label: "Duplicates" },
+      ]}
+      onChange={(value) => setTab(value as "space" | "duplicates")}
+    />
+  );
+
+  if (tab === "duplicates") {
+    return (
+      <div className="view storage">
+        {tabBar}
+        <Duplicates />
+      </div>
+    );
+  }
+
   const rows = results ?? folder?.rows ?? [];
   const largest = Math.max(1, ...rows.map((r) => r.bytes));
   const total = Math.max(1, rows.reduce((sum, r) => sum + r.bytes, 0));
 
   return (
     <div className="view storage">
+      {tabBar}
       <div className="volumes">
         {volumes.filter((v) => !v.disk_image).map((v) => {
           const Icon = v.internal ? HardDrive : Usb;
+          const card = health?.drives.find((d) => d.mount === v.mount_point);
+          const open = healthOpen === v.mount_point;
           return (
-            <button
-              key={v.mount_point}
-              className={`volume-card${v.mount_point === active ? " active" : ""}`}
-              onClick={() => (scanning && v.mount_point === active ? undefined : scanVolume(v.mount_point))}
-              disabled={busy}
-              title={v.mount_point}
-            >
-              <span className="volume-card-head">
-                <Icon size={15} strokeWidth={1.75} />
-                <span className="strong name">{v.name}</span>
-              </span>
-              <Bar fraction={1 - v.available_bytes / v.total_bytes} height={5} />
-              <span className="muted small">
-                {bytes(v.available_bytes)} free of {bytes(v.total_bytes)}
-              </span>
-            </button>
+            <div className="volume-cell" key={v.mount_point}>
+              <button
+                className={`volume-card${v.mount_point === active ? " active" : ""}`}
+                onClick={() => (scanning && v.mount_point === active ? undefined : scanVolume(v.mount_point))}
+                disabled={busy}
+                title={v.mount_point}
+              >
+                <span className="volume-card-head">
+                  <Icon size={15} strokeWidth={1.75} />
+                  <span className="strong name">{v.name}</span>
+                </span>
+                <Bar fraction={1 - v.available_bytes / v.total_bytes} height={5} />
+                <span className="muted small">
+                  {bytes(v.available_bytes)} free of {bytes(v.total_bytes)}
+                </span>
+                <DriveHealthLine card={card} toolAvailable={health?.tool_available ?? true} />
+              </button>
+              {card && (
+                <button
+                  className="crumb health-toggle small"
+                  onClick={() => setHealthOpen(open ? null : v.mount_point)}
+                  aria-expanded={open}
+                >
+                  {open ? "Hide drive health" : "Drive health"}
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
+      {healthOpen && (
+        <DriveHealthPanel
+          card={health?.drives.find((d) => d.mount === healthOpen)}
+          alerts={health?.alerts ?? []}
+          toolAvailable={health?.tool_available ?? true}
+        />
+      )}
 
       {installers.length > 0 && (
         <div className="installers muted small">
@@ -527,14 +673,18 @@ export function Storage() {
         <div className="explorer">
           <div className="list">
             {rows.map((r) => {
+              // A click with detail > 1 is the second click of a double-click: it must not drill in again.
               const kind = KINDS[kindOf(r.path, r.is_dir)];
               const pct = (r.bytes / total) * 100;
               return (
                 <div
                   key={r.path}
                   className={`row folder-row${r.is_dir && !results ? " clickable" : ""}`}
-                  onClick={() => (r.is_dir && !results ? open(r.path) : undefined)}
-                  onDoubleClick={() => (r.summary ? undefined : api.reveal(r.path))}
+                  tabIndex={actionable(r) ? 0 : undefined}
+                  onClick={(e) => (r.is_dir && !results && e.detail < 2 ? open(r.path) : undefined)}
+                  onDoubleClick={() => (actionable(r) ? showInFinder(r.path) : undefined)}
+                  onKeyDown={(e) => onRowKey(e, r)}
+                  onContextMenu={(e) => (actionable(r) ? itemMenu.open(e, r) : e.preventDefault())}
                   title={`${r.path}\n${kind.label}`}
                 >
                   <span className="name">
@@ -549,9 +699,11 @@ export function Storage() {
               );
             })}
           </div>
-          {!results && <Treemap rows={rows} open={open} />}
+          {!results && <Treemap rows={rows} open={open} finder={showInFinder} menu={itemMenu.open} />}
         </div>
       )}
+
+      {itemMenu.element}
 
       {pending && (
         <ConfirmDialog
@@ -562,6 +714,26 @@ export function Storage() {
           onCancel={() => setPending(null)}
         />
       )}
+
+      {itemTrash && (
+        <ConfirmDialog
+          title={`Move ${itemTrash.row.name} to the Trash?`}
+          description={`${shortPath(itemTrash.row.path)}, ${bytes(itemTrash.row.bytes)} will move to the Trash. Nothing is deleted: you can put it back, or empty the Trash yourself.`}
+          confirmLabel="Move to Trash"
+          onConfirm={confirmItemTrash}
+          onCancel={() => setItemTrash(null)}
+        />
+      )}
+
+      {itemMove && (
+        <ConfirmDialog
+          title={`Copy ${itemMove.row.name} to another drive?`}
+          description={`${shortPath(itemMove.destination)} is on another drive, so ${itemMove.row.name} is copied to ${shortPath(itemMove.target)}, and the original moves to the Trash.`}
+          confirmLabel="Copy and move to Trash"
+          onConfirm={confirmItemMove}
+          onCancel={() => setItemMove(null)}
+        />
+      )}
     </div>
   );
 }
@@ -569,8 +741,21 @@ export function Storage() {
 const W = 300;
 const H = 240;
 
-/** The current folder as one level of tiles, coloured by kind. Click a folder tile to open it. */
-function Treemap({ rows, open }: { rows: Row[]; open: (path: string) => void }) {
+/**
+ * The current folder as one level of tiles, coloured by kind. Click a folder
+ * tile to open it; double-click opens any item in Finder; right-click for the item menu.
+ */
+function Treemap({
+  rows,
+  open,
+  finder,
+  menu,
+}: {
+  rows: Row[];
+  open: (path: string) => void;
+  finder: (path: string) => void;
+  menu: (event: ReactMouseEvent | MouseEvent, row: Row) => void;
+}) {
   const items = rows.filter((r) => r.bytes > 0).slice(0, 40);
   if (items.length === 0) return null;
   const tiles = squarify(items.map((r) => r.bytes), W, H);
@@ -580,8 +765,19 @@ function Treemap({ rows, open }: { rows: Row[]; open: (path: string) => void }) 
         const t = tiles[i];
         const kind = KINDS[kindOf(r.path, r.is_dir)];
         const chars = Math.floor((t.w - 8) / 5.6);
+        // A click with detail > 1 is the second click of a double-click: it must not drill in again.
         return (
-          <g key={r.path} onClick={() => r.is_dir && open(r.path)} style={{ cursor: r.is_dir ? "pointer" : "default" }}>
+          <g
+            key={r.path}
+            onClick={(e) => {
+              if (r.is_dir && e.detail < 2) open(r.path);
+            }}
+            onDoubleClick={() => {
+              if (actionable(r)) finder(r.path);
+            }}
+            onContextMenu={(e) => (actionable(r) ? menu(e, r) : e.preventDefault())}
+            style={{ cursor: r.is_dir ? "pointer" : "default" }}
+          >
             <title>{`${r.name}: ${bytes(r.bytes)}`}</title>
             <rect x={t.x + 0.5} y={t.y + 0.5} width={Math.max(t.w - 1, 0)} height={Math.max(t.h - 1, 0)} rx={2} fill={kind.color} opacity={0.88} />
             {t.w > 46 && t.h > 16 && chars > 3 && (

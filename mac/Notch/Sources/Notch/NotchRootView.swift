@@ -133,6 +133,19 @@ struct NotchRootView: View {
                             x: model.edge.outward.x * Design.px(24),
                             y: model.edge.outward.y * Design.px(24)
                         )))
+                } else if let disk = model.diskImagePrompt, model.isExpanded {
+                    // A disk image installed (Undo) or asked about, ahead of
+                    // the ordinary cards until it is answered or goes.
+                    DiskImageCard(prompt: disk,
+                                  direction: model.edge.tooltipDirection,
+                                  tailOffset: model.notchMiddleAlong - diskImageCardAlong,
+                                  onChoice: { model.onDiskImageChoice?($0) })
+                        .onHover { model.onDiskImageHover?($0) }
+                        .position(diskImageCardCentre(place))
+                        .transition(.opacity.combined(with: .offset(
+                            x: model.edge.outward.x * Design.px(24),
+                            y: model.edge.outward.y * Design.px(24)
+                        )))
                 } else if let resetEvent = model.activeResetAlert,
                    model.isExpanded,
                    model.hoveredIndex == nil {
@@ -636,6 +649,21 @@ struct NotchRootView: View {
         let size = UpdateCard.size(for: model.edge.tooltipDirection)
         let across = model.edge.isVertical ? size.width : size.height
         return place.point(along: updateCardAlong,
+                           across: model.tooltipInset + (NotchLayout.tailLength + across) / 2)
+    }
+
+    /// Where the disk image card is centred along the notch: on its middle,
+    /// kept on the screen — see `DiskImageCard`.
+    private var diskImageCardAlong: CGFloat {
+        let size = DiskImageCard.size(for: model.edge.tooltipDirection)
+        return model.cardAlong(centredOn: model.notchMiddleAlong,
+                               length: model.edge.isVertical ? size.height : size.width)
+    }
+
+    private func diskImageCardCentre(_ place: NotchPlacement) -> CGPoint {
+        let size = DiskImageCard.size(for: model.edge.tooltipDirection)
+        let across = model.edge.isVertical ? size.width : size.height
+        return place.point(along: diskImageCardAlong,
                            across: model.tooltipInset + (NotchLayout.tailLength + across) / 2)
     }
 

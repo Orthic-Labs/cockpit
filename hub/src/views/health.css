@@ -1,0 +1,17 @@
+/* Drive health and duplicates in Storage. Tokens come from styles.css. */
+.health-line { display: inline-flex; flex-wrap: wrap; gap: 3px 7px; align-items: center; min-width: 0; }
+.health-panel { gap: 10px; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px 12px; }
+.health-metric { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.health-section { display: flex; flex-direction: column; gap: 3px; }
+.health-test { display: flex; justify-content: space-between; gap: 10px; }
+.health-spark { display: flex; flex-direction: column; gap: 3px; }
+.health-spark svg { display: block; width: 100%; height: 44px; overflow: visible; }
+.volume-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.volume-cell .health-toggle { align-self: flex-start; }
+.dup-controls { flex-wrap: wrap; align-items: center; }
+.dup-path { flex: 1; min-width: 200px; }
+.dup-group { gap: 2px; }
+.dup-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 4px 0; border-top: 1px solid var(--rk-hairline); }
+.dup-row.sub { padding-left: 18px; }
+.dup-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

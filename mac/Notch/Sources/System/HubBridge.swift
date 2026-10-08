@@ -27,6 +27,12 @@ final class HubBridge {
         /// Why the launcher hotkey is not working, when it is not.
         var launcherStatus: () -> String? = { nil }
         var permissionsChanged: (Bool) -> Void = { _ in }
+        /// Pulse's updater: its state for the hub, and the hub's two requests.
+        var updates: () -> [String: Any] = { [:] }
+        var checkForUpdates: () -> Void = {}
+        var installUpdate: () -> Void = {}
+        /// A drive health change the hub found: the notch peeks with its message.
+        var driveAlert: (String) -> Void = { _ in }
     }
 
     private let preferences: Preferences
@@ -39,6 +45,8 @@ final class HubBridge {
     private var helperWatch: Timer?
     private var permissionWatch: Timer?
     private var hubVisibleUntil = Date.distantPast
+    /// The last drive health alert the hub sent for the notch to peek.
+    private var lastDriveAlertID: String?
 
     static var directory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -195,6 +203,11 @@ final class HubBridge {
             "helperError": helperError ?? NSNull(),
             "permissions": permissions.entries.map(\.snapshot),
             "permissionErrors": permissions.errors,
+            // The alert the notch last peeked for, so the hub can confirm delivery.
+            "driveAlertID": lastDriveAlertID ?? NSNull(),
+            "updates": actions.updates(),
+            // Network rate, battery, fans and temperatures: empty until the first System reading.
+            "system": SystemReadingsStore.current,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         else { return }
@@ -227,6 +240,10 @@ final class HubBridge {
             guard let key = command["key"] as? String else { return }
             if key == "displayPreference", let id = command["value"] as? String {
                 preferences.displayPreference = id == "followActiveWindow" ? .followActiveWindow : .display(id)
+            } else if key.hasPrefix(WindowHotKeys.settingPrefix) {
+                // One window action's shortcut; "" turns it off.
+                let id = String(key.dropFirst(WindowHotKeys.settingPrefix.count))
+                preferences.windowHotkeys[id] = command["value"] as? String ?? ""
             } else {
                 Self.table[key]?.set(preferences, command["value"])
             }
@@ -262,6 +279,13 @@ final class HubBridge {
             helperError = PrivilegedHelper.disable()
             watchHelper()
         case "openLoginItems": PrivilegedHelper.openLoginItems()
+        case "checkUpdates": actions.checkForUpdates()
+        case "installUpdate": actions.installUpdate()
+        case "driveAlert":
+            if let id = command["id"] as? String, let message = command["message"] as? String {
+                lastDriveAlertID = id
+                actions.driveAlert(message)
+            }
         default: break
         }
     }
@@ -322,6 +346,12 @@ final class HubBridge {
                 options: nil)
     }
 
+    private static func stringMap(_ path: ReferenceWritableKeyPath<Preferences, [String: String]>) -> Setting {
+        Setting(get: { $0[keyPath: path] },
+                set: { prefs, value in if let v = value as? [String: String] { prefs[keyPath: path] = v } },
+                options: nil)
+    }
+
     private static func choice<E: RawRepresentable & CaseIterable>(
         _ path: ReferenceWritableKeyPath<Preferences, E>
     ) -> Setting where E.RawValue == String {
@@ -373,6 +403,7 @@ final class HubBridge {
         // General
         "launchAtLogin": bool(\.launchAtLogin),
         "asksProviderOnLook": bool(\.asksProviderOnLook),
+        "autoUpdateCheck": bool(\.autoUpdateCheck),
         // Mac conveniences (all off until chosen)
         "convFinderCutPaste": bool(\.convFinderCutPaste),
         "convWindowMaximizer": bool(\.convWindowMaximizer),
@@ -380,10 +411,19 @@ final class HubBridge {
         "convFnCommand": bool(\.convFnCommand),
         "convAutoQuit": bool(\.convAutoQuit),
         "convDiskImageInstaller": bool(\.convDiskImageInstaller),
+        "convDiskImageAuto": bool(\.convDiskImageAuto),
         "convDiskImageTrashDownload": bool(\.convDiskImageTrashDownload),
         "convAutoQuitApps": stringList(\.convAutoQuitApps),
         "launcherEnabled": bool(\.launcherEnabled),
         "launcherHotkey": choice(\.launcherHotkey),
+        "launcherConfig": text(\.launcherConfigJSON),
+        "launcherClipboard": bool(\.launcherClipboard),
+        "launcherCurrency": bool(\.launcherCurrency),
+        "launcherDictionary": bool(\.launcherDictionary),
+        "launcherShortcuts": bool(\.launcherShortcuts),
+        "windowManagementEnabled": bool(\.windowManagementEnabled),
+        // Reset to defaults: an empty map. Single actions use "windowHotkey.<id>".
+        "windowHotkeys": stringMap(\.windowHotkeys),
     ]
 }
 

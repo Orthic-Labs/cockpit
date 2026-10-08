@@ -99,6 +99,31 @@ targets:
         # Sources/Vendor/zstd/README.md. Delete this line and that directory
         # together if the Desktop source is ever dropped.
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Codenotch-Bridging-Header.h
+    dependencies:
+      # Finder right-click menu; lands in Pulse.app/Contents/PlugIns.
+      - target: PulseFinder
+        embed: true
+        codeSign: false
+
+  PulseFinder:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: FinderExtension
+        excludes:
+          - "*.plist"
+          - "*.entitlements"
+    settings:
+      base:
+        PRODUCT_NAME: PulseFinder
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orthic.pulse.finder
+        INFOPLIST_FILE: FinderExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        # Finder Sync extensions must be sandboxed; the entitlements file is
+        # hand-written (signing re-applies it in scripts/release/mac-payload.mjs).
+        CODE_SIGN_ENTITLEMENTS: FinderExtension/PulseFinder.entitlements
+        ENABLE_APP_SANDBOX: "YES"
+        SKIP_INSTALL: "YES"
 
   PulseHelper:
     type: tool
@@ -141,5 +166,6 @@ schemes:
         Pulse: all
         PulseHelper: all
         PulseElevate: all
+        PulseFinder: all
     run:
       config: Debug

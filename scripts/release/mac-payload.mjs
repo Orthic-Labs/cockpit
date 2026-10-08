@@ -18,6 +18,8 @@ const paths = {
   hub: join(stagingRoot, appName, 'Contents', 'Helpers', 'Pulse.app'),
   privilegedHelper: join(stagingRoot, appName, 'Contents', 'Helpers', 'PulseHelper'),
   elevate: join(stagingRoot, appName, 'Contents', 'Helpers', 'pulse-elevate'),
+  finder: join(stagingRoot, appName, 'Contents', 'PlugIns', 'PulseFinder.appex'),
+  finderExecutable: join(stagingRoot, appName, 'Contents', 'PlugIns', 'PulseFinder.appex', 'Contents', 'MacOS', 'PulseFinder'),
   hubExecutable: join(stagingRoot, appName, 'Contents', 'Helpers', 'Pulse.app', 'Contents', 'MacOS', 'pulse-hub'),
   raw: join(stagingRoot, 'raw'),
   output: join(repoRoot, 'dist', 'releases', 'mac', 'Pulse.dmg')
@@ -59,6 +61,16 @@ async function copyTree(source, target, label) {
   await mkdir(dirname(target), { recursive: true });
   await cp(source, target, { recursive: true, force: true });
 }
+
+// TODO(smartctl): bundle the official smartmontools 7.5 macOS build as
+// Contents/Helpers/smartctl. Not wired yet: the upstream macOS artifact URL
+// and its published SHA-256 are not pinned here, so nothing is fetched at build
+// time. When added: download over HTTPS, verify the SHA-256 against the
+// published checksum, copy it into Helpers (mode 0755), copy
+// release/smartmontools-NOTICE.txt into Contents/Resources, and add
+// dist/staging/Pulse.app/Contents/Helpers/smartctl to sign.prePackageFiles in
+// right-release.config.mjs before Contents/MacOS/Pulse. Until then the hub and
+// the notch look for smartctl at Contents/Helpers, then Homebrew.
 
 // Pulse.app is the notch (Codenotch fork, xcodebuild) with the CLI and the
 // hub (Tauri) inside Contents/Helpers. The notch's own Info.plist is kept.
@@ -121,6 +133,7 @@ async function candidate() {
   await rm(app, { recursive: true, force: true });
   await copyTree(source.notch, app, 'notch app (xcodebuild)');
   await requireFile(appExecutable, 'notch executable');
+  await requireFile(join(app, 'Contents', 'PlugIns', 'PulseFinder.appex', 'Contents', 'MacOS', 'PulseFinder'), 'Finder extension (Contents/PlugIns)');
   await copyExecutable(source.helper, helper, 'Pulse CLI');
   await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Pulse.app'), 'hub app (Tauri)');
   await placePrivilegedHelper(app, source.notch);
@@ -163,6 +176,9 @@ async function prepare() {
   }
   await requireFile(paths.hubExecutable, 'staged hub executable');
   await chmod(paths.hubExecutable, 0o755);
+  // Finder Sync extension, embedded in Contents/PlugIns by the Pulse target.
+  await requireFile(paths.finderExecutable, 'staged Finder extension');
+  await chmod(paths.finderExecutable, 0o755);
   await mkdir(paths.raw, { recursive: true });
   await copyExecutable(paths.appExecutable, join(paths.raw, 'Pulse'), 'staged app executable');
   await copyExecutable(paths.helper, join(paths.raw, 'pulse'), 'staged Pulse CLI');
@@ -189,6 +205,7 @@ async function packageMac({ local = false } = {}) {
   const { sign } = require('@electron/osx-sign');
   const appdmg = require('appdmg');
   const entitlements = join(releaseRoot, 'entitlements.plist');
+  const finderEntitlements = join(repoRoot, 'mac', 'Notch', 'FinderExtension', 'PulseFinder.entitlements');
   await sign({
     app: paths.app,
     identity: resolveMacosDeveloperIdIdentity({ env: { ...process.env, APPLE_DEVELOPER_ID: identity } }),
@@ -196,10 +213,14 @@ async function packageMac({ local = false } = {}) {
     type: 'distribution',
     // osx-sign v2 reads entitlements per file; a top-level `entitlements` is
     // ignored and Electron's defaults (camera, mic, location…) are applied.
-    // The privileged helper and pulse-elevate need no entitlements.
+    // The privileged helper and pulse-elevate need no entitlements. The Finder
+    // extension must be sandboxed and gets only its own entitlements (never
+    // the app's Apple Events entitlement); matches the bundle or its binary.
     optionsForFile: file => /\/Contents\/Helpers\/(PulseHelper|pulse-elevate)$/.test(file)
       ? { hardenedRuntime: true }
-      : { hardenedRuntime: true, entitlements },
+      : /\/Contents\/PlugIns\/PulseFinder\.appex(\/|$)/.test(file)
+        ? { hardenedRuntime: true, entitlements: finderEntitlements }
+        : { hardenedRuntime: true, entitlements },
     preAutoEntitlements: false,
     preEmbedProvisioningProfile: false,
     gatekeeperAssess: false

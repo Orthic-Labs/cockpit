@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, ConfirmDialog } from "@rightkit/app-shell/react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { api, bytes, type ProcessRow, type Status } from "../api";
+import { useNotch, type NotchState } from "./Settings";
 import { Bar } from "./Storage";
 
 type Level = "ok" | "warn" | "bad";
@@ -17,6 +18,19 @@ const SORTS: { key: SortKey; label: string }[] = [
 const PROTECTED_NAMES = new Set(["kernel_task", "windowserver", "launchd", "loginwindow"]);
 // Pulse itself. Quitting it from its own window would close the hub.
 const PULSE_NAMES = new Set(["pulse", "pulse-hub", "pulse hub"]);
+
+/** The notch's System readings beyond CPU and memory (`system` in its state file). */
+export interface SystemReadings {
+  network?: { interface: string; kind: string; down: number; up: number };
+  battery?: { percent: number; charging: boolean; cycles?: number; health?: number };
+  fans?: { name: string; rpm: number }[];
+  temperatures?: { name: string; celsius: number }[];
+}
+
+/** The System readings from the notch's state, or null while the notch has none. */
+export function systemReadings(state: NotchState | null): SystemReadings | null {
+  return (state as (NotchState & { system?: SystemReadings }) | null)?.system ?? null;
+}
 
 const LEVEL_COLOR: Record<Level, string> = {
   ok: "var(--rk-ok)",
@@ -66,6 +80,9 @@ export function Monitor() {
   const [forcing, setForcing] = useState<ProcessRow | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("memory");
+  const [sensorsOpen, setSensorsOpen] = useState(false);
+  const notch = useNotch();
+  const system = systemReadings(notch.state);
 
   const note = (key: string, text: string) => setNotes((n) => ({ ...n, [key]: text }));
 
@@ -140,9 +157,12 @@ export function Monitor() {
   const pressure = status.memory_pressure.value;
   const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "Memory";
 
+  const network = system?.network;
+  const sensorCount = (system?.fans?.length ?? 0) + (system?.temperatures?.length ?? 0) + (system?.battery ? 1 : 0);
+
   return (
     <div className="view">
-      <div className="mon-summary">
+      <div className="mon-summary mon-summary--four">
         <SummaryCard
           label="CPU"
           value={cpuRaw == null ? "—" : `${Math.round(cpuRaw)}%`}
@@ -162,7 +182,57 @@ export function Monitor() {
           sub={swapTotal == null ? "Unknown" : swapTotal === 0 ? "No swap space" : `of ${bytes(swapTotal)} used`}
           fraction={swapFraction}
         />
+        <SummaryCard
+          label="Network"
+          value={network ? `↓ ${bytes(network.down)}/s` : "—"}
+          sub={
+            network
+              ? `↑ ${bytes(network.up)}/s · ${network.kind}`
+              : notch.error
+                ? "Notch not running"
+                : "No active interface"
+          }
+        />
       </div>
+
+      {sensorCount > 0 && system && (
+        <div className="mon-sensors">
+          <button
+            type="button"
+            className="mon-disclosure"
+            aria-expanded={sensorsOpen}
+            aria-controls="mon-sensors-list"
+            onClick={() => setSensorsOpen((open) => !open)}
+          >
+            {sensorsOpen ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
+            <span className="mon-label">Sensors</span>
+            <span className="muted small">
+              {[
+                system.fans?.length ? `${system.fans.length} fan${system.fans.length === 1 ? "" : "s"}` : null,
+                system.temperatures?.length ? `${system.temperatures.length} temperatures` : null,
+                system.battery ? "battery" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          </button>
+          {sensorsOpen && (
+            <div id="mon-sensors-list" className="mon-sensors-list">
+              {system.battery && (
+                <SensorRow label="Battery" value={batteryText(system.battery)} />
+              )}
+              {system.fans?.map((f, i) => (
+                <SensorRow key={`fan-${i}`} label={f.name} value={`${Math.round(f.rpm).toLocaleString()} rpm`} />
+              ))}
+              {[...(system.temperatures ?? [])]
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((t, i) => (
+                  <SensorRow key={`temp-${i}`} label={t.name} value={`${t.celsius.toFixed(1)} °C`} />
+                ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mon-toolbar">
         <input
@@ -317,7 +387,8 @@ function SummaryCard({
   aside?: ReactNode;
   value: string;
   sub: string;
-  fraction: number;
+  /** Omitted for a rate, which has no capacity to fill a bar against. */
+  fraction?: number;
 }) {
   return (
     <section className="mon-card" aria-label={label}>
@@ -326,10 +397,26 @@ function SummaryCard({
         {aside}
       </div>
       <div className="mon-card-value">{value}</div>
-      <Bar fraction={fraction} color={LEVEL_COLOR[levelFor(fraction)]} />
+      {fraction !== undefined && <Bar fraction={fraction} color={LEVEL_COLOR[levelFor(fraction)]} />}
       <div className="mon-card-sub muted small">{sub}</div>
     </section>
   );
+}
+
+function SensorRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mon-sensor">
+      <span className="mon-label">{label}</span>
+      <span>{value}</span>
+    </div>
+  );
+}
+
+function batteryText(b: NonNullable<SystemReadings["battery"]>): string {
+  const parts = [`${b.percent}%`, b.charging ? "charging" : null];
+  if (b.cycles != null) parts.push(`${b.cycles} cycles`);
+  if (b.health != null) parts.push(`${Math.round(b.health * 100)}% health`);
+  return parts.filter(Boolean).join(" · ");
 }
 
 function Pill({ level, children }: { level: Level; children: ReactNode }) {

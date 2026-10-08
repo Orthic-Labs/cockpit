@@ -25,6 +25,8 @@ final class ConveniencesService {
     private let fnHub = EventTapHub(location: .cghidEventTap, events: [.keyDown, .keyUp, .flagsChanged])
     private var fnToken: EventTapToken?
     private let autoQuit = AutoQuit()
+    /// Window-management shortcuts (`Windows/`); own Carbon hotkeys, no tap.
+    private lazy var windowHotKeys = WindowHotKeys(preferences: preferences)
     private lazy var diskImage = DiskImageInstaller(preferences: preferences)
     private var tokens: [String: EventTapToken] = [:]
     private var cancellables = Set<AnyCancellable>()
@@ -55,6 +57,8 @@ final class ConveniencesService {
                 MainActor.assumeIsolated { self?.onChange?() }
             })
         }
+        windowHotKeys.onChange = { [weak self] in self?.onChange?() }
+        windowHotKeys.start()
         reconcile()
     }
 
@@ -67,7 +71,19 @@ final class ConveniencesService {
         workspaceTokens.removeAll()
         tearDown()
         diskImage.stop()
+        windowHotKeys.stop()
     }
+
+    /// Disk image cards go to the notch: the app delegate points this at the
+    /// fleet, and sends the notch's answers and hover back.
+    var presentDiskImage: ((DiskImagePrompt?) -> Bool)? {
+        get { diskImage.present }
+        set { diskImage.present = newValue }
+    }
+
+    func diskImageChoice(_ choice: DiskImageChoice) { diskImage.choose(choice) }
+
+    func diskImageHover(_ on: Bool) { diskImage.hoverChanged(on) }
 
     func openAccessibilitySettings() {
         if let url = URL(string: Self.settingsURL) { NSWorkspace.shared.open(url) }
@@ -227,6 +243,7 @@ final class ConveniencesService {
             "runningApps": running,
             "autoQuitApps": listed,
             "cutPasteResults": lastResults.map { ["name": $0.name, "ok": $0.ok, "detail": $0.detail] as [String: Any] },
+            "windowManagement": windowHotKeys.snapshot(),
         ]
     }
 

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// The launcher's content: a search field over grouped results, in the notch's
-/// dark glass.
+/// dark glass. A command's output replaces the results until Escape.
 struct LauncherView: View {
     @ObservedObject var model: LauncherModel
     @FocusState private var focused: Bool
@@ -15,7 +15,7 @@ struct LauncherView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(.white.opacity(0.5))
-                TextField("Search apps, files, commands, or calculate", text: $model.query)
+                TextField("Search apps, files, clipboard, or run a command", text: $model.query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(.white)
@@ -27,7 +27,9 @@ struct LauncherView: View {
 
             Divider().overlay(Color.white.opacity(0.1))
 
-            if model.items.isEmpty {
+            if let output = model.output {
+                outputView(output)
+            } else if model.items.isEmpty {
                 Spacer()
                 Text(model.query.trimmingCharacters(in: .whitespaces).isEmpty
                      ? "Type to search" : "No matches")
@@ -78,6 +80,26 @@ struct LauncherView: View {
         .onChange(of: model.focusToken) { _, _ in focused = true }
     }
 
+    private func outputView(_ output: LauncherOutput) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(output.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+            ScrollView {
+                Text(output.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text("Esc returns to search")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.35))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private func row(_ item: LauncherItem, position: Int) -> some View {
         let isSelected = position == model.selected
         return HStack(spacing: 12) {
@@ -116,7 +138,12 @@ struct LauncherView: View {
 
     @ViewBuilder
     private func icon(_ item: LauncherItem) -> some View {
-        if let path = item.iconPath {
+        if let image = item.image {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else if let path = item.iconPath {
             Image(nsImage: NSWorkspace.shared.icon(forFile: path))
                 .resizable()
                 .interpolation(.high)

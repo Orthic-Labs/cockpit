@@ -56,6 +56,10 @@ final class PulsePermissions {
                   why: "Lets Pulse read protected folders during disk scans.",
                   status: entries.first { $0.id == "fullDiskAccess" }?.status ?? .unknown,
                   required: false),
+            Entry(id: "finderMenu", title: "Finder menu",
+                  why: "Adds Copy Path and Open in Terminal to Finder's right-click menu. Optional.",
+                  status: entries.first { $0.id == "finderMenu" }?.status ?? .unknown,
+                  required: false),
         ]
         if finderRequired {
             rows.append(Entry(id: "automation", title: "Automation of Finder",
@@ -74,13 +78,15 @@ final class PulsePermissions {
         Task { [weak self] in
             let statuses = await Task.detached(priority: .utility) {
                 (PermissionProbe.fullDiskAccess(),
-                 finderRequired && finderRunning ? PermissionProbe.finder(ask: false) : .unknown)
+                 finderRequired && finderRunning ? PermissionProbe.finder(ask: false) : .unknown,
+                 PermissionProbe.finderMenu())
             }.value
             guard let self else { return }
             var updated = rows
             for index in updated.indices {
                 if updated[index].id == "fullDiskAccess" { updated[index].status = statuses.0 }
                 if updated[index].id == "automation" { updated[index].status = statuses.1 }
+                if updated[index].id == "finderMenu" { updated[index].status = statuses.2 }
             }
             self.update(updated)
             self.refreshing = false
@@ -124,6 +130,8 @@ final class PulsePermissions {
                     }
                 }
             } else { requestFinder() }
+        case "finderMenu":
+            Self.openExtensionsPane()
         case "login":
             do { try SMAppService.mainApp.register() }
             catch {
@@ -156,6 +164,14 @@ final class PulsePermissions {
         if let url = URL(string: modern), NSWorkspace.shared.open(url) { return }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Login Items & Extensions; falls back to the older Extensions pane id.
+    static func openExtensionsPane() {
+        for scheme in ["x-apple.systempreferences:com.apple.ExtensionsPreferences",
+                       "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"] {
+            if let url = URL(string: scheme), NSWorkspace.shared.open(url) { return }
         }
     }
 
@@ -196,6 +212,24 @@ private enum PermissionProbe {
             if failure == EACCES || failure == EPERM { return .needsApproval }
         }
         return .unknown
+    }
+
+    /// `pluginkit -m -i` prints a leading "+" for an enabled extension, "-" for
+    /// a disabled one, and nothing when it is not registered.
+    static func finderMenu() -> PulsePermissions.Status {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        process.arguments = ["-m", "-i", "dev.orthic.pulse.finder"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return .unknown }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let line = String(decoding: data, as: UTF8.self)
+            .split(separator: "\n").first { $0.contains("dev.orthic.pulse.finder") }
+        guard let line else { return .off }
+        return line.drop { $0 == " " }.first == "+" ? .granted : .off
     }
 
     static func finder(ask: Bool) -> PulsePermissions.Status {

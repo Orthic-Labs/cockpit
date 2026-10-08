@@ -68,9 +68,10 @@ final class LauncherIndex {
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    func matches(_ query: String, limit: Int) -> [LauncherApp] {
+    /// Best fuzzy matches. `bonus` adds usage points (frecency) to each score.
+    func matches(_ query: String, limit: Int, bonus: (LauncherApp) -> Int) -> [LauncherApp] {
         let scored: [(LauncherApp, Int)] = apps.compactMap { app in
-            Self.score(query, app.name).map { (app, $0) }
+            LauncherIndex.score(query, app.name).map { (app, $0 + bonus(app)) }
         }
         return scored
             .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.name.count < $1.0.name.count }
@@ -100,73 +101,5 @@ final class LauncherIndex {
         if lowered.hasPrefix(joined) { score += 200 }
         else if lowered.contains(joined) { score += 80 }
         return score - (n.count - q.count)
-    }
-}
-
-/// Spotlight file-name search, bounded and only for queries of two characters
-/// or more. One query at a time; a new one cancels the last.
-@MainActor
-final class LauncherFileSearch {
-    struct Hit: Equatable {
-        let url: URL
-        let isDirectory: Bool
-    }
-
-    private var query: NSMetadataQuery?
-    private var observer: NSObjectProtocol?
-    private var debounce: DispatchWorkItem?
-    private let limit = 6
-
-    func search(_ text: String, completion: @escaping ([Hit]) -> Void) {
-        cancel()
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count >= 2 else { completion([]); return }
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { self?.start(trimmed, completion: completion) }
-        }
-        debounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-    }
-
-    func cancel() {
-        debounce?.cancel()
-        debounce = nil
-        query?.stop()
-        query = nil
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        observer = nil
-    }
-
-    private func start(_ text: String, completion: @escaping ([Hit]) -> Void) {
-        let query = NSMetadataQuery()
-        // The text is a predicate argument, never part of the format string.
-        query.predicate = NSPredicate(format: "%K CONTAINS[cd] %@", NSMetadataItemFSNameKey, text)
-        query.searchScopes = [NSMetadataQueryUserHomeScope]
-        query.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemFSContentChangeDateKey, ascending: false)]
-        observer = NotificationCenter.default.addObserver(
-            forName: .NSMetadataQueryDidFinishGathering, object: query, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let finished = self.query else { return }
-                finished.disableUpdates()
-                var hits: [Hit] = []
-                let count = min(finished.resultCount, 300)
-                for i in 0..<count {
-                    guard let item = finished.result(at: i) as? NSMetadataItem,
-                          let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
-                    else { continue }
-                    if path.contains("/Library/") || path.contains("/.") || path.hasSuffix(".app")
-                        || path.contains(".app/") { continue }
-                    var isDir: ObjCBool = false
-                    FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
-                    hits.append(Hit(url: URL(fileURLWithPath: path), isDirectory: isDir.boolValue))
-                    if hits.count >= self.limit { break }
-                }
-                self.cancel()
-                completion(hits)
-            }
-        }
-        self.query = query
-        query.start()
     }
 }

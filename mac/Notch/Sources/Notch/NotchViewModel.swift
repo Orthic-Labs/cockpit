@@ -90,6 +90,12 @@ final class NotchViewModel: ObservableObject {
     @Published var updatePrompt: UpdatePrompt?
     /// The notch's answer to it.
     var onUpdateChoice: ((UpdateChoice) -> Void)?
+    /// A disk image's card — installed with Undo, or a question about it. See
+    /// `DiskImageCard`.
+    @Published var diskImagePrompt: DiskImagePrompt?
+    /// The notch's answer to it, and whether the pointer is on the card.
+    var onDiskImageChoice: ((DiskImageChoice) -> Void)?
+    var onDiskImageHover: ((Bool) -> Void)?
     /// A newer version waiting, put off — the red dot on the settings button.
     @Published var updatePending = false
     @Published var permissionsPending = false

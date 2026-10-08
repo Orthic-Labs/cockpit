@@ -13,6 +13,22 @@ Signed payload paths:
 
 RightKit owns signing, notarization, packaging & publication. Records below describe prior Pulse builds; artifact names, hashes & repo links stay historical.
 
+## Self-update via GitHub Releases
+
+Pulse updates itself from GitHub Releases on `Orthic-Labs/pulse`, with no Sparkle. The notch checks `https://api.github.com/repos/Orthic-Labs/pulse/releases/latest` at most every six hours (or on "Check now" in hub General > Updates) and compares the tag with the running `CFBundleShortVersionString`. Turn off "Automatically check" in the same group to stop scheduled checks.
+
+Releases must be published to GitHub Releases for this to work. A release that is not published, is a draft, or is a pre-release is invisible to the updater. Publishing stays a manual, owner-approved step: nothing in the app or pipeline publishes a release on its own.
+
+For each release:
+
+- Tag `vX.Y.Z` equal to `MARKETING_VERSION` in `mac/Notch/project.yml`, and bump `CURRENT_PROJECT_VERSION`.
+- Attach `Pulse.dmg` (or `Pulse-<version>.dmg`) as the release asset. Other assets are ignored. The asset must be the Developer ID signed, notarized image, and its size must match what GitHub lists.
+- Mark it as the latest, non-draft, non-pre-release release.
+
+The client downloads only over HTTPS, mounts the image read-only without showing it in Finder, and checks the app inside: bundle identifier `dev.orthic.pulse`, version equal to the tag, a valid strict and nested signature with Apple anchor and team `6KLGD3LLKF`, and Gatekeeper acceptance (`spctl --assess`). A copy that fails any check is never installed. On success it moves `/Applications/Pulse.app` to the Trash, copies the verified app into place, checks it again, and relaunches. If the new copy fails its check, the old app is moved back. Failures are shown in hub General > Updates.
+
+Updates install only over `/Applications/Pulse.app`. A copy run from a build folder or disk image reports that it cannot update itself.
+
 ## Upgrading
 
 Nothing is deleted on upgrade. The first Pulse launch moves existing data:

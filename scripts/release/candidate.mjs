@@ -39,7 +39,7 @@ if (action === 'admit') {
   const root=env.RIGHT_GIT_ARTIFACT_ROOT;
   const app=env.PULSE_CHECK_APP || path.join(root,'pulse','mac','Pulse.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
-  for(const f of ['Contents/MacOS/Pulse','Contents/Helpers/pulse','Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub','Contents/Helpers/Pulse.app/Contents/Info.plist','Contents/Helpers/PulseHelper','Contents/Helpers/pulse-elevate','Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  for(const f of ['Contents/MacOS/Pulse','Contents/Helpers/pulse','Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub','Contents/Helpers/Pulse.app/Contents/Info.plist','Contents/Helpers/PulseHelper','Contents/Helpers/pulse-elevate','Contents/PlugIns/PulseFinder.appex/Contents/MacOS/PulseFinder','Contents/PlugIns/PulseFinder.appex/Contents/Info.plist','Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
   const plist=run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Info.plist')],{encoding:'utf8',stdio:'pipe'});
   const info=JSON.parse(plist);
   if(info.CFBundleIdentifier!=='dev.orthic.pulse'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');
@@ -55,6 +55,14 @@ if (action === 'admit') {
       const d=spawnSync('codesign',['-dv','--verbose=2',path.join(app,f)],{encoding:'utf8'}).stderr||'';
       if(!d.includes(`Identifier=${id}\n`)||!d.includes('TeamIdentifier=6KLGD3LLKF')||!/flags=0x[0-9a-f]+\(.*runtime/.test(d))throw new Error(`${f}: expected identifier ${id}, team 6KLGD3LLKF and hardened runtime`);
     }
+  }
+  if(env.PULSE_CHECK_APP){
+    // Finder extension: Pulse's team, its own identifier, hardened runtime, sandboxed.
+    const appex=path.join(app,'Contents/PlugIns/PulseFinder.appex');
+    const d=spawnSync('codesign',['-dv','--verbose=2',appex],{encoding:'utf8'}).stderr||'';
+    if(!d.includes('Identifier=dev.orthic.pulse.finder\n')||!d.includes('TeamIdentifier=6KLGD3LLKF')||!/flags=0x[0-9a-f]+\(.*runtime/.test(d))throw new Error('PulseFinder.appex: expected identifier dev.orthic.pulse.finder, team 6KLGD3LLKF and hardened runtime');
+    const e=spawnSync('codesign',['-d','--entitlements','-','--xml',appex],{encoding:'utf8'}).stdout||'';
+    if(!e.includes('com.apple.security.app-sandbox'))throw new Error('PulseFinder.appex is not sandboxed');
   }
   if(env.PULSE_CHECK_APP){
     // Signed app: exactly the entitlements Pulse needs, never Electron's defaults.

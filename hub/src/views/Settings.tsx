@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Badge, Button, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
+import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 
 export interface Limit {
   label: string;
@@ -39,6 +40,25 @@ interface Conveniences {
   runningApps: AppRef[];
   autoQuitApps: AppRef[];
   cutPasteResults: { name: string; ok: boolean; detail: string }[];
+  windowManagement?: WindowManagementState;
+}
+
+/** One window action, as the notch lists it (Conveniences/Windows/WindowAction.swift). */
+interface WindowShortcutState {
+  id: string;
+  title: string;
+  group: string;
+  groupTitle: string;
+  /** Shortcut text such as "ctrl+opt+left"; empty when the action has none. */
+  shortcut: string;
+  display: string;
+  default: string;
+  error: string;
+}
+
+interface WindowManagementState {
+  enabled: boolean;
+  actions: WindowShortcutState[];
 }
 
 export interface NotchState {
@@ -54,6 +74,32 @@ export interface NotchState {
   launcherStatus?: string | null;
   helper?: "notRegistered" | "needsReenable" | "requiresApproval" | "enabled" | "notFound";
   helperError?: string | null;
+  updates?: UpdateState;
+}
+
+/** Pulse's updater, as the notch reports it (Sources/App/Updater.swift). */
+export interface UpdateState {
+  current: string;
+  /** The newer version waiting, if any. */
+  available: string | null;
+  lastChecked: string | null;
+  status: "idle" | "checking" | "upToDate" | "available" | "downloading" | "installing" | "failed";
+  message?: string;
+  /** 0–1 while downloading. */
+  progress?: number;
+}
+
+function updateLine(u: UpdateState): string {
+  switch (u.status) {
+    case "checking": return "Checking for updates…";
+    case "upToDate": return "Pulse is up to date.";
+    case "available": return `Pulse ${u.available} is available.`;
+    case "downloading":
+      return u.progress === undefined ? "Downloading…" : `Downloading… ${Math.round(u.progress * 100)}%`;
+    case "installing": return "Installing. Pulse reopens when it is done.";
+    case "failed": return `Update failed: ${u.message ?? "unknown reason"}`;
+    default: return u.lastChecked ? "Not checked since launch." : "Not checked yet.";
+  }
 }
 
 export interface Permission {
@@ -159,7 +205,7 @@ export function Settings({ section, notch, onNavigate }: {
                   </span>
                   <Button size="sm" variant="secondary" disabled={permission.status === "granted"}
                     onClick={() => send({ command: "permissionRequest", id: permission.id })}>
-                    {permission.id === "automation" ? "Allow" : permission.id === "fullDiskAccess" || permission.status === "needsApproval" ? "Open Settings" : "Allow"}
+                    {permission.id === "automation" ? "Allow" : permission.id === "fullDiskAccess" || permission.id === "finderMenu" || permission.status === "needsApproval" ? "Open Settings" : "Allow"}
                   </Button>
                 </span>
               </Row>
@@ -245,6 +291,34 @@ export function Settings({ section, notch, onNavigate }: {
       {section === "general" && (
         <>
           <Group title="Startup">{bool("launchAtLogin", "Open Pulse at login")}</Group>
+          <Group title="Updates">
+            {state.updates ? (
+              <>
+                <Row label={`Version ${state.updates.current}`} note={updateLine(state.updates)}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={["checking", "downloading", "installing"].includes(state.updates.status)}
+                    onClick={() => send({ command: "checkUpdates" })}
+                  >
+                    Check now
+                  </Button>
+                </Row>
+                {state.updates.available && !["downloading", "installing"].includes(state.updates.status) ? (
+                  <Row
+                    label={`Install Pulse ${state.updates.available}`}
+                    note="Downloads from GitHub, checks Apple's signature and notarization, then replaces Pulse in Applications and reopens it."
+                  >
+                    <Button size="sm" variant="secondary" onClick={() => send({ command: "installUpdate" })}>Update</Button>
+                  </Row>
+                ) : null}
+              </>
+            ) : (
+              <div className="muted small">Waiting for the notch to report its version.</div>
+            )}
+            {bool("autoUpdateCheck", "Automatically check",
+              "Looks for a new release at most every six hours. Nothing installs until you choose Update.")}
+          </Group>
           <Group title="Uninstalling">
             <Row
               label="Uninstall without password"
@@ -280,6 +354,16 @@ export function Settings({ section, notch, onNavigate }: {
                   Command space only works after Spotlight's shortcut is turned off in System Settings.
                 </div>
                 {state.launcherStatus ? <div className="error">{state.launcherStatus}</div> : null}
+                {bool("launcherDictionary", "Dictionary", "“define word” looks words up in the Mac's dictionaries.")}
+                {bool("launcherShortcuts", "Apple Shortcuts", "Search and run the shortcuts in the Shortcuts app.")}
+                {bool("launcherClipboard", "Clipboard history",
+                  "Text and images you copy, kept on this Mac, searchable with “clip”. Off until you turn it on.")}
+                {bool("launcherCurrency", "Currency and crypto rates",
+                  "Fetches exchange rates once a day from open.er-api.com and CoinGecko. Off until you turn it on.")}
+                <LauncherLists
+                  raw={s.launcherConfig}
+                  onSave={(next: LauncherConfig) => set("launcherConfig", JSON.stringify(next))}
+                />
               </>
             ) : null}
           </Group>
@@ -303,6 +387,10 @@ export function Settings({ section, notch, onNavigate }: {
           </Group>
           {state.conveniences && (
             <ConveniencesGroup c={state.conveniences} s={s} set={set} onNavigate={onNavigate} />
+          )}
+          {state.conveniences?.windowManagement && (
+            <WindowManagementGroup w={state.conveniences.windowManagement} accessibility={state.conveniences.accessibility}
+              s={s} set={set} />
           )}
           <div className="muted small">Pulse notch {state.version} · built on Codenotch (MIT)</div>
         </>
@@ -351,8 +439,10 @@ function ConveniencesGroup({ c, s, set, onNavigate }: {
         "Fills the screen without a full-screen Space. Option-click keeps the usual behaviour.")}
       {toggle("convDockClickMinimize", "Dock click minimizes",
         "Clicking the Dock icon of the frontmost app minimizes its windows.")}
-      {toggle("convDiskImageInstaller", "Offer to install and eject",
-        "When a disk image holding one app mounts, the notch offers to copy it to Applications and eject the image. Needs no permission.")}
+      {toggle("convDiskImageInstaller", "Install apps from disk images",
+        "When a disk image holding an app mounts, the notch installs it to Applications and ejects the image, or asks first. Needs no permission.")}
+      {Boolean(s.convDiskImageInstaller) && toggle("convDiskImageAuto", "Install apps from disk images automatically",
+        "Only signed, notarized apps that aren't installed yet; others ask in the notch.")}
       {Boolean(s.convDiskImageInstaller) && toggle("convDiskImageTrashDownload", "Move the downloaded disk image to the Trash",
         "After a successful install, the .dmg you opened goes to the Trash. Off by default.")}
       {toggle("convAutoQuit", "Auto Quit",
@@ -376,6 +466,109 @@ function ConveniencesGroup({ c, s, set, onNavigate }: {
             </span>
           </Row>
         </>
+      )}
+    </Group>
+  );
+}
+
+/** The browser's key event as a shortcut ("ctrl+opt+left"), or null when it
+ *  names no key or has no modifier. Matches the names in WindowShortcut.swift. */
+function windowShortcutFrom(e: KeyboardEvent): string | null {
+  const names: Record<string, string> = {
+    ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+    Enter: "return", NumpadEnter: "return", Space: "space", Backspace: "delete", Tab: "tab",
+    Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Comma: ",", Period: ".",
+    Slash: "/", Semicolon: ";", Quote: "'", Backslash: "\\", Backquote: "`",
+  };
+  let key = names[e.code] ?? "";
+  if (!key) {
+    const match = /^(?:Key|Digit)([A-Z0-9])$/.exec(e.code);
+    key = match ? match[1].toLowerCase() : "";
+  }
+  if (!key) return null;
+  const mods: string[] = [];
+  if (e.ctrlKey) mods.push("ctrl");
+  if (e.altKey) mods.push("opt");
+  if (e.shiftKey) mods.push("shift");
+  if (e.metaKey) mods.push("cmd");
+  if (mods.length === 0) return null;
+  return [...mods, key].join("+");
+}
+
+function WindowManagementGroup({ w, accessibility, s, set }: {
+  w: WindowManagementState;
+  accessibility: boolean;
+  s: NotchState["settings"];
+  set: (key: string, value: unknown) => void;
+}) {
+  const [recording, setRecording] = useState<string | null>(null);
+  // While an action waits for its shortcut, the next key press with a modifier is taken.
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === "Escape") {
+        setRecording(null);
+        return;
+      }
+      const shortcut = windowShortcutFrom(e);
+      if (!shortcut) return;
+      set(`windowHotkey.${recording}`, shortcut);
+      setRecording(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, set]);
+
+  const groups = new Map<string, { title: string; items: WindowShortcutState[] }>();
+  for (const action of w.actions) {
+    const group = groups.get(action.group) ?? { title: action.groupTitle, items: [] };
+    group.items.push(action);
+    groups.set(action.group, group);
+  }
+
+  return (
+    <Group title="Window management">
+      <Row
+        label="Move windows with shortcuts"
+        note="Halves, quarters, thirds, maximize, larger and smaller, displays and nudges. Off by default; each shortcut can be turned off or changed. Needs Accessibility permission."
+      >
+        <Toggle checked={Boolean(s.windowManagementEnabled)} onChange={(v) => set("windowManagementEnabled", v)}
+          label="Move windows with shortcuts" />
+      </Row>
+      {Boolean(s.windowManagementEnabled) && !accessibility && (
+        <div className="muted small">Shortcuts do nothing until Pulse has Accessibility permission.</div>
+      )}
+      {Boolean(s.windowManagementEnabled) && [...groups.entries()].map(([id, group]) => (
+        <div key={id}>
+          <div className="muted small">{group.title}</div>
+          {group.items.map((action) => (
+            <Row key={action.id} label={action.title}>
+              <span className="buttons">
+                <span className="muted small num">
+                  {recording === action.id ? "Press a shortcut…" : action.display || "None"}
+                </span>
+                <Toggle checked={action.shortcut !== ""} label={`${action.title} shortcut`}
+                  onChange={(on) => {
+                    if (!on) set(`windowHotkey.${action.id}`, "");
+                    else if (action.default) set(`windowHotkey.${action.id}`, action.default);
+                    else setRecording(action.id);
+                  }} />
+                <Button size="sm" variant="ghost"
+                  onClick={() => setRecording(recording === action.id ? null : action.id)}>
+                  {recording === action.id ? "Cancel" : "Change"}
+                </Button>
+              </span>
+              {action.error && <div className="error">{action.error}</div>}
+            </Row>
+          ))}
+        </div>
+      ))}
+      {Boolean(s.windowManagementEnabled) && (
+        <Row label="Shortcuts" note="Recording needs at least one of Control, Option, Shift or Command. Escape cancels.">
+          <Button size="sm" variant="secondary" onClick={() => set("windowHotkeys", {})}>Reset to defaults</Button>
+        </Row>
       )}
     </Group>
   );

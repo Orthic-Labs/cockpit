@@ -179,6 +179,12 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(asksProviderOnLook, forKey: Keys.asksProviderOnLook) }
     }
 
+    /// Whether Pulse looks for a newer release, at most every six hours. On by
+    /// default. It only checks: nothing is downloaded or installed until Update.
+    @Published var autoUpdateCheck: Bool {
+        didSet { defaults.set(autoUpdateCheck, forKey: Keys.autoUpdateCheck) }
+    }
+
     // Pulse fork: Mac conveniences. Every one is off until chosen, and each
     // needs Accessibility (see `Conveniences/ConveniencesService.swift`).
     @Published var convFinderCutPaste: Bool {
@@ -203,6 +209,12 @@ final class Preferences: ObservableObject {
     @Published var convDiskImageInstaller: Bool {
         didSet { defaults.set(convDiskImageInstaller, forKey: Keys.convDiskImageInstaller) }
     }
+    /// Install automatically, with no prompt, when the image holds one signed,
+    /// notarized app that is not installed and not running (on by default).
+    /// Everything else is asked in the notch.
+    @Published var convDiskImageAuto: Bool {
+        didSet { defaults.set(convDiskImageAuto, forKey: Keys.convDiskImageAuto) }
+    }
     @Published var convDiskImageTrashDownload: Bool {
         didSet { defaults.set(convDiskImageTrashDownload, forKey: Keys.convDiskImageTrashDownload) }
     }
@@ -217,6 +229,37 @@ final class Preferences: ObservableObject {
 
     @Published var launcherHotkey: LauncherHotkeyChoice {
         didSet { defaults.set(launcherHotkey.rawValue, forKey: Keys.launcherHotkey) }
+    }
+
+    /// Launcher items the hub edits: pinned apps, file folders, app and command
+    /// hotkeys, quicklinks, snippets, commands. One JSON string; see `LauncherConfig`.
+    @Published var launcherConfigJSON: String {
+        didSet { defaults.set(launcherConfigJSON, forKey: Keys.launcherConfig) }
+    }
+    /// Launcher sources, each off or on in the hub. Clipboard and currency are
+    /// off until chosen: one stores what you copy, the other fetches rates.
+    @Published var launcherClipboard: Bool {
+        didSet { defaults.set(launcherClipboard, forKey: Keys.launcherClipboard) }
+    }
+    @Published var launcherCurrency: Bool {
+        didSet { defaults.set(launcherCurrency, forKey: Keys.launcherCurrency) }
+    }
+    @Published var launcherDictionary: Bool {
+        didSet { defaults.set(launcherDictionary, forKey: Keys.launcherDictionary) }
+    }
+    @Published var launcherShortcuts: Bool {
+        didSet { defaults.set(launcherShortcuts, forKey: Keys.launcherShortcuts) }
+    }
+
+    /// Pulse fork: window-management shortcuts (`Conveniences/Windows/`), off
+    /// until switched on. `windowHotkeys` maps an action id to its shortcut
+    /// text; a missing id means the action's default, "" means none.
+    @Published var windowManagementEnabled: Bool {
+        didSet { defaults.set(windowManagementEnabled, forKey: Keys.windowManagementEnabled) }
+    }
+
+    @Published var windowHotkeys: [String: String] {
+        didSet { defaults.set(windowHotkeys, forKey: Keys.windowHotkeys) }
     }
 
     /// Whether Claude's big ring shows the day's share of the weekly limit
@@ -411,6 +454,7 @@ final class Preferences: ObservableObject {
         static let seen = "seenProviders"
         static let disabledModels = "disabledModels"
         static let introducedOllama = "introducedOllama"
+        static let autoUpdateCheck = "autoUpdateCheck"
         static let migratedOllamaID = "migratedOllamaLocalID"
         static let mutedAlerts = "mutedAlertProviders"
         static let accountNicknames = "accountNicknames"
@@ -434,8 +478,16 @@ final class Preferences: ObservableObject {
         static let convAutoQuitApps = "convAutoQuitApps"
         static let convDiskImageInstaller = "convDiskImageInstaller"
         static let convDiskImageTrashDownload = "convDiskImageTrashDownload"
+        static let convDiskImageAuto = "convDiskImageAuto"
         static let launcherEnabled = "launcherEnabled"
         static let launcherHotkey = "launcherHotkey"
+        static let launcherConfig = "launcherConfig"
+        static let launcherClipboard = "launcherClipboard"
+        static let launcherCurrency = "launcherCurrency"
+        static let launcherDictionary = "launcherDictionary"
+        static let launcherShortcuts = "launcherShortcuts"
+        static let windowManagementEnabled = "windowManagementEnabled"
+        static let windowHotkeys = "windowHotkeys"
         static let scope = "notchScope"
         static let accentColor = "accentColor"
         // A new key, so there is nothing under the old app name to migrate.
@@ -612,6 +664,8 @@ final class Preferences: ObservableObject {
         // choice, and on a rate-limited provider it can cost freshness rather
         // than buy it.
         self.asksProviderOnLook = defaults.bool(forKey: Keys.asksProviderOnLook)
+        // On unless the user has switched it off: absent means never chosen.
+        self.autoUpdateCheck = defaults.object(forKey: Keys.autoUpdateCheck) as? Bool ?? true
         self.convFinderCutPaste = defaults.bool(forKey: Keys.convFinderCutPaste)
         self.convWindowMaximizer = defaults.bool(forKey: Keys.convWindowMaximizer)
         self.convDockClickMinimize = defaults.bool(forKey: Keys.convDockClickMinimize)
@@ -619,10 +673,19 @@ final class Preferences: ObservableObject {
         self.convAutoQuit = defaults.bool(forKey: Keys.convAutoQuit)
         self.convDiskImageInstaller = defaults.object(forKey: Keys.convDiskImageInstaller) as? Bool ?? true
         self.convDiskImageTrashDownload = defaults.bool(forKey: Keys.convDiskImageTrashDownload)
+        self.convDiskImageAuto = defaults.object(forKey: Keys.convDiskImageAuto) as? Bool ?? true
         self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
         self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)
         self.launcherHotkey = defaults.string(forKey: Keys.launcherHotkey)
             .flatMap(LauncherHotkeyChoice.init(rawValue:)) ?? .optionSpace
+        self.launcherConfigJSON = defaults.string(forKey: Keys.launcherConfig) ?? ""
+        self.launcherClipboard = defaults.bool(forKey: Keys.launcherClipboard)
+        self.launcherCurrency = defaults.bool(forKey: Keys.launcherCurrency)
+        self.launcherDictionary = defaults.object(forKey: Keys.launcherDictionary) as? Bool ?? true
+        self.launcherShortcuts = defaults.object(forKey: Keys.launcherShortcuts) as? Bool ?? true
+        // Off by default, like every convenience.
+        self.windowManagementEnabled = defaults.bool(forKey: Keys.windowManagementEnabled)
+        self.windowHotkeys = defaults.dictionary(forKey: Keys.windowHotkeys) as? [String: String] ?? [:]
         // Off by default: it swaps what Claude's ring means, and that is a
         // choice for whoever budgets their week that way.
         self.claudeDailyPaceRing = defaults.bool(forKey: Keys.claudeDailyPaceRing)

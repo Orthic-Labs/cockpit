@@ -24,7 +24,7 @@ pub fn cleanup_cached() -> Option<cs::Report> {
     cache::load(FINDINGS_FILE, FINDINGS_FORMAT)
 }
 
-fn move_to_trash(path: &Path) -> Result<(), String> {
+pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
     let mut context = trash::TrashContext::default();
     context.set_delete_method(DeleteMethod::NsFileManager);
     context.delete(path).map_err(|e| e.to_string())

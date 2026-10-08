@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ChevronRight, CircleUser, Gauge, HardDrive, LayoutGrid, ShieldCheck, Sparkles } from "lucide-react";
 import { ago, api, appsApi, bytes, type CachedApps, type CleanupReport, type Status, type UpdateReport, type Volume } from "../api";
 import type { Account, Limit, NotchState } from "./Settings";
+import { systemReadings } from "./Monitor";
 
 type Level = "ok" | "warn" | "bad";
 
@@ -145,6 +146,7 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
   const notchDown = notch.error != null;
   const accounts = notch.state?.accounts.filter((a) => a.connected) ?? [];
   const missing = notch.state?.permissions?.filter((p) => p.required && p.status !== "granted").length ?? 0;
+  const network = systemReadings(notch.state)?.network ?? null;
 
   return (
     <div className="view ov">
@@ -172,6 +174,11 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
               fraction={swapFraction}
             />
           </span>
+          {network && (
+            <span className="ov-muted">
+              Network ↓ {bytes(network.down)}/s · ↑ {bytes(network.up)}/s · {network.kind}
+            </span>
+          )}
         </OvCard>
 
         <OvCard icon={<CircleUser size={14} strokeWidth={1.75} />} title="Usage" onOpen={() => onNavigate("accounts")}>

@@ -39,6 +39,23 @@ export interface Row {
   summary?: boolean;
 }
 
+/** An item's identity when the person asked for an action on it (device and inode). */
+export interface FileIdentity {
+  dev: number;
+  ino: number;
+  is_dir: boolean;
+}
+
+export interface MovePlan {
+  target: string;
+  same_volume: boolean;
+}
+
+export interface MoveResult {
+  target: string;
+  copied: boolean;
+}
+
 export interface Folder {
   path: string;
   root: string;
@@ -208,7 +225,8 @@ export const api = {
   lastScan: () => invoke<Folder | null>("last_scan"),
   growth: () => invoke<Growth>("growth"),
   children: (path: string) => invoke<Folder>("children", { path }),
-  search: (query: string) => invoke<Row[]>("search", { query }),
+  search: (query: string, limit?: number, extensions?: string[]) =>
+    invoke<Row[]>("search", { query, limit: limit ?? null, extensions: extensions ?? null }),
   apps: () => invoke<AppEntry[]>("apps_list"),
   appDetail: (path: string) => invoke<AppDetail>("app_detail", { path }),
   uninstall: (path: string, bundleId: string | null, items: string[]) =>
@@ -230,7 +248,98 @@ export const api = {
     }),
   cleanupRestore: (id: string) => invoke<unknown>("cleanup_restore", { id }),
   reveal: (path: string) => invoke<void>("reveal", { path }),
+  /** Device and inode of an item now; the file actions check them again before acting. */
+  fileIdentity: (path: string) => invoke<FileIdentity>("file_identity", { path }),
+  /** Opens a folder, or selects a file, in Finder. Read-only. */
+  finderOpen: (path: string) => invoke<void>("finder_open", { path }),
+  /** The native folder picker; null when cancelled. */
+  fileChooseFolder: () => invoke<string | null>("file_choose_folder"),
+  fileMovePlan: (path: string, id: FileIdentity, destination: string) =>
+    invoke<MovePlan>("file_move_plan", { path, dev: id.dev, ino: id.ino, destination }),
+  /** Renames within one drive; across drives, copies then trashes the original when copyAcrossVolumes is set. */
+  fileMove: (path: string, id: FileIdentity, destination: string, copyAcrossVolumes: boolean) =>
+    invoke<MoveResult>("file_move", { path, dev: id.dev, ino: id.ino, destination, copyAcrossVolumes }),
+  fileTrash: (path: string, id: FileIdentity) => invoke<void>("file_trash", { path, dev: id.dev, ino: id.ino }),
+  /** Drive health for these mounts; samples smartctl only when ten minutes have passed. */
+  driveHealth: (mounts: string[]) => invoke<HealthReport>("drive_health", { mounts }),
+  homePath: () => invoke<string>("home_path"),
+  duplicatesScan: (path: string) => invoke<DuplicateReport>("duplicates_scan", { path }),
+  /** Moves each extra copy to the Trash after re-checking it; the kept copy is never touched. */
+  duplicatesTrash: (items: { kept: string; path: string }[]) =>
+    invoke<DuplicatesTrashResult>("duplicates_trash", { items }),
 };
+
+// ---- Drive health (smartctl, kept by core) ----
+
+export interface SelfTest {
+  kind: string;
+  result: string;
+  passed: boolean | null;
+  power_on_hours: number | null;
+}
+
+/** One successful SMART reading. `at` is Unix seconds. */
+export interface HealthReading {
+  at: number;
+  passed: boolean | null;
+  temperature_c: number | null;
+  wear_percent: number | null;
+  written_bytes: number | null;
+  power_on_hours: number | null;
+  critical_warning: number | null;
+  media_errors: number | null;
+  self_tests: SelfTest[];
+}
+
+export interface HealthAlert {
+  id: string;
+  at: number;
+  disk: string;
+  kind: "warning" | "wear" | "media_errors";
+  message: string;
+}
+
+export interface DriveCard {
+  mount: string;
+  disk: string | null;
+  model: string | null;
+  status: "ok" | "warning" | "unavailable" | "unknown";
+  reachable: boolean;
+  /** The latest good reading; when the connection hides SMART, the last one kept, with its date. */
+  latest: HealthReading | null;
+  history: HealthReading[];
+}
+
+export interface HealthReport {
+  tool_available: boolean;
+  sampled_at: number | null;
+  drives: DriveCard[];
+  /** Newest first. */
+  alerts: HealthAlert[];
+}
+
+// ---- Duplicates (exact content, bounded by core) ----
+
+export interface DuplicateGroup {
+  kept_path: string;
+  extras: string[];
+  size_bytes: number;
+}
+
+export interface DuplicateReport {
+  groups: DuplicateGroup[];
+  skipped: { path: string; reason: string }[];
+  diagnostics: string[];
+  truncated: boolean;
+  files_considered: number;
+  bytes_read: number;
+}
+
+export interface DuplicatesTrashResult {
+  moved: { path: string; bytes: number }[];
+  skipped: { path: string; reason: string }[];
+  moved_bytes: number;
+}
 
 export function bytes(n: number | null | undefined): string {
   if (n == null) return "—";

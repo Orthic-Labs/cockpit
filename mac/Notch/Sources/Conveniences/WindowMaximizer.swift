@@ -6,12 +6,12 @@ import ApplicationServices
 /// so do windows already full screen or that cannot be resized.
 ///
 /// A second click on a window that is still where the button put it restores
-/// where it was.
+/// where it was. The frames and the move come from the window-management
+/// engine (`Windows/WindowActions.swift`), so Restore and the shortcuts see the
+/// same memory.
 final class WindowMaximizer {
     private let lock = NSLock()
     private var swallowingMouseUp = false
-    /// Frames to go back to, keyed by the window element's hash.
-    private var previous: [CFHashCode: CGRect] = [:]
 
     func handle(_ type: CGEventType, _ event: CGEvent) -> TapDecision {
         switch type {
@@ -33,7 +33,7 @@ final class WindowMaximizer {
     }
 
     func reset() {
-        lock.lock(); swallowingMouseUp = false; previous.removeAll(); lock.unlock()
+        lock.lock(); swallowingMouseUp = false; lock.unlock()
     }
 
     /// The window whose zoom button is under the pointer, when this should
@@ -54,32 +54,6 @@ final class WindowMaximizer {
     }
 
     private func toggle(_ window: AXUIElement) {
-        guard let frame = AX.frame(of: window) else { return }
-        // Accessibility coordinates have their origin at the top-left of the
-        // primary display; AppKit's at its bottom-left.
-        guard let primary = NSScreen.screens.first else { return }
-        let center = CGPoint(x: frame.midX, y: primary.frame.height - frame.midY)
-        let screen = NSScreen.screens.first { $0.frame.contains(center) } ?? primary
-        let visible = screen.visibleFrame
-        let target = CGRect(x: visible.minX, y: primary.frame.height - visible.maxY,
-                            width: visible.width, height: visible.height)
-        let key = CFHash(window)
-        lock.lock()
-        let back = previous[key]
-        lock.unlock()
-        if let back, Self.near(frame, target) {
-            AX.setFrame(back, of: window)
-            lock.lock(); previous[key] = nil; lock.unlock()
-        } else {
-            if !Self.near(frame, target) {
-                lock.lock(); previous[key] = frame; lock.unlock()
-            }
-            AX.setFrame(target, of: window)
-        }
-    }
-
-    private static func near(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.minX - b.minX) < 3 && abs(a.minY - b.minY) < 3
-            && abs(a.width - b.width) < 3 && abs(a.height - b.height) < 3
+        WindowActions.toggleMaximize(window)
     }
 }

@@ -76,6 +76,7 @@ Pulse builds on these projects. Donor inventory and pins: [docs/donors.md](docs/
 | [Petal](https://github.com/henrydennis/petal) | MIT | Storage treemap, path classes and findings ideas; bulk directory listing ported to the core |
 | [Uninstally](https://github.com/gostonx/uninstally) | MIT | Leftover detection ported to Rust for Apps |
 | [Vorssaint](https://github.com/vorssaint/vorssaint-utils) | GPL-3.0-or-later | Disk image installer ported from its service; other conveniences reimplemented from its ideas |
+| [smartmontools](https://www.smartmontools.org/) | GPL-2.0 (notice in [`release/smartmontools-NOTICE.txt`](release/smartmontools-NOTICE.txt)) | `smartctl` for drive health, run as a separate program |
 
 Files adapted from Vorssaint keep its SPDX and copyright notices.
 

@@ -26,6 +26,11 @@ enum SystemProviders {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
     }
 
+    /// A transfer rate, such as "1.2 MB/s".
+    static func rate(_ bytesPerSecond: Double) -> String {
+        bytes(Int64(bytesPerSecond.rounded())) + "/s"
+    }
+
     static func snapshot(id: String, name: String, glyph: ProviderGlyph,
                          window: LimitWindow) -> ProviderSnapshot {
         ProviderSnapshot(id: id, displayName: name, glyph: glyph, fidelity: .official,
@@ -46,6 +51,8 @@ actor SystemLoadProvider: UsageProvider {
 
     private static let host = mach_host_self()
     private var previous: Ticks?
+    /// Network, fans, battery and temperatures: see `SystemExtras`.
+    private var extras = SystemExtras()
 
     private struct Ticks {
         let busy: UInt32
@@ -66,15 +73,25 @@ actor SystemLoadProvider: UsageProvider {
                               detail: L10n.t("\(Percent.text(for: busy / total))% busy · \(cores) cores"))
         let memory = try? MemoryProvider.window()
         // Hover-only rows: no ring, no fraction, so they render as one line.
-        var extras: [LimitWindow] = []
+        var rows: [LimitWindow] = []
         if let gpu = SystemSensors.gpuUtilization() {
-            extras.append(LimitWindow(id: "gpu", label: L10n.t("GPU"),
-                                      detail: L10n.t("\(Percent.text(for: gpu))% busy")))
+            rows.append(LimitWindow(id: "gpu", label: L10n.t("GPU"),
+                                    detail: L10n.t("\(Percent.text(for: gpu))% busy")))
+        }
+        let reading = extras.sample()
+        if let network = reading.network {
+            rows.append(LimitWindow(id: "network", label: L10n.t("Network"),
+                                    detail: "↓ \(SystemProviders.rate(network.down)) · ↑ \(SystemProviders.rate(network.up)) · \(network.kind)"))
+        }
+        if !reading.fans.isEmpty {
+            let speeds = reading.fans.map { "\(Int($0.rpm.rounded()))" }.joined(separator: " / ")
+            rows.append(LimitWindow(id: "fans", label: L10n.t("Fans"),
+                                    detail: L10n.t("\(speeds) rpm")))
         }
         // Memory pressure leads (the main, outer ring); CPU is the thin inner
         // ring. Without a memory reading, CPU leads alone.
         return ProviderSnapshot(id: id, displayName: displayName, glyph: glyph, fidelity: .official,
-                                status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []) + extras,
+                                status: .ok, windows: [cpu] + (memory.map { [$0] } ?? []) + rows,
                                 headlineID: memory?.id ?? cpu.id,
                                 weeklyID: memory == nil ? nil : cpu.id, kind: .system,
                                 headerAccessory: SystemSensors.cpuTemperature()

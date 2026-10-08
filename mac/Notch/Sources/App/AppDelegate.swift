@@ -166,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // order for a frame and then visibly shuffles.
                 order: preferences.providerOrder
             )
-            let updater = Updater()
+            let updater = Updater(preferences: preferences)
             self.updater = updater
             // An update is offered in the notch, and installed there — see
             // `UpdateCard`. Checked for as it launches; never under test, where
@@ -431,10 +431,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.launcher = launcher
             bridgeActions.launcherStatus = { [weak launcher] in launcher?.status }
             bridgeActions.permissionsChanged = { [weak fleet] in fleet?.apply(permissionsPending: $0) }
+            bridgeActions.updates = { [weak updater] in updater?.hubSnapshot ?? [:] }
+            bridgeActions.checkForUpdates = { [weak updater] in updater?.checkNow() }
+            bridgeActions.installUpdate = { [weak updater] in updater?.install() }
+            bridgeActions.driveAlert = { [weak self] message in self?.announceDriveAlert(message: message) }
             let bridge = HubBridge(preferences: preferences, store: store, actions: bridgeActions)
             conveniences.onChange = { [weak bridge] in bridge?.republish() }
             bridge.start()
             self.hubBridge = bridge
+            // The hub's Updates group follows the updater's progress.
+            updater.objectWillChange
+                .receive(on: RunLoop.main)
+                .sink { [weak bridge] _ in bridge?.republish() }
+                .store(in: &cancellables)
+            // Disk image installs are shown and answered in the notch.
+            conveniences.presentDiskImage = { [weak fleet] in fleet?.apply(diskImagePrompt: $0) ?? false }
+            fleet.onDiskImageChoice = { [weak conveniences] in conveniences?.diskImageChoice($0) }
+            fleet.onDiskImageHover = { [weak conveniences] in conveniences?.diskImageHover($0) }
             conveniences.start()
             self.conveniences = conveniences
             fleet.onRefresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
@@ -737,6 +750,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notice.noticeSubtitle = L10n.t("This is what one looks like.")
         notice.noticeStatus = ""
         fleet.showResetAlert(notice, duration: 5.0)
+    }
+
+    /// A drive health change the hub found (Warning, wear up five points or
+    /// more, or new media errors), shown as the same notice card. Skipped
+    /// silently while the notch is hidden; the hub's Storage view still shows it.
+    @MainActor
+    private func announceDriveAlert(message: String) {
+        guard let fleet = notchFleet else { return }
+        var notice = UsageResetEvent(providerID: "codenotch", providerName: "Pulse",
+                                     windowLabel: "", glyph: .claude,
+                                     previousFraction: 0, currentFraction: 0, resetsAt: nil)
+        notice.noticeTitle = L10n.t("Drive health")
+        notice.noticeSubtitle = message
+        notice.noticeStatus = ""
+        fleet.showResetAlert(notice, duration: 6.0)
     }
 
     /// Open the notch and show a usage reset notification modal when a limit resets.

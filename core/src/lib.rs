@@ -8,6 +8,7 @@ pub mod cleanup;
 pub mod cleanup_scan;
 pub mod compression;
 pub mod dashboard_export;
+pub mod drive_health;
 pub mod duplicates;
 pub mod folder_growth;
 pub mod history;

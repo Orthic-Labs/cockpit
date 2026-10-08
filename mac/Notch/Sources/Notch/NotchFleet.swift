@@ -66,6 +66,10 @@ final class NotchFleet {
     /// The notch's answer to an update it offered.
     var onUpdateChoice: ((UpdateChoice) -> Void)?
     private var updatePrompt: UpdatePrompt?
+    /// The notch's answer to a disk image card, and the pointer on it.
+    var onDiskImageChoice: ((DiskImageChoice) -> Void)?
+    var onDiskImageHover: ((Bool) -> Void)?
+    private var diskImagePrompt: DiskImagePrompt?
 
     private var updatePending = false
     private var permissionsPending = false
@@ -83,6 +87,19 @@ final class NotchFleet {
         for controller in controllers.values {
             controller.model.updatePending = updatePending
         }
+    }
+
+    /// A disk image's card on every notch in the fleet, or nil to take it down.
+    /// Returns whether any notch could show it: with every notch hidden there
+    /// is nowhere to ask.
+    @discardableResult
+    func apply(diskImagePrompt: DiskImagePrompt?) -> Bool {
+        self.diskImagePrompt = diskImagePrompt
+        var shown = false
+        for controller in controllers.values where controller.apply(diskImagePrompt: diskImagePrompt) {
+            shown = true
+        }
+        return diskImagePrompt == nil || shown
     }
 
     /// An update to offer in the notch, or how its install is going; nil once
@@ -448,6 +465,9 @@ final class NotchFleet {
         controller.model.onFocusSession = onFocusSession
         controller.model.onUpdateChoice = { [weak self] in self?.onUpdateChoice?($0) }
         controller.apply(updatePrompt: updatePrompt)
+        controller.model.onDiskImageChoice = { [weak self] in self?.onDiskImageChoice?($0) }
+        controller.model.onDiskImageHover = { [weak self] in self?.onDiskImageHover?($0) }
+        controller.apply(diskImagePrompt: diskImagePrompt)
         controller.model.updatePending = updatePending
         controller.model.permissionsPending = permissionsPending
         controller.onReposition = onReposition
