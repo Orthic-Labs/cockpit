@@ -230,7 +230,7 @@ export function Cleanup() {
               <button className="btn" onClick={() => setConfirming(false)} disabled={busy}>
                 Cancel
               </button>
-              <button className="btn" style={{ background: "var(--accent)", color: "#fff" }} onClick={move} disabled={busy}>
+              <button className="btn" style={{ background: "var(--rk-accent)", color: "#fff" }} onClick={move} disabled={busy}>
                 Move to Trash
               </button>
             </>
@@ -241,7 +241,7 @@ export function Cleanup() {
               </span>
               <button
                 className="btn"
-                style={{ background: "var(--accent)", color: "#fff" }}
+                style={{ background: "var(--rk-accent)", color: "#fff" }}
                 onClick={() => setConfirming(true)}
                 disabled={busy || chosen.length === 0}
               >

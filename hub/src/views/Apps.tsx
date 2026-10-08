@@ -89,7 +89,7 @@ export function Apps() {
               <span className="muted small"> {a.version ?? ""} · {lastUsedText(a.last_used)}</span>
             </span>
             <span className="bar" style={{ height: 4 }}>
-              <i style={{ width: `${(a.size_bytes / largest) * 100}%`, background: "var(--accent)" }} />
+              <i style={{ width: `${(a.size_bytes / largest) * 100}%`, background: "var(--rk-accent)" }} />
             </span>
             <span className="size">{bytes(a.size_bytes)}</span>
           </div>

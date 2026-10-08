@@ -11,5 +11,5 @@ description = "Headless QA of the Cockpit hub on rightkit-qa: drives the debug q
 [workspace]
 
 [dev-dependencies]
-rightkit-qa = "=0.2.7"
+rightkit-qa = "=0.2.8"
 serde_json = "1"

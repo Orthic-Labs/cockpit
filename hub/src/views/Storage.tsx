@@ -436,7 +436,7 @@ export function Storage() {
           {[...growth.grown, ...growth.shrunk].slice(0, 4).map((c) => (
             <button key={c.path} className="chip" onClick={() => open(c.path)} disabled={busy} title={c.path}>
               {c.path.split("/").pop()}{" "}
-              <span style={{ color: c.bytes > 0 ? "var(--warn)" : "var(--ok)" }}>{signedBytes(c.bytes)}</span>
+              <span style={{ color: c.bytes > 0 ? "var(--rk-warn)" : "var(--rk-ok)" }}>{signedBytes(c.bytes)}</span>
             </button>
           ))}
         </div>

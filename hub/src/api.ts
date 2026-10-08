@@ -244,9 +244,9 @@ export function bytes(n: number | null | undefined): string {
 
 /** Colour for a 0–1 share, matching the notch rings. */
 export function tone(fraction: number): string {
-  if (fraction >= 0.85) return "var(--bad)";
-  if (fraction >= 0.6) return "var(--warn)";
-  return "var(--ok)";
+  if (fraction >= 0.85) return "var(--rk-bad)";
+  if (fraction >= 0.6) return "var(--rk-warn)";
+  return "var(--rk-ok)";
 }
 
 export function signedBytes(n: number): string {
