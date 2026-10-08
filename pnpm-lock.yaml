@@ -12,8 +12,8 @@ importers:
         specifier: 2.7.1
         version: 2.7.1
       '@rightkit/release':
-        specifier: 0.2.133
-        version: 0.2.133
+        specifier: 0.2.132
+        version: 0.2.132
     optionalDependencies:
       appdmg:
         specifier: 0.6.6
@@ -26,8 +26,8 @@ packages:
     engines: {node: '>=22.12.0'}
     hasBin: true
 
-  '@rightkit/release@0.2.133':
-    resolution: {integrity: sha512-aOuXkTZ3F2WFsJqLa5/qFPvPQOa8D2p7OZTZj59lCwfvPUAZ5CWkid0+x4VMS0EqqPy9JOmkDBrxYK1lgKgcrg==}
+  '@rightkit/release@0.2.132':
+    resolution: {integrity: sha512-R4YSV166ZpN2XTXPn/+ikXwK4hNIF3lvvkviniAl6dz0FGR666v0Gre0vrpDHUQvPnHWs6wjGlEJvJYr1m+t+w==}
     hasBin: true
 
   '@xmldom/xmldom@0.9.12':
@@ -259,7 +259,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rightkit/release@0.2.133':
+  '@rightkit/release@0.2.132':
     dependencies:
       smol-toml: 1.7.0
 
