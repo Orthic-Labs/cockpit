@@ -108,7 +108,8 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
     echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
     [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
     # A silent no-op (skipped scenario) must not pass: demand the receipt and one screenshot per section.
-    grep -rq '"passed"' "$qa_out/evidence" --include=evidence.json || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
+    # 0.2.10+ writes evidence inside the managed run (managed/runs/<app>/<id>/evidence).
+    grep -rq '"passed"' "$qa_out" --include=evidence.json || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
     [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
   else
     echo "Hub QA skipped (PULSE_SKIP_HUB_QA set: signed-build gate)"
