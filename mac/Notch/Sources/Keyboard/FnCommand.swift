@@ -32,8 +32,13 @@ final class FnCommand {
         for key in keys.keys { post(key, down: false, flags: []) }
     }
 
+    /// Posting from the HID system state source updates the system-wide modifier
+    /// state too, which apps that query it (Flutter: LocalSend) read instead of
+    /// the flags on the key event.
+    private let source = CGEventSource(stateID: .hidSystemState)
+
     private func post(_ key: Int64, down: Bool, flags: CGEventFlags) {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(key), keyDown: down) else { return }
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key), keyDown: down) else { return }
         event.type = .flagsChanged
         event.flags = flags
         event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
