@@ -46,9 +46,13 @@ pub trait FilesystemProvider {
         path: &Path,
         limit: usize,
     ) -> Result<(Vec<(PathBuf, Option<FileMetadata>)>, bool), FsError> {
-        self.children_bounded(path, limit).map(|(children, truncated)| {
-            (children.into_iter().map(|child| (child, None)).collect(), truncated)
-        })
+        self.children_bounded(path, limit)
+            .map(|(children, truncated)| {
+                (
+                    children.into_iter().map(|child| (child, None)).collect(),
+                    truncated,
+                )
+            })
     }
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError>;
     /// Called once at the start of each scan so providers can reset per-scan
@@ -557,7 +561,16 @@ pub fn scan_with_provider<P: FilesystemProvider>(
         if ctx.cancelled {
             break;
         }
-        let _ = walk(provider, root, 0, options, None, None, &mut report, &mut ctx);
+        let _ = walk(
+            provider,
+            root,
+            0,
+            options,
+            None,
+            None,
+            &mut report,
+            &mut ctx,
+        );
     }
     if ctx.cancelled {
         report.incomplete_reasons.push("scan cancelled".into());

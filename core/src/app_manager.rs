@@ -606,7 +606,9 @@ fn now_epoch() -> i64 {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Waits for a scoped thread. A panic in it is re-raised, as `thread::scope` would.
@@ -1600,7 +1602,8 @@ pub fn app_leftovers(path: &str, emit: &(dyn Fn(LeftoverPart) + Sync)) -> Result
     std::thread::scope(|scope| {
         scope.spawn(|| {
             let mut part = LeftoverPart::new("bundle");
-            part.items.push(bundle_row(&root, eligible, disk_size(&root)));
+            part.items
+                .push(bundle_row(&root, eligible, disk_size(&root)));
             emit(part);
         });
         stream_leftovers(&root, bundle_id.as_deref(), eligible, emit);
@@ -1667,9 +1670,7 @@ pub fn app_detail(path: &str) -> Result<AppDetail, String> {
     );
     items.retain(|i| {
         i.location != "Installer receipt"
-            || !taken
-                .iter()
-                .any(|t| Path::new(&i.path).starts_with(t))
+            || !taken.iter().any(|t| Path::new(&i.path).starts_with(t))
     });
     let mut seen = HashSet::new();
     background.retain(|b: &BackgroundEntry| seen.insert((b.kind.clone(), b.label.clone())));
@@ -2340,7 +2341,12 @@ fn fetch_appcast(url: &str) -> Result<String, String> {
     let done = run_captured(command, Duration::from_secs(8), None)
         .map_err(|_| "Feed did not answer in time.".to_string())?;
     if !done.ok {
-        let reason = done.stderr.lines().next().unwrap_or("request failed").trim();
+        let reason = done
+            .stderr
+            .lines()
+            .next()
+            .unwrap_or("request failed")
+            .trim();
         return Err(format!("Feed could not be read: {reason}"));
     }
     String::from_utf8(done.stdout).map_err(|_| "Feed is not UTF-8 text.".to_string())
@@ -2409,8 +2415,8 @@ fn parse_appcast(xml: &str, macos: Option<&str>) -> Option<Vec<Candidate>> {
         {
             continue;
         }
-        let version = xml_text(block, "sparkle:version")
-            .or_else(|| xml_attribute(block, "sparkle:version"));
+        let version =
+            xml_text(block, "sparkle:version").or_else(|| xml_attribute(block, "sparkle:version"));
         let short = xml_text(block, "sparkle:shortVersionString")
             .or_else(|| xml_attribute(block, "sparkle:shortVersionString"));
         if version.is_some() || short.is_some() {
@@ -2437,7 +2443,11 @@ fn newest_candidate(candidates: Vec<Candidate>) -> Option<Candidate> {
 /// Whether the candidate is newer than the installed bundle. Build numbers
 /// compare when both sides have one, otherwise marketing versions. None when
 /// neither pair is available.
-fn candidate_newer(candidate: &Candidate, short: Option<&str>, build: Option<&str>) -> Option<bool> {
+fn candidate_newer(
+    candidate: &Candidate,
+    short: Option<&str>,
+    build: Option<&str>,
+) -> Option<bool> {
     if let (Some(version), Some(installed)) = (candidate.version.as_deref(), build) {
         return Some(version_is_newer(version, installed));
     }
@@ -2540,7 +2550,10 @@ fn brew_snapshot() -> Option<BrewSnapshot> {
             .or_else(|| cask.get("name"))
             .and_then(|v| v.as_str());
         let latest = cask.get("current_version").and_then(|v| v.as_str());
-        let pinned = cask.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+        let pinned = cask
+            .get("pinned")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if let (Some(token), Some(latest), false) = (token, latest, pinned)
             && valid_cask_token(token)
             && !latest.trim().is_empty()
@@ -2732,9 +2745,7 @@ pub fn check_updates(force: bool, on_row: &(dyn Fn(&AppUpdate) + Sync)) -> Updat
     let mut apps: Vec<AppUpdate> = rows
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    apps.sort_by(|a: &AppUpdate, b: &AppUpdate| {
-        a.name.to_lowercase().cmp(&b.name.to_lowercase())
-    });
+    apps.sort_by(|a: &AppUpdate, b: &AppUpdate| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     let cache = UpdatesCacheFile {
         schema: UPDATES_CACHE_SCHEMA,
         brew,

@@ -771,10 +771,7 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
         &self,
         path: &Path,
         limit: usize,
-    ) -> Result<
-        (Vec<(PathBuf, Option<pulse_core::FileMetadata>)>, bool),
-        pulse_core::FsError,
-    > {
+    ) -> Result<(Vec<(PathBuf, Option<pulse_core::FileMetadata>)>, bool), pulse_core::FsError> {
         self.reject(path)?;
         let (children, truncated) = self.inner.children_with_files(path, limit)?;
         Ok((
@@ -1125,12 +1122,21 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
                             row.installed_version.as_deref().unwrap_or("?"),
                             row.source
                         ),
-                        "app_store" => println!("{}: App Store (open it there to update)", row.name),
+                        "app_store" => {
+                            println!("{}: App Store (open it there to update)", row.name)
+                        }
                         _ => {}
                     }
                 }
-                let available = report.apps.iter().filter(|r| r.state == "available").count();
-                println!("{available} update(s) available across {} apps", report.apps.len());
+                let available = report
+                    .apps
+                    .iter()
+                    .filter(|r| r.state == "available")
+                    .count();
+                println!(
+                    "{available} update(s) available across {} apps",
+                    report.apps.len()
+                );
             }
         }
         "detail" => {

@@ -141,11 +141,19 @@ fn parse(record: &[u8]) -> Option<(Vec<u8>, Option<BulkFile>)> {
     let data_offset = cursor.i32()?;
     let length = cursor.u32()? as usize;
     let start = usize::try_from(reference_at as i64 + i64::from(data_offset)).ok()?;
-    let name = record.get(start..start.checked_add(length.checked_sub(1)?)?)?.to_vec();
+    let name = record
+        .get(start..start.checked_add(length.checked_sub(1)?)?)?
+        .to_vec();
 
-    let common = ATTR_CMN_DEVID | ATTR_CMN_OBJTYPE | ATTR_CMN_CRTIME | ATTR_CMN_MODTIME | ATTR_CMN_FLAGS | ATTR_CMN_FILEID;
+    let common = ATTR_CMN_DEVID
+        | ATTR_CMN_OBJTYPE
+        | ATTR_CMN_CRTIME
+        | ATTR_CMN_MODTIME
+        | ATTR_CMN_FLAGS
+        | ATTR_CMN_FILEID;
     let file = if returned.commonattr & common == common
-        && returned.fileattr & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_DATALENGTH) == (ATTR_FILE_ALLOCSIZE | ATTR_FILE_DATALENGTH)
+        && returned.fileattr & (ATTR_FILE_ALLOCSIZE | ATTR_FILE_DATALENGTH)
+            == (ATTR_FILE_ALLOCSIZE | ATTR_FILE_DATALENGTH)
     {
         regular_file(&mut cursor)
     } else {
@@ -212,9 +220,8 @@ pub(super) fn read_entries(
     let mut truncated = false;
     BUFFER.with_borrow_mut(|buf| -> io::Result<()> {
         loop {
-            let count = unsafe {
-                getattrlistbulk(fd, &mut attrs, buf.as_mut_ptr().cast(), buf.len(), 0)
-            };
+            let count =
+                unsafe { getattrlistbulk(fd, &mut attrs, buf.as_mut_ptr().cast(), buf.len(), 0) };
             if count < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -229,7 +236,10 @@ pub(super) fn read_entries(
                     .and_then(|b| b.try_into().ok())
                     .ok_or_else(malformed)?;
                 let length = u32::from_ne_bytes(length_bytes) as usize;
-                let end = offset.checked_add(length).filter(|&end| length >= 8 && end <= buf.len()).ok_or_else(malformed)?;
+                let end = offset
+                    .checked_add(length)
+                    .filter(|&end| length >= 8 && end <= buf.len())
+                    .ok_or_else(malformed)?;
                 let record = &buf[offset..end];
                 offset = end;
                 let Some((name, file)) = parse(record) else {
@@ -265,18 +275,29 @@ mod tests {
         let (plain, _) = crate::platform::children_bounded(dir, 100_000).unwrap();
         let mut bulk_names: Vec<_> = listed.iter().map(|(p, _)| p.clone()).collect();
         bulk_names.sort();
-        assert_eq!(bulk_names, plain, "bulk and plain listings must name the same entries");
+        assert_eq!(
+            bulk_names, plain,
+            "bulk and plain listings must name the same entries"
+        );
         let mut checked = 0;
         for (child, file) in listed {
             let Some(file) = file else { continue };
             let meta = fs::symlink_metadata(&child).unwrap();
-            assert!(meta.file_type().is_file(), "{child:?} must be a regular file");
+            assert!(
+                meta.file_type().is_file(),
+                "{child:?} must be a regular file"
+            );
             assert_eq!(file.dev, meta.dev(), "{child:?} dev");
             assert_eq!(file.ino, meta.ino(), "{child:?} ino");
             assert_eq!(file.logical, meta.len(), "{child:?} logical");
             assert_eq!(file.allocation, meta.blocks() * 512, "{child:?} allocation");
             assert_eq!(file.modified, meta.mtime() as u64, "{child:?} modified");
-            let created = meta.created().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let created = meta
+                .created()
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             assert_eq!(file.created, created, "{child:?} created");
             checked += 1;
         }
