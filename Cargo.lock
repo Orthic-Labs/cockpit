@@ -249,6 +249,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "rcgen",
+ "rightkit-search",
  "rusqlite",
  "rustls",
  "serde",
@@ -294,6 +295,12 @@ dependencies = [
  "untrusted",
  "windows-sys",
 ]
+
+[[package]]
+name = "rightkit-search"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ae438f6b9828c7bee686c12e2ee04ae2cb08bea5dbec0ee8b7c97961751cf25"
 
 [[package]]
 name = "rusqlite"

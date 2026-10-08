@@ -9,15 +9,20 @@ use crate::model::{
     CloneIdentity, EntryKind, FileIdentity, FolderAccounting, ReclaimEstimate, ScanReport,
     ScannedEntry, VolumeIdentity,
 };
+use rightkit_search::filename::{
+    Entry as IndexEntry, Error as IndexError, FilenameIndex, Kind as IndexKind,
+    Request as IndexRequest,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Maximum query length accepted by [`search_filenames`], in bytes and chars.
-pub const MAX_QUERY_LENGTH: usize = 256;
+pub const MAX_QUERY_LENGTH: usize = rightkit_search::filename::MAX_QUERY_LENGTH;
 /// Maximum extension length accepted by [`search_filenames`].
-pub const MAX_EXTENSION_LENGTH: usize = 64;
+pub const MAX_EXTENSION_LENGTH: usize = rightkit_search::filename::MAX_EXTENSION_LENGTH;
 /// Maximum number of rows returned by one browser operation.
 pub const MAX_PAGE_LIMIT: usize = 1_000;
 /// Maximum offset accepted by a browser operation.
@@ -225,53 +230,10 @@ pub fn validate_page_bounds(offset: usize, limit: usize) -> Result<(), StorageBr
     Ok(())
 }
 
-fn validate_search(request: &SearchRequest) -> Result<(), StorageBrowserError> {
-    validate_page_bounds(request.offset, request.limit)?;
-    if request.query.len() > MAX_QUERY_LENGTH
-        || request.query.chars().count() > MAX_QUERY_LENGTH
-        || request.query.contains('\0')
-    {
-        return Err(StorageBrowserError::InvalidQuery(format!(
-            "query must be at most {MAX_QUERY_LENGTH} bytes/chars and contain no NUL"
-        )));
-    }
-    if let Some(extension) = request.extension.as_ref() {
-        let trimmed = extension.strip_prefix('.').unwrap_or(extension);
-        if trimmed.is_empty()
-            || trimmed.len() > MAX_EXTENSION_LENGTH
-            || trimmed.chars().count() > MAX_EXTENSION_LENGTH
-            || trimmed.contains('/')
-            || trimmed.contains('\\')
-            || trimmed.contains('\0')
-        {
-            return Err(StorageBrowserError::InvalidExtension(
-                "extension must be a non-empty filename suffix".into(),
-            ));
-        }
-    }
-    if let (Some(min), Some(max)) = (request.min_size, request.max_size)
-        && min > max
-    {
-        return Err(StorageBrowserError::InvalidSizeRange);
-    }
-    Ok(())
-}
-
 fn basename(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
-}
-
-fn fold(value: &str) -> String {
-    value.to_lowercase()
-}
-
-fn extension_matches(path: &Path, requested: &str) -> bool {
-    let requested = fold(requested.strip_prefix('.').unwrap_or(requested));
-    path.extension()
-        .map(|extension| fold(&extension.to_string_lossy()) == requested)
-        .unwrap_or(false)
 }
 
 fn report_incomplete(report: &ScanReport) -> bool {
@@ -400,45 +362,77 @@ fn page<T: Clone>(all: &[T], offset: usize, limit: usize) -> (Vec<T>, bool) {
 
 /// Search filenames against report metadata. Hidden files are included by
 /// default. No contents are opened and placeholders are never hydrated.
+/// Name, extension, size and pagination matching is delegated to
+/// `rightkit_search::filename`; this function only maps report entries onto it.
 pub fn search_filenames(
     report: &ScanReport,
     request: &SearchRequest,
 ) -> Result<SearchPage, StorageBrowserError> {
-    validate_search(request)?;
-    let query = fold(&request.query);
-    let mut matches: Vec<_> = canonical_entries(report)
-        .into_iter()
-        .filter(|entry| fold(&basename(&entry.path)).contains(&query))
-        .filter(|entry| request.kind.is_none_or(|kind| entry.metadata.kind == kind))
-        .filter(|entry| {
-            request
-                .extension
-                .as_deref()
-                .is_none_or(|extension| extension_matches(&entry.path, extension))
-        })
-        .filter(|entry| {
-            let size = entry.metadata.logical_size;
-            request
-                .min_size
-                .is_none_or(|min| size.is_some_and(|value| value >= min))
-                && request
-                    .max_size
-                    .is_none_or(|max| size.is_some_and(|value| value <= max))
-        })
+    let entries = canonical_entries(report);
+    let mut index = FilenameIndex::new();
+    for entry in &entries {
+        if request.kind.is_none_or(|kind| entry.metadata.kind == kind) {
+            index.insert(index_entry(entry));
+        }
+    }
+    let page = index.search(&index_request(request))?;
+    let by_path: HashMap<&Path, &ScannedEntry> = entries
+        .iter()
+        .map(|entry| (entry.path.as_path(), *entry))
         .collect();
-    matches.sort_by(|a, b| a.path.cmp(&b.path));
-    let total_matches = matches.len();
-    let items: Vec<_> = matches.into_iter().map(item_from_entry).collect();
-    let (items, has_more) = page(&items, request.offset, request.limit);
+    let items = page
+        .items
+        .iter()
+        .filter_map(|hit| by_path.get(hit.path.as_path()))
+        .map(|entry| item_from_entry(entry))
+        .collect();
     Ok(SearchPage {
         items,
-        offset: request.offset,
-        limit: request.limit,
-        total_matches,
-        has_more,
+        offset: page.offset,
+        limit: page.limit,
+        total_matches: page.total_matches,
+        has_more: page.has_more,
         incomplete: report_incomplete(report),
         dates: DateAvailability::default(),
     })
+}
+
+fn index_entry(entry: &ScannedEntry) -> IndexEntry {
+    IndexEntry {
+        path: entry.path.clone(),
+        kind: match entry.metadata.kind {
+            EntryKind::File => IndexKind::File,
+            EntryKind::Directory => IndexKind::Dir,
+            EntryKind::Symlink | EntryKind::Other => IndexKind::Other,
+        },
+        size: entry.metadata.logical_size,
+    }
+}
+
+fn index_request(request: &SearchRequest) -> IndexRequest {
+    IndexRequest {
+        query: request.query.clone(),
+        // The kind filter is applied while building the index, because the
+        // index kind cannot distinguish symlinks from other entries.
+        kind: None,
+        extension: request.extension.clone(),
+        min_size: request.min_size,
+        max_size: request.max_size,
+        offset: request.offset,
+        limit: request.limit,
+    }
+}
+
+impl From<IndexError> for StorageBrowserError {
+    fn from(error: IndexError) -> Self {
+        match error {
+            IndexError::InvalidLimit(limit) => Self::InvalidLimit(limit),
+            IndexError::InvalidOffset(offset) => Self::InvalidOffset(offset),
+            IndexError::InvalidQuery(message) => Self::InvalidQuery(message),
+            IndexError::InvalidExtension(message) => Self::InvalidExtension(message),
+            IndexError::InvalidSizeRange => Self::InvalidSizeRange,
+        }
+    }
 }
 
 /// Short alias for callers that already have a browser context.
