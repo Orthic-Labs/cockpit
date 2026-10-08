@@ -92,7 +92,8 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     let state_override = take_option(&mut arguments, "--state-dir")?.map(PathBuf::from);
     #[cfg(target_os = "macos")]
     if state_override.is_none() {
-        let home = std::env::var_os("HOME").map(PathBuf::from)
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
             .ok_or_else(|| "HOME is unset".to_string())?;
         pulse_core::state_migration::migrate_mac_state(&home).map_err(|e| e.to_string())?;
     }

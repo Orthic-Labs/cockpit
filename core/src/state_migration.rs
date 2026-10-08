@@ -11,7 +11,12 @@ pub fn migrate_directory(legacy: &Path, destination: &Path) -> io::Result<()> {
     }
     match fs::symlink_metadata(legacy) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-        Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "legacy state is not a directory")),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "legacy state is not a directory",
+            ));
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     }
@@ -33,12 +38,23 @@ fn rename_exclusive(legacy: &Path, destination: &Path) -> io::Result<()> {
     let legacy = CString::new(legacy.as_os_str().as_bytes())?;
     let destination = CString::new(destination.as_os_str().as_bytes())?;
     #[cfg(target_os = "macos")]
-    let result = unsafe { libc::renamex_np(legacy.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    let result =
+        unsafe { libc::renamex_np(legacy.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
     #[cfg(target_os = "linux")]
     let result = unsafe {
-        libc::renameat2(libc::AT_FDCWD, legacy.as_ptr(), libc::AT_FDCWD, destination.as_ptr(), libc::RENAME_NOREPLACE)
+        libc::renameat2(
+            libc::AT_FDCWD,
+            legacy.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
     };
-    if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -49,7 +65,10 @@ fn rename_exclusive(legacy: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn rename_exclusive(_legacy: &Path, _destination: &Path) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "exclusive state migration unavailable"))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "exclusive state migration unavailable",
+    ))
 }
 
 /// Shared Mac state plus native hub data, cache & WebKit storage.
@@ -59,7 +78,11 @@ pub fn migrate_mac_state(home: &Path) -> io::Result<()> {
         &home.join("Library/Application Support/Cockpit"),
         &home.join("Library/Application Support/Pulse"),
     )?;
-    for parent in ["Library/Application Support", "Library/Caches", "Library/WebKit"] {
+    for parent in [
+        "Library/Application Support",
+        "Library/Caches",
+        "Library/WebKit",
+    ] {
         migrate_directory(
             &home.join(parent).join("dev.orthic.cockpit.hub"),
             &home.join(parent).join("dev.orthic.pulse.hub"),

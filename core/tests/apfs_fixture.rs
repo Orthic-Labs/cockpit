@@ -35,13 +35,17 @@ fn entry<'a>(report: &'a pulse_core::ScanReport, suffix: &str) -> &'a pulse_core
 
 #[test]
 fn apfs_fixture_accounting_is_conservative() {
-    let Some(root) = std::env::var_os("PULSE_APFS_FIXTURE_ROOT").or_else(|| std::env::var_os("COCKPIT_APFS_FIXTURE_ROOT")).map(PathBuf::from) else {
+    let Some(root) = std::env::var_os("PULSE_APFS_FIXTURE_ROOT")
+        .or_else(|| std::env::var_os("COCKPIT_APFS_FIXTURE_ROOT"))
+        .map(PathBuf::from)
+    else {
         eprintln!("SKIP apfs_fixture: PULSE_APFS_FIXTURE_ROOT not set (CI-only harness)");
         return;
     };
     assert!(root.is_dir(), "fixture root is not a directory");
 
-    let baseline: Option<u64> = std::env::var("PULSE_APFS_FIXTURE_BASELINE_USED").or_else(|_| std::env::var("COCKPIT_APFS_FIXTURE_BASELINE_USED"))
+    let baseline: Option<u64> = std::env::var("PULSE_APFS_FIXTURE_BASELINE_USED")
+        .or_else(|_| std::env::var("COCKPIT_APFS_FIXTURE_BASELINE_USED"))
         .ok()
         .and_then(|v| v.parse().ok());
     let after = used_bytes(&root);
@@ -193,7 +197,9 @@ fn apfs_fixture_accounting_is_conservative() {
     );
 
     // Snapshot-retained allocation: asserted only when setup actually created a snapshot.
-    let snapshot = std::env::var("PULSE_APFS_FIXTURE_SNAPSHOT").or_else(|_| std::env::var("COCKPIT_APFS_FIXTURE_SNAPSHOT")).ok();
+    let snapshot = std::env::var("PULSE_APFS_FIXTURE_SNAPSHOT")
+        .or_else(|_| std::env::var("COCKPIT_APFS_FIXTURE_SNAPSHOT"))
+        .ok();
     let snapshot_created = snapshot.as_deref() == Some("created");
     match snapshot.as_deref() {
         Some("created") => {}

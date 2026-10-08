@@ -1493,12 +1493,9 @@ fn trash_batch_with_finder(paths: &[&Path], limit: Duration) -> Result<(), Strin
 fn elevate_tool() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     exe.ancestors().skip(1).take(6).find_map(|dir| {
-        [
-            dir.join("pulse-elevate"),
-            dir.join("Helpers/pulse-elevate"),
-        ]
-        .into_iter()
-        .find(|p| p.is_file())
+        [dir.join("pulse-elevate"), dir.join("Helpers/pulse-elevate")]
+            .into_iter()
+            .find(|p| p.is_file())
     })
 }
 

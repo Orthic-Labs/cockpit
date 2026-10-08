@@ -363,8 +363,7 @@ fn flooding_exe() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("pulse-flood-{}-{nanos}.sh", std::process::id()));
+    let path = std::env::temp_dir().join(format!("pulse-flood-{}-{nanos}.sh", std::process::id()));
     std::fs::write(&path, "#!/bin/sh\nwhile :; do printf 'stdout-flood-01234567890123456789\\n'; printf 'stderr-flood-01234567890123456789\\n' >&2; done\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();

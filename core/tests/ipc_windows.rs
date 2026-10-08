@@ -21,10 +21,7 @@ fn unique(tag: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!(
-        r"\\.\pipe\pulse-test-{}-{tag}-{nanos}",
-        std::process::id()
-    )
+    format!(r"\\.\pipe\pulse-test-{}-{tag}-{nanos}", std::process::id())
 }
 
 fn limits() -> Limits {

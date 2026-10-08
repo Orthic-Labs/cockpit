@@ -560,7 +560,10 @@ pub fn scan_with_provider<P: FilesystemProvider>(
             .cmp(&a.attributed_allocation_bytes)
             .then_with(|| a.path.cmp(&b.path))
     });
-    if std::env::var_os("PULSE_SCAN_LOG").or_else(|| std::env::var_os("COCKPIT_SCAN_LOG")).is_some() {
+    if std::env::var_os("PULSE_SCAN_LOG")
+        .or_else(|| std::env::var_os("COCKPIT_SCAN_LOG"))
+        .is_some()
+    {
         eprintln!(
             "scan: {} entries visited, {} kept, {} folders, {} ms{}",
             seen_count,

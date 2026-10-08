@@ -148,7 +148,10 @@ pub fn default_directory() -> io::Result<PathBuf> {
                 .map(|p| p.join(".local/state/pulse"))
         });
     let root = root.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "local metadata directory unavailable")
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "local metadata directory unavailable",
+        )
     })?;
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let legacy = root.with_file_name("Cockpit");
