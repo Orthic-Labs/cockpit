@@ -10,6 +10,11 @@ emit_generated() {
     git diff -- '*.rs'
     echo 'PULSE_FORMAT_PATCH_END'
   fi
+  if [[ -n "$(git diff -- Cargo.lock)" ]]; then
+    echo 'PULSE_CARGO_LOCK_PATCH_BEGIN'
+    git diff -- Cargo.lock
+    echo 'PULSE_CARGO_LOCK_PATCH_END'
+  fi
   if [[ -f Cargo.lock ]] && ! git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then
     echo 'PULSE_CARGO_LOCK_BEGIN'
     cat Cargo.lock
@@ -35,6 +40,13 @@ gate_exit() {
 trap gate_exit EXIT
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
 cargo fmt --all
+# A manifest change without a matching lock: resolve it here (CI is the only
+# place Pulse may resolve), print the lock patch for a verbatim commit, fail.
+if ! cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
+  cargo update --workspace
+  echo "Cargo.lock is out of date; commit the PULSE_CARGO_LOCK_PATCH from this log." >&2
+  exit 1
+fi
 cargo test --locked --workspace --no-fail-fast
 cargo clippy --locked --workspace --all-targets --keep-going -- -D warnings
 cargo run --locked --quiet --bin pulse -- status --json

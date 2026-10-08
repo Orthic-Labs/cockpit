@@ -243,6 +243,12 @@ final class NotchWindowController {
                     // percentage and reset time is written out, and on a notch
                     // held open there is no unfold to notice instead.
                     if index != nil { self?.onLook?() }
+                    // Pulse fork: ⌘V sends the clipboard while the pointer is on the Send cell.
+                    if let self {
+                        let id = index.flatMap { self.model.snapshots[safe: $0] }?.providerID
+                        NearbySharing.shared.hoverChanged(ObjectIdentifier(self),
+                                                          overSend: id == NearbySharing.providerID)
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -404,6 +410,14 @@ final class NotchWindowController {
             if !Runtime.isUnderTest { panel.orderFrontRegardless() }
             self.panel = panel
             self.hostingView = hosting
+            // Pulse fork: files dropped on the Send cell are sent to the chosen device.
+            hosting.registerForDraggedTypes([.fileURL])
+            hosting.onDropTargeted = { on in
+                MainActor.assumeIsolated { NearbySharing.shared.setDropTargeting(on) }
+            }
+            hosting.onDropFiles = { urls in
+                MainActor.assumeIsolated { NearbySharing.shared.drop(urls: urls) }
+            }
         }
         // Use the actual panel origin: near a corner its transparent padding
         // can extend offscreen, while the tooltip itself must stay visible.
@@ -1364,6 +1378,18 @@ final class NotchWindowController {
         return true
     }
 
+    /// The Send cell, in panel coordinates, while the notch is open: the one
+    /// place a file drag is taken.
+    private var sendCellRect: CGRect? {
+        guard model.isExpanded,
+              let index = model.snapshots.firstIndex(where: { $0.providerID == NearbySharing.providerID })
+        else { return nil }
+        let pitch = model.cellPitch * model.sizeScale
+        let centre = model.ringAlong(index: index, in: model.cellWing)
+        return placement.rect(along: centre - pitch / 2, across: 0, length: pitch,
+                              depth: model.notchDepth * model.sizeScale)
+    }
+
     private func updateInteractiveRects() {
         var rects = [liveRect]
         if let card = updateCardRect { rects.append(card) }
@@ -1375,6 +1401,7 @@ final class NotchWindowController {
             rects.append(card)
         }
         hostingView?.interactiveRects = rects
+        hostingView?.dropRect = sendCellRect
         if let panel {
             // Runs for every mouse event on the screen. AppKit does not skip an
             // unchanged value: each assignment re-sends the window's event mask
@@ -1697,7 +1724,8 @@ final class NotchWindowController {
            model.snapshots.indices.contains(index) {
             let id = model.snapshots[index].providerID
             let section = id == SystemProviders.disksID ? "storage"
-                : id == SystemProviders.cpuID ? "monitor" : "accounts"
+                : id == SystemProviders.cpuID ? "monitor"
+                : id == SystemProviders.sendID ? "general" : "accounts"
             onOpenHub?(section)
             return
         }

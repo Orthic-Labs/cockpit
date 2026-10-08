@@ -228,6 +228,23 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(convAutoQuitApps, forKey: Keys.convAutoQuitApps) }
     }
 
+    /// Nearby sharing (LocalSend protocol, run by the hub): on by default.
+    @Published var nearbyEnabled: Bool {
+        didSet { defaults.set(nearbyEnabled, forKey: Keys.nearbyEnabled) }
+    }
+    /// How other devices list this Mac; empty means "<Mac name> (Pulse)".
+    @Published var nearbyAlias: String {
+        didSet { defaults.set(nearbyAlias, forKey: Keys.nearbyAlias) }
+    }
+    /// Where received files go; empty means Downloads.
+    @Published var nearbySaveFolder: String {
+        didSet { defaults.set(nearbySaveFolder, forKey: Keys.nearbySaveFolder) }
+    }
+    /// Skip the question for devices accepted before (off by default).
+    @Published var nearbyAcceptKnown: Bool {
+        didSet { defaults.set(nearbyAcceptKnown, forKey: Keys.nearbyAcceptKnown) }
+    }
+
     /// Pulse fork: the launcher is off until switched on.
     @Published var launcherEnabled: Bool {
         didSet { defaults.set(launcherEnabled, forKey: Keys.launcherEnabled) }
@@ -486,6 +503,10 @@ final class Preferences: ObservableObject {
         static let convDiskImageTrashDownload = "convDiskImageTrashDownload"
         static let convDiskImageAuto = "convDiskImageAuto"
         static let convDiskImageAutoUpdate = "convDiskImageAutoUpdate"
+        static let nearbyEnabled = "nearbyEnabled"
+        static let nearbyAlias = "nearbyAlias"
+        static let nearbySaveFolder = "nearbySaveFolder"
+        static let nearbyAcceptKnown = "nearbyAcceptKnown"
         static let launcherEnabled = "launcherEnabled"
         static let launcherHotkey = "launcherHotkey"
         static let launcherConfig = "launcherConfig"
@@ -683,6 +704,10 @@ final class Preferences: ObservableObject {
         self.convDiskImageAuto = defaults.object(forKey: Keys.convDiskImageAuto) as? Bool ?? true
         self.convDiskImageAutoUpdate = defaults.bool(forKey: Keys.convDiskImageAutoUpdate)
         self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
+        self.nearbyEnabled = defaults.object(forKey: Keys.nearbyEnabled) as? Bool ?? true
+        self.nearbyAlias = defaults.string(forKey: Keys.nearbyAlias) ?? ""
+        self.nearbySaveFolder = defaults.string(forKey: Keys.nearbySaveFolder) ?? ""
+        self.nearbyAcceptKnown = defaults.bool(forKey: Keys.nearbyAcceptKnown)
         self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)
         self.launcherHotkey = defaults.string(forKey: Keys.launcherHotkey)
             .flatMap(LauncherHotkeyChoice.init(rawValue:)) ?? .optionSpace

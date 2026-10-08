@@ -15,11 +15,13 @@ enum SystemProviders {
     static let cpuID = "system-cpu"
     static let memoryID = "system-memory"
     static let disksID = "system-disks"
+    /// Nearby sharing: the Send cell (see Sharing/NearbySharing.swift).
+    static let sendID = "system-send"
 
     static func isSystem(providerID: String) -> Bool { providerID.hasPrefix("system-") }
 
     static func all() -> [UsageProvider] {
-        [SystemLoadProvider(), DisksProvider()]
+        [SystemLoadProvider(), DisksProvider(), SendProvider()]
     }
 
     static func bytes(_ value: Int64) -> String {

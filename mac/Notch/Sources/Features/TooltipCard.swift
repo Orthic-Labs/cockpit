@@ -469,7 +469,22 @@ private struct LimitWindowRow: View {
         window.usedFraction == nil && (window.used != nil || window.detail != nil)
     }
 
+    /// Pulse fork: a nearby device in the Send cell's card; a click makes it the target.
+    private var nearbyDevice: String? {
+        window.id.hasPrefix("nearby:") ? String(window.id.dropFirst("nearby:".count)) : nil
+    }
+
     var body: some View {
+        rows
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if let device = nearbyDevice {
+                    MainActor.assumeIsolated { NearbySharing.shared.select(device) }
+                }
+            }
+    }
+
+    @ViewBuilder private var rows: some View {
         if let money = window.money {
             MoneyBreakdownView(title: window.label, money: money, fidelity: fidelity)
         } else if isCountRow {
@@ -621,7 +636,8 @@ private struct ProviderTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TooltipHeader(title: L10n.t("\(snapshot.displayName) Usage"),
+            TooltipHeader(title: snapshot.glyph == .send
+                              ? snapshot.displayName : L10n.t("\(snapshot.displayName) Usage"),
                           subtitle: snapshot.plan,
                           note: snapshot.headerAccessory ?? activityNote ?? readingAge) {
                 ProviderGlyphView(glyph: snapshot.glyph)

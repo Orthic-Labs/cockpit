@@ -5,5 +5,12 @@
 	<!-- Pulse lives in the notch: no Dock icon and no menu bar for the hub. -->
 	<key>LSUIElement</key>
 	<true/>
+	<!-- Nearby sharing (LocalSend protocol): finds and talks to devices on the local network. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Pulse finds nearby devices on your network so you can send and receive files with the LocalSend app and other Pulse Macs.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_localsend._tcp</string>
+	</array>
 </dict>
 </plist>

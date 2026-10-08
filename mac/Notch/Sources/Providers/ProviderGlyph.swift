@@ -8,6 +8,8 @@ enum ProviderGlyph: String, Codable, Equatable {
     case cpu
     case memory
     case disk
+    /// Nearby sharing (send and receive files).
+    case send
 
     /// An SF Symbol for marks that have no traced outline.
     var symbolName: String? {
@@ -15,6 +17,7 @@ enum ProviderGlyph: String, Codable, Equatable {
         case .cpu: return "cpu"
         case .memory: return "memorychip"
         case .disk: return "internaldrive"
+        case .send: return "paperplane"
         default: return nil
         }
     }
@@ -26,7 +29,7 @@ enum ProviderGlyph: String, Codable, Equatable {
         switch self {
         case .claude: return 0.97
         case .openai: return 0.94
-        case .cpu, .memory, .disk: return 0.9
+        case .cpu, .memory, .disk, .send: return 0.9
         }
     }
 
@@ -34,7 +37,7 @@ enum ProviderGlyph: String, Codable, Equatable {
         switch self {
         case .claude: return GlyphOutline.claude
         case .openai: return GlyphOutline.openai
-        case .cpu, .memory, .disk: return []
+        case .cpu, .memory, .disk, .send: return []
         }
     }
 }

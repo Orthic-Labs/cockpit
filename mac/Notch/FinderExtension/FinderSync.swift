@@ -5,8 +5,8 @@ import FinderSync
 // UninstallyFinder extension (github.com/gostonx/uninstally, MIT, (c) 2026
 // Codenta). See docs/donors.md.
 
-/// Adds a "Pulse" submenu to Finder's right-click menu, system-wide:
-/// Copy Path, Copy Path (escaped) and Open in Terminal.
+/// Adds Copy Path, Copy Path (escaped) and Open in Terminal as top-level items
+/// in Finder's right-click menu, system-wide.
 ///
 /// Finder Sync extensions must be sandboxed, so this does nothing but the
 /// pasteboard and a Launch Services open; it never touches file contents.
@@ -22,15 +22,11 @@ final class FinderSync: FIFinderSync {
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
         guard menuKind == .contextualMenuForItems || menuKind == .contextualMenuForContainer else { return nil }
-        let submenu = NSMenu(title: "Pulse")
-        submenu.addItem(item("Copy Path", #selector(copyPath(_:)), symbol: "doc.on.clipboard"))
-        submenu.addItem(item("Copy Path (escaped)", #selector(copyEscapedPath(_:)), symbol: "terminal"))
-        submenu.addItem(item("Open in Terminal", #selector(openInTerminal(_:)), symbol: "apple.terminal"))
-
+        // Top-level items, no submenu: Copy Path first, then the rest.
         let menu = NSMenu(title: "")
-        let parent = NSMenuItem(title: "Pulse", action: nil, keyEquivalent: "")
-        parent.submenu = submenu
-        menu.addItem(parent)
+        menu.addItem(item("Copy Path", #selector(copyPath(_:)), symbol: "doc.on.clipboard"))
+        menu.addItem(item("Copy Path (escaped)", #selector(copyEscapedPath(_:)), symbol: "terminal"))
+        menu.addItem(item("Open in Terminal", #selector(openInTerminal(_:)), symbol: "apple.terminal"))
         return menu
     }
 

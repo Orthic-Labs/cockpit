@@ -415,6 +415,11 @@ final class HubBridge {
         "convDiskImageAutoUpdate": bool(\.convDiskImageAutoUpdate),
         "convDiskImageTrashDownload": bool(\.convDiskImageTrashDownload),
         "convAutoQuitApps": stringList(\.convAutoQuitApps),
+        // Nearby sharing (run by the hub; it reads these from notch-state.json)
+        "nearbyEnabled": bool(\.nearbyEnabled),
+        "nearbyAlias": text(\.nearbyAlias),
+        "nearbySaveFolder": text(\.nearbySaveFolder),
+        "nearbyAcceptKnown": bool(\.nearbyAcceptKnown),
         "launcherEnabled": bool(\.launcherEnabled),
         "launcherHotkey": choice(\.launcherHotkey),
         "launcherConfig": text(\.launcherConfigJSON),

@@ -41,6 +41,56 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
         return super.hitTest(point)
     }
 
+    // MARK: - File drops (Pulse fork: the Send cell)
+
+    /// Where a file drag is accepted, in view coordinates (top-left origin):
+    /// the Send cell and nothing else. Nil when there is no such cell.
+    var dropRect: CGRect?
+    /// The drag is over the cell, or left it.
+    var onDropTargeted: ((Bool) -> Void)?
+    /// Files dropped on the cell; returns whether they were taken.
+    var onDropFiles: (([URL]) -> Bool)?
+    private var dropIsOver = false
+
+    private func dropURLs(_ sender: NSDraggingInfo) -> [URL] {
+        let objects = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        return (objects as? [URL]) ?? []
+    }
+
+    private func dropOperation(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let point = convert(sender.draggingLocation, from: nil)
+        let inside = dropRect?.contains(point) == true && !dropURLs(sender).isEmpty
+        if inside != dropIsOver {
+            dropIsOver = inside
+            onDropTargeted?(inside)
+        }
+        return inside ? .copy : []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { dropOperation(sender) }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { dropOperation(sender) }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        if dropIsOver {
+            dropIsOver = false
+            onDropTargeted?(false)
+        }
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dropOperation(sender) != []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let accepted = dropOperation(sender) != []
+        let urls = dropURLs(sender)
+        dropIsOver = false
+        onDropTargeted?(false)
+        return accepted ? (onDropFiles?(urls) ?? false) : false
+    }
+
     /// `NSView.menu` is not inherited by subviews, and the hit test lands on one
     /// of SwiftUI's, so AppKit would otherwise ask a view that has no menu.
     override func menu(for event: NSEvent) -> NSMenu? {

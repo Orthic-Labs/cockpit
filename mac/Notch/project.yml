@@ -79,6 +79,11 @@ targets:
           - tr
         LSMinimumSystemVersion: "26.0"
         NSAppleEventsUsageDescription: "Pulse asks Finder which items and folder you have selected so Cut and Paste can move files."
+        # Nearby sharing runs in the hub, which the notch starts as its child, so macOS asks about
+        # Local Network on the notch's behalf and shows this text.
+        NSLocalNetworkUsageDescription: "Pulse finds nearby devices on your network so you can send and receive files with the LocalSend app and other Pulse Macs."
+        NSBonjourServices:
+          - _localsend._tcp
         # Sources/Info.plist is *generated* from this block, so editing that
         # file directly is undone by the next `make gen`. Pointing both at the
         # build settings keeps one place to bump.

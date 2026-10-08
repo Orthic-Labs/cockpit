@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Badge, Button, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
+import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
+import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
 
 export interface Limit {
   label: string;
@@ -197,7 +198,8 @@ export function Settings({ section, notch, onNavigate }: {
       {section === "permissions" && (
         <Group title="Permissions">
           {!state.permissions ? <div className="muted small">Waiting for permission status from Pulse notch…</div> : (
-            <PermissionRows permissions={state.permissions} errors={state.permissionErrors} send={send} />
+            <PermissionRows permissions={state.permissions} errors={state.permissionErrors} send={send}
+              nearbyOn={s.nearbyEnabled !== false} />
           )}
         </Group>
       )}
@@ -278,6 +280,7 @@ export function Settings({ section, notch, onNavigate }: {
       {section === "general" && (
         <>
           <Group title="Startup">{bool("launchAtLogin", "Open Pulse at login")}</Group>
+          <NearbyGroup s={s} set={set} />
           <Group title="Updates">
             {state.updates ? (
               <>
@@ -639,24 +642,25 @@ function useHubFullDiskAccess(): string | null {
 }
 
 /**
- * Permission rows from the notch. Full Disk Access is per app and the hub is a
- * separate app, so that row is granted only when the hub passes too.
+ * Permission rows from the notch. The hub runs as the notch's child process, so
+ * the notch's Full Disk Access covers it; the hub's own probe only confirms.
  */
-function PermissionRows({ permissions, errors, send }: {
+function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
   permissions: Permission[];
   errors?: Record<string, string>;
   send: Send;
+  nearbyOn?: boolean;
 }) {
   const hub = useHubFullDiskAccess();
   return (
     <>
       {permissions.map((permission) => {
         const fda = permission.id === "fullDiskAccess";
-        // The notch's grant alone is not enough: the hub must pass too.
         const awaitingHub = fda && permission.status === "granted" && hub === null;
-        const needsHub = fda && permission.status === "granted" && hub !== null && hub !== "granted";
-        const status = awaitingHub ? "unknown" : needsHub ? "needsApproval" : permission.status;
+        const restart = fda && permission.status === "granted" && hub !== null && hub !== "granted";
+        const status = awaitingHub ? "unknown" : restart ? "needsApproval" : permission.status;
         const text = awaitingHub ? "Checking…"
+          : restart ? "Restart Pulse to apply"
           : status === "granted" ? "Granted"
           : status === "needsApproval" ? "Needs approval"
           : status === "off" ? "Off" : "Unknown";
@@ -674,18 +678,126 @@ function PermissionRows({ permissions, errors, send }: {
                 </Button>
               </span>
             </Row>
-            {fda && (
-              <div className="muted small">
-                {needsHub && <strong>Add Pulse (hub) too. </strong>}
-                Pulse (hub) is a separate app that runs the disk scans. Open Settings reveals it in Finder:
-                drag it into the list, or use +.
-              </div>
-            )}
             {errors?.[permission.id] && <div className="error">{errors[permission.id]}</div>}
           </div>
         );
       })}
+      <LocalNetworkRow enabled={nearbyOn} />
+      <StaleGrants />
     </>
+  );
+}
+
+type StaleService = { service: string; label: string };
+type StaleApp = { id: string; kind: "bundle" | "path"; services: StaleService[] };
+type ResetOutcome = { id: string; service: string; ok: boolean; message: string };
+
+/**
+ * Permission grants that belong to apps that no longer exist. Read from TCC.db
+ * (read-only); removed with `tccutil reset`, never by writing the database.
+ */
+function StaleGrants() {
+  const [apps, setApps] = useState<StaleApp[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [results, setResults] = useState<ResetOutcome[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const key = (id: string, service: string) => `${id}\u0000${service}`;
+
+  const scan = () => {
+    setBusy(true);
+    setError(null);
+    setResults(null);
+    invoke<StaleApp[]>("tcc_stale_scan")
+      .then((found) => {
+        setApps(found);
+        setPicked(new Set(found.filter((a) => a.kind === "bundle")
+          .flatMap((a) => a.services.map((s) => key(a.id, s.service)))));
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  const toggle = (k: string) => setPicked((prev) => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+
+  const run = () => {
+    setConfirm(false);
+    if (!apps) return;
+    const items = apps.filter((a) => a.kind === "bundle")
+      .map((a) => ({ id: a.id, services: a.services.filter((s) => picked.has(key(a.id, s.service))).map((s) => s.service) }))
+      .filter((i) => i.services.length > 0);
+    setBusy(true);
+    invoke<ResetOutcome[]>("tcc_reset", { items })
+      .then((outcomes) => { setResults(outcomes); setApps(null); })
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  const bundles = (apps ?? []).filter((a) => a.kind === "bundle");
+  const paths = (apps ?? []).filter((a) => a.kind === "path");
+  const count = picked.size;
+  const cleared = results?.filter((r) => r.ok).length ?? 0;
+  const failed = results?.filter((r) => !r.ok) ?? [];
+
+  return (
+    <div className="permission-row">
+      <Row label="Clean up old apps"
+        note="Finds permissions still granted to apps that are no longer installed. Needs Full Disk Access to look.">
+        <Button size="sm" variant="secondary" disabled={busy} onClick={scan}>
+          {busy ? "Working…" : "Find old permissions"}
+        </Button>
+      </Row>
+      {error && <div className="error">{error}</div>}
+      {apps && apps.length === 0 && <div className="muted small">No permissions from removed apps were found.</div>}
+      {bundles.map((a) => (
+        <div key={a.id} className="small">
+          <div><strong>{a.id}</strong></div>
+          {a.services.map((s) => (
+            <label key={s.service} style={{ display: "block", marginLeft: 12 }}>
+              <input type="checkbox" checked={picked.has(key(a.id, s.service))}
+                onChange={() => toggle(key(a.id, s.service))} /> {s.label}
+            </label>
+          ))}
+        </div>
+      ))}
+      {bundles.length > 0 && (
+        <div className="buttons">
+          <Button size="sm" variant="secondary" disabled={busy || count === 0} onClick={() => setConfirm(true)}>
+            Clear {count} selected
+          </Button>
+        </div>
+      )}
+      {paths.length > 0 && (
+        <div className="muted small">
+          <div>These were added by file path, which macOS will not let Pulse remove. Remove each with − in the matching System Settings list:</div>
+          {paths.map((a) => (
+            <div key={a.id} style={{ marginLeft: 12 }}>{a.id}: {a.services.map((s) => s.label).join(", ")}</div>
+          ))}
+        </div>
+      )}
+      {results && (
+        <div className="small">
+          <div>{cleared} cleared{failed.length > 0 ? `, ${failed.length} failed` : ""}.</div>
+          {failed.map((r) => (
+            <div key={key(r.id, r.service)} className="error">{r.id} ({r.service}): {r.message}</div>
+          ))}
+        </div>
+      )}
+      {confirm && (
+        <ConfirmDialog
+          title={`Clear ${count} old permission${count === 1 ? "" : "s"}?`}
+          description="These apps are no longer installed. Pulse asks macOS to forget their grants with tccutil. Nothing else changes, and an app you reinstall will simply ask again."
+          confirmLabel="Clear"
+          onConfirm={run}
+          onCancel={() => setConfirm(false)}
+        />
+      )}
+    </div>
   );
 }
 

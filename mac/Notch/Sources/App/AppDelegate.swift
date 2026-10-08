@@ -446,10 +446,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .store(in: &cancellables)
             // Disk image installs are shown and answered in the notch.
             conveniences.presentDiskImage = { [weak fleet] in fleet?.apply(diskImagePrompt: $0) ?? false }
-            fleet.onDiskImageChoice = { [weak conveniences] in conveniences?.diskImageChoice($0) }
-            fleet.onDiskImageHover = { [weak conveniences] in conveniences?.diskImageHover($0) }
+            // Nearby sharing borrows the same card: while one of its cards is up
+            // (a request, "Saved to Downloads"), the buttons and hover are its own.
+            fleet.onDiskImageChoice = { [weak conveniences] choice in
+                if NearbySharing.shared.handlesCard() {
+                    NearbySharing.shared.handleCardChoice(choice)
+                } else {
+                    conveniences?.diskImageChoice(choice)
+                }
+            }
+            fleet.onDiskImageHover = { [weak conveniences] on in
+                if NearbySharing.shared.handlesCard() {
+                    NearbySharing.shared.handleCardHover(on)
+                } else {
+                    conveniences?.diskImageHover(on)
+                }
+            }
             conveniences.start()
             self.conveniences = conveniences
+            // The fifth cell, Send: the hub runs the LocalSend service, the notch shows it.
+            let sharing = NearbySharing.shared
+            sharing.enabled = { [weak preferences] in preferences?.nearbyEnabled ?? true }
+            sharing.present = { [weak fleet] in fleet?.apply(diskImagePrompt: $0) ?? false }
+            sharing.onChange = { [weak store] in _ = store?.refresh(providerID: NearbySharing.providerID) }
+            // Switching sharing off takes the cell away; on brings it back.
+            preferences.$nearbyEnabled
+                .removeDuplicates()
+                .receive(on: RunLoop.main)
+                .sink { [weak preferences] on in preferences?.setConnected(on, for: SystemProviders.sendID) }
+                .store(in: &cancellables)
+            if !isRunningTests { sharing.start() }
             fleet.onRefresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
             fleet.onLook = { [weak store] in store?.refreshBecauseSomeoneIsLooking() }
             fleet.onRefreshProvider = { [weak store] id in
@@ -890,6 +916,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor func openSettings() { _ = HubLauncher.open(section: "settings") }
     func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { HubLauncher.terminate() }
         hubBridge?.stop()
         conveniences?.stop()
         tokenRefresher?.stop()

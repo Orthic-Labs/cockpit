@@ -238,7 +238,7 @@ export const api = {
     invoke<QuitOutcome>("process_force_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
   volumes: () => invoke<Volume[]>("volumes"),
   eject: (mount: string) => invoke<void>("eject", { mount }),
-  /** Opens Full Disk Access and reveals the hub bundle, so the hub can be added. */
+  /** Opens the Full Disk Access pane in System Settings. */
   openFullDiskAccess: () => invoke<void>("fda_request"),
   cleanupScan: () => invoke<CleanupReport>("cleanup_scan"),
   /** The last saved findings, or null when none were saved. Never scans. */
@@ -441,4 +441,70 @@ export const appsApi = {
   updatesRefresh: (force: boolean) => invoke<void>("apps_updates_refresh", { force }),
   /** Returns "running", "opened" or "store". */
   update: (path: string) => invoke<string>("app_update", { path }),
+};
+
+// ---- Nearby sharing (LocalSend protocol, run by the hub: src-tauri/src/share.rs) ----
+
+export interface ShareDevice {
+  fingerprint: string;
+  alias: string;
+  deviceModel?: string | null;
+  deviceType?: string | null;
+  ip: string;
+  port: number;
+  protocol: string;
+}
+
+export interface ShareIncoming {
+  id: string;
+  from: string;
+  fingerprint: string;
+  fileCount: number;
+  totalBytes: number;
+  isMessage: boolean;
+  preview?: string | null;
+  files: { name: string; size: number }[];
+  known: boolean;
+}
+
+export interface ShareTransfer {
+  id: string;
+  direction: "send" | "receive";
+  peer: string;
+  state: "waiting" | "active" | "done" | "failed" | "cancelled" | "declined";
+  totalBytes: number;
+  doneBytes: number;
+  filesTotal: number;
+  filesDone: number;
+  current?: string | null;
+  savedTo?: string | null;
+  savedFiles: string[];
+  error?: string | null;
+}
+
+export interface ShareSnapshot {
+  running: boolean;
+  error: string | null;
+  alias?: string;
+  saveDir?: string;
+  devices: ShareDevice[];
+  incoming: ShareIncoming[];
+  transfers: ShareTransfer[];
+  warnings: string[];
+  localNetwork: "unknown" | "granted" | "blocked";
+}
+
+export const shareApi = {
+  state: () => invoke<ShareSnapshot>("share_state"),
+  devices: () => invoke<ShareDevice[]>("share_devices"),
+  /** Send files and/or text to a device (by fingerprint). Resolves with the transfer id. */
+  send: (to: string, paths: string[], text?: string) => invoke<string>("share_send", { to, paths, text }),
+  accept: (id: string) => invoke<boolean>("share_accept", { id }),
+  decline: (id: string) => invoke<boolean>("share_decline", { id }),
+  cancel: (id: string) => invoke<boolean>("share_cancel", { id }),
+  dismiss: (id: string) => invoke<void>("share_dismiss", { id }),
+  /**
+   * Events from the service: `share-devices` (ShareDevice[]), `share-incoming` (ShareIncoming),
+   * `share-incoming-resolved` (id), `share-progress` (ShareTransfer).
+   */
 };

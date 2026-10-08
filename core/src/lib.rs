@@ -13,6 +13,8 @@ pub mod duplicates;
 pub mod folder_growth;
 pub mod history;
 pub mod ipc;
+#[cfg(feature = "localsend")]
+pub mod localsend;
 pub mod model;
 pub mod monitor;
 pub mod platform;

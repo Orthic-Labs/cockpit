@@ -20,6 +20,8 @@ mod permissions;
 
 mod scanner;
 
+mod share;
+
 mod watch;
 
 use std::path::PathBuf;
@@ -372,7 +374,16 @@ pub fn run() {
             // Hidden QA runs stay accessory and must not take focus; otherwise
             // the open hub shows in the Dock until its window is closed.
             let qa_hidden = cfg!(feature = "qa-native") && std::env::var("RIGHTKIT_QA_HIDDEN").as_deref() == Ok("1");
+            // `--background` is how the notch starts the hub just to share files:
+            // no window and no Dock icon until something asks for them.
+            let background = std::env::args().any(|a| a == "--background");
             if qa_hidden {
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            } else if background {
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             } else {
@@ -380,6 +391,7 @@ pub fn run() {
             }
             watch_notch(app.handle().clone());
             health::start_background();
+            share::start_background(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -397,7 +409,9 @@ pub fn run() {
             cleanup::cleanup_scan, cleanup::cleanup_cached, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore,
             health::drive_health, duplicates::duplicates_scan, duplicates::duplicates_trash, duplicates::home_path,
             files::file_identity, files::finder_open, files::file_choose_folder, files::file_move_plan, files::file_move, files::file_trash,
-            permissions::fda_status, permissions::fda_request
+            permissions::fda_status, permissions::fda_request, permissions::tcc_stale_scan, permissions::tcc_reset,
+            share::share_state, share::share_devices, share::share_send, share::share_accept, share::share_decline,
+            share::share_cancel, share::share_dismiss, share::open_local_network_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulse hub");
