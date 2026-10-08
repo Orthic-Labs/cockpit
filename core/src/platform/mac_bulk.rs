@@ -14,11 +14,11 @@ use std::os::raw::{c_int, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-/// Facts about one regular file, read in the same call as its name.
-#[derive(Clone, Debug)]
 /// Directory children with their bulk-read file facts, and whether more were left unread.
 pub type BulkChildren = (Vec<(PathBuf, Option<BulkFile>)>, bool);
 
+/// Facts about one regular file, read in the same call as its name.
+#[derive(Clone, Debug)]
 pub struct BulkFile {
     /// st_dev of the file.
     pub dev: u64,
@@ -197,11 +197,7 @@ fn regular_file(cursor: &mut Cursor<'_>) -> Option<BulkFile> {
 /// Reads up to `limit` entries of the directory open as `fd`. Returns the
 /// children (joined to `parent`) with their file facts where complete, and
 /// whether more entries were left unread. `.` and `..` are never returned.
-pub(super) fn read_entries(
-    fd: c_int,
-    parent: &Path,
-    limit: usize,
-) -> io::Result<BulkChildren> {
+pub(super) fn read_entries(fd: c_int, parent: &Path, limit: usize) -> io::Result<BulkChildren> {
     let mut attrs = AttrList {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
