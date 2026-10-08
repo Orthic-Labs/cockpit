@@ -694,7 +694,7 @@ final class Preferences: ObservableObject {
         self.asksProviderOnLook = defaults.bool(forKey: Keys.asksProviderOnLook)
         // On unless the user has switched it off: absent means never chosen.
         self.autoUpdateCheck = defaults.object(forKey: Keys.autoUpdateCheck) as? Bool ?? true
-        self.convFinderCutPaste = defaults.bool(forKey: Keys.convFinderCutPaste)
+        self.convFinderCutPaste = defaults.object(forKey: Keys.convFinderCutPaste) as? Bool ?? true
         self.convWindowMaximizer = defaults.bool(forKey: Keys.convWindowMaximizer)
         self.convDockClickMinimize = defaults.bool(forKey: Keys.convDockClickMinimize)
         self.convFnCommand = defaults.bool(forKey: Keys.convFnCommand)

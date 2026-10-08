@@ -480,12 +480,25 @@ private struct LimitWindowRow: View {
             .onTapGesture {
                 if let device = nearbyDevice {
                     MainActor.assumeIsolated { NearbySharing.shared.select(device) }
+                } else if window.id == NearbySharing.pasteRowID {
+                    MainActor.assumeIsolated { NearbySharing.shared.pasteClipboard() }
                 }
             }
     }
 
     @ViewBuilder private var rows: some View {
-        if let money = window.money {
+        if window.id == NearbySharing.pasteRowID {
+            // Pulse fork: the Send card's paste button.
+            HStack(spacing: 6) {
+                Image(systemName: "doc.on.clipboard")
+                Text(window.label)
+            }
+            .font(Typography.cardBody)
+            .foregroundStyle(Palette.textPrimary)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
+        } else if let money = window.money {
             MoneyBreakdownView(title: window.label, money: money, fidelity: fidelity)
         } else if isCountRow {
             if window.label.isEmpty, let line = window.detail {

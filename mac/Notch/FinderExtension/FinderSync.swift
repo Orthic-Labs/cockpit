@@ -13,9 +13,32 @@ import FinderSync
 final class FinderSync: FIFinderSync {
     override init() {
         super.init()
-        // Observe the whole file system so the menu appears wherever the user
-        // right-clicks (internal disk, external drives, any folder).
-        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/")]
+        // Finder only shows the menu inside observed folders. "/" covers the
+        // startup disk; every other mounted volume (external drives, disk
+        // images, network shares) needs its own entry, kept current as
+        // volumes come and go.
+        updateObservedFolders()
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification,
+                     NSWorkspace.didRenameVolumeNotification] {
+            volumeObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.updateObservedFolders()
+            })
+        }
+    }
+
+    private var volumeObservers: [NSObjectProtocol] = []
+
+    deinit {
+        volumeObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+    }
+
+    private func updateObservedFolders() {
+        var folders: Set<URL> = [URL(fileURLWithPath: "/")]
+        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil,
+                                                            options: [.skipHiddenVolumes]) ?? []
+        folders.formUnion(volumes)
+        FIFinderSyncController.default().directoryURLs = folders
     }
 
     // MARK: Menu

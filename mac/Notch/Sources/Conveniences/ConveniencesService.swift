@@ -32,7 +32,6 @@ final class ConveniencesService {
     private var cancellables = Set<AnyCancellable>()
     private var recheck: Timer?
     private var workspaceTokens: [NSObjectProtocol] = []
-    private var lastResults: [FinderCutPaste.ItemResult] = []
     private var published = ""
 
     /// Called when anything the hub shows may have changed.
@@ -43,10 +42,6 @@ final class ConveniencesService {
     }
 
     func start() {
-        finder.onResults = { [weak self] results in
-            self?.lastResults = Array(results.prefix(20))
-            self?.onChange?()
-        }
         preferences.objectWillChange
             .sink { [weak self] _ in DispatchQueue.main.async { self?.reconcile() } }
             .store(in: &cancellables)
@@ -242,7 +237,7 @@ final class ConveniencesService {
             "active": hub.isRunning || autoQuit.isRunning,
             "runningApps": running,
             "autoQuitApps": listed,
-            "cutPasteResults": lastResults.map { ["name": $0.name, "ok": $0.ok, "detail": $0.detail] as [String: Any] },
+            "cutPasteResults": [] as [[String: Any]],
             "windowManagement": windowHotKeys.snapshot(),
         ]
     }

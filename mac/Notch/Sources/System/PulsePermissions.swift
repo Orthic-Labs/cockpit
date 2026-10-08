@@ -132,7 +132,16 @@ final class PulsePermissions {
                 }
             } else { requestFinder() }
         case "finderMenu":
-            Self.openExtensionsPane()
+            // Turn the extension on directly; the Settings pane that lists it is
+            // hard to find, so it only opens when that did not work.
+            Task { [weak self] in
+                let status = await Task.detached(priority: .userInitiated) {
+                    PermissionProbe.enableFinderMenu()
+                    return PermissionProbe.finderMenu()
+                }.value
+                if status != .granted { Self.openExtensionsPane() }
+                self?.refresh()
+            }
         case "login":
             do { try SMAppService.mainApp.register() }
             catch {
@@ -221,6 +230,18 @@ private enum PermissionProbe {
             if failure == EACCES || failure == EPERM { return .needsApproval }
         }
         return .unknown
+    }
+
+    /// `pluginkit -e use` enables the Finder Sync extension, as its switch in
+    /// System Settings does.
+    static func enableFinderMenu() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        process.arguments = ["-e", "use", "-i", "dev.orthic.pulse.finder"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return }
+        process.waitUntilExit()
     }
 
     /// `pluginkit -m -i` prints a leading "+" for an enabled extension, "-" for

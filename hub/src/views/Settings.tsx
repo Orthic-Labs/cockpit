@@ -414,7 +414,7 @@ function ConveniencesGroup({ c, s, set, onNavigate }: {
         <Button size="sm" variant="secondary" onClick={() => onNavigate("permissions")}>Permissions</Button>
       </Row>
       {toggle("convFinderCutPaste", "Cut and paste in Finder",
-        "⌘X marks the selected items, ⌘V in a Finder window moves them there. Never overwrites; a name clash gets \" 2\".")}
+        "⌘X (or Fn X) marks the selected items; ⌘V in a Finder window moves them there. Finder asks before replacing anything.")}
       {Boolean(s.convFinderCutPaste) && c.accessibility && !c.inputMonitoring && (
         <div className="muted small">
           Key shortcuts may also need Input Monitoring (System Settings, Privacy and Security).
@@ -664,7 +664,7 @@ function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
           : status === "granted" ? "Granted"
           : status === "needsApproval" ? "Needs approval"
           : status === "off" ? "Off" : "Unknown";
-        const opensSettings = fda || permission.id === "finderMenu" || status === "needsApproval";
+        const opensSettings = fda || status === "needsApproval";
         return (
           <div key={permission.id} className="permission-row">
             <Row label={permission.title} note={permission.why}>
@@ -674,7 +674,7 @@ function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
                   onClick={() => fda
                     ? invoke<void>("fda_request")
                     : send({ command: "permissionRequest", id: permission.id })}>
-                  {permission.id === "automation" ? "Allow" : opensSettings ? "Open Settings" : "Allow"}
+                  {permission.id === "finderMenu" ? "Turn On" : permission.id === "automation" ? "Allow" : opensSettings ? "Open Settings" : "Allow"}
                 </Button>
               </span>
             </Row>

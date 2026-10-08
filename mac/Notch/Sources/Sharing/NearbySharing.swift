@@ -80,6 +80,8 @@ struct ShareState: Decodable, Equatable {
 final class NearbySharing {
     static let shared = NearbySharing()
     static let providerID = SystemProviders.sendID
+    /// The paste button row in the Send cell's hover card.
+    static let pasteRowID = "action:paste"
 
     /// The Send cell has something new to show.
     var onChange: (() -> Void)?
@@ -419,6 +421,7 @@ final class NearbySharing {
             windows.append(LimitWindow(id: "hint-network", label: "",
                                        detail: L10n.t("Allow Local Network for Pulse in System Settings.")))
         } else if !devices.isEmpty {
+            windows.append(LimitWindow(id: Self.pasteRowID, label: L10n.t("Paste clipboard")))
             if aimed == nil {
                 windows.append(LimitWindow(id: "hint-pick", label: "",
                                            detail: L10n.t("Click a device to make it the target")))
