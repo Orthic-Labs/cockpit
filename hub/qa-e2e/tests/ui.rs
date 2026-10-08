@@ -75,11 +75,9 @@ fn hub_sections_render_without_errors() {
         let ws = workspace::create(&sc.scratch("ws"), None, "pulse-hub").expect("qa workspace");
         // The app derives HOME from RIGHTKIT_QA_DATA_DIR/home (macOS launches carry only
         // RIGHTKIT_* keys), so Storage scans this fixture and never the user's real home.
-        // Not under the system temp dir: the scanner reports no entries for /var/folders.
-        let home = std::env::var_os("RUNNER_TEMP")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME")).join("Library/Caches"))
-            .join(format!("pulse-hub-qa-home-{}", ws.run_id));
+        // rightkit-qa >= 0.2.12 requires env paths to live inside the QA app home
+        // (/private/tmp/rightkit-qa/…); the scanner resolves /private paths.
+        let home = ws.home.join("fixture-home");
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(FIXTURE)).expect("fixture dir");
         std::fs::write(home.join(FIXTURE).join("fixture.bin"), vec![0u8; 65536]).expect("fixture file");
