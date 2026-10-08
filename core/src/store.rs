@@ -1798,7 +1798,7 @@ fn decode_id(key: &str) -> io::Result<String> {
         return Err(invalid("invalid state record filename"));
     }
     let mut bytes = Vec::with_capacity(key.len() / 2);
-    for pair in key.as_bytes().chunks_exact(2) {
+    for pair in key.as_bytes().as_chunks::<2>().0 {
         let high = (pair[0] as char).to_digit(16).unwrap();
         let low = (pair[1] as char).to_digit(16).unwrap();
         bytes.push((high * 16 + low) as u8);

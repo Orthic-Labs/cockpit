@@ -2258,7 +2258,7 @@ pub fn cached_updates() -> UpdateReport {
     let cache = read_updates_cache();
     let checked_at = cache.apps.values().map(|a| a.checked_at).max();
     let mut apps: Vec<AppUpdate> = cache.apps.into_values().collect();
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
     UpdateReport { checked_at, apps }
 }
 
@@ -2745,7 +2745,7 @@ pub fn check_updates(force: bool, on_row: &(dyn Fn(&AppUpdate) + Sync)) -> Updat
     let mut apps: Vec<AppUpdate> = rows
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    apps.sort_by(|a: &AppUpdate, b: &AppUpdate| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a: &AppUpdate| a.name.to_lowercase());
     let cache = UpdatesCacheFile {
         schema: UPDATES_CACHE_SCHEMA,
         brew,

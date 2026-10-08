@@ -379,7 +379,7 @@ impl Inner {
             .iter()
             .map(|s| s.device.clone())
             .collect();
-        list.sort_by(|a, b| a.alias.to_lowercase().cmp(&b.alias.to_lowercase()));
+        list.sort_by_key(|a| a.alias.to_lowercase());
         list
     }
 
