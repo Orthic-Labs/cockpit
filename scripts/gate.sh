@@ -99,7 +99,10 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
     qa_rc=0
     (cd hub/src-tauri && cargo build --features qa-native,custom-protocol) || qa_rc=$?
     if [[ $qa_rc -eq 0 ]]; then
-      (cd hub/qa-e2e && PULSE_QA_SHOTS="$qa_out/screenshots" RIGHTKIT_QA_EVIDENCE="$qa_out/evidence" \
+      # rightkit-qa >= 0.2.10 keeps managed runs under RIGHTKIT_MANAGED_ROOT
+      # (default is a workstation path the runner cannot create).
+      (cd hub/qa-e2e && RIGHTKIT_MANAGED_ROOT="$qa_out/managed" \
+        PULSE_QA_SHOTS="$qa_out/screenshots" RIGHTKIT_QA_EVIDENCE="$qa_out/evidence" \
         cargo test --test ui -- --nocapture) || qa_rc=$?
     fi
     echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
