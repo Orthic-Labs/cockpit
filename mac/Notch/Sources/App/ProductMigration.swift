@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 
 /// Runs before preferences, bridge state or usage archives can be written.
+@MainActor
 enum ProductMigration {
     static let domain = "dev.orthic.pulse"
     private static let legacyDomain = "dev.orthic.cockpit"
