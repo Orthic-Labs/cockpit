@@ -44,8 +44,6 @@ const titles: Record<string, string> = {
   permissions: "Permissions",
 };
 
-const settingsIds = new Set(["permissions", "accounts", "appearance", "notifications", "general"]);
-
 /** `--section settings` (from the notch's settings handle) opens Accounts. */
 const resolve = (section: string | null | undefined) =>
   !section ? null : section === "settings" ? "accounts" : titles[section] ? section : null;
@@ -87,8 +85,6 @@ export function App() {
       sidebarWidth={170}
       sidebarToggle={false}
       wordmark={<span className="wordmark">Pulse</span>}
-      onOpenSettings={() => setActive("accounts")}
-      settingsActive={settingsIds.has(active)}
     >
       {active === "storage" ? <Storage /> : active === "cleanup" ? <Cleanup /> : active === "monitor" ? <Monitor /> : active === "apps" ? <Apps /> : <Settings section={active} notch={notch} onNavigate={setActive} />}
     </AppShell>
