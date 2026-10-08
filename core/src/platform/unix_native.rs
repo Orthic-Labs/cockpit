@@ -293,7 +293,7 @@ pub(super) fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf
 pub(super) fn bulk_children_bounded(
     path: &Path,
     limit: usize,
-) -> Result<(Vec<(PathBuf, Option<super::mac_bulk::BulkFile>)>, bool), FsError> {
+) -> Result<super::mac_bulk::BulkChildren, FsError> {
     let c_path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| FsError::new("path contains NUL; directory not listed"))?;
     let mut before = std::mem::MaybeUninit::<libc::stat>::uninit();

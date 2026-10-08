@@ -122,7 +122,7 @@ pub fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool
 }
 
 #[cfg(target_os = "macos")]
-pub use mac_bulk::BulkFile;
+pub use mac_bulk::{BulkChildren, BulkFile};
 
 /// macOS bulk listing: like `children_bounded`, but each entry may also carry
 /// the facts of a regular file, read in the same call. `None` means the
@@ -131,7 +131,7 @@ pub use mac_bulk::BulkFile;
 pub fn bulk_children_bounded(
     path: &Path,
     limit: usize,
-) -> Result<(Vec<(PathBuf, Option<BulkFile>)>, bool), FsError> {
+) -> Result<BulkChildren, FsError> {
     unix_native::bulk_children_bounded(path, limit)
 }
 

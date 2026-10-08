@@ -19,6 +19,9 @@ pub const DIRECTORY_ENUMERATION_BUDGET: usize = 500_000;
 /// Filesystem boundary used by the scanner. Implementations must inspect
 /// directory entries without opening file contents and must report symlinks as
 /// symlinks. The scanner never calls a method that can hydrate a placeholder.
+/// Children with the file facts read alongside them, and whether more were left unread.
+pub type ChildrenWithFiles = (Vec<(PathBuf, Option<FileMetadata>)>, bool);
+
 pub trait FilesystemProvider {
     fn inspect(&self, path: &Path) -> Result<FileMetadata, FsError>;
     /// Like `inspect`, plus a reason for each field that is unavailable.
@@ -45,7 +48,7 @@ pub trait FilesystemProvider {
         &self,
         path: &Path,
         limit: usize,
-    ) -> Result<(Vec<(PathBuf, Option<FileMetadata>)>, bool), FsError> {
+    ) -> Result<ChildrenWithFiles, FsError> {
         self.children_bounded(path, limit)
             .map(|(children, truncated)| {
                 (
@@ -473,7 +476,7 @@ impl FilesystemProvider for CachingStdProvider {
         &self,
         path: &Path,
         limit: usize,
-    ) -> Result<(Vec<(PathBuf, Option<FileMetadata>)>, bool), FsError> {
+    ) -> Result<ChildrenWithFiles, FsError> {
         self.expect_directory(path)?;
         let (listed, truncated) = platform::bulk_children_bounded(path, limit)?;
         let state = self.lock();
@@ -745,6 +748,7 @@ impl Sub {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk<P: FilesystemProvider>(
     provider: &P,
     path: PathBuf,

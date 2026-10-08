@@ -771,7 +771,7 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
         &self,
         path: &Path,
         limit: usize,
-    ) -> Result<(Vec<(PathBuf, Option<pulse_core::FileMetadata>)>, bool), pulse_core::FsError> {
+    ) -> Result<pulse_core::scan::ChildrenWithFiles, pulse_core::FsError> {
         self.reject(path)?;
         let (children, truncated) = self.inner.children_with_files(path, limit)?;
         Ok((

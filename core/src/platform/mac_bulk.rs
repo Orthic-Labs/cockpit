@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 
 /// Facts about one regular file, read in the same call as its name.
 #[derive(Clone, Debug)]
+/// Directory children with their bulk-read file facts, and whether more were left unread.
+pub type BulkChildren = (Vec<(PathBuf, Option<BulkFile>)>, bool);
+
 pub struct BulkFile {
     /// st_dev of the file.
     pub dev: u64,
@@ -198,7 +201,7 @@ pub(super) fn read_entries(
     fd: c_int,
     parent: &Path,
     limit: usize,
-) -> io::Result<(Vec<(PathBuf, Option<BulkFile>)>, bool)> {
+) -> io::Result<BulkChildren> {
     let mut attrs = AttrList {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
