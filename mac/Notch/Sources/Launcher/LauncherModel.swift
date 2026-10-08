@@ -332,7 +332,7 @@ final class LauncherModel: ObservableObject {
         for (position, link) in config.quicklinks.enumerated() where !link.template.isEmpty {
             guard let argument = matchesItem(text, keyword: link.keyword, name: link.name) else { continue }
             let target = LauncherTemplate.fill(link.template, [
-                "query": LauncherTemplate.encode(argument),
+                "query": LauncherActions.encode(argument),
                 "clipboard": LauncherTemplate.clipboardText(),
                 "date": LauncherTemplate.today(),
             ])
