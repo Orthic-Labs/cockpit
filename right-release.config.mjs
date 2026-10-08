@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 const version=JSON.parse(readFileSync(new URL('./package.json',import.meta.url))).version;
 export default {
  schema:1, app:'pulse', version, packageManager:'pnpm', hostedWorkflows:'right-git-ci-only',
- distribution:{provider:'github-releases',repository:'Orthic-Labs/cockpit'},
+ distribution:{provider:'github-releases',repository:'Orthic-Labs/pulse'},
  // Pulse's native workspace is the repo-root Cargo.toml (core + CLI); the
  // hub's Tauri crate is a separate workspace under hub/src-tauri.
  nativeAssembly:{cargoManifest:'Cargo.toml',cargoLockSource:'manifest'},
