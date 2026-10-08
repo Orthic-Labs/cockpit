@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { bytes, type ChromeSnapshots } from "../api";
+import { ago, bytes, isStale, type ChromeSnapshots } from "../api";
 import { ChromeSnapshotsLine } from "./ChromeSnapshots";
 
 interface Finding {
@@ -62,6 +62,7 @@ interface Activity {
 
 const cleanup = {
   scan: () => invoke<Report>("cleanup_scan"),
+  cached: () => invoke<Report | null>("cleanup_cached"),
   apply: (items: { rule_id: string; path: string; dev: string; ino: string }[]) =>
     invoke<ApplyResult>("cleanup_apply", { items }),
   history: () => invoke<Activity[]>("cleanup_history"),
@@ -76,6 +77,7 @@ export function Cleanup() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -91,17 +93,36 @@ export function Cleanup() {
     }
   };
 
-  const load = () =>
-    run(async () => {
-      const next = await cleanup.scan();
-      setReport(next);
-      setSelected(new Set(next.findings.filter((f) => f.preselected).map((f) => f.id)));
-      setConfirming(false);
-      setHistory(await cleanup.history());
-    });
+  // Shows a findings list, with its preselected items selected.
+  const show = (next: Report) => {
+    setReport(next);
+    setSelected(new Set(next.findings.filter((f) => f.preselected).map((f) => f.id)));
+    setConfirming(false);
+  };
 
+  // A rescan runs behind the page, which stays usable while it runs.
+  const refresh = async () => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      show(await cleanup.scan());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Saved findings show at once. A rescan follows only when there are none or they are old.
   useEffect(() => {
-    load();
+    cleanup.history().then(setHistory).catch(() => {});
+    cleanup
+      .cached()
+      .then((saved) => {
+        if (saved) show(saved);
+        if (!saved || isStale(saved.scanned_at)) void refresh();
+      })
+      .catch(() => void refresh());
   }, []);
 
   const eligible = (report?.findings ?? []).filter((f) => f.eligible);
@@ -131,9 +152,7 @@ export function Cleanup() {
       setNotice(`Moved to Trash: ${bytes(result.moved_bytes)} (${result.moved_items} items${skipped})`);
       if (result.skipped.length) setError(result.skipped.map((s) => `${shortPath(s.path)}: ${s.reason}`).join("\n"));
       setConfirming(false);
-      const next = await cleanup.scan();
-      setReport(next);
-      setSelected(new Set(next.findings.filter((f) => f.preselected).map((f) => f.id)));
+      show(await cleanup.scan());
       setHistory(await cleanup.history());
     });
 
@@ -143,8 +162,7 @@ export function Cleanup() {
       setNotice(`Restored: ${bytes(result.restored_bytes)} (${result.restored_items} items)`);
       if (result.skipped.length) setError(result.skipped.map((s) => `${shortPath(s.path)}: ${s.reason}`).join("\n"));
       setHistory(await cleanup.history());
-      const next = await cleanup.scan();
-      setReport(next);
+      show(await cleanup.scan());
     });
 
   const Group = ({ title, note, items }: { title: string; note: string; items: Finding[] }) =>
@@ -180,8 +198,13 @@ export function Cleanup() {
         <span className="strong" style={{ fontSize: 15 }}>
           {report ? `${bytes(canGo)} can go` : "Looking for what can go…"}
         </span>
-        <button className="btn" onClick={load} disabled={busy}>
-          {busy ? "Working…" : "Rescan"}
+        {report && (
+          <span className="muted small">
+            {refreshing ? `Updated ${ago(report.scanned_at)} · Refreshing…` : `Updated ${ago(report.scanned_at)}`}
+          </span>
+        )}
+        <button className="btn" onClick={refresh} disabled={busy || refreshing}>
+          {refreshing ? "Refreshing…" : "Rescan"}
         </button>
       </div>
       <div className="muted small">

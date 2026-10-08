@@ -15,6 +15,8 @@ use serde::Serialize;
 
 /// Snapshots of the same roots kept after a save.
 const KEEP: usize = 4;
+/// Folders smaller than this are not kept in a saved home snapshot.
+const MIN_FOLDER_BYTES: u64 = 1024 * 1024;
 /// Grown / shrunk folders returned.
 const GROWN: usize = 5;
 const SHRUNK: usize = 3;
@@ -43,12 +45,20 @@ pub struct Growth {
 /// `KEEP` snapshots for the same roots. Failures are ignored: history is a
 /// convenience and must never get in the way of the scan.
 pub fn save_in_background(report: &ScanReport) {
-    // Per-file entries are not needed for folder comparison and would push the
-    // snapshot past the store's size cap on a home folder.
+    // Per-file entries are not needed for folder comparison. Folders below
+    // MIN_FOLDER_BYTES are dropped too: a home scan has ~250k of them, which
+    // pushed the snapshot past the store's 64 MiB cap, so nothing was saved
+    // and the hub could never show a previous home scan. The roots always stay.
+    let folders = report
+        .folders
+        .iter()
+        .filter(|f| f.attributed_allocation_bytes >= MIN_FOLDER_BYTES || report.roots.contains(&f.path))
+        .cloned()
+        .collect();
     let slim = ScanReport {
         roots: report.roots.clone(),
         entries: Vec::new(),
-        folders: report.folders.clone(),
+        folders,
         accounting: report.accounting.clone(),
         volume_usage: report.volume_usage.clone(),
         volume_deltas: report.volume_deltas.clone(),
@@ -58,7 +68,9 @@ pub fn save_in_background(report: &ScanReport) {
     };
     PENDING.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
-        let _ = save_and_prune(slim);
+        if let Err(error) = save_and_prune(slim) {
+            crate::scanner::log(&format!("growth snapshot not saved: {error}"));
+        }
         PENDING.fetch_sub(1, Ordering::SeqCst);
     });
 }

@@ -3,7 +3,9 @@ import { Badge, Button, ConfirmDialog, EmptyState } from "@rightkit/app-shell/re
 import { Activity, ChevronDown, ChevronRight, File, Folder as FolderIcon, HardDrive, Info, RefreshCw, ShieldCheck, Terminal, Undo2, Usb } from "lucide-react";
 import {
   api,
+  ago,
   bytes,
+  isStale,
   signedBytes,
   tone,
   type CleanupFinding,
@@ -35,10 +37,12 @@ interface Group {
 let cachedReport: CleanupReport | null = null;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const when = (secs: number) =>
-  new Date(secs * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** The volume a saved scan belongs to: its external drive, else the startup disk. */
+const mountFor = (root: string, list: Volume[]) =>
+  list.find((v) => !v.internal && v.mount_point === root)?.mount_point ?? "/";
 
 function groupFindings(list: CleanupFinding[]): Group[] {
   const map = new Map<string, Group>();
@@ -82,6 +86,9 @@ export function Storage() {
   const [undo, setUndo] = useState<{ id: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  // True until the saved view has been asked for, so the page never shows an empty "Scanning…" first.
+  const [opening, setOpening] = useState(true);
+  const [findingsBusy, setFindingsBusy] = useState(false);
   // Latest scan request; an older one that comes back (cancelled) is ignored.
   const scanToken = useRef(0);
   const alive = useRef(true);
@@ -99,18 +106,36 @@ export function Storage() {
     }
   };
 
-  const loadFindings = (force = false) => {
-    if (cachedReport && !force) {
-      setReport(cachedReport);
-      return;
-    }
+  const refreshFindings = () => {
+    setFindingsBusy(true);
     api
       .cleanupScan()
       .then((r) => {
         cachedReport = r;
         setReport(r);
       })
-      .catch(() => setReport(null));
+      .catch(() => {})
+      .finally(() => setFindingsBusy(false));
+  };
+
+  // Findings show at once from the saved copy. A background rescan follows when
+  // there is none, when it is old, or when a move has just changed the list.
+  const loadFindings = (force = false) => {
+    if (cachedReport) {
+      setReport(cachedReport);
+      if (force || isStale(cachedReport.scanned_at)) refreshFindings();
+      return;
+    }
+    api
+      .cleanupCached()
+      .then((saved) => {
+        if (saved && !cachedReport) {
+          cachedReport = saved;
+          setReport(saved);
+        }
+        if (!saved || force || isStale(saved.scanned_at)) refreshFindings();
+      })
+      .catch(() => refreshFindings());
   };
 
   const isInternal = (mount: string, list: Volume[]) => {
@@ -183,14 +208,21 @@ export function Storage() {
         const root = status.running_root;
         const external = list.find((v) => !v.internal && v.mount_point === root);
         setActive(external ? external.mount_point : (list.find((v) => v.internal)?.mount_point ?? "/"));
+        setOpening(false);
         follow(list);
         return;
       }
-      // Launch shows the last saved scan; a fresh scan starts only when there is none.
+      // The saved view opens at once. A rescan runs behind it only when the
+      // saved one is old; with no saved view at all, the first scan starts now.
       const saved = await api.lastScan().catch(() => null);
       if (!alive.current) return;
-      if (saved) show(saved, list);
-      else scanVolume("/", list);
+      setOpening(false);
+      if (saved) {
+        show(saved, list);
+        if (isStale(saved.scanned_at)) scanVolume(mountFor(saved.root, list), list);
+      } else {
+        scanVolume("/", list);
+      }
     })();
     return () => {
       alive.current = false;
@@ -330,6 +362,7 @@ export function Storage() {
             <span className="strong headline">
               <ShieldCheck size={15} strokeWidth={1.75} />
               {!report ? "Looking for what is safe to clear…" : freeable > 0 ? `You can free ${bytes(freeable)}` : "Nothing obvious to clear"}
+              {report && findingsBusy && <span className="muted small"> · Refreshing…</span>}
             </span>
             {safeItems.length > 1 && (
               <Button size="sm" onClick={() => setPending({ label: "Safe items", items: safeItems })} disabled={busy}>
@@ -445,7 +478,13 @@ export function Storage() {
       <div className="toolbar">
         <input className="search" placeholder="Search files" value={query} onChange={(e) => setQuery(e.target.value)} />
         <span className="muted small">
-          {scanning ? "Scanning…" : folder ? `Scanned ${when(folder.scanned_at)}${folder.from_snapshot ? " (saved scan)" : ""} ·` : ""}
+          {folder && scanning
+            ? `Updated ${ago(folder.scanned_at)} · Refreshing…`
+            : scanning
+              ? "Scanning…"
+              : folder
+                ? `Updated ${ago(folder.scanned_at)}${folder.from_snapshot ? " (saved)" : ""} ·`
+                : ""}
         </span>
         <Button size="sm" onClick={() => scanVolume(active)} disabled={busy || scanning}>
           <RefreshCw size={12} /> Rescan
@@ -479,7 +518,7 @@ export function Storage() {
         <div className="muted small">This is a very large folder, so sizes may be a little low.</div>
       )}
       {error && <div className="error" style={{ whiteSpace: "pre-wrap" }}>{error}</div>}
-      {!folder && scanning && <div className="muted">Scanning…</div>}
+      {!folder && (opening ? <div className="muted">Loading…</div> : scanning && <div className="muted">Scanning…</div>)}
       {folder && rows.length === 0 && !busy && !scanning && (
         <EmptyState icon={<FolderIcon size={22} />} title={results ? "No matches" : "This folder is empty"} />
       )}

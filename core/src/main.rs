@@ -81,7 +81,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     arguments.retain(|a| a != "--json");
     if arguments.is_empty() || ["help", "--help", "-h"].contains(&arguments[0].as_str()) {
         println!(
-            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\napps list [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. Cleanup & process actions await feasibility & safety gates."
+            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\napps list [--json]\napps updates [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. Cleanup & process actions await feasibility & safety gates."
         );
         return Ok(());
     }
@@ -767,6 +767,25 @@ impl<P: FilesystemProvider> FilesystemProvider for ExcludingProvider<P> {
         ))
     }
 
+    fn children_with_files(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<
+        (Vec<(PathBuf, Option<pulse_core::FileMetadata>)>, bool),
+        pulse_core::FsError,
+    > {
+        self.reject(path)?;
+        let (children, truncated) = self.inner.children_with_files(path, limit)?;
+        Ok((
+            children
+                .into_iter()
+                .filter(|(child, _)| !self.is_excluded(child))
+                .collect(),
+            truncated,
+        ))
+    }
+
     fn volume_usage(
         &self,
         volume: &pulse_core::VolumeIdentity,
@@ -1081,7 +1100,7 @@ fn resolve_app(target: &str) -> Result<String, String> {
 fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
     use pulse_core::app_manager;
     if arguments.is_empty() {
-        return Err("apps requires list, detail or uninstall".into());
+        return Err("apps requires list, updates, detail or uninstall".into());
     }
     let sub = arguments.remove(0);
     match sub.as_str() {
@@ -1089,6 +1108,30 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
             require_empty(&arguments)?;
             let apps = app_manager::list_apps();
             emit_inspection(json!({"apps": apps}), machine);
+        }
+        "updates" => {
+            require_empty(&arguments)?;
+            let report = app_manager::check_updates(false, &|_: &app_manager::AppUpdate| {});
+            if machine {
+                let value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
+                println!("{value}");
+            } else {
+                for row in &report.apps {
+                    match row.state.as_str() {
+                        "available" => println!(
+                            "{}: update available {} (installed {}, via {})",
+                            row.name,
+                            row.latest_version.as_deref().unwrap_or("?"),
+                            row.installed_version.as_deref().unwrap_or("?"),
+                            row.source
+                        ),
+                        "app_store" => println!("{}: App Store (open it there to update)", row.name),
+                        _ => {}
+                    }
+                }
+                let available = report.apps.iter().filter(|r| r.state == "available").count();
+                println!("{available} update(s) available across {} apps", report.apps.len());
+            }
         }
         "detail" => {
             if arguments.len() != 1 {

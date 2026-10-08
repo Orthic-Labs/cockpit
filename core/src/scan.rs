@@ -38,6 +38,18 @@ pub trait FilesystemProvider {
         }
         Ok((children, truncated))
     }
+    /// Bounded listing that may also return a regular file's metadata, read in
+    /// the same call (`Some`). `None` means the entry is inspected as usual.
+    /// The default lists names only.
+    fn children_with_files(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<(Vec<(PathBuf, Option<FileMetadata>)>, bool), FsError> {
+        self.children_bounded(path, limit).map(|(children, truncated)| {
+            (children.into_iter().map(|child| (child, None)).collect(), truncated)
+        })
+    }
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError>;
     /// Called once at the start of each scan so providers can reset per-scan
     /// caches. The default does nothing.
@@ -289,6 +301,28 @@ impl CachingStdProvider {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// If the directory was inspected earlier in this scan, its identity must
+    /// still match before its listing is opened.
+    fn expect_directory(&self, path: &Path) -> Result<(), FsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let expected = self.lock().directories.remove(path);
+            if let Some(expected) = expected {
+                let current = fs::symlink_metadata(path).map_err(map_io)?;
+                if (current.dev(), current.ino()) != expected {
+                    return Err(FsError::new(format!(
+                        "directory identity changed since inspection: {}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     fn native_info(
         &self,
@@ -423,21 +457,47 @@ impl FilesystemProvider for CachingStdProvider {
     /// If the directory was inspected earlier in this scan, its identity must
     /// still match before the descriptor-based listing is opened.
     fn children_bounded(&self, path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool), FsError> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let expected = self.lock().directories.remove(path);
-            if let Some(expected) = expected {
-                let current = fs::symlink_metadata(path).map_err(map_io)?;
-                if (current.dev(), current.ino()) != expected {
-                    return Err(FsError::new(format!(
-                        "directory identity changed since inspection: {}",
-                        path.display()
-                    )));
-                }
-            }
-        }
+        self.expect_directory(path)?;
         platform::children_bounded(path, limit)
+    }
+
+    /// macOS: one bulk read gives the names and, for regular files on a volume
+    /// this scan has already identified, their metadata, so those files are
+    /// not inspected a second time. Everything else is inspected as before.
+    #[cfg(target_os = "macos")]
+    fn children_with_files(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<(Vec<(PathBuf, Option<FileMetadata>)>, bool), FsError> {
+        self.expect_directory(path)?;
+        let (listed, truncated) = platform::bulk_children_bounded(path, limit)?;
+        let state = self.lock();
+        let children = listed
+            .into_iter()
+            .map(|(child, file)| {
+                let known = file.and_then(|file| {
+                    let volume = state.volumes.get(&file.dev)?.volume.clone();
+                    Some(FileMetadata {
+                        kind: EntryKind::File,
+                        volume: volume.clone(),
+                        logical_size: Some(file.logical),
+                        allocation_size: Some(file.allocation),
+                        file_id: Some(FileIdentity {
+                            volume,
+                            id: format!("{}:{}", file.dev, file.ino),
+                        }),
+                        clone_id: None,
+                        created_at: Some(file.created),
+                        modified_at: Some(file.modified),
+                        is_placeholder: false,
+                        metadata_complete: true,
+                    })
+                });
+                (child, known)
+            })
+            .collect();
+        Ok((children, truncated))
     }
 
     fn volume_usage(&self, volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {
@@ -497,7 +557,7 @@ pub fn scan_with_provider<P: FilesystemProvider>(
         if ctx.cancelled {
             break;
         }
-        let _ = walk(provider, root, 0, options, None, &mut report, &mut ctx);
+        let _ = walk(provider, root, 0, options, None, None, &mut report, &mut ctx);
     }
     if ctx.cancelled {
         report.incomplete_reasons.push("scan cancelled".into());
@@ -678,6 +738,8 @@ fn walk<P: FilesystemProvider>(
     depth: usize,
     options: &ScanOptions,
     expected_volume: Option<&VolumeIdentity>,
+    // Metadata already read with the parent's listing; `None` means inspect.
+    prefetched: Option<FileMetadata>,
     report: &mut ScanReport,
     ctx: &mut Ctx,
 ) -> Sub {
@@ -723,7 +785,11 @@ fn walk<P: FilesystemProvider>(
         }
         return Sub::empty();
     }
-    let (mut metadata, provider_reasons) = match provider.inspect_detailed(&path) {
+    let inspected = match prefetched {
+        Some(metadata) => Ok((metadata, Vec::new())),
+        None => provider.inspect_detailed(&path),
+    };
+    let (mut metadata, provider_reasons) = match inspected {
         Ok(value) => value,
         Err(error) => {
             report.inspection_errors.push(InspectionError {
@@ -997,8 +1063,8 @@ fn walk_children<P: FilesystemProvider>(
     if !directory_unchanged(provider, &path, metadata, report) {
         return none;
     }
-    let (children, truncated) = match provider.children_bounded(&path, budget) {
-        Ok(children) => children,
+    let (listed, truncated) = match provider.children_with_files(&path, budget) {
+        Ok(listing) => listing,
         Err(error) => {
             report.inspection_errors.push(InspectionError {
                 path,
@@ -1024,12 +1090,12 @@ fn walk_children<P: FilesystemProvider>(
             path.display()
         ));
     }
-    let mut children = children;
+    let mut children = listed;
     sort_children(&path, &mut children);
     let mut logical = 0u64;
     let mut attributed = 0u64;
     let mut candidates: Vec<ScannedEntry> = Vec::new();
-    for child in children {
+    for (child, prefetched) in children {
         if ctx.count >= options.max_entries || ctx.cancelled {
             break;
         }
@@ -1039,6 +1105,7 @@ fn walk_children<P: FilesystemProvider>(
             depth + 1,
             options,
             Some(&metadata.volume),
+            prefetched,
             report,
             ctx,
         );
@@ -1062,13 +1129,13 @@ fn walk_children<P: FilesystemProvider>(
 /// Sort and de-duplicate one directory's listing. Siblings share a parent, so
 /// on unix they are ordered by their final name bytes (the same order as a
 /// component-wise path comparison) instead of re-comparing whole paths.
-fn sort_children(parent: &Path, children: &mut Vec<PathBuf>) {
+fn sort_children<T>(parent: &Path, children: &mut Vec<(PathBuf, T)>) {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         let prefix = parent.as_os_str().as_bytes();
         let cut = if prefix == b"/" { 1 } else { prefix.len() + 1 };
-        let siblings = children.iter().all(|child| {
+        let siblings = children.iter().all(|(child, _)| {
             let bytes = child.as_os_str().as_bytes();
             bytes.len() > cut
                 && bytes.starts_with(prefix)
@@ -1077,15 +1144,15 @@ fn sort_children(parent: &Path, children: &mut Vec<PathBuf>) {
         });
         if siblings {
             children.sort_unstable_by(|a, b| {
-                a.as_os_str().as_bytes()[cut..].cmp(&b.as_os_str().as_bytes()[cut..])
+                a.0.as_os_str().as_bytes()[cut..].cmp(&b.0.as_os_str().as_bytes()[cut..])
             });
-            children.dedup_by(|a, b| a.as_os_str() == b.as_os_str());
+            children.dedup_by(|a, b| a.0.as_os_str() == b.0.as_os_str());
             return;
         }
     }
     let _ = parent;
-    children.sort();
-    children.dedup();
+    children.sort_by(|a, b| a.0.cmp(&b.0));
+    children.dedup_by(|a, b| a.0 == b.0);
 }
 
 fn symlink_ancestor<P: FilesystemProvider>(

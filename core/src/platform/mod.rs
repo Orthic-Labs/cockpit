@@ -10,6 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
+mod mac_bulk;
+#[cfg(target_os = "macos")]
 mod mac_native;
 #[cfg(unix)]
 mod unix_native;
@@ -117,6 +119,20 @@ pub fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool
             "directory listing unsupported on this platform",
         ))
     }
+}
+
+#[cfg(target_os = "macos")]
+pub use mac_bulk::BulkFile;
+
+/// macOS bulk listing: like `children_bounded`, but each entry may also carry
+/// the facts of a regular file, read in the same call. `None` means the
+/// entry has to be inspected as usual.
+#[cfg(target_os = "macos")]
+pub fn bulk_children_bounded(
+    path: &Path,
+    limit: usize,
+) -> Result<(Vec<(PathBuf, Option<BulkFile>)>, bool), FsError> {
+    unix_native::bulk_children_bounded(path, limit)
 }
 
 /// Native mount accounting for a scanned volume identity. Total/used/

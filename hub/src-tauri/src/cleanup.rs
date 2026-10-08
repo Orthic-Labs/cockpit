@@ -7,8 +7,21 @@ use std::path::{Path, PathBuf};
 use pulse_core::cleanup_scan as cs;
 use trash::macos::{DeleteMethod, TrashContextExtMacos};
 
+use crate::cache;
+
+/// Format of `cleanup-findings-v1.json`: the last scan's report.
+const FINDINGS_FILE: &str = "cleanup-findings-v1.json";
+const FINDINGS_FORMAT: u32 = 1;
+
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// The last saved findings, shown at once on open. They may be stale: every
+/// item is checked again (dev and inode) before anything moves.
+#[tauri::command]
+pub fn cleanup_cached() -> Option<cs::Report> {
+    cache::load(FINDINGS_FILE, FINDINGS_FORMAT)
 }
 
 fn move_to_trash(path: &Path) -> Result<(), String> {
@@ -19,11 +32,15 @@ fn move_to_trash(path: &Path) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn cleanup_scan() -> Result<cs::Report, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tauri::async_runtime::spawn_blocking(|| -> Result<cs::Report, String> {
         // Never alongside a storage scan.
         let _exclusive = crate::scanner::exclusive();
         let running = cs::running_process_names();
-        cs::scan(&home(), &running)
+        let report = cs::scan(&home(), &running)?;
+        if let Err(error) = cache::save(FINDINGS_FILE, FINDINGS_FORMAT, &report) {
+            crate::scanner::log(&format!("saving cleanup findings failed: {error}"));
+        }
+        Ok(report)
     })
     .await
     .map_err(|e| e.to_string())?

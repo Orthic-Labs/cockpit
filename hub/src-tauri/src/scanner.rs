@@ -16,9 +16,20 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use pulse_core::{EntryKind, ScanOptions, ScanReport};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::{growth, home};
+use crate::{cache, growth, home};
+
+/// Format of the two saved files (`storage-index-v1.json` and
+/// `storage-view-v1.json`). A different version is ignored, never migrated.
+const FORMAT: u32 = 1;
+const INDEX_FILE: &str = "storage-index-v1.json";
+const VIEW_FILE: &str = "storage-view-v1.json";
+
+/// Newest scan time saved so far; an older scan finishing later never overwrites it.
+static SAVED_AT: AtomicU64 = AtomicU64::new(0);
+/// Serialises loading the saved index, so concurrent requests read it once.
+static LOADING: Mutex<()> = Mutex::new(());
 
 /// Largest children kept per folder.
 const TOP: usize = 200;
@@ -61,7 +72,7 @@ fn lock<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Row {
     path: PathBuf,
     name: String,
@@ -71,7 +82,7 @@ pub struct Row {
     summary: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Folder {
     path: PathBuf,
     root: PathBuf,
@@ -262,6 +273,118 @@ fn held() -> Option<Arc<Index>> {
     lock(&INDEX).clone()
 }
 
+/// One folder as saved: path, child count and the rows the browser shows.
+#[derive(Serialize, Deserialize)]
+struct SavedFolder(String, usize, Vec<SavedRow>);
+
+/// One row as saved: name, is a folder, is a summary row, bytes.
+#[derive(Serialize, Deserialize)]
+struct SavedRow(String, bool, bool, u64);
+
+#[derive(Serialize, Deserialize)]
+struct SavedIndex {
+    root: PathBuf,
+    root_label: String,
+    scanned_at: u64,
+    incomplete: bool,
+    needs_access: bool,
+    limited: bool,
+    folders: Vec<SavedFolder>,
+}
+
+fn saved_index(index: &Index) -> SavedIndex {
+    SavedIndex {
+        root: index.root.clone(),
+        root_label: index.root_label.clone(),
+        scanned_at: index.scanned_at,
+        incomplete: index.incomplete,
+        needs_access: index.needs_access,
+        limited: index.limited,
+        folders: index
+            .nodes
+            .iter()
+            .map(|(path, node)| {
+                SavedFolder(
+                    path.to_string_lossy().into_owned(),
+                    node.children,
+                    node.items
+                        .iter()
+                        .map(|i| SavedRow(i.name.to_string(), i.is_dir, i.summary, i.bytes))
+                        .collect(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn restored_index(saved: SavedIndex) -> Index {
+    let nodes: HashMap<PathBuf, Node> = saved
+        .folders
+        .into_iter()
+        .map(|SavedFolder(path, children, rows)| {
+            let items = rows
+                .into_iter()
+                .map(|SavedRow(name, is_dir, summary, bytes)| Item {
+                    name: name.into_boxed_str(),
+                    is_dir,
+                    summary,
+                    bytes,
+                })
+                .collect();
+            (PathBuf::from(path), Node { children, items, ..Node::default() })
+        })
+        .collect();
+    Index {
+        root: saved.root,
+        root_label: saved.root_label,
+        scanned_at: saved.scanned_at,
+        from_snapshot: true,
+        incomplete: saved.incomplete,
+        needs_access: saved.needs_access,
+        limited: saved.limited,
+        nodes,
+    }
+}
+
+/// Write the folder index and the root view on a background thread, so the
+/// next launch can show them at once. Failures are logged, never shown.
+fn persist(index: Arc<Index>, view: Folder) {
+    let at = view.scanned_at;
+    let spawned = std::thread::Builder::new().name("pulse-save".into()).spawn(move || {
+        low_priority();
+        if at < SAVED_AT.load(Ordering::SeqCst) {
+            return;
+        }
+        let result = cache::save(INDEX_FILE, FORMAT, &saved_index(&index))
+            .and_then(|()| cache::save(VIEW_FILE, FORMAT, &view));
+        match result {
+            Ok(()) => SAVED_AT.store(at, Ordering::SeqCst),
+            Err(error) => log(&format!("saving the storage scan failed: {error}")),
+        }
+    });
+    if let Err(error) = spawned {
+        log(&format!("saving the storage scan failed: {error}"));
+    }
+}
+
+/// The folder index in memory: the newest scan, else the saved one, read from
+/// disk on first use. `None` when there is neither.
+fn restore() -> Option<Arc<Index>> {
+    if let Some(index) = held() {
+        return Some(index);
+    }
+    let _loading = lock(&LOADING);
+    if let Some(index) = held() {
+        return Some(index);
+    }
+    let saved: SavedIndex = cache::load(INDEX_FILE, FORMAT)?;
+    let index = Arc::new(restored_index(saved));
+    // A scan that finished while this was loading is newer and wins.
+    let mut slot = lock(&INDEX);
+    let shown = slot.get_or_insert(index).clone();
+    Some(shown)
+}
+
 /// Resident memory of this process in MB, from `ps` (logging only).
 fn rss_mb() -> Option<u64> {
     let out = std::process::Command::new("/bin/ps")
@@ -274,7 +397,7 @@ fn rss_mb() -> Option<u64> {
 
 /// One line per scan in `~/Library/Application Support/Pulse/scan.log` (and
 /// on stderr when `PULSE_SCAN_LOG` is set), so scan cost can be compared.
-fn log(line: &str) {
+pub(crate) fn log(line: &str) {
     if std::env::var_os("PULSE_SCAN_LOG").or_else(|| std::env::var_os("COCKPIT_SCAN_LOG")).is_some() {
         eprintln!("{line}");
     }
@@ -329,6 +452,9 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>) -> Result<Folder, S
         } else {
             return Err("cancelled".into());
         }
+    }
+    if let Ok(view) = &result {
+        persist(index.clone(), view.clone());
     }
     log(&format!(
         "scan {} done: {kept} entries kept, {folders} folders, scan {scan_ms} ms, index {} ms, rss {} MB, {} index folders",
@@ -390,14 +516,24 @@ pub fn scan_status() -> Status {
     }
 }
 
-/// The folder view held in memory, else one built from the last saved home
-/// scan; `None` when there is neither. Never scans.
+/// The newest folder view: the one held in memory, else the root view saved
+/// with the last scan, shown at once. `None` when there is neither. Never scans.
 #[tauri::command]
 pub async fn last_scan() -> Result<Option<Folder>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         if let Some(index) = held() {
             return folder(&index, &index.root).map(Some);
         }
+        if let Some(mut view) = cache::load::<Folder>(VIEW_FILE, FORMAT) {
+            view.from_snapshot = true;
+            // Load the full index behind the view, so drilling down does not wait for it.
+            let _ = std::thread::Builder::new().name("pulse-index".into()).spawn(|| {
+                low_priority();
+                let _ = restore();
+            });
+            return Ok(Some(view));
+        }
+        // Saves from before the index file: the newest home snapshot, if one can be read.
         let root = home();
         let Some((report, at)) = growth::latest_scan(&root) else {
             return Ok(None);
@@ -415,31 +551,40 @@ pub async fn last_scan() -> Result<Option<Folder>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// One folder of the scan. Loads the saved index first when it is not in memory.
 #[tauri::command]
-pub fn children(path: String) -> Result<Folder, String> {
-    let index = held().ok_or("scan first")?;
-    folder(&index, &PathBuf::from(path))
+pub async fn children(path: String) -> Result<Folder, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Folder, String> {
+        let index = restore().ok_or("scan first")?;
+        folder(&index, &PathBuf::from(path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn search(query: String) -> Result<Vec<Row>, String> {
-    let index = held().ok_or("scan first")?;
-    let needle = query.to_lowercase();
-    let mut found: Vec<Row> = Vec::new();
-    for (parent, node) in &index.nodes {
-        for item in node.items.iter().filter(|i| !i.summary) {
-            if item.name.to_lowercase().contains(&needle) {
-                found.push(Row {
-                    path: parent.join(&*item.name),
-                    name: item.name.to_string(),
-                    is_dir: item.is_dir,
-                    bytes: item.bytes,
-                    summary: false,
-                });
+pub async fn search(query: String) -> Result<Vec<Row>, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Row>, String> {
+        let index = restore().ok_or("scan first")?;
+        let needle = query.to_lowercase();
+        let mut found: Vec<Row> = Vec::new();
+        for (parent, node) in &index.nodes {
+            for item in node.items.iter().filter(|i| !i.summary) {
+                if item.name.to_lowercase().contains(&needle) {
+                    found.push(Row {
+                        path: parent.join(&*item.name),
+                        name: item.name.to_string(),
+                        is_dir: item.is_dir,
+                        bytes: item.bytes,
+                        summary: false,
+                    });
+                }
             }
         }
-    }
-    found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-    found.truncate(100);
-    Ok(found)
+        found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        found.truncate(100);
+        Ok(found)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

@@ -34,7 +34,7 @@ final class NotchFleet {
     /// `NotchWindowController.currentScreen()`.
     private var displayPreference: DisplayPreference = .followActiveWindow
     private var resetTimeFormat: ResetTimeFormat = .automatic
-    private var accentColor: AccentColorChoice = .system
+    private var accentColor: AccentColorChoice = .green
     private var watchLimit: Double = 0.70
     private var criticalLimit: Double = 0.90
     private var colorTransitionStyle: ColorTransitionStyle = .hardStep

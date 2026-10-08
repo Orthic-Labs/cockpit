@@ -132,7 +132,7 @@ final class NotchViewModel: ObservableObject {
     }
     /// Mirrors the persisted Appearance choice so the separate notch window
     /// redraws immediately when Settings changes it.
-    @Published var accentColor: AccentColorChoice = .system
+    @Published var accentColor: AccentColorChoice = .green
     /// Whether a provider's weekly limit gets a ring of its own, and where.
     /// Mirrored here for the same reason `accentColor` is: the notch is a
     /// separate window, and it has to redraw the moment Settings changes this.

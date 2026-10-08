@@ -285,6 +285,38 @@ pub(super) fn children_bounded(path: &Path, limit: usize) -> Result<(Vec<PathBuf
     Ok((children, truncated))
 }
 
+/// macOS: the same descriptor-pinned, no-follow listing as `children_bounded`,
+/// read with one bulk call that also returns each regular file's facts (see
+/// `mac_bulk`). Same refusals, same limit; the pinned descriptor is closed on
+/// every exit path.
+#[cfg(target_os = "macos")]
+pub(super) fn bulk_children_bounded(
+    path: &Path,
+    limit: usize,
+) -> Result<(Vec<(PathBuf, Option<super::mac_bulk::BulkFile>)>, bool), FsError> {
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| FsError::new("path contains NUL; directory not listed"))?;
+    let mut before = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::lstat(c_path.as_ptr(), before.as_mut_ptr()) } != 0 {
+        return Err(os_error(std::io::Error::last_os_error()));
+    }
+    let before = unsafe { before.assume_init() };
+    if before.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(FsError::new(format!(
+            "not a real directory (links are not followed): {}",
+            path.display()
+        )));
+    }
+    if raw_placeholder(&before) {
+        return Err(FsError::new(format!(
+            "placeholder directory not listed: {}",
+            path.display()
+        )));
+    }
+    let pinned = pin_directory(path, &before)?;
+    super::mac_bulk::read_entries(pinned.0, path, limit).map_err(os_error)
+}
+
 // statvfs field widths vary across Unix ABIs.
 #[allow(clippy::unnecessary_cast)]
 pub(super) fn volume_usage(volume: &VolumeIdentity) -> Result<VolumeUsage, FsError> {

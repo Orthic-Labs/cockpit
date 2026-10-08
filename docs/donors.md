@@ -32,9 +32,9 @@ Source-vendoring disposition: four pinned donor trees remain unmodified & retain
 
 Pulse's `mac/Sources/PulseMacPrototype/NotchPresentation.swift` adapts codeNOTCH's canonical bezel flare/corner outline & ring-stack presentation to owner's compact footprint. Provider/runtime code remains Pulse-owned. Original MIT notice is included in app bundle; full donor motion, cutout joining & provider UI are not claimed absorbed.
 
-## Petal in Storage (2026-10-07)
+## Petal in Storage (2026-10-07; bulk listing ported 2026-10-08)
 
-The hub Storage view uses Petal (MIT, `f5e5b00e`) ideas, not its GPUI code: the nine path kinds and colours from `src/classify/` (path rules in `hub/src/chart.ts`; the trained model is not ported), the squarified treemap from `src/treemap.rs` (rewritten for SVG), and the findings catalog and the rule that project `node_modules` stay out of hidden folders, `Library`, `Applications` and bundles from `src/findings.rs` (new `discover` rules in `rules/cleanup.json`, `core/src/cleanup_scan.rs`). Volumes come from core's own disk listing; `disk.rs` and `dirlist.rs` were not needed.
+The hub Storage view uses Petal (MIT, `f5e5b00e`) ideas, not its GPUI code: the nine path kinds and colours from `src/classify/` (path rules in `hub/src/chart.ts`; the trained model is not ported), the squarified treemap from `src/treemap.rs` (rewritten for SVG), and the findings catalog and the rule that project `node_modules` stay out of hidden folders, `Library`, `Applications` and bundles from `src/findings.rs` (new `discover` rules in `rules/cleanup.json`, `core/src/cleanup_scan.rs`). Volumes come from core's own disk listing; `disk.rs` was not needed. Petal's `src/dirlist.rs` (`getattrlistbulk` bulk listing) is ported into core as `core/src/platform/mac_bulk.rs`: the scanner reads each directory's regular files in one call instead of an `lstat` per file, keeps the descriptor-pinned listing and its refusals, and inspects anything it cannot describe completely the usual way. Not yet ported: Petal's parallel walk, its FSEvents watcher (`src/watch.rs`) and its clone-id lookup.
 
 ## Uninstally in Apps (2026-10-07)
 

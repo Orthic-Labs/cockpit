@@ -222,6 +222,8 @@ export const api = {
   eject: (mount: string) => invoke<void>("eject", { mount }),
   openFullDiskAccess: () => invoke<void>("open_full_disk_access"),
   cleanupScan: () => invoke<CleanupReport>("cleanup_scan"),
+  /** The last saved findings, or null when none were saved. Never scans. */
+  cleanupCached: () => invoke<CleanupReport | null>("cleanup_cached"),
   cleanupApply: (items: CleanupFinding[]) =>
     invoke<CleanupApplyResult>("cleanup_apply", {
       items: items.map((f) => ({ rule_id: f.rule_id, path: f.path, dev: f.dev, ino: f.ino })),
@@ -242,6 +244,23 @@ export function bytes(n: number | null | undefined): string {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** Saved results older than this refresh in the background when their view opens. */
+const STALE_SECS = 10 * 60;
+
+/** True when a saved result (Unix seconds) is old enough to refresh. */
+export function isStale(secs: number): boolean {
+  return Date.now() / 1000 - secs > STALE_SECS;
+}
+
+/** "just now", "5 min ago", "2 h ago", or the date for anything older. */
+export function ago(secs: number): string {
+  const elapsed = Math.max(0, Date.now() / 1000 - secs);
+  if (elapsed < 90) return "just now";
+  if (elapsed < 3600) return `${Math.round(elapsed / 60)} min ago`;
+  if (elapsed < 86400) return `${Math.round(elapsed / 3600)} h ago`;
+  return new Date(secs * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 /** Colour for a 0–1 share, matching the notch rings. */
 export function tone(fraction: number): string {
   if (fraction >= 0.85) return "var(--rk-bad)";
@@ -252,3 +271,64 @@ export function tone(fraction: number): string {
 export function signedBytes(n: number): string {
   return `${n < 0 ? "−" : "+"}${bytes(Math.abs(n))}`;
 }
+
+// ---- Apps: saved inventory, streamed leftovers, icons and updates ----
+
+export interface CachedApps {
+  /** Unix seconds when the saved list was written; null when there is none. */
+  saved_at: number | null;
+  apps: AppEntry[];
+}
+
+/** One source's share of an app's leftovers (`apps-leftovers` events). */
+export interface LeftoverPart {
+  source: "bundle" | "vendor" | "background" | "library" | "receipts";
+  items: RelatedItem[];
+  background: BackgroundEntry[];
+  receipts: string[];
+}
+
+export type LeftoversEvent =
+  | { kind: "part"; path: string; part: LeftoverPart }
+  | { kind: "done"; path: string; error: string | null };
+
+/** Update state of one app. Only Sparkle, Homebrew and App Store apps can have one. */
+export interface AppUpdate {
+  path: string;
+  name: string;
+  bundle_id: string | null;
+  installed_version: string | null;
+  source: "app_store" | "homebrew" | "sparkle" | "none";
+  state: "available" | "current" | "app_store" | "unknown" | "unavailable";
+  latest_version: string | null;
+  cask: string | null;
+  store_url: string | null;
+  reason: string | null;
+  /** Unix seconds when this row was checked. */
+  checked_at: number;
+}
+
+export interface UpdateReport {
+  /** Unix seconds of the newest check; null before any check. */
+  checked_at: number | null;
+  apps: AppUpdate[];
+}
+
+export interface UpdateJob {
+  path: string;
+  state: "running" | "done" | "failed";
+  message: string;
+}
+
+export const appsApi = {
+  cached: () => invoke<CachedApps>("apps_cached"),
+  refresh: () => invoke<void>("apps_refresh"),
+  summary: (path: string) => invoke<AppEntry>("app_summary", { path }),
+  leftovers: (path: string) => invoke<void>("app_leftovers", { path }),
+  /** Cached icons by path; the rest arrive as `apps-icon` events. */
+  icons: (paths: string[]) => invoke<Record<string, string>>("app_icons", { paths }),
+  updatesCached: () => invoke<UpdateReport>("apps_updates_cached"),
+  updatesRefresh: (force: boolean) => invoke<void>("apps_updates_refresh", { force }),
+  /** Returns "running", "opened" or "store". */
+  update: (path: string) => invoke<string>("app_update", { path }),
+};

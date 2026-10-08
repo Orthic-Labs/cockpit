@@ -19,11 +19,13 @@
 //! for ideas only (team-id group containers, installer receipts); no source
 //! was copied.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -591,28 +593,98 @@ fn find_apps() -> Vec<PathBuf> {
     found
 }
 
-/// Every app in the application folders, largest first.
-pub fn list_apps() -> Vec<AppEntry> {
+/// Pulse's own state folder (inventory, icon and update caches).
+fn support_dir() -> PathBuf {
+    home().join("Library/Application Support/Pulse")
+}
+
+fn now_epoch() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Waits for a scoped thread. A panic in it is re-raised, as `thread::scope` would.
+fn join<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// Writes JSON through a temporary file, so a reader never sees a half-written cache.
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+const INVENTORY_WORKERS: usize = 4;
+const APPS_CACHE_SCHEMA: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct AppsCacheFile {
+    schema: u32,
+    saved_at: i64,
+    apps: Vec<AppEntry>,
+}
+
+/// The last saved inventory and when it was saved, for an instant first paint.
+pub fn cached_apps() -> Option<(i64, Vec<AppEntry>)> {
+    let bytes = std::fs::read(support_dir().join("apps-cache.json")).ok()?;
+    let file: AppsCacheFile = serde_json::from_slice(&bytes).ok()?;
+    (file.schema == APPS_CACHE_SCHEMA).then_some((file.saved_at, file.apps))
+}
+
+/// Every app in the application folders, largest first. Each app goes to
+/// `on_app` as soon as its sizes are known, from a small worker pool, so one
+/// large bundle does not hold up the rest. The result replaces the saved cache.
+pub fn list_apps_streaming(on_app: &(dyn Fn(&AppEntry) + Sync)) -> Vec<AppEntry> {
     let paths = find_apps();
     let running = running_roots();
-    let chunk = paths.len().div_ceil(8).max(1);
-    let mut apps = Vec::new();
+    let next = AtomicUsize::new(0);
+    let done = Mutex::new(Vec::<AppEntry>::with_capacity(paths.len()));
     std::thread::scope(|scope| {
-        let handles: Vec<_> = paths
-            .chunks(chunk)
-            .map(|part| {
-                let running = &running;
-                scope.spawn(move || part.iter().map(|p| inspect(p, running)).collect::<Vec<_>>())
-            })
-            .collect();
-        for handle in handles {
-            if let Ok(part) = handle.join() {
-                apps.extend(part);
-            }
+        for _ in 0..INVENTORY_WORKERS.min(paths.len()) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, AtomicOrdering::Relaxed);
+                    let Some(path) = paths.get(index) else {
+                        break;
+                    };
+                    let entry = inspect(path, &running);
+                    on_app(&entry);
+                    lock(&done).push(entry);
+                }
+            });
         }
     });
-    apps.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    let mut apps: Vec<AppEntry> = done
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    apps.sort_by(|a: &AppEntry, b: &AppEntry| {
+        b.size_bytes.cmp(&a.size_bytes).then(a.path.cmp(&b.path))
+    });
+    let file = AppsCacheFile {
+        schema: APPS_CACHE_SCHEMA,
+        saved_at: now_epoch(),
+        apps: apps.clone(),
+    };
+    let _ = write_json_atomic(&support_dir().join("apps-cache.json"), &file);
     apps
+}
+
+/// Every app in the application folders, largest first.
+pub fn list_apps() -> Vec<AppEntry> {
+    list_apps_streaming(&|_: &AppEntry| {})
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1012,15 +1084,42 @@ fn other_apps(this: &Path) -> (Vec<String>, Vec<PathBuf>) {
     (ids, paths)
 }
 
+/// Facts that need only this bundle: its plist, nested helper ids and code signature.
+struct BundleFacts {
+    main_plist: Option<serde_json::Value>,
+    nested: Vec<String>,
+    background: Vec<BackgroundEntry>,
+    groups: Vec<String>,
+    team: Option<String>,
+}
+
+fn bundle_facts(root: &Path) -> BundleFacts {
+    let main_plist = plist_json(&root.join("Contents/Info.plist"));
+    let (nested, background) = harvest_bundle(root, main_plist.as_ref());
+    let (groups, team) = signing_info(root);
+    BundleFacts {
+        main_plist,
+        nested,
+        background,
+        groups,
+        team,
+    }
+}
+
 fn build_identity(
     root: &Path,
     bundle_id: Option<&str>,
     others: Vec<String>,
+    facts: BundleFacts,
 ) -> (Identity, Vec<BackgroundEntry>) {
-    let main_plist = plist_json(&root.join("Contents/Info.plist"));
+    let BundleFacts {
+        main_plist,
+        nested: extra,
+        background,
+        groups,
+        team,
+    } = facts;
     let main = bundle_id.map(str::to_lowercase);
-    let (extra, background) = harvest_bundle(root, main_plist.as_ref());
-    let (groups, team) = signing_info(root);
     let mut ids: Vec<String> = Vec::new();
     ids.extend(main.clone());
     for id in extra {
@@ -1283,7 +1382,7 @@ fn loaded_jobs(identity: &Identity) -> Vec<BackgroundEntry> {
 /// when everything else in it is the vendor's own uninstaller or helper apps
 /// (same team id, or named "Uninstall..."), the folder icon file, .DS_Store
 /// or .localized. Never the Applications folder itself.
-fn vendor_folder(root: &Path) -> Option<PathBuf> {
+fn vendor_folder(root: &Path, team: Option<String>) -> Option<PathBuf> {
     let folder = root.parent()?;
     if folder.extension().is_some_and(|x| x == "app") {
         return None;
@@ -1301,7 +1400,6 @@ fn vendor_folder(root: &Path) -> Option<PathBuf> {
     {
         return None;
     }
-    let team = signing_info(root).1;
     for entry in std::fs::read_dir(folder).ok()? {
         let path = entry.ok()?.path();
         if path == root {
@@ -1342,85 +1440,239 @@ fn validate_app_path(path: &str) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// The bundle, its Library leftovers (user and system), installer-receipt
-/// files and background items, with sizes and a confidence on each item.
-pub fn app_detail(path: &str) -> Result<AppDetail, String> {
-    let root = validate_app_path(path)?;
-    let app = inspect(&root, &running_roots());
-    let mut items = vec![RelatedItem {
-        path: app.path.clone(),
+/// The bundle row, shown with its size once known.
+fn bundle_row(root: &Path, preselected: bool, size_bytes: u64) -> RelatedItem {
+    RelatedItem {
+        path: root.to_string_lossy().into_owned(),
         label: "Application".into(),
         location: "Application".into(),
         exact: true,
         confidence: "exact".into(),
         reason: "The application bundle".into(),
-        admin: needs_admin(&root),
-        size_bytes: app.size_bytes,
-        preselected: app.protected.is_none(),
-    }];
-    let mut background = Vec::new();
-    let mut receipts = Vec::new();
-    if app.protected.is_none()
-        && let Some(folder) = vendor_folder(&root)
-    {
-        items.push(RelatedItem {
-            path: folder.to_string_lossy().into_owned(),
-            label: "Application".into(),
-            location: "Application".into(),
-            exact: true,
-            confidence: "exact".into(),
-            reason: "The vendor folder holding only this app and its uninstaller".into(),
-            admin: needs_admin(&folder),
-            size_bytes: disk_size(&folder),
-            preselected: true,
-        });
+        admin: needs_admin(root),
+        size_bytes,
+        preselected,
     }
-    if app.protected.is_none() {
-        let (others, other_roots) = other_apps(&root);
-        let (identity, embedded) = build_identity(&root, app.bundle_id.as_deref(), others);
-        let mut found = library_items(&identity);
-        found.sort_by(|a, b| {
-            let rank = |i: &RelatedItem| match i.confidence.as_str() {
-                "exact" => 0,
-                "helper" => 1,
-                "group" => 2,
-                "prefix" => 3,
-                "team" => 4,
-                _ => 5,
-            };
-            rank(a)
-                .cmp(&rank(b))
-                .then(b.size_bytes.cmp(&a.size_bytes))
-                .then(a.path.cmp(&b.path))
-        });
-        found.dedup_by(|a, b| a.path == b.path);
-        background.extend(embedded);
-        for item in &found {
-            if matches!(item.label.as_str(), "LaunchAgents" | "LaunchDaemons") {
-                background.push(BackgroundEntry {
-                    kind: if item.label == "LaunchAgents" {
-                        "Launch agent".into()
-                    } else {
-                        "Launch daemon".into()
-                    },
-                    label: Path::new(&item.path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    path: Some(item.path.clone()),
+}
+
+/// One source's share of an app's leftovers, sent as soon as that source finishes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeftoverPart {
+    /// "bundle", "vendor", "background", "library" or "receipts".
+    pub source: String,
+    pub items: Vec<RelatedItem>,
+    pub background: Vec<BackgroundEntry>,
+    /// Installer packages that matched (receipts source only).
+    pub receipts: Vec<String>,
+}
+
+impl LeftoverPart {
+    fn new(source: &str) -> Self {
+        Self {
+            source: source.into(),
+            items: Vec::new(),
+            background: Vec::new(),
+            receipts: Vec::new(),
+        }
+    }
+}
+
+/// Position of each source in the assembled list. The bundle is always first.
+fn source_rank(source: &str) -> u8 {
+    match source {
+        "bundle" => 0,
+        "vendor" => 1,
+        "library" => 2,
+        "receipts" => 3,
+        _ => 4,
+    }
+}
+
+fn confidence_rank(confidence: &str) -> u8 {
+    match confidence {
+        "exact" => 0,
+        "helper" => 1,
+        "group" => 2,
+        "prefix" => 3,
+        "team" => 4,
+        _ => 5,
+    }
+}
+
+/// Runs the leftover sources once the bundle's identity is known. The Library
+/// scan, the vendor folder, installer receipts and loaded launchd jobs run
+/// concurrently, and each is sent to `emit` as it completes. Nothing is sent
+/// when the app is not `eligible` (protected apps are never matched).
+fn stream_leftovers(
+    root: &Path,
+    bundle_id: Option<&str>,
+    eligible: bool,
+    emit: &(dyn Fn(LeftoverPart) + Sync),
+) {
+    if !eligible {
+        return;
+    }
+    // Identity first: the code signature and helper ids, alongside the other installed apps.
+    let (facts, others) = std::thread::scope(|scope| {
+        let facts = scope.spawn(|| bundle_facts(root));
+        let others = scope.spawn(|| other_apps(root));
+        (join(facts), join(others))
+    });
+    let team = facts.team.clone();
+    let (other_ids, other_roots) = others;
+    let (identity, embedded) = build_identity(root, bundle_id, other_ids, facts);
+    emit(LeftoverPart {
+        background: embedded,
+        ..LeftoverPart::new("background")
+    });
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut part = LeftoverPart::new("vendor");
+            if let Some(folder) = vendor_folder(root, team.clone()) {
+                part.items.push(RelatedItem {
+                    path: folder.to_string_lossy().into_owned(),
+                    label: "Application".into(),
+                    location: "Application".into(),
+                    exact: true,
+                    confidence: "exact".into(),
+                    reason: "The vendor folder holding only this app and its uninstaller".into(),
+                    admin: needs_admin(&folder),
+                    size_bytes: disk_size(&folder),
+                    preselected: true,
                 });
             }
-        }
-        background.extend(loaded_jobs(&identity));
-        let mut taken: Vec<String> = vec![app.path.clone()];
-        taken.extend(found.iter().map(|i| i.path.clone()));
-        let (receipt_files, pkgs) = receipt_items(&identity, &other_roots, &taken);
-        receipts = pkgs;
-        items.extend(found);
-        items.extend(receipt_files);
-        let mut seen = HashSet::new();
-        background.retain(|b| seen.insert((b.kind.clone(), b.label.clone())));
+            emit(part);
+        });
+        scope.spawn(|| {
+            let mut found = library_items(&identity);
+            found.sort_by(|a, b| {
+                confidence_rank(&a.confidence)
+                    .cmp(&confidence_rank(&b.confidence))
+                    .then(b.size_bytes.cmp(&a.size_bytes))
+                    .then(a.path.cmp(&b.path))
+            });
+            found.dedup_by(|a, b| a.path == b.path);
+            let mut part = LeftoverPart::new("library");
+            for item in &found {
+                if matches!(item.label.as_str(), "LaunchAgents" | "LaunchDaemons") {
+                    part.background.push(BackgroundEntry {
+                        kind: if item.label == "LaunchAgents" {
+                            "Launch agent".into()
+                        } else {
+                            "Launch daemon".into()
+                        },
+                        label: Path::new(&item.path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        path: Some(item.path.clone()),
+                    });
+                }
+            }
+            part.items = found;
+            emit(part);
+        });
+        scope.spawn(|| {
+            // Receipt files under the app or a Library item are dropped when the
+            // list is assembled; the bundle path alone is excluded here.
+            let taken = [root.to_string_lossy().into_owned()];
+            let (items, pkgs) = receipt_items(&identity, &other_roots, &taken);
+            let mut part = LeftoverPart::new("receipts");
+            part.items = items;
+            part.receipts = pkgs;
+            emit(part);
+        });
+        scope.spawn(|| {
+            let mut part = LeftoverPart::new("background");
+            part.background = loaded_jobs(&identity);
+            emit(part);
+        });
+    });
+}
+
+/// The app's bundle row, then its leftovers, streamed part by part to `emit`.
+/// Callers show the header from the list at once and wait for nothing here.
+pub fn app_leftovers(path: &str, emit: &(dyn Fn(LeftoverPart) + Sync)) -> Result<(), String> {
+    let root = validate_app_path(path)?;
+    let bundle_id = bundle_info(&root).and_then(|info| info.bundle_id);
+    let eligible = protected_reason(&root, bundle_id.as_deref()).is_none();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut part = LeftoverPart::new("bundle");
+            part.items.push(bundle_row(&root, eligible, disk_size(&root)));
+            emit(part);
+        });
+        stream_leftovers(&root, bundle_id.as_deref(), eligible, emit);
+    });
+    Ok(())
+}
+
+/// The header facts of one app, without sizes or leftovers, for opening an app by path.
+pub fn app_summary(path: &str) -> Result<AppEntry, String> {
+    let root = validate_app_path(path)?;
+    let info = bundle_info(&root);
+    let bundle_id = info.as_ref().and_then(|i| i.bundle_id.clone());
+    Ok(AppEntry {
+        name: root
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: root.to_string_lossy().into_owned(),
+        protected: protected_reason(&root, bundle_id.as_deref()),
+        bundle_id,
+        version: info.and_then(|i| i.version),
+        size_bytes: 0,
+        last_used: None,
+        running: running_roots().contains(&root),
+    })
+}
+
+/// The bundle, its Library leftovers (user and system), installer-receipt
+/// files and background items, with sizes and a confidence on each item.
+/// Synchronous: the CLI and uninstall use this.
+pub fn app_detail(path: &str) -> Result<AppDetail, String> {
+    let root = validate_app_path(path)?;
+    let app = inspect(&root, &running_roots());
+    let eligible = app.protected.is_none();
+    let parts = Mutex::new(Vec::<LeftoverPart>::new());
+    stream_leftovers(
+        &root,
+        app.bundle_id.as_deref(),
+        eligible,
+        &|part: LeftoverPart| {
+            lock(&parts).push(part);
+        },
+    );
+    let mut parts: Vec<LeftoverPart> = parts
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    parts.sort_by_key(|part| source_rank(&part.source));
+
+    let mut items = vec![bundle_row(&root, eligible, app.size_bytes)];
+    let mut background = Vec::new();
+    let mut receipts = Vec::new();
+    for part in parts {
+        items.extend(part.items);
+        background.extend(part.background);
+        receipts.extend(part.receipts);
     }
+    // Installer files under the app or a Library item are already listed there.
+    let mut taken: Vec<PathBuf> = vec![root.clone()];
+    taken.extend(
+        items
+            .iter()
+            .filter(|i| i.location == "User Library" || i.location == "System Library")
+            .map(|i| PathBuf::from(&i.path)),
+    );
+    items.retain(|i| {
+        i.location != "Installer receipt"
+            || !taken
+                .iter()
+                .any(|t| Path::new(&i.path).starts_with(t))
+    });
+    let mut seen = HashSet::new();
+    background.retain(|b: &BackgroundEntry| seen.insert((b.kind.clone(), b.label.clone())));
     Ok(AppDetail {
         app,
         items,
@@ -1812,4 +2064,799 @@ fn revalidate(fresh: &AppDetail, item: &str) -> Result<u64, String> {
         return Err("Is a symbolic link; left in place.".into());
     }
     Ok(disk_size(path))
+}
+
+// ---------------------------------------------------------------------------
+// Icons: a 64-pixel PNG per app, rendered with sips and cached.
+// ---------------------------------------------------------------------------
+
+const ICON_PIXELS: &str = "64";
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Modification time of the bundle folder, in nanoseconds since the epoch.
+fn bundle_stamp(root: &Path) -> Option<u128> {
+    let modified = std::fs::metadata(root).ok()?.modified().ok()?;
+    modified
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_nanos())
+}
+
+/// The bundle's icon file: CFBundleIconFile (".icns" optional), else AppIcon.icns.
+fn icon_file(root: &Path) -> Option<PathBuf> {
+    let resources = root.join("Contents/Resources");
+    let plist = plist_json(&root.join("Contents/Info.plist"));
+    let named = plist
+        .as_ref()
+        .and_then(|p| p.get("CFBundleIconFile"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && !n.contains('/') && !n.contains(".."));
+    let mut names: Vec<String> = Vec::new();
+    if let Some(name) = named {
+        names.push(if name.ends_with(".icns") {
+            name.to_string()
+        } else {
+            format!("{name}.icns")
+        });
+    }
+    names.push("AppIcon.icns".to_string());
+    names
+        .iter()
+        .map(|name| resources.join(name))
+        .find(|p| p.is_file())
+}
+
+/// Renders the bundle's icon to a 64-pixel PNG at `png`, through a temporary file.
+fn render_icon(root: &Path, dir: &Path, png: &Path) -> bool {
+    let Some(icns) = icon_file(root) else {
+        return false;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let tmp = png.with_extension("tmp.png");
+    let mut command = Command::new("/usr/bin/sips");
+    command
+        .args(["-s", "format", "png", "--resampleWidth", ICON_PIXELS])
+        .arg(&icns)
+        .arg("--out")
+        .arg(&tmp);
+    let ok = run_captured(command, Duration::from_secs(20), None)
+        .map(|done| done.ok)
+        .unwrap_or(false);
+    if ok && std::fs::rename(&tmp, png).is_ok() {
+        return true;
+    }
+    let _ = std::fs::remove_file(&tmp);
+    false
+}
+
+/// Removes cached icons of one app that do not belong to the `keep` entry.
+fn prune_icons(dir: &Path, prefix: &str, keep: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(prefix) && !name.starts_with(keep) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Path of the cached PNG icon for an app. With `generate`, a missing icon is
+/// rendered now; a failure is remembered until the bundle changes. Without
+/// it, only the cache is read. None means no icon (the caller shows a fallback).
+pub fn app_icon(path: &str, generate: bool) -> Option<PathBuf> {
+    let root = validate_app_path(path).ok()?;
+    let stamp = bundle_stamp(&root)?;
+    let dir = support_dir().join("icons");
+    let prefix = format!("{:016x}-", fnv1a(root.to_string_lossy().as_bytes()));
+    let base = format!("{prefix}{stamp}");
+    let png = dir.join(format!("{base}.png"));
+    if png.is_file() {
+        return Some(png);
+    }
+    if !generate || dir.join(format!("{base}.none")).exists() {
+        return None;
+    }
+    if render_icon(&root, &dir, &png) {
+        prune_icons(&dir, &prefix, &format!("{base}."));
+        return Some(png);
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{base}.none")), b"");
+    prune_icons(&dir, &prefix, &format!("{base}."));
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Updates: Sparkle appcasts, Homebrew casks and App Store apps. Read-only
+// checks; the only actions hand off to the app, the App Store or Homebrew.
+// ---------------------------------------------------------------------------
+
+const UPDATE_TTL_SECS: i64 = 6 * 60 * 60;
+const UPDATE_WORKERS: usize = 4;
+const APPCAST_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const APPCAST_MAX_ITEMS: usize = 200;
+const UPDATES_CACHE_SCHEMA: u32 = 1;
+const STORE_PREFIX: &str = "macappstore://apps.apple.com/app/id";
+
+/// The update state of one installed app.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppUpdate {
+    pub path: String,
+    pub name: String,
+    pub bundle_id: Option<String>,
+    pub installed_version: Option<String>,
+    /// "app_store", "homebrew", "sparkle" or "none".
+    pub source: String,
+    /// "available", "current", "app_store", "unknown" or "unavailable".
+    pub state: String,
+    pub latest_version: Option<String>,
+    /// Homebrew cask token, when Homebrew installed this app.
+    pub cask: Option<String>,
+    /// macappstore:// link, when the App Store id is known.
+    pub store_url: Option<String>,
+    /// Plain-language reason when no comparison was possible.
+    pub reason: Option<String>,
+    /// Unix seconds when this row was checked.
+    pub checked_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateReport {
+    /// Unix seconds of the newest check; None before any check.
+    pub checked_at: Option<i64>,
+    pub apps: Vec<AppUpdate>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct BrewSnapshot {
+    checked_at: i64,
+    /// App bundle path -> cask token. A path claimed by two casks is left out.
+    owners: BTreeMap<String, String>,
+    /// Cask token -> newest version, for casks Homebrew reports as outdated.
+    outdated: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct UpdatesCacheFile {
+    #[serde(default)]
+    schema: u32,
+    #[serde(default)]
+    brew: Option<BrewSnapshot>,
+    /// Keyed by app path.
+    #[serde(default)]
+    apps: BTreeMap<String, AppUpdate>,
+}
+
+fn updates_cache_path() -> PathBuf {
+    support_dir().join("updates-cache.json")
+}
+
+fn read_updates_cache() -> UpdatesCacheFile {
+    std::fs::read(updates_cache_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn write_updates_cache(cache: &UpdatesCacheFile) {
+    let _ = write_json_atomic(&updates_cache_path(), cache);
+}
+
+/// The saved update results, shown at once while a fresh check runs.
+pub fn cached_updates() -> UpdateReport {
+    let cache = read_updates_cache();
+    let checked_at = cache.apps.values().map(|a| a.checked_at).max();
+    let mut apps: Vec<AppUpdate> = cache.apps.into_values().collect();
+    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    UpdateReport { checked_at, apps }
+}
+
+/// Compares version strings part by part. Numeric parts compare by value; text
+/// compares as text; a missing part counts as zero.
+fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let split = |text: &str| -> Vec<String> {
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (a, b) = (split(left), split(right));
+    for index in 0..a.len().max(b.len()) {
+        let x = a.get(index).map(String::as_str).unwrap_or("0");
+        let y = b.get(index).map(String::as_str).unwrap_or("0");
+        let order = match (x.parse::<u128>(), y.parse::<u128>()) {
+            (Ok(p), Ok(q)) => p.cmp(&q),
+            _ => x.cmp(y),
+        };
+        if order != std::cmp::Ordering::Equal {
+            return order;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn version_is_newer(candidate: &str, installed: &str) -> bool {
+    compare_versions(candidate, installed) == std::cmp::Ordering::Greater
+}
+
+/// The macOS version, read once (for appcast items that need a newer system).
+fn macos_version() -> Option<String> {
+    static VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            let mut command = Command::new("/usr/bin/sw_vers");
+            command.arg("-productVersion");
+            stdout_of(command, Duration::from_secs(5))
+        })
+        .clone()
+}
+
+/// Only https URLs with a host and no credentials.
+fn https_url(raw: &str) -> bool {
+    let Some(rest) = raw.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    raw.len() <= 2048
+        && !authority.is_empty()
+        && !authority.contains('@')
+        && !raw.chars().any(|c| c.is_whitespace() || c == '\0')
+}
+
+/// Reads a feed with curl: https only (redirects included), 5 seconds in
+/// total, no curl config file, and a size cap. Only the body is read.
+fn fetch_appcast(url: &str) -> Result<String, String> {
+    let mut command = Command::new("/usr/bin/curl");
+    command
+        .args([
+            "-q",
+            "-sS",
+            "-f",
+            "-L",
+            "--max-redirs",
+            "3",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "5",
+            "--max-time",
+            "5",
+            "--max-filesize",
+        ])
+        .arg(APPCAST_MAX_BYTES.to_string())
+        .arg(url);
+    let done = run_captured(command, Duration::from_secs(8), None)
+        .map_err(|_| "Feed did not answer in time.".to_string())?;
+    if !done.ok {
+        let reason = done.stderr.lines().next().unwrap_or("request failed").trim();
+        return Err(format!("Feed could not be read: {reason}"));
+    }
+    String::from_utf8(done.stdout).map_err(|_| "Feed is not UTF-8 text.".to_string())
+}
+
+/// One appcast item this Mac could be offered.
+struct Candidate {
+    version: Option<String>,
+    short: Option<String>,
+}
+
+fn clean_version(raw: &str) -> Option<String> {
+    let text = raw.trim();
+    (!text.is_empty() && text.len() <= 128 && !text.contains('<')).then(|| text.to_string())
+}
+
+/// Text of a plain element such as `<sparkle:version>1.2</sparkle:version>`.
+fn xml_text(block: &str, element: &str) -> Option<String> {
+    let open = format!("<{element}>");
+    let close = format!("</{element}>");
+    let start = block.find(&open)? + open.len();
+    let end = start + block[start..].find(&close)?;
+    clean_version(&block[start..end])
+}
+
+/// Value of an attribute such as ` sparkle:version="1.2"`, as enclosures carry them.
+fn xml_attribute(block: &str, name: &str) -> Option<String> {
+    let key = format!(" {name}=\"");
+    let start = block.find(&key)? + key.len();
+    let end = start + block[start..].find('"')?;
+    clean_version(&block[start..end])
+}
+
+/// Items this Mac can use. Other channels and items that need a newer macOS
+/// are left out. None when the feed is not an appcast, or has a DTD or entities.
+fn parse_appcast(xml: &str, macos: Option<&str>) -> Option<Vec<Candidate>> {
+    if xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY") || !xml.contains("<rss") {
+        return None;
+    }
+    let mut candidates = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<item") {
+        let after = &rest[start..];
+        let Some(end) = after.find("</item>") else {
+            break;
+        };
+        let block = &after[..end];
+        rest = &after[end + "</item>".len()..];
+        // "<item" must be the whole tag name, not the start of "<items".
+        let is_item = matches!(
+            block.as_bytes().get(5).copied(),
+            Some(b'>' | b' ' | b'\n' | b'\t' | b'\r')
+        );
+        if !is_item {
+            continue;
+        }
+        if candidates.len() >= APPCAST_MAX_ITEMS {
+            break;
+        }
+        if block.contains("<sparkle:channel") {
+            continue;
+        }
+        if let (Some(minimum), Some(current)) =
+            (xml_text(block, "sparkle:minimumSystemVersion"), macos)
+            && compare_versions(&minimum, current) == std::cmp::Ordering::Greater
+        {
+            continue;
+        }
+        let version = xml_text(block, "sparkle:version")
+            .or_else(|| xml_attribute(block, "sparkle:version"));
+        let short = xml_text(block, "sparkle:shortVersionString")
+            .or_else(|| xml_attribute(block, "sparkle:shortVersionString"));
+        if version.is_some() || short.is_some() {
+            candidates.push(Candidate { version, short });
+        }
+    }
+    Some(candidates)
+}
+
+fn candidate_key(candidate: &Candidate) -> &str {
+    candidate
+        .version
+        .as_deref()
+        .or(candidate.short.as_deref())
+        .unwrap_or("")
+}
+
+fn newest_candidate(candidates: Vec<Candidate>) -> Option<Candidate> {
+    candidates
+        .into_iter()
+        .max_by(|a, b| compare_versions(candidate_key(a), candidate_key(b)))
+}
+
+/// Whether the candidate is newer than the installed bundle. Build numbers
+/// compare when both sides have one, otherwise marketing versions. None when
+/// neither pair is available.
+fn candidate_newer(candidate: &Candidate, short: Option<&str>, build: Option<&str>) -> Option<bool> {
+    if let (Some(version), Some(installed)) = (candidate.version.as_deref(), build) {
+        return Some(version_is_newer(version, installed));
+    }
+    if let (Some(marketing), Some(installed)) = (candidate.short.as_deref(), short) {
+        return Some(version_is_newer(marketing, installed));
+    }
+    None
+}
+
+/// The macappstore:// link for an App Store app, from its Spotlight adam id.
+fn store_url(root: &Path) -> Option<String> {
+    let mut command = Command::new("/usr/bin/mdls");
+    command
+        .args(["-raw", "-name", "kMDItemAppStoreAdamID"])
+        .arg(root);
+    let raw = stdout_of(command, Duration::from_secs(5))?;
+    let id = raw.trim();
+    (!id.is_empty() && id.chars().all(|c| c.is_ascii_digit()))
+        .then(|| format!("{}{}", STORE_PREFIX, id))
+}
+
+/// Homebrew from /opt/homebrew or the PATH, nothing else.
+fn brew_path() -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from("/opt/homebrew/bin/brew")];
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join("brew")));
+    }
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn brew_command(brew: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(brew);
+    command
+        .args(args)
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .env("HOMEBREW_NO_ANALYTICS", "1")
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
+        .env("HOMEBREW_NO_INSTALL_CLEANUP", "1");
+    command
+}
+
+fn brew_json(brew: &Path, args: &[&str], limit: Duration) -> Option<serde_json::Value> {
+    let done = run_captured(brew_command(brew, args), limit, None).ok()?;
+    if !done.ok {
+        return None;
+    }
+    serde_json::from_slice(&done.stdout).ok()
+}
+
+fn json_array<'a>(value: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn valid_cask_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 256
+        && !token.starts_with('-')
+        && !token.contains("..")
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '+' | '@' | '/'))
+}
+
+/// Bundle paths a cask's app artifact can install to: absolute as written,
+/// otherwise under the two Applications folders.
+fn app_candidates(name: &str) -> Vec<String> {
+    if name.starts_with('/') {
+        return if name.ends_with(".app") {
+            vec![name.trim_end_matches('/').to_string()]
+        } else {
+            Vec::new()
+        };
+    }
+    if !name.ends_with(".app") || name.contains('/') {
+        return Vec::new();
+    }
+    vec![
+        format!("/Applications/{name}"),
+        format!("{}/Applications/{name}", home().to_string_lossy()),
+    ]
+}
+
+/// Homebrew's installed casks and which of them are outdated. Reads only, and
+/// uses the cached taps (no metadata refresh). None when Homebrew is absent or fails.
+fn brew_snapshot() -> Option<BrewSnapshot> {
+    let brew = brew_path()?;
+    let outdated_json = brew_json(
+        &brew,
+        &["outdated", "--cask", "--greedy", "--json=v2"],
+        Duration::from_secs(120),
+    )?;
+    let mut outdated = BTreeMap::new();
+    for cask in json_array(&outdated_json, "casks") {
+        let token = cask
+            .get("token")
+            .or_else(|| cask.get("name"))
+            .and_then(|v| v.as_str());
+        let latest = cask.get("current_version").and_then(|v| v.as_str());
+        let pinned = cask.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+        if let (Some(token), Some(latest), false) = (token, latest, pinned)
+            && valid_cask_token(token)
+            && !latest.trim().is_empty()
+        {
+            outdated.insert(token.to_string(), latest.trim().to_string());
+        }
+    }
+
+    let installed = brew_json(
+        &brew,
+        &["info", "--json=v2", "--installed"],
+        Duration::from_secs(120),
+    )?;
+    let mut owners: BTreeMap<String, String> = BTreeMap::new();
+    for cask in json_array(&installed, "casks") {
+        let Some(token) = cask.get("token").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !valid_cask_token(token) {
+            continue;
+        }
+        for artifact in json_array(cask, "artifacts") {
+            for app in json_array(artifact, "app") {
+                let name = app
+                    .as_str()
+                    .or_else(|| app.get("target").and_then(|v| v.as_str()));
+                let Some(name) = name else {
+                    continue;
+                };
+                for path in app_candidates(name) {
+                    let conflict = owners.get(&path).is_some_and(|existing| existing != token);
+                    let entry = if conflict {
+                        String::new()
+                    } else {
+                        token.to_string()
+                    };
+                    owners.insert(path, entry);
+                }
+            }
+        }
+    }
+    owners.retain(|_, token| !token.is_empty());
+    Some(BrewSnapshot {
+        checked_at: now_epoch(),
+        owners,
+        outdated,
+    })
+}
+
+/// Checks one app against the evidence available for it.
+fn check_app(
+    root: &Path,
+    brew: Option<&BrewSnapshot>,
+    previous: Option<&AppUpdate>,
+    now: i64,
+) -> AppUpdate {
+    let plist = plist_json(&root.join("Contents/Info.plist")).unwrap_or(serde_json::Value::Null);
+    let text = |key: &str| -> Option<String> {
+        plist
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let short = text("CFBundleShortVersionString");
+    let build = text("CFBundleVersion");
+    let installed = short.clone().or_else(|| build.clone());
+    let path = root.to_string_lossy().into_owned();
+    let mut row = AppUpdate {
+        path: path.clone(),
+        name: root
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        bundle_id: text("CFBundleIdentifier").filter(|id| valid_bundle_id(id)),
+        installed_version: installed.clone(),
+        source: "none".into(),
+        state: "unknown".into(),
+        latest_version: None,
+        cask: None,
+        store_url: None,
+        reason: None,
+        checked_at: now,
+    };
+
+    if root.join("Contents/_MASReceipt/receipt").exists() {
+        row.source = "app_store".into();
+        row.state = "app_store".into();
+        row.store_url = store_url(root);
+        row.reason = Some("App Store apps update through the App Store.".into());
+        return row;
+    }
+
+    if let Some(snapshot) = brew
+        && let Some(token) = snapshot.owners.get(&path)
+    {
+        row.source = "homebrew".into();
+        row.cask = Some(token.clone());
+        match snapshot.outdated.get(token) {
+            Some(latest) => {
+                row.state = "available".into();
+                row.latest_version = Some(latest.clone());
+            }
+            None => row.state = "current".into(),
+        }
+        return row;
+    }
+
+    let Some(feed) = text("SUFeedURL") else {
+        row.reason = Some("This app declares no update feed.".into());
+        return row;
+    };
+    row.source = "sparkle".into();
+    if let Some(prior) = previous
+        && prior.source == "sparkle"
+        && prior.installed_version == installed
+        && prior.state != "unavailable"
+        && now - prior.checked_at < UPDATE_TTL_SECS
+    {
+        return prior.clone();
+    }
+    if !https_url(&feed) {
+        row.state = "unknown".into();
+        row.reason = Some("The update feed is not an HTTPS address.".into());
+        return row;
+    }
+    let xml = match fetch_appcast(&feed) {
+        Ok(xml) => xml,
+        Err(reason) => {
+            row.state = "unavailable".into();
+            row.reason = Some(reason);
+            return row;
+        }
+    };
+    let Some(candidates) = parse_appcast(&xml, macos_version().as_deref()) else {
+        row.state = "unknown".into();
+        row.reason = Some("The feed is not a Sparkle appcast Pulse can read.".into());
+        return row;
+    };
+    let Some(newest) = newest_candidate(candidates) else {
+        row.state = "unknown".into();
+        row.reason = Some("The feed lists no version for this Mac.".into());
+        return row;
+    };
+    row.latest_version = newest.short.clone().or_else(|| newest.version.clone());
+    match candidate_newer(&newest, short.as_deref(), build.as_deref()) {
+        Some(true) => row.state = "available".into(),
+        Some(false) => row.state = "current".into(),
+        None => {
+            row.state = "unknown".into();
+            row.reason = Some("The installed and feed versions cannot be compared.".into());
+        }
+    }
+    row
+}
+
+/// Checks every installed app for an update. Each row goes to `on_row` as it
+/// is known. Sparkle results and the Homebrew list are reused for six hours
+/// unless `force`. Only appcast XML and Homebrew's listings are read; nothing
+/// is downloaded for installation and nothing is installed here.
+pub fn check_updates(force: bool, on_row: &(dyn Fn(&AppUpdate) + Sync)) -> UpdateReport {
+    let now = now_epoch();
+    let cached = read_updates_cache();
+    let brew = match cached.brew {
+        Some(snapshot) if !force && now - snapshot.checked_at < UPDATE_TTL_SECS => Some(snapshot),
+        _ => brew_snapshot(),
+    };
+    let previous = cached.apps;
+    let paths = find_apps();
+    let next = AtomicUsize::new(0);
+    let rows = Mutex::new(Vec::<AppUpdate>::with_capacity(paths.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..UPDATE_WORKERS.min(paths.len()) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, AtomicOrdering::Relaxed);
+                    let Some(root) = paths.get(index) else {
+                        break;
+                    };
+                    let key = root.to_string_lossy().into_owned();
+                    let prior = if force { None } else { previous.get(&key) };
+                    let row = check_app(root, brew.as_ref(), prior, now);
+                    on_row(&row);
+                    lock(&rows).push(row);
+                }
+            });
+        }
+    });
+    let mut apps: Vec<AppUpdate> = rows
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    apps.sort_by(|a: &AppUpdate, b: &AppUpdate| {
+        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+    });
+    let cache = UpdatesCacheFile {
+        schema: UPDATES_CACHE_SCHEMA,
+        brew,
+        apps: apps
+            .iter()
+            .map(|row| (row.path.clone(), row.clone()))
+            .collect(),
+    };
+    write_updates_cache(&cache);
+    UpdateReport {
+        checked_at: Some(now),
+        apps,
+    }
+}
+
+/// What the Update button does for one app.
+pub enum UpdateAction {
+    /// `brew upgrade --cask <token>`, run by the caller in the background.
+    Homebrew { cask: String },
+    /// Open the app so that it offers its own update.
+    Sparkle,
+    /// Open the App Store, at the app's page when its id is known.
+    AppStore { url: Option<String> },
+}
+
+/// Decides the update action for one app from the same evidence the check uses.
+pub fn update_action(path: &str) -> Result<UpdateAction, String> {
+    let root = validate_app_path(path)?;
+    if root.join("Contents/_MASReceipt/receipt").exists() {
+        return Ok(UpdateAction::AppStore {
+            url: store_url(&root),
+        });
+    }
+    let key = root.to_string_lossy().into_owned();
+    let cached = read_updates_cache();
+    let brew = match cached.brew {
+        Some(snapshot) if now_epoch() - snapshot.checked_at < UPDATE_TTL_SECS => Some(snapshot),
+        _ => brew_snapshot(),
+    };
+    if let Some(snapshot) = brew.as_ref()
+        && let Some(token) = snapshot.owners.get(&key)
+    {
+        return if snapshot.outdated.contains_key(token) {
+            Ok(UpdateAction::Homebrew {
+                cask: token.clone(),
+            })
+        } else {
+            Err("Homebrew reports this app is already up to date.".into())
+        };
+    }
+    let plist = plist_json(&root.join("Contents/Info.plist"));
+    let has_feed = plist
+        .as_ref()
+        .and_then(|p| p.get("SUFeedURL"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|feed| https_url(feed.trim()));
+    if has_feed {
+        Ok(UpdateAction::Sparkle)
+    } else {
+        Err("This app has no update source Pulse can use.".into())
+    }
+}
+
+fn tail(text: &str) -> String {
+    let text = text.trim();
+    let count = text.chars().count();
+    if count <= 1500 {
+        text.to_string()
+    } else {
+        text.chars().skip(count - 1500).collect()
+    }
+}
+
+fn forget_brew_snapshot() {
+    let mut cache = read_updates_cache();
+    cache.brew = None;
+    write_updates_cache(&cache);
+}
+
+/// Runs `brew upgrade --cask <token>`. Homebrew downloads and installs; Pulse
+/// starts it and reports the outcome. The outdated list is then forgotten.
+pub fn homebrew_upgrade(token: &str) -> Result<String, String> {
+    if !valid_cask_token(token) {
+        return Err("Unrecognised cask name.".into());
+    }
+    let brew = brew_path().ok_or_else(|| "Homebrew is not available.".to_string())?;
+    let done = run_captured(
+        brew_command(&brew, &["upgrade", "--cask", token]),
+        Duration::from_secs(1800),
+        None,
+    )?;
+    forget_brew_snapshot();
+    let mut text = String::from_utf8_lossy(&done.stdout).into_owned();
+    if !done.stderr.is_empty() {
+        text.push('\n');
+        text.push_str(&done.stderr);
+    }
+    let message = tail(&text);
+    if done.ok { Ok(message) } else { Err(message) }
+}
+
+/// Opens an app so that it can offer its own update.
+pub fn open_app(path: &str) -> Result<(), String> {
+    let root = validate_app_path(path)?;
+    let mut command = Command::new("/usr/bin/open");
+    command.arg(&root);
+    run_with_timeout(command, Duration::from_secs(10)).map(|_| ())
+}
+
+/// Opens the App Store at one app's page, or at the App Store itself.
+pub fn open_store(url: Option<&str>) -> Result<(), String> {
+    let mut command = Command::new("/usr/bin/open");
+    match url {
+        Some(url) => match url.strip_prefix(STORE_PREFIX) {
+            Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => {
+                command.arg(url);
+            }
+            _ => return Err("Unrecognised App Store link.".into()),
+        },
+        None => {
+            command.args(["-a", "App Store"]);
+        }
+    }
+    run_with_timeout(command, Duration::from_secs(10)).map(|_| ())
 }

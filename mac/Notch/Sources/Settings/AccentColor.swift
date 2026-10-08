@@ -54,7 +54,9 @@ enum AccentColorChoice: String, CaseIterable, Identifiable {
 }
 
 private struct CodenotchAccentColorKey: EnvironmentKey {
-    static let defaultValue = Color(nsColor: .controlAccentColor)
+    // Views drawn outside the root view's environment (e.g. while the notch is
+    // dragged) fall back here, so this must match the app's default accent.
+    static let defaultValue = Palette.ample
 }
 
 extension EnvironmentValues {
