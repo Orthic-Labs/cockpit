@@ -1,4 +1,4 @@
-# Cockpit hub — design refresh proposal
+# Pulse hub — design refresh proposal
 
 Scope: the five hub screens inside the existing `@rightkit/app-shell` fused shell. Shell, navigation, fonts, icons, accent, window size, components and the Trash-with-confirm safety model are unchanged (see BRIEF.md, *Keep constant*). Mockups: `storage.html`, `cleanup.html`, `monitor.html`, `apps.html`, `settings.html`, each 900×600, dark by default, light via the sun/moon button in the sidebar foot.
 
@@ -79,7 +79,7 @@ Scope: the five hub screens inside the existing `@rightkit/app-shell` fused shel
 
 **Primary action.** None; toggles are the action. Nothing destructive lives here.
 
-**Removed or merged.** Helper status paragraph → badge. *Approve Cockpit…* long label → *Allow Cockpit in the background* row. Conveniences' *Last paste* diagnostic → hidden unless a failure (not drawn). Version line stays as an 11px foot.
+**Removed or merged.** Helper status paragraph → badge. *Approve Pulse…* long label → *Allow Pulse in the background* row. Conveniences' *Last paste* diagnostic → hidden unless a failure (not drawn). Version line stays as an 11px foot.
 
 ## Spacing, type and tokens
 

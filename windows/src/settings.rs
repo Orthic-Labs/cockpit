@@ -528,24 +528,6 @@ pub fn settings_paths() -> Result<SettingsPaths, StoreError> {
         return Err(StoreError::NoBaseDirectory);
     }
     let paths = paths_under(&base);
-    let legacy = base.join("Cockpit");
-    if !paths.dir.try_exists().map_err(|e| StoreError::Io("stat_pulse_dir", e))? {
-        match fs::symlink_metadata(&legacy) {
-            Ok(metadata) => {
-                if !metadata.is_dir() || is_reparse_attributes(metadata.file_attributes()) {
-                    return Err(StoreError::ReparsePoint("legacy_dir"));
-                }
-                // Windows cannot replace an existing directory with a rename.
-                if let Err(error) = fs::rename(&legacy, &paths.dir) {
-                    if !paths.dir.is_dir() {
-                        return Err(StoreError::Io("migrate_legacy_dir", error));
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(StoreError::Io("stat_legacy_dir", error)),
-        }
-    }
     Ok(paths)
 }
 

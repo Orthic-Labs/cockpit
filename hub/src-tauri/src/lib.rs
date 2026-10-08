@@ -334,7 +334,7 @@ pub fn run() {
     // QA launches (rightkit-qa) can only pass RIGHTKIT_* keys on macOS, so the isolated
     // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_PULSE_QA_HOME.
     #[cfg(all(debug_assertions, feature = "qa-native"))]
-    if let Some(home) = std::env::var_os("RIGHTKIT_PULSE_QA_HOME").or_else(|| std::env::var_os("RIGHTKIT_COCKPIT_QA_HOME")) {
+    if let Some(home) = std::env::var_os("RIGHTKIT_PULSE_QA_HOME") {
         std::env::set_var("HOME", home);
     }
     #[cfg(target_os = "macos")]

@@ -1,4 +1,4 @@
-**Cockpit hub refresh — adversarial re-review**
+**Pulse hub refresh — adversarial re-review**
 
 Reviewed `review.md`, original `BRIEF.md`, `proposal-v2.md` including v2.1, all five HTML files & relevant current view code. Shared CSS & JavaScript are identical across mocks except screen initialization; state menus differ. Browser inventory exposed no browser surface: findings below are source-derived, with no rendered-fit or native-interaction claim. “Resolved” means design/source remedy, not implementation acceptance.
 

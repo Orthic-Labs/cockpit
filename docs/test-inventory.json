@@ -482,7 +482,7 @@
         "count": 20
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/AccessibilityGeometryTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/AccessibilityGeometryTests.swift",
         "sha256": "d23136338161b46091dfd0f21e4b48cacdb39edf7854326b724012a97050e6e0",
         "declared_test_names": [
           "testElementRejectsNonAXUIElement",
@@ -494,7 +494,7 @@
         "count": 5
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/DashboardHostTests.swift",
         "sha256": "a04628442b64ed465cd5233e84327de17ee5d0906de7267d1bf183d324bc7021",
         "declared_test_names": [
           "testScanRequestArgvIsExplicitRootNoShell",
@@ -516,7 +516,7 @@
         "count": 15
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/MediaCompressionTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/MediaCompressionTests.swift",
         "sha256": "c5c33a52ab765e58c6e13d612529b3c6a95c3c5222e46a601311faa50ab755b3",
         "declared_test_names": [
           "testInvalidParametersAreRejectedWithoutEncoding",
@@ -528,7 +528,7 @@
         "count": 5
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
         "sha256": "32fc277ef3c6e80b2bfc0ff85c5d6e1578252c69cb567d24e650581cd01ebd34",
         "declared_test_names": [
           "testReviewApplyRestartUndoConflictAndAncestorProtection"
@@ -536,7 +536,7 @@
         "count": 1
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeStorageServicesTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/NativeStorageServicesTests.swift",
         "sha256": "d7e83608de915dd644d17b41a3358575ad583c12618b5699f79f18a0aecdf8e7",
         "declared_test_names": [
           "testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput"
@@ -544,7 +544,7 @@
         "count": 1
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillLifecycleTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillLifecycleTests.swift",
         "sha256": "85b28f2b82d3696b078af8e776203a97ea34c55fc0438195bd493f90f0d93856",
         "declared_test_names": [
           "testCPUNoPreviousIsUnavailable",
@@ -564,7 +564,7 @@
         "count": 13
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillRuntimeTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillRuntimeTests.swift",
         "sha256": "3ff6919b1518d5351759b160e5c040631fecae5f85472e3262d2e2bb864e5e62",
         "declared_test_names": [
           "testMonitorCapIsAnExplicitRefusal",
@@ -579,7 +579,7 @@
         "count": 8
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsStoreTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillSettingsStoreTests.swift",
         "sha256": "e5f4383197544545e61ec12ddfb317bcdafd423522d18143af468ed744a36f54",
         "declared_test_names": [
           "testPermissiveDirectoryIsRefusedAndUntouched",
@@ -602,7 +602,7 @@
         "count": 16
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillSettingsTests.swift",
         "sha256": "fef8650d76a548a92df4363c00142567ed9ce487b1a53d1b4ea25d24f338ef4d",
         "declared_test_names": [
           "testFullDocument",
@@ -635,7 +635,7 @@
         "count": 26
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityEdgeCasesTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/VisibilityEdgeCasesTests.swift",
         "sha256": "113249390bb926aeba8b743c89d3673cc18e256de62122c9afc35f398fd02619",
         "declared_test_names": [
           "testNegativeCoordinatesCover",
@@ -650,7 +650,7 @@
         "count": 8
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityGeometryTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/VisibilityGeometryTests.swift",
         "sha256": "f37878f7e12614f5d6d4ce26247ee33aaee618175d776c96767d1540eb6b597c",
         "declared_test_names": [
           "testCoverageRequiresCompleteMonitor",
@@ -1371,7 +1371,7 @@
         "count": 20
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/AccessibilityGeometryTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/AccessibilityGeometryTests.swift",
         "sha256": "d23136338161b46091dfd0f21e4b48cacdb39edf7854326b724012a97050e6e0",
         "declared_test_names": [
           "testElementRejectsNonAXUIElement",
@@ -1383,7 +1383,7 @@
         "count": 5
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostE2ETests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/DashboardHostE2ETests.swift",
         "sha256": "0fee31afaaf91794db257d10e7c2a0c13c1ded5eaac88280ee473c2a72ef0a37",
         "declared_test_names": [
           "testPackagedDashboardScansFixtureThroughNativeHostAndRetainsResults"
@@ -1391,7 +1391,7 @@
         "count": 1
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/DashboardHostTests.swift",
         "sha256": "a04628442b64ed465cd5233e84327de17ee5d0906de7267d1bf183d324bc7021",
         "declared_test_names": [
           "testScanRequestArgvIsExplicitRootNoShell",
@@ -1413,7 +1413,7 @@
         "count": 15
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/MediaCompressionTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/MediaCompressionTests.swift",
         "sha256": "d3bb261f3b7ed5c1c22a0cbbf0b8ec931fc7d76e3f31f398c70c51b2e3f3a6fd",
         "declared_test_names": [
           "testInvalidParametersAreRejectedWithoutEncoding",
@@ -1425,7 +1425,7 @@
         "count": 5
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/NativeCleanupJourneyTests.swift",
         "sha256": "b15eb90f97c71f4c596a9581c62e27834897d862d15c6be5481474a522167933",
         "declared_test_names": [
           "testReviewApplyRestartUndoConflictAndAncestorProtection"
@@ -1433,7 +1433,7 @@
         "count": 1
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/NativeStorageServicesTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/NativeStorageServicesTests.swift",
         "sha256": "8ca32caf55de4b27c844c21f76707bf636a422295dd598093a8c8de836604840",
         "declared_test_names": [
           "testNativeCompressionJourneyPersistsActivityAndProtectsExistingOutput"
@@ -1441,7 +1441,7 @@
         "count": 1
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillLifecycleTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillLifecycleTests.swift",
         "sha256": "85b28f2b82d3696b078af8e776203a97ea34c55fc0438195bd493f90f0d93856",
         "declared_test_names": [
           "testCPUNoPreviousIsUnavailable",
@@ -1461,7 +1461,7 @@
         "count": 13
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillRuntimeTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillRuntimeTests.swift",
         "sha256": "3ff6919b1518d5351759b160e5c040631fecae5f85472e3262d2e2bb864e5e62",
         "declared_test_names": [
           "testMonitorCapIsAnExplicitRefusal",
@@ -1476,7 +1476,7 @@
         "count": 8
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsStoreTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillSettingsStoreTests.swift",
         "sha256": "e5f4383197544545e61ec12ddfb317bcdafd423522d18143af468ed744a36f54",
         "declared_test_names": [
           "testPermissiveDirectoryIsRefusedAndUntouched",
@@ -1499,7 +1499,7 @@
         "count": 16
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/PillSettingsTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/PillSettingsTests.swift",
         "sha256": "fef8650d76a548a92df4363c00142567ed9ce487b1a53d1b4ea25d24f338ef4d",
         "declared_test_names": [
           "testFullDocument",
@@ -1532,7 +1532,7 @@
         "count": 26
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityEdgeCasesTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/VisibilityEdgeCasesTests.swift",
         "sha256": "113249390bb926aeba8b743c89d3673cc18e256de62122c9afc35f398fd02619",
         "declared_test_names": [
           "testNegativeCoordinatesCover",
@@ -1547,7 +1547,7 @@
         "count": 8
       },
       {
-        "file": "mac/Tests/CockpitMacPrototypeCoreTests/VisibilityGeometryTests.swift",
+        "file": "mac/Tests/PulseMacPrototypeCoreTests/VisibilityGeometryTests.swift",
         "sha256": "f37878f7e12614f5d6d4ce26247ee33aaee618175d776c96767d1540eb6b597c",
         "declared_test_names": [
           "testCoverageRequiresCompleteMonitor",
@@ -1756,7 +1756,7 @@
     "accepted_deleted_declarations": 0,
     "completed_replacements": 0,
     "added_declarations": {
-      "mac/Tests/CockpitMacPrototypeCoreTests/DashboardHostE2ETests.swift": [
+      "mac/Tests/PulseMacPrototypeCoreTests/DashboardHostE2ETests.swift": [
         "testPackagedDashboardScansFixtureThroughNativeHostAndRetainsResults"
       ]
     },

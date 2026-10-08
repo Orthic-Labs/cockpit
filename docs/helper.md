@@ -34,4 +34,4 @@ Registration, approval, the signing identifiers and whether a root daemon may re
 
 ## Rename migration
 
-First Pulse launch attempts to unregister `dev.orthic.cockpit.helper` best-effort, retrying on later launches if needed. Pulse never registers its replacement during migration. Hub shows “Off after rename”; switch Uninstall without password on again & approve Pulse in Login Items. Signing team remains `6KLGD3LLKF`. See [identifier migration](rename-pulse.md).
+First Pulse launch attempts to unregister the legacy helper registration best-effort, retrying on later launches if needed. Pulse never registers its replacement during migration. Hub shows “Off after rename”; switch Uninstall without password on again & approve Pulse in Login Items. Signing team remains `6KLGD3LLKF`. See [upgrading](mac-app-delivery.md#upgrading).

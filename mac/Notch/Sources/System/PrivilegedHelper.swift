@@ -13,7 +13,7 @@ enum PrivilegedHelper {
     static func retireLegacyRegistration() {
         guard !UserDefaults.standard.bool(forKey: "pulseLegacyHelperRetired") else { return }
         do {
-            try SMAppService.daemon(plistName: "dev.orthic.cockpit.helper.plist").unregister()
+            try SMAppService.daemon(plistName: LegacyProductNames.helperPlist).unregister()
             UserDefaults.standard.set(true, forKey: "pulseLegacyHelperRetired")
         } catch {
             Log.usage.notice("legacy helper unregister did not complete; will retry next launch")

@@ -1,4 +1,4 @@
-# Adversarial review brief — Cockpit hub design refresh
+# Adversarial review brief — Pulse hub design refresh
 
 Review the proposed design refresh adversarially. Assume it has real flaws and find them. Do not rewrite the design; judge it.
 

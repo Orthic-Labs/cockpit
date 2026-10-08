@@ -4,10 +4,6 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 const env = { ...process.env };
-// Legacy overrides remain usable; Pulse always takes precedence.
-for (const [key, value] of Object.entries(process.env)) {
-  if (key.startsWith('COCKPIT_')) env[key.replace(/^COCKPIT_/, 'PULSE_')] ??= value;
-}
 if (env.GITHUB_ACTIONS !== 'true') throw new Error('Release execution requires generated hosted CI');
 const action = process.argv[2];
 const run = (cmd, args, options={}) => {

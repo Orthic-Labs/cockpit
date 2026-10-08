@@ -398,7 +398,7 @@ fn rss_mb() -> Option<u64> {
 /// One line per scan in `~/Library/Application Support/Pulse/scan.log` (and
 /// on stderr when `PULSE_SCAN_LOG` is set), so scan cost can be compared.
 pub(crate) fn log(line: &str) {
-    if std::env::var_os("PULSE_SCAN_LOG").or_else(|| std::env::var_os("COCKPIT_SCAN_LOG")).is_some() {
+    if std::env::var_os("PULSE_SCAN_LOG").is_some() {
         eprintln!("{line}");
     }
     let dir = home().join("Library/Application Support/Pulse");

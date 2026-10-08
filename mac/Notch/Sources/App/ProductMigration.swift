@@ -1,35 +1,49 @@
 import AppKit
 import Darwin
 
+/// Legacy identifiers, migration only. Nothing else in Pulse names them, except
+/// PrivilegedHelper's retirement of the legacy launch daemon.
+enum LegacyProductNames {
+    // legacy name, migration only
+    static let domain = "dev.orthic.cockpit"
+    // legacy name, migration only
+    static let supportFolder = "Cockpit"
+    // legacy name, migration only
+    static let hubDomain = "dev.orthic.cockpit.hub"
+    // legacy name, migration only
+    static let loginItemKey = "cockpitLoginItemDefaulted"
+    // legacy name, migration only
+    static let helperPlist = "dev.orthic.cockpit.helper.plist"
+}
+
 /// Runs before preferences, bridge state or usage archives can be written.
 @MainActor
 enum ProductMigration {
     static let domain = "dev.orthic.pulse"
-    private static let legacyDomain = "dev.orthic.cockpit"
 
     static func run() throws {
         let defaults = UserDefaults.standard
-        let old = defaults.persistentDomain(forName: legacyDomain) ?? [:]
+        let old = defaults.persistentDomain(forName: LegacyProductNames.domain) ?? [:]
         let support = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support", isDirectory: true)
-        let legacy = support.appendingPathComponent("Cockpit", isDirectory: true)
+        let legacy = support.appendingPathComponent(LegacyProductNames.supportFolder, isDirectory: true)
         let hadLegacyState = FileManager.default.fileExists(atPath: legacy.path) || !old.isEmpty
 
         try moveDirectory(legacy, to: support.appendingPathComponent("Pulse", isDirectory: true))
         // Preserve the hub's native data & WKWebView storage before launching it.
         for parent in ["Library/Application Support", "Library/Caches", "Library/WebKit"] {
             let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(parent)
-            try moveDirectory(root.appendingPathComponent("dev.orthic.cockpit.hub"),
+            try moveDirectory(root.appendingPathComponent(LegacyProductNames.hubDomain),
                               to: root.appendingPathComponent("dev.orthic.pulse.hub"))
         }
-        copyDomain(legacyDomain, to: domain)
-        copyDomain("dev.orthic.cockpit.hub", to: "dev.orthic.pulse.hub")
+        copyDomain(LegacyProductNames.domain, to: domain)
+        copyDomain(LegacyProductNames.hubDomain, to: "dev.orthic.pulse.hub")
         if (defaults.persistentDomain(forName: domain) ?? [:]).isEmpty {
             Preferences.migrateFromPreviousName()
         }
         // Keep every original key; also translate the renamed login-item sentinel.
         if defaults.object(forKey: "pulseLoginItemDefaulted") == nil,
-           let value = defaults.object(forKey: "cockpitLoginItemDefaulted") {
+           let value = defaults.object(forKey: LegacyProductNames.loginItemKey) {
             defaults.set(value, forKey: "pulseLoginItemDefaulted")
         }
         if hadLegacyState && !defaults.bool(forKey: "pulseHelperRenameHandled") {

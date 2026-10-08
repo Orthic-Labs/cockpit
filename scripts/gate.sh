@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Accept legacy user/CI overrides without replacing explicit Pulse values.
-for pulse_legacy_key in ${!COCKPIT_@}; do
-  pulse_current_key="PULSE_${pulse_legacy_key#COCKPIT_}"
-  if [[ -z "${!pulse_current_key+x}" ]]; then
-    export "$pulse_current_key=${!pulse_legacy_key}"
-  fi
-done
 if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
   echo "Pulse compilation & tests run in GitHub Actions. Local work is static-only." >&2
   exit 2

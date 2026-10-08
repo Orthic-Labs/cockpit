@@ -29,7 +29,9 @@ struct Section {
     settings: bool,
 }
 
-const SECTIONS: [Section; 8] = [
+// Overview is the section the hub opens on.
+const SECTIONS: [Section; 9] = [
+    Section { id: "overview", title: "Overview", settings: false },
     Section { id: "storage", title: "Storage", settings: false },
     Section { id: "cleanup", title: "Cleanup", settings: false },
     Section { id: "monitor", title: "Monitor", settings: false },
@@ -59,7 +61,7 @@ fn wait_text(ctl: &Control, needle: &str, timeout: Duration, what: &str) {
 }
 
 fn hub_binary() -> PathBuf {
-    if let Some(p) = std::env::var_os("PULSE_HUB_BIN").or_else(|| std::env::var_os("COCKPIT_HUB_BIN")) {
+    if let Some(p) = std::env::var_os("PULSE_HUB_BIN") {
         return PathBuf::from(p);
     }
     let target = std::env::var_os("CARGO_TARGET_DIR")
@@ -82,7 +84,7 @@ fn hub_sections_render_without_errors() {
         std::fs::create_dir_all(home.join(FIXTURE)).expect("fixture dir");
         std::fs::write(home.join(FIXTURE).join("fixture.bin"), vec![0u8; 65536]).expect("fixture file");
 
-        let shots: PathBuf = std::env::var_os("PULSE_QA_SHOTS").or_else(|| std::env::var_os("COCKPIT_QA_SHOTS"))
+        let shots: PathBuf = std::env::var_os("PULSE_QA_SHOTS")
             .map(PathBuf::from)
             .unwrap_or_else(|| sc.scratch("screenshots"));
         std::fs::create_dir_all(&shots).expect("screenshots dir");
@@ -100,7 +102,7 @@ fn hub_sections_render_without_errors() {
 
         for (index, sec) in SECTIONS.iter().enumerate() {
             if index > 0 {
-                // A DOM click on the nav item (Storage is the initial section).
+                // A DOM click on the nav item (Overview is the initial section).
                 let js = format!(
                     "const b=[...document.querySelectorAll('nav.rk-nav button')].find(e=>e.textContent.trim()==={}); if(!b) return false; b.click(); return true;",
                     json!(sec.title)

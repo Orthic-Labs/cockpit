@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 //
-// Cockpit: adapted from Vorssaint's DiskImageInstallerService (GPL-3.0-or-later),
+// Pulse: adapted from Vorssaint's DiskImageInstallerService (GPL-3.0-or-later),
 // see mac/Notch/FORK.md. The identity checks, collision handling, staged copy,
 // Gatekeeper assessment and failure outcomes are Vorssaint's. The prompt is
 // replaced: Vorssaint's NSAlert with options becomes a small non-modal card
 // at the top of the screen (no Dock icon, no activation), and the options
-// are Cockpit preferences instead of checkboxes. Installs go to /Applications.
+// are Pulse preferences instead of checkboxes. Installs go to /Applications.
 
 import AppKit
 import Combine

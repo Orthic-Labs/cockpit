@@ -2,13 +2,6 @@
 # CI-only: detach and remove exactly what the state file names, after verification.
 # Usage: teardown.sh [STATE_FILE]   (defaults to $PULSE_APFS_FIXTURE_STATE)
 set -euo pipefail
-# Accept legacy user/CI overrides without replacing explicit Pulse values.
-for pulse_legacy_key in ${!COCKPIT_@}; do
-  pulse_current_key="PULSE_${pulse_legacy_key#COCKPIT_}"
-  if [[ -z "${!pulse_current_key+x}" ]]; then
-    export "$pulse_current_key=${!pulse_legacy_key}"
-  fi
-done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"

@@ -1,5 +1,5 @@
 //! Preserve rename-era state without merging or replacing an existing destination.
-use std::{fs, io, path::Path};
+use std::{fs, io, path::{Path, PathBuf}};
 
 /// Move a legacy directory once. Both names existing means Pulse wins; the legacy
 /// directory stays untouched. Failed moves are returned before callers create state.
@@ -71,11 +71,29 @@ fn rename_exclusive(_legacy: &Path, _destination: &Path) -> io::Result<()> {
     ))
 }
 
+/// Legacy metadata directory beside `root`; migration only.
+pub fn legacy_metadata_dir(root: &Path) -> PathBuf {
+    // legacy name, migration only
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let name = "Cockpit";
+    // legacy name, migration only
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let name = "cockpit";
+    root.with_file_name(name)
+}
+
+// legacy name, migration only
+#[cfg(target_os = "macos")]
+const LEGACY_MAC_SUPPORT_FOLDER: &str = "Cockpit";
+// legacy name, migration only
+#[cfg(target_os = "macos")]
+const LEGACY_HUB_FOLDER: &str = "dev.orthic.cockpit.hub";
+
 /// Shared Mac state plus native hub data, cache & WebKit storage.
 #[cfg(target_os = "macos")]
 pub fn migrate_mac_state(home: &Path) -> io::Result<()> {
     migrate_directory(
-        &home.join("Library/Application Support/Cockpit"),
+        &home.join("Library/Application Support").join(LEGACY_MAC_SUPPORT_FOLDER),
         &home.join("Library/Application Support/Pulse"),
     )?;
     for parent in [
@@ -84,7 +102,7 @@ pub fn migrate_mac_state(home: &Path) -> io::Result<()> {
         "Library/WebKit",
     ] {
         migrate_directory(
-            &home.join(parent).join("dev.orthic.cockpit.hub"),
+            &home.join(parent).join(LEGACY_HUB_FOLDER),
             &home.join(parent).join("dev.orthic.pulse.hub"),
         )?;
     }

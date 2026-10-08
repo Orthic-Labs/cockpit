@@ -65,9 +65,9 @@ async function copyTree(source, target, label) {
 function sourcePaths() {
   const temp = process.env.RUNNER_TEMP || '/tmp';
   return {
-    notch: process.env.PULSE_NOTCH_APP || process.env.COCKPIT_NOTCH_APP || join(temp, 'pulse-notch', 'Build', 'Products', 'Release', appName),
-    helper: process.env.PULSE_CLI_BINARY || process.env.COCKPIT_CLI_BINARY || join(repoRoot, 'target', 'release', 'pulse'),
-    hub: process.env.PULSE_HUB_APP || process.env.COCKPIT_HUB_APP || join(repoRoot, 'hub', 'src-tauri', 'target', 'release', 'bundle', 'macos', 'Pulse.app')
+    notch: process.env.PULSE_NOTCH_APP || join(temp, 'pulse-notch', 'Build', 'Products', 'Release', appName),
+    helper: process.env.PULSE_CLI_BINARY || join(repoRoot, 'target', 'release', 'pulse'),
+    hub: process.env.PULSE_HUB_APP || join(repoRoot, 'hub', 'src-tauri', 'target', 'release', 'bundle', 'macos', 'Pulse.app')
   };
 }
 

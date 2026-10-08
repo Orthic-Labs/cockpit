@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 //
-// Cockpit: ported unchanged from Vorssaint's DiskImageInstaller service
+// Pulse: ported unchanged from Vorssaint's DiskImageInstaller service
 // (GPL-3.0-or-later), see mac/Notch/FORK.md.
 
 import Foundation

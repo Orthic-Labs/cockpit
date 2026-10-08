@@ -1,4 +1,4 @@
-# Cockpit hub refresh v2
+# Pulse hub refresh v2
 
 Supersedes proposal.md. BRIEF.md’s Keep-constant list binds: fused RightKit shell, fixed 170px sidebar, eight sections/two groups, native traffic lights, Tanker titles/wordmark, system body at 13px, lucide 1.75, #0a84ff, existing library components, confirmed reversible Trash moves & separate confirmed Force Quit. `hub/package.json` now pins app-shell **0.2.1**.
 

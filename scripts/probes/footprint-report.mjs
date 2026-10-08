@@ -179,7 +179,7 @@ export function parseProbeOutput(stdout, expectedPid) {
     return fail("malformed", "probe_json_invalid");
   }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return fail("malformed", "probe_json_not_object");
-  if (doc.schema_version !== 1 || !["pulse.probe.sample", "cockpit.probe.sample"].includes(doc.kind)) return fail("malformed", "probe_schema_unrecognised");
+  if (doc.schema_version !== 1 || !["pulse.probe.sample"].includes(doc.kind)) return fail("malformed", "probe_schema_unrecognised");
   if (doc.pid !== expectedPid) return fail("malformed", "probe_pid_mismatch");
   if (doc.status === "vanished") return fail("vanished", "probe_process_vanished");
   if (doc.status === "pid_reused") return fail("pid_reused", "start_time_changed_during_sample");

@@ -153,10 +153,7 @@ pub fn default_directory() -> io::Result<PathBuf> {
             "local metadata directory unavailable",
         )
     })?;
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    let legacy = root.with_file_name("Cockpit");
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let legacy = root.with_file_name("cockpit");
+    let legacy = crate::state_migration::legacy_metadata_dir(&root);
     crate::state_migration::migrate_directory(&legacy, &root)?;
     Ok(root)
 }

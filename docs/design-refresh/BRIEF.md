@@ -1,8 +1,8 @@
-# Design refresh brief — Cockpit hub
+# Design refresh brief — Pulse hub
 
-You are proposing an intuitive design refresh of the **Cockpit hub**: the small window the notch opens. Your output is a proposal and mockups, not app code.
+You are proposing an intuitive design refresh of the **Pulse hub**: the small window the notch opens. Your output is a proposal and mockups, not app code.
 
-## What Cockpit is
+## What Pulse is
 
 A personal Mac utility. A **notch** on the right screen edge (Swift, a Codenotch fork) shows always-on rings: Codex usage, Claude usage, System (memory outer, CPU inner), Disks (external outer, internal inner), with hover cards. Clicking it opens the **hub** (Tauri 2 + React, `hub/src`), which has:
 

@@ -1,4 +1,4 @@
-# Cockpit hub design refresh — adversarial review
+# Pulse hub design refresh — adversarial review
 
 **Verdict: ship with fixes.** Direction is sound, implementation brief is not ready. Stronger grouping, restrained surfaces & clearer selection improve today’s utility UI, but this is only partly minimal: Storage compresses two competing workspaces, Monitor adds dashboard rings without answering what needs attention, & destructive actions become harder to discover. It can look credible in 2026 without imitating Liquid Glass. As proposed, it fails reversible-cleanup safety, accessible contrast & minimum-window support; Windows requires explicit platform adaptations. Keep overall structure, resolve blockers & major findings before implementation approval.
 
@@ -6,7 +6,7 @@
 
 Reviewed both briefs, proposal, all five HTML/CSS/JS mockups, current React views, `App.tsx`, `styles.css`, API types, chart mapping & cleanup rules. Browser opening failed because no browser surface was available; geometry below is source-derived, not screenshot-verified. Inspected both supplied PNGs: `hub-now.png` is blank chrome; `monitor.png` shows older disk gauges absent from current `Monitor.tsx`. Neither establishes current five-screen visual coverage.
 
-Against useful category benchmarks, proposal improves grouping but falls short on interaction clarity: [DaisyDisk](https://daisydiskapp.com/) distinguishes physical usage from clone sizes; [TreeSize](https://www.jam-software.com/treesize) combines recognizable folder navigation with size comparison; [Raycast](https://www.raycast.com/) makes keyboard access central. Those are relevant standards, not reasons to copy their appearance. Cockpit’s tiny explorer, hidden actions & unexplained measurements undermine comparable confidence.
+Against useful category benchmarks, proposal improves grouping but falls short on interaction clarity: [DaisyDisk](https://daisydiskapp.com/) distinguishes physical usage from clone sizes; [TreeSize](https://www.jam-software.com/treesize) combines recognizable folder navigation with size comparison; [Raycast](https://www.raycast.com/) makes keyboard access central. Those are relevant standards, not reasons to copy their appearance. Pulse’s tiny explorer, hidden actions & unexplained measurements undermine comparable confidence.
 
 For requested macOS 26 baseline, Apple explicitly retains rounded rectangles for compact desktop controls; Liquid Glass separates functional controls from content. Solid content cards are therefore reasonable. Windows Fluent similarly gives materials specific jobs: Mica underlies windows; Acrylic serves transient surfaces. Lack of blur is **not** this proposal’s problem. Legibility, hierarchy, platform behavior & honest state are. [Apple design system](https://developer.apple.com/videos/play/wwdc2025/356/), [Windows materials](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/materials).
 
