@@ -551,7 +551,7 @@ impl Service {
 
     /// Forget a finished transfer.
     pub fn dismiss(&self, transfer_id: &str) {
-        lock(&self.inner.transfers).retain(|t| !(t.id == transfer_id && !t.is_open()));
+        lock(&self.inner.transfers).retain(|t| t.id != transfer_id || t.is_open());
         self.inner.emit(Event::Changed);
     }
 

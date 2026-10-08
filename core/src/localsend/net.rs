@@ -518,6 +518,7 @@ pub fn call(
 }
 
 /// One small request with an optional JSON body, on a fresh connection.
+#[allow(clippy::too_many_arguments)]
 pub fn request_json(
     ip: IpAddr,
     port: u16,
