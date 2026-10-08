@@ -8,7 +8,7 @@ use pulse_core::localsend::{Config, Service, net};
 use serde_json::json;
 use std::io::Write;
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,13 +16,13 @@ fn temp(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pulse-localsend-{name}-{}", proto::random_hex(4)))
 }
 
-fn start(port: u16, save: &PathBuf, state: &PathBuf) -> Arc<Service> {
+fn start(port: u16, save: &Path, state: &Path) -> Arc<Service> {
     let config = Config {
         alias: "Test Mac (Pulse)".into(),
         port,
-        save_dir: save.clone(),
+        save_dir: save.to_path_buf(),
         accept_known: false,
-        state_dir: state.clone(),
+        state_dir: state.to_path_buf(),
         device_model: "Mac".into(),
     };
     Arc::new(Service::start(config, Arc::new(|_| {})).expect("service starts"))
