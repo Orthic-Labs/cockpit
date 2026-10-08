@@ -215,8 +215,21 @@ async function packageMac({ local = false } = {}) {
   await mkdir(dirname(paths.output), { recursive: true });
   const specification = JSON.parse(await readFile(join(releaseRoot, 'appdmg.json'), 'utf8'));
   specification['code-sign'] = { 'signing-identity': identity, identifier: 'dev.orthic.pulse.dmg' };
-  const builder = appdmg({ target: paths.output, basepath: stagingRoot, specification });
-  await once(builder, 'finish');
+  // macOS 27 runners intermittently report "Resource busy" when appdmg detaches
+  // its working image; free the mount and rebuild the image from scratch.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const builder = appdmg({ target: paths.output, basepath: stagingRoot, specification });
+      await once(builder, 'finish');
+      break;
+    } catch (error) {
+      if (attempt >= 3 || !/hdiutil detach/.test(String(error?.message ?? error))) throw error;
+      console.warn(`[pulse mac payload] dmg attempt ${attempt} failed to detach; retrying`);
+      await new Promise(done => spawn('/usr/bin/hdiutil', ['detach', '-force', `/Volumes/${specification.title}`], { stdio: 'ignore' }).once('exit', done));
+      await rm(paths.output, { force: true });
+      await new Promise(done => setTimeout(done, 3000 * attempt));
+    }
+  }
   console.log(`[pulse mac payload] package: ${paths.output}`);
 }
 
