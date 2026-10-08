@@ -443,6 +443,8 @@ function ConveniencesGroup({ c, s, set, onNavigate }: {
         "When a disk image holding an app mounts, the notch installs it to Applications and ejects the image, or asks first. Needs no permission.")}
       {Boolean(s.convDiskImageInstaller) && toggle("convDiskImageAuto", "Install apps from disk images automatically",
         "Only signed, notarized apps that aren't installed yet; others ask in the notch.")}
+      {Boolean(s.convDiskImageInstaller) && toggle("convDiskImageAutoUpdate", "Also update apps that are already installed",
+        "Replaces an older installed version; Undo restores it from the Trash.")}
       {Boolean(s.convDiskImageInstaller) && toggle("convDiskImageTrashDownload", "Move the downloaded disk image to the Trash",
         "After a successful install, the .dmg you opened goes to the Trash. Off by default.")}
       {toggle("convAutoQuit", "Auto Quit",

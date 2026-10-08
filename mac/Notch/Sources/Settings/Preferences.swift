@@ -215,6 +215,12 @@ final class Preferences: ObservableObject {
     @Published var convDiskImageAuto: Bool {
         didSet { defaults.set(convDiskImageAuto, forKey: Keys.convDiskImageAuto) }
     }
+    /// Also replace an installed copy with a lower version, with no prompt, when
+    /// the image's app is signed, notarized, not running and the same bundle id
+    /// (off by default). Undo restores the old copy from the Trash.
+    @Published var convDiskImageAutoUpdate: Bool {
+        didSet { defaults.set(convDiskImageAutoUpdate, forKey: Keys.convDiskImageAutoUpdate) }
+    }
     @Published var convDiskImageTrashDownload: Bool {
         didSet { defaults.set(convDiskImageTrashDownload, forKey: Keys.convDiskImageTrashDownload) }
     }
@@ -479,6 +485,7 @@ final class Preferences: ObservableObject {
         static let convDiskImageInstaller = "convDiskImageInstaller"
         static let convDiskImageTrashDownload = "convDiskImageTrashDownload"
         static let convDiskImageAuto = "convDiskImageAuto"
+        static let convDiskImageAutoUpdate = "convDiskImageAutoUpdate"
         static let launcherEnabled = "launcherEnabled"
         static let launcherHotkey = "launcherHotkey"
         static let launcherConfig = "launcherConfig"
@@ -674,6 +681,7 @@ final class Preferences: ObservableObject {
         self.convDiskImageInstaller = defaults.object(forKey: Keys.convDiskImageInstaller) as? Bool ?? true
         self.convDiskImageTrashDownload = defaults.bool(forKey: Keys.convDiskImageTrashDownload)
         self.convDiskImageAuto = defaults.object(forKey: Keys.convDiskImageAuto) as? Bool ?? true
+        self.convDiskImageAutoUpdate = defaults.bool(forKey: Keys.convDiskImageAutoUpdate)
         self.convAutoQuitApps = defaults.stringArray(forKey: Keys.convAutoQuitApps) ?? []
         self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)
         self.launcherHotkey = defaults.string(forKey: Keys.launcherHotkey)

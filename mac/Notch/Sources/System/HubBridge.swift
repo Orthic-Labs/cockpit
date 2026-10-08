@@ -412,6 +412,7 @@ final class HubBridge {
         "convAutoQuit": bool(\.convAutoQuit),
         "convDiskImageInstaller": bool(\.convDiskImageInstaller),
         "convDiskImageAuto": bool(\.convDiskImageAuto),
+        "convDiskImageAutoUpdate": bool(\.convDiskImageAutoUpdate),
         "convDiskImageTrashDownload": bool(\.convDiskImageTrashDownload),
         "convAutoQuitApps": stringList(\.convAutoQuitApps),
         "launcherEnabled": bool(\.launcherEnabled),

@@ -7,7 +7,8 @@
 // replaced: Vorssaint's NSAlert with options becomes cards in the notch
 // (`DiskImageCard`), and the options are Pulse preferences instead of
 // checkboxes. Installs go to /Applications. Pulse adds the automatic path
-// (signed, notarized, not installed, not running), Undo, and Replace.
+// (signed, notarized, not installed, not running), the automatic update of an
+// older installed copy (`convDiskImageAutoUpdate`), Undo, and Replace.
 
 import AppKit
 import Darwin
@@ -18,7 +19,10 @@ import Foundation
 ///
 /// A signed, notarized app that is not installed and not running goes in
 /// without a prompt (when `convDiskImageAuto` is on) and the notch says so,
-/// with Undo. Everything else is asked in the notch.
+/// with Undo. With `convDiskImageAutoUpdate` on, a signed, notarized app with
+/// the same bundle id as an older, idle installed copy replaces it the same
+/// way ("Updated <App> to <version>", with Undo). Everything else is asked in
+/// the notch.
 @MainActor
 final class DiskImageInstaller {
     /// Shows a card on the notch(es), or clears it with nil. Returns whether
@@ -43,6 +47,8 @@ final class DiskImageInstaller {
         let destinationURL: URL
         let bundleID: String?
         let name: String
+        /// Old copies an automatic update moved to the Trash; empty for a fresh install.
+        let replaced: [DiskImageTrashedCopy]
     }
 
     init(preferences: Preferences) {
@@ -112,9 +118,15 @@ final class DiskImageInstaller {
         guard current == nil, !installing, !resultShowing, mountObserver != nil, !pending.isEmpty else { return }
         let finding = pending.removeFirst()
         current = finding
-        if case let .app(candidate) = finding, isAutomatic(candidate) {
-            runInstall(candidate, replace: false, automatic: true)
-            return
+        if case let .app(candidate) = finding {
+            if isAutomatic(candidate) {
+                runInstall(candidate, replace: false, automatic: true)
+                return
+            }
+            if isAutomaticUpdate(candidate) {
+                runInstall(candidate, replace: true, automatic: true)
+                return
+            }
         }
         guard show(offer(for: finding)) else {
             // No notch can show the question (hidden): leave the image alone.
@@ -132,6 +144,31 @@ final class DiskImageInstaller {
             && candidate.bundleID != nil
             && candidate.installedURL == nil
             && runningCopies(of: candidate.bundleID).isEmpty
+    }
+
+    /// Opt-in: the same bundle id is installed at a LOWER version, the copy is
+    /// not running, the image's app is signed and notarized, and the install
+    /// would only ever replace that app (the name in /Applications, if taken,
+    /// holds the same bundle id). Anything else is asked in the notch.
+    private func isAutomaticUpdate(_ candidate: DiskImageCandidate) -> Bool {
+        guard preferences.convDiskImageAutoUpdate,
+              candidate.trusted,
+              let bundleID = candidate.bundleID,
+              candidate.installedURL != nil,
+              let installed = candidate.installedVersion,
+              candidate.installedBundleID?.caseInsensitiveCompare(bundleID) == .orderedSame,
+              installed.isOlder(than: candidate.newVersion),
+              runningCopies(of: bundleID).isEmpty
+        else { return false }
+        let fm = FileManager.default
+        guard let destination = DiskImageInstallerSupport.collisionURLs(
+            for: candidate.appURL, useUserApplications: false, fileManager: fm)?.first
+        else { return false }
+        if fm.fileExists(atPath: destination.path),
+           Bundle(url: destination)?.bundleIdentifier?.caseInsensitiveCompare(bundleID) != .orderedSame {
+            return false
+        }
+        return true
     }
 
     private func runningCopies(of bundleID: String?) -> [NSRunningApplication] {
@@ -232,11 +269,12 @@ final class DiskImageInstaller {
             let result = await Task.detached(priority: .utility) {
                 DiskImageInstallWork.install(candidate, trashingDownload: trash, replacing: replace)
             }.value
-            showResult(result, candidate: candidate, replaced: replace)
+            showResult(result, candidate: candidate, replaced: replace, automatic: automatic)
         }
     }
 
-    private func showResult(_ result: DiskImageInstallResult, candidate: DiskImageCandidate, replaced: Bool) {
+    private func showResult(_ result: DiskImageInstallResult, candidate: DiskImageCandidate,
+                            replaced: Bool, automatic: Bool) {
         let name = candidate.displayName
         var detail: String
         var warning = false
@@ -262,17 +300,28 @@ final class DiskImageInstaller {
             return
         }
         let destination = result.destinationURL
-        if !replaced, let destination {
-            lastInstall = InstalledRecord(destinationURL: destination, bundleID: candidate.bundleID, name: name)
+        let updated = replaced && automatic
+        // A fresh install and an automatic update can be undone; a manual Replace stands.
+        let undoable = updated ? !result.replaced.isEmpty : !replaced
+        if undoable, let destination {
+            lastInstall = InstalledRecord(destinationURL: destination, bundleID: candidate.bundleID,
+                                          name: name, replaced: updated ? result.replaced : [])
         }
         installing = false
         resultShowing = true
+        let title: String
+        if updated {
+            let version = candidate.newVersion.display ?? ""
+            title = version.isEmpty ? L10n.t("Updated \(name)") : L10n.t("Updated \(name) to \(version)")
+        } else {
+            title = replaced ? L10n.t("Replaced \(name)") : L10n.t("Installed \(name)")
+        }
         let prompt = DiskImagePrompt(
             iconPath: (destination ?? candidate.appURL).path,
-            title: replaced ? L10n.t("Replaced \(name)") : L10n.t("Installed \(name)"),
+            title: title,
             detail: detail,
             style: warning ? .problem : .done,
-            primary: replaced ? nil : .init(choice: .undo, label: L10n.t("Undo")))
+            primary: undoable ? .init(choice: .undo, label: L10n.t("Undo")) : nil)
         if !show(prompt) {
             // No notch to say it on; the install itself stands.
             finish()
@@ -295,6 +344,10 @@ final class DiskImageInstaller {
     private func undo() {
         guard let record = lastInstall else { finish(); return }
         lastInstall = nil
+        if !record.replaced.isEmpty {
+            undoUpdate(record)
+            return
+        }
         let fm = FileManager.default
         let url = record.destinationURL
         let sameApp = fm.fileExists(atPath: url.path)
@@ -309,6 +362,43 @@ final class DiskImageInstaller {
             showProblem(icon: url.path, title: L10n.t("Could not undo"),
                         detail: L10n.t("\(record.name) is no longer where it was installed, or could not be moved."))
         }
+    }
+
+    /// Moves the updated copy to the Trash and puts the old copy back from the
+    /// Trash. Both bundle ids are re-checked, and nothing moves unless every
+    /// check passes first.
+    private func undoUpdate(_ record: InstalledRecord) {
+        let fm = FileManager.default
+        let url = record.destinationURL
+        func hasBundleID(_ app: URL) -> Bool {
+            guard let bundleID = record.bundleID else { return false }
+            return Bundle(url: app)?.bundleIdentifier?.caseInsensitiveCompare(bundleID) == .orderedSame
+        }
+        let newIsThere = fm.fileExists(atPath: url.path) && hasBundleID(url)
+        let oldReady = !record.replaced.isEmpty && record.replaced.allSatisfy { copy in
+            fm.fileExists(atPath: copy.inTrash.path) && hasBundleID(copy.inTrash)
+                && (copy.original.standardizedFileURL.path == url.path || !fm.fileExists(atPath: copy.original.path))
+        }
+        guard newIsThere, oldReady else {
+            showProblem(icon: url.path, title: L10n.t("Could not undo"),
+                        detail: L10n.t("\(record.name) is no longer the updated copy, or the old copy is no longer in the Trash."))
+            return
+        }
+        do {
+            try fm.trashItem(at: url, resultingItemURL: nil)
+            for copy in record.replaced.reversed() {
+                try fm.moveItem(at: copy.inTrash, to: copy.original)
+            }
+        } catch {
+            showProblem(icon: url.path, title: L10n.t("Could not undo"),
+                        detail: L10n.t("\(record.name) could not be put back. Check the Trash and Applications."))
+            return
+        }
+        resultShowing = true
+        show(DiskImagePrompt(iconPath: (record.replaced.first?.original ?? url).path,
+                             title: L10n.t("Restored \(record.name)"),
+                             detail: L10n.t("The updated copy is in the Trash."), style: .done))
+        armDismiss(after: 3)
     }
 
     // MARK: - Offers
@@ -346,8 +436,8 @@ final class DiskImageInstaller {
         var label = L10n.t("Install & eject")
 
         if installed {
-            let old = c.installedVersion ?? L10n.t("unknown version")
-            let new = c.newVersion ?? L10n.t("unknown version")
+            let old = c.installedVersion?.display ?? L10n.t("unknown version")
+            let new = c.newVersion.display ?? L10n.t("unknown version")
             title = L10n.t("\(name) is already installed")
             lines.append(L10n.t("Installed \(old) · this image has \(new)"))
             warning = running
@@ -387,12 +477,63 @@ struct DiskImageCandidate: Sendable {
     let imageIdentity: DiskImageFileIdentity
     let displayName: String
     let bundleID: String?
-    let newVersion: String?
+    let newVersion: DiskImageAppVersion
     /// The copy already in /Applications (same file name or same bundle id).
     let installedURL: URL?
-    let installedVersion: String?
+    let installedVersion: DiskImageAppVersion?
+    let installedBundleID: String?
     /// Passes the signature check and Gatekeeper as a notarized Developer ID app.
     let trusted: Bool
+}
+
+/// An app's CFBundleShortVersionString and CFBundleVersion.
+struct DiskImageAppVersion: Sendable {
+    let short: String?
+    let build: String?
+
+    /// What the notch shows: the marketing version, else the build.
+    var display: String? { short ?? build }
+
+    /// Whether this version is older than `other`. The short versions decide
+    /// when both are numeric and differ; otherwise the build versions do. False
+    /// when neither can be compared, so an unknown version is never replaced.
+    func isOlder(than other: DiskImageAppVersion) -> Bool {
+        if let a = short, let b = other.short, let order = Self.numericOrder(a, b), order != 0 {
+            return order < 0
+        }
+        if let a = build, let b = other.build, let order = Self.numericOrder(a, b) {
+            return order < 0
+        }
+        return false
+    }
+
+    /// -1, 0 or 1 for dotted numeric versions (components compared as
+    /// numbers, so 1.10 is newer than 1.9); nil if a component is not a number.
+    static func numericOrder(_ a: String, _ b: String) -> Int? {
+        func parts(_ text: String) -> [Int]? {
+            var numbers: [Int] = []
+            for piece in text.split(separator: ".", omittingEmptySubsequences: false) {
+                guard !piece.isEmpty, piece.allSatisfy({ $0.isASCII && $0.isNumber }),
+                      let number = Int(piece)
+                else { return nil }
+                numbers.append(number)
+            }
+            return numbers
+        }
+        guard let x = parts(a), let y = parts(b) else { return nil }
+        for index in 0..<max(x.count, y.count) {
+            let left = index < x.count ? x[index] : 0
+            let right = index < y.count ? y[index] : 0
+            if left != right { return left < right ? -1 : 1 }
+        }
+        return 0
+    }
+}
+
+/// An old copy a replace moved to the Trash, and where it is now.
+struct DiskImageTrashedCopy: Sendable {
+    let original: URL
+    let inTrash: URL
 }
 
 enum DiskImageFinding: Sendable {
@@ -426,6 +567,8 @@ enum DiskImageInstallOutcome: Sendable {
 struct DiskImageInstallResult: Sendable {
     let outcome: DiskImageInstallOutcome
     let destinationURL: URL?
+    /// Old copies moved to the Trash by a replace (for Undo of an update).
+    var replaced: [DiskImageTrashedCopy] = []
 }
 
 enum DiskImageInstallWork {
@@ -494,9 +637,10 @@ enum DiskImageInstallWork {
             mountURL: mountURL, appURL: appURL, imageURL: imageURL, imageIdentity: imageIdentity,
             displayName: DiskImageInstallerSupport.displayName(preferred: preferred, appURL: appURL),
             bundleID: bundleID,
-            newVersion: version(of: appURL),
+            newVersion: appVersion(of: appURL),
             installedURL: installedURL,
-            installedVersion: installedURL.flatMap { version(of: $0) },
+            installedVersion: installedURL.map { appVersion(of: $0) },
+            installedBundleID: installedURL.flatMap { Bundle(url: $0)?.bundleIdentifier },
             trusted: notarizedAndSigned(appURL)).asFinding
     }
 
@@ -522,11 +666,13 @@ enum DiskImageInstallWork {
         return nil
     }
 
-    private static func version(of appURL: URL) -> String? {
+    private static func appVersion(of appURL: URL) -> DiskImageAppVersion {
         let info = Bundle(url: appURL)?.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String
-        let build = info?["CFBundleVersion"] as? String
-        return [short, build].compactMap { $0 }.first { !$0.isEmpty }
+        func text(_ key: String) -> String? {
+            let value = (info?[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value?.isEmpty == false ? value : nil
+        }
+        return DiskImageAppVersion(short: text("CFBundleShortVersionString"), build: text("CFBundleVersion"))
     }
 
     /// Copies the app to /Applications, eject the image, optionally trash the
@@ -577,7 +723,7 @@ enum DiskImageInstallWork {
             }
         }
 
-        var trashedOld: [(original: URL, inTrash: URL)] = []
+        var trashedOld: [DiskImageTrashedCopy] = []
         do {
             guard let finalCollisionURLs = DiskImageInstallerSupport.collisionURLs(
                 for: candidate.appURL, useUserApplications: false, fileManager: fm),
@@ -590,7 +736,9 @@ enum DiskImageInstallWork {
                 for old in olds {
                     var resulting: NSURL?
                     try fm.trashItem(at: old, resultingItemURL: &resulting)
-                    if let resulting { trashedOld.append((old, resulting as URL)) }
+                    if let resulting {
+                        trashedOld.append(DiskImageTrashedCopy(original: old, inTrash: resulting as URL))
+                    }
                 }
             } else {
                 guard finalCollisionURLs.allSatisfy({ !fm.fileExists(atPath: $0.path) }) else {
@@ -608,20 +756,25 @@ enum DiskImageInstallWork {
         do {
             try NSWorkspace.shared.unmountAndEjectDevice(at: candidate.mountURL)
         } catch {
-            return DiskImageInstallResult(outcome: .installedKeepingMount, destinationURL: destinationURL)
+            return DiskImageInstallResult(outcome: .installedKeepingMount, destinationURL: destinationURL,
+                                          replaced: trashedOld)
         }
 
         guard trashingDownload else {
-            return DiskImageInstallResult(outcome: .installed(downloadTrashed: false), destinationURL: destinationURL)
+            return DiskImageInstallResult(outcome: .installed(downloadTrashed: false), destinationURL: destinationURL,
+                                          replaced: trashedOld)
         }
         guard fileIdentity(at: candidate.imageURL) == candidate.imageIdentity else {
-            return DiskImageInstallResult(outcome: .installedKeepingDownload, destinationURL: destinationURL)
+            return DiskImageInstallResult(outcome: .installedKeepingDownload, destinationURL: destinationURL,
+                                          replaced: trashedOld)
         }
         do {
             try fm.trashItem(at: candidate.imageURL, resultingItemURL: nil)
-            return DiskImageInstallResult(outcome: .installed(downloadTrashed: true), destinationURL: destinationURL)
+            return DiskImageInstallResult(outcome: .installed(downloadTrashed: true), destinationURL: destinationURL,
+                                          replaced: trashedOld)
         } catch {
-            return DiskImageInstallResult(outcome: .installedKeepingDownload, destinationURL: destinationURL)
+            return DiskImageInstallResult(outcome: .installedKeepingDownload, destinationURL: destinationURL,
+                                          replaced: trashedOld)
         }
     }
 
