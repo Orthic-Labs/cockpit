@@ -930,23 +930,31 @@ impl NameIndex {
     /// The live rows as bytes: magic, version, row count, arena length, then
     /// each column (start, length, parent, size, kind) and the names.
     pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        // Writing to a Vec cannot fail.
+        let _ = self.write_to(&mut out);
+        out
+    }
+
+    /// Write the rows in the `to_bytes` format. Pass a buffered writer to stream
+    /// them to a file without building the whole encoding in memory.
+    pub fn write_to<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<()> {
         let map = self.live_map();
         let live: Vec<usize> = (0..self.rows())
             .filter(|&row| map[row] != NO_PARENT)
             .collect();
         let arena_len: usize = live.iter().map(|&row| usize::from(self.len[row])).sum();
-        let mut out = Vec::with_capacity(24 + live.len() * NAME_ROW_BYTES + arena_len);
-        out.extend_from_slice(&NAME_MAGIC);
-        out.extend_from_slice(&NAME_VERSION.to_le_bytes());
-        out.extend_from_slice(&(live.len() as u64).to_le_bytes());
-        out.extend_from_slice(&(arena_len as u64).to_le_bytes());
+        out.write_all(&NAME_MAGIC)?;
+        out.write_all(&NAME_VERSION.to_le_bytes())?;
+        out.write_all(&(live.len() as u64).to_le_bytes())?;
+        out.write_all(&(arena_len as u64).to_le_bytes())?;
         let mut offset: u32 = 0;
         for &row in &live {
-            out.extend_from_slice(&offset.to_le_bytes());
+            out.write_all(&offset.to_le_bytes())?;
             offset += u32::from(self.len[row]);
         }
         for &row in &live {
-            out.extend_from_slice(&self.len[row].to_le_bytes());
+            out.write_all(&self.len[row].to_le_bytes())?;
         }
         for &row in &live {
             let parent = if self.parent[row] == NO_PARENT {
@@ -954,18 +962,18 @@ impl NameIndex {
             } else {
                 map[self.parent[row] as usize]
             };
-            out.extend_from_slice(&parent.to_le_bytes());
+            out.write_all(&parent.to_le_bytes())?;
         }
         for &row in &live {
-            out.extend_from_slice(&self.size[row].to_le_bytes());
+            out.write_all(&self.size[row].to_le_bytes())?;
         }
         for &row in &live {
-            out.push(self.flags[row] & NAME_KIND);
+            out.write_all(&[self.flags[row] & NAME_KIND])?;
         }
         for &row in &live {
-            out.extend_from_slice(self.name(row).as_bytes());
+            out.write_all(self.name(row).as_bytes())?;
         }
-        out
+        Ok(())
     }
 
     /// Decode `to_bytes` output. `None` for another version or a damaged file.

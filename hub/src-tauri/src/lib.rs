@@ -16,6 +16,8 @@ mod growth;
 
 mod health;
 
+mod permissions;
+
 mod scanner;
 
 mod watch;
@@ -394,7 +396,8 @@ pub fn run() {
             apps::process_rows, apps::process_quit, apps::process_force_quit, scanner::scan, scanner::scan_status, scanner::last_scan, growth::growth, scanner::children, scanner::search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,
             cleanup::cleanup_scan, cleanup::cleanup_cached, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore,
             health::drive_health, duplicates::duplicates_scan, duplicates::duplicates_trash, duplicates::home_path,
-            files::file_identity, files::finder_open, files::file_choose_folder, files::file_move_plan, files::file_move, files::file_trash
+            files::file_identity, files::finder_open, files::file_choose_folder, files::file_move_plan, files::file_move, files::file_trash,
+            permissions::fda_status, permissions::fda_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulse hub");

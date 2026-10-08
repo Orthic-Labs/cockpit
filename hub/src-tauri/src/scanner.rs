@@ -10,14 +10,20 @@
 //!
 //! Alongside it the index keeps a `NameIndex`: every name the scan visited,
 //! so search finds files of any size. While the hub is open, `watch` reports
-//! the folders that changed; `refresh_subtree` reads just those again and
+//! the folders that changed; `apply_changes` reads just those again and
 //! updates both parts in place.
+//!
+//! Memory: the root view is read from a small saved file at open. The folder
+//! index loads on the first drill-down or search, and the name rows on the
+//! first search. Both are dropped after `IDLE_UNLOAD` without Storage use. While
+//! the index is not in memory, live changes are only collected as a set of
+//! folders (`WAITING`), and applied when the index loads again.
 
-use std::collections::HashMap;
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Once};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pulse_core::scan::NameIndex;
@@ -27,18 +33,32 @@ use tauri::AppHandle;
 
 use crate::{cache, growth, home, watch};
 
-/// Format of the two saved files (`storage-index-v1.json` and
-/// `storage-view-v1.json`). A different version is ignored, never migrated.
+/// Format of the JSON view and the older JSON index (`storage-index-v1.json`).
 const FORMAT: u32 = 1;
+/// The folder index as the hub saved it before the binary format. Still read
+/// when no binary index exists; removed once a binary index is written.
 const INDEX_FILE: &str = "storage-index-v1.json";
+/// The folder index, binary (see `write_index`).
+const INDEX_FILE_V2: &str = "storage-index-v2.bin";
 const VIEW_FILE: &str = "storage-view-v1.json";
 /// The name rows (`NameIndex::to_bytes`), saved beside the folder index.
 const NAMES_FILE: &str = "storage-names-v1.bin";
+/// Folders whose name rows changed while the rows were not in memory. The saved
+/// name rows are brought up to date with these when they are next loaded.
+const STALE_FILE: &str = "storage-names-stale-v1.txt";
+
+/// Magic and version of the binary folder index.
+const INDEX_MAGIC: [u8; 4] = *b"PIX2";
+const INDEX_VERSION: u32 = 2;
+/// Longest path or name a saved index may hold; a longer length means damage.
+const MAX_SAVED_TEXT: usize = 1 << 20;
 
 /// Newest scan time saved so far; an older scan finishing later never overwrites it.
 static SAVED_AT: AtomicU64 = AtomicU64::new(0);
-/// Serialises loading the saved index, so concurrent requests read it once.
+/// Serialises loading the saved index and name rows, so concurrent requests read them once.
 static LOADING: Mutex<()> = Mutex::new(());
+/// Only one save writes the saved files at a time (they share temporary names).
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Largest children kept per folder.
 const TOP: usize = 200;
@@ -52,6 +72,17 @@ const LIVE_MAX_ENTRIES: usize = 200_000;
 const SMALLER_FILES: &str = "Smaller files";
 /// While the watch runs, the index is written at most this often.
 const SAVE_INTERVAL: Duration = Duration::from_secs(20);
+/// Storage is unused for this long: the folder index and name rows leave memory.
+const IDLE_UNLOAD: Duration = Duration::from_secs(120);
+/// How often the idle check runs.
+const IDLE_CHECK: Duration = Duration::from_secs(15);
+/// A folder that changed is read again at most this often.
+const RETRY: Duration = Duration::from_secs(10);
+/// Changes waiting for the index: more than this and they are reported as stale.
+const WAITING_MAX: usize = 100_000;
+/// Folders that may be waiting for their name rows. More than this and the
+/// saved name rows are dropped; a new scan rebuilds them.
+const STALE_MAX: usize = 5_000;
 
 /// Event the page listens to: folders read again after a change (see `Updated`).
 pub(crate) const UPDATED_EVENT: &str = "storage-updated";
@@ -62,7 +93,7 @@ unsafe extern "C" {
 }
 
 /// QOS_CLASS_UTILITY for the calling thread.
-fn low_priority() {
+pub(crate) fn low_priority() {
     #[cfg(target_os = "macos")]
     unsafe {
         pthread_set_qos_class_self_np(0x11, 0);
@@ -73,13 +104,34 @@ fn low_priority() {
 static RUN: Mutex<()> = Mutex::new(());
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
+/// The folder index while it is in memory; `None` after an idle unload.
 static INDEX: Mutex<Option<Arc<Index>>> = Mutex::new(None);
+/// The name rows while they are in memory; `None` until the first search.
+static NAMES: Mutex<Option<Arc<NameIndex>>> = Mutex::new(None);
+/// What the Storage page needs when the index is not in memory.
+static SUMMARY: Mutex<Option<Summary>> = Mutex::new(None);
 /// Bumped each time a scan replaces the index. A live refresh applies only to
 /// the index it started from.
 static INDEX_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// The index has changes that are not saved yet.
 static DIRTY: AtomicBool = AtomicBool::new(false);
+/// Saves in flight. A refresh waits (its folder stays waiting) while any runs,
+/// so the saved data is never copied to make room for a change.
+static SAVING: AtomicUsize = AtomicUsize::new(0);
+/// A scan has finished in this session (so loaded data is not a saved snapshot).
+static SCANNED: AtomicBool = AtomicBool::new(false);
+/// The saved name rows can no longer be trusted: they are removed at the next save.
+static NAMES_BROKEN: AtomicBool = AtomicBool::new(false);
+/// Folders whose name rows changed while those rows were not in memory.
+static STALE: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+/// Changes not applied yet: raw paths from FSEvents, or the indexed folders that hold them.
+static WAITING: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+/// When each folder was last read again (only those within `RETRY` are kept).
+static ATTEMPTED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
 static LAST_SAVE: Mutex<Option<Instant>> = Mutex::new(None);
+/// When the Storage page last used the index.
+static LAST_USE: Mutex<Option<Instant>> = Mutex::new(None);
+static IDLE_TIMER: Once = Once::new();
 
 struct Job {
     id: u64,
@@ -153,9 +205,14 @@ struct Index {
     needs_access: bool,
     limited: bool,
     nodes: HashMap<PathBuf, Node>,
-    /// Every name the scan visited. `None` for a saved index that has no name
-    /// file, and after a refresh that could not keep the rows in step.
-    names: Option<NameIndex>,
+}
+
+/// What the Storage page shows of the index, kept while the index is unloaded.
+#[derive(Clone)]
+struct Summary {
+    root: PathBuf,
+    scanned_at: u64,
+    from_snapshot: bool,
 }
 
 fn now() -> u64 {
@@ -282,7 +339,6 @@ fn build(report: &ScanReport, scanned_at: u64, from_snapshot: bool) -> Index {
         needs_access: needs_access(report),
         limited: limited(report),
         nodes: fold_nodes(report, label),
-        names: None,
     }
 }
 
@@ -313,132 +369,25 @@ fn folder(index: &Index, path: &Path) -> Result<Folder, String> {
     })
 }
 
+/// The folder index if it is in memory. Never loads it.
 fn held() -> Option<Arc<Index>> {
     lock(&INDEX).clone()
 }
 
-/// One folder as saved: path, child count and the rows the browser shows.
-#[derive(Serialize, Deserialize)]
-struct SavedFolder(String, usize, Vec<SavedRow>);
-
-/// One row as saved: name, is a folder, is a summary row, bytes.
-#[derive(Serialize, Deserialize)]
-struct SavedRow(String, bool, bool, u64);
-
-#[derive(Serialize, Deserialize)]
-struct SavedIndex {
-    root: PathBuf,
-    root_label: String,
-    scanned_at: u64,
-    incomplete: bool,
-    needs_access: bool,
-    limited: bool,
-    folders: Vec<SavedFolder>,
-}
-
-fn saved_index(index: &Index) -> SavedIndex {
-    SavedIndex {
-        root: index.root.clone(),
-        root_label: index.root_label.clone(),
-        scanned_at: index.scanned_at,
-        incomplete: index.incomplete,
-        needs_access: index.needs_access,
-        limited: index.limited,
-        folders: index
-            .nodes
-            .iter()
-            .map(|(path, node)| {
-                SavedFolder(
-                    path.to_string_lossy().into_owned(),
-                    node.children,
-                    node.items
-                        .iter()
-                        .map(|i| SavedRow(i.name.to_string(), i.is_dir, i.summary, i.bytes))
-                        .collect(),
-                )
-            })
-            .collect(),
-    }
-}
-
-fn restored_index(saved: SavedIndex) -> Index {
-    let nodes: HashMap<PathBuf, Node> = saved
-        .folders
-        .into_iter()
-        .map(|SavedFolder(path, children, rows)| {
-            let items = rows
-                .into_iter()
-                .map(|SavedRow(name, is_dir, summary, bytes)| Item {
-                    name: name.into_boxed_str(),
-                    is_dir,
-                    summary,
-                    bytes,
-                })
-                .collect();
-            (PathBuf::from(path), Node { children, items, ..Node::default() })
-        })
-        .collect();
-    Index {
-        root: saved.root,
-        root_label: saved.root_label,
-        scanned_at: saved.scanned_at,
-        from_snapshot: true,
-        incomplete: saved.incomplete,
-        needs_access: saved.needs_access,
-        limited: saved.limited,
-        nodes,
-        names: None,
-    }
-}
-
-/// Write the name rows, or remove the file when the index has none.
-fn save_names(index: &Index) -> std::io::Result<()> {
-    match index.names.as_ref() {
-        Some(names) => cache::write_bytes(NAMES_FILE, &names.to_bytes()),
-        None => cache::remove(NAMES_FILE),
-    }
-}
-
-/// Write the folder index, the root view and the name rows on a background
-/// thread, so the next launch can show them at once. Failures are logged, never shown.
-fn persist(index: Arc<Index>, view: Folder) {
-    let at = view.scanned_at;
-    let spawned = std::thread::Builder::new().name("pulse-save".into()).spawn(move || {
-        low_priority();
-        if at < SAVED_AT.load(Ordering::SeqCst) {
-            return;
-        }
-        let result = cache::save(INDEX_FILE, FORMAT, &saved_index(&index))
-            .and_then(|()| cache::save(VIEW_FILE, FORMAT, &view))
-            .and_then(|()| save_names(&index));
-        match result {
-            Ok(()) => SAVED_AT.store(at, Ordering::SeqCst),
-            Err(error) => log(&format!("saving the storage scan failed: {error}")),
-        }
+/// Note that the Storage page used the index now. The first use starts the idle check.
+fn touch() {
+    *lock(&LAST_USE) = Some(Instant::now());
+    IDLE_TIMER.call_once(|| {
+        let _ = std::thread::Builder::new().name("pulse-idle".into()).spawn(idle_loop);
     });
-    if let Err(error) = spawned {
-        log(&format!("saving the storage scan failed: {error}"));
-    }
 }
 
-/// The folder index in memory: the newest scan, else the saved one, read from
-/// disk on first use. `None` when there is neither.
-fn restore() -> Option<Arc<Index>> {
-    if let Some(index) = held() {
-        return Some(index);
+fn idle_loop() {
+    low_priority();
+    loop {
+        std::thread::sleep(IDLE_CHECK);
+        unload_if_idle();
     }
-    let _loading = lock(&LOADING);
-    if let Some(index) = held() {
-        return Some(index);
-    }
-    let saved: SavedIndex = cache::load(INDEX_FILE, FORMAT)?;
-    let mut index = restored_index(saved);
-    index.names = cache::read_bytes(NAMES_FILE).and_then(|bytes| NameIndex::from_bytes(&bytes));
-    let index = Arc::new(index);
-    // A scan that finished while this was loading is newer and wins.
-    let mut slot = lock(&INDEX);
-    let shown = slot.get_or_insert(index).clone();
-    Some(shown)
 }
 
 /// Resident memory of this process in MB, from `ps` (logging only).
@@ -469,6 +418,510 @@ pub(crate) fn log(line: &str) {
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{} {line}", now());
     }
+}
+
+// --- Saved folder index (binary) -------------------------------------------------
+
+/// Text as a 4-byte length, then its UTF-8 bytes.
+fn write_text<W: Write>(out: &mut W, text: &str) -> std::io::Result<()> {
+    let len = u32::try_from(text.len()).map_err(std::io::Error::other)?;
+    out.write_all(&len.to_le_bytes())?;
+    out.write_all(text.as_bytes())
+}
+
+/// Write the folder index, one folder after another, straight to `out`. The
+/// layout: magic, version, root, root label, scan time, flags (bit 0 incomplete,
+/// bit 1 needs access, bit 2 limited, bit 3 from a snapshot), folder count, then
+/// per folder its path, child count, total, dirs, kept, row count and its rows
+/// (name, kind bits: 1 folder, 2 summary row, then bytes).
+fn write_index<W: Write>(out: &mut W, index: &Index) -> std::io::Result<()> {
+    out.write_all(&INDEX_MAGIC)?;
+    out.write_all(&INDEX_VERSION.to_le_bytes())?;
+    write_text(out, &index.root.to_string_lossy())?;
+    write_text(out, &index.root_label)?;
+    out.write_all(&index.scanned_at.to_le_bytes())?;
+    let flags = u8::from(index.incomplete)
+        | (u8::from(index.needs_access) << 1)
+        | (u8::from(index.limited) << 2)
+        | (u8::from(index.from_snapshot) << 3);
+    out.write_all(&[flags])?;
+    out.write_all(&(index.nodes.len() as u64).to_le_bytes())?;
+    for (path, node) in &index.nodes {
+        write_text(out, &path.to_string_lossy())?;
+        out.write_all(&(node.children as u64).to_le_bytes())?;
+        out.write_all(&node.total.to_le_bytes())?;
+        out.write_all(&node.dirs.to_le_bytes())?;
+        out.write_all(&node.kept.to_le_bytes())?;
+        let rows = u32::try_from(node.items.len()).map_err(std::io::Error::other)?;
+        out.write_all(&rows.to_le_bytes())?;
+        for item in &node.items {
+            write_text(out, &item.name)?;
+            out.write_all(&[u8::from(item.is_dir) | (u8::from(item.summary) << 1)])?;
+            out.write_all(&item.bytes.to_le_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn invalid(what: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string())
+}
+
+fn read_u8<R: Read>(input: &mut R) -> std::io::Result<u8> {
+    let mut bytes = [0u8; 1];
+    input.read_exact(&mut bytes)?;
+    Ok(bytes[0])
+}
+
+fn read_u32<R: Read>(input: &mut R) -> std::io::Result<u32> {
+    let mut bytes = [0u8; 4];
+    input.read_exact(&mut bytes)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_u64<R: Read>(input: &mut R) -> std::io::Result<u64> {
+    let mut bytes = [0u8; 8];
+    input.read_exact(&mut bytes)?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_text<R: Read>(input: &mut R) -> std::io::Result<String> {
+    let len = read_u32(input)? as usize;
+    if len > MAX_SAVED_TEXT {
+        return Err(invalid("a saved name is too long"));
+    }
+    let mut bytes = vec![0u8; len];
+    input.read_exact(&mut bytes)?;
+    String::from_utf8(bytes).map_err(std::io::Error::other)
+}
+
+/// Read what `write_index` wrote. Streamed: the file is never held whole in memory.
+fn read_index<R: Read>(input: &mut R) -> std::io::Result<Index> {
+    let mut magic = [0u8; 4];
+    input.read_exact(&mut magic)?;
+    if magic != INDEX_MAGIC || read_u32(input)? != INDEX_VERSION {
+        return Err(invalid("not a storage index"));
+    }
+    let root = PathBuf::from(read_text(input)?);
+    let root_label = read_text(input)?;
+    let scanned_at = read_u64(input)?;
+    let flags = read_u8(input)?;
+    let folders = read_u64(input)?;
+    let mut nodes: HashMap<PathBuf, Node> = HashMap::new();
+    for _ in 0..folders {
+        let path = PathBuf::from(read_text(input)?);
+        let children = usize::try_from(read_u64(input)?).map_err(std::io::Error::other)?;
+        let total = read_u64(input)?;
+        let dirs = read_u64(input)?;
+        let kept = read_u64(input)?;
+        let rows = read_u32(input)? as usize;
+        if rows > TOP {
+            return Err(invalid("a folder has too many rows"));
+        }
+        let mut items = Vec::with_capacity(rows);
+        for _ in 0..rows {
+            let name = read_text(input)?.into_boxed_str();
+            let kind = read_u8(input)?;
+            let bytes = read_u64(input)?;
+            items.push(Item {
+                name,
+                is_dir: kind & 1 != 0,
+                summary: kind & 2 != 0,
+                bytes,
+            });
+        }
+        nodes.insert(path, Node { total, dirs, kept, children, items });
+    }
+    Ok(Index {
+        root,
+        root_label,
+        scanned_at,
+        from_snapshot: flags & 8 != 0,
+        incomplete: flags & 1 != 0,
+        needs_access: flags & 2 != 0,
+        limited: flags & 4 != 0,
+        nodes,
+    })
+}
+
+/// One folder as saved before the binary format: path, child count and rows.
+#[derive(Deserialize)]
+struct SavedFolder(String, usize, Vec<SavedRow>);
+
+/// One row as saved before the binary format: name, is a folder, is a summary row, bytes.
+#[derive(Deserialize)]
+struct SavedRow(String, bool, bool, u64);
+
+#[derive(Deserialize)]
+struct SavedIndex {
+    root: PathBuf,
+    root_label: String,
+    scanned_at: u64,
+    incomplete: bool,
+    needs_access: bool,
+    limited: bool,
+    folders: Vec<SavedFolder>,
+}
+
+/// The JSON index of earlier versions. The totals were not saved then, so they
+/// are rebuilt from the rows: exact unless a folder's rows were cut to `TOP`.
+fn restored_index(saved: SavedIndex) -> Index {
+    let nodes: HashMap<PathBuf, Node> = saved
+        .folders
+        .into_iter()
+        .map(|SavedFolder(path, children, rows)| {
+            let items: Vec<Item> = rows
+                .into_iter()
+                .map(|SavedRow(name, is_dir, summary, bytes)| Item {
+                    name: name.into_boxed_str(),
+                    is_dir,
+                    summary,
+                    bytes,
+                })
+                .collect();
+            let total = items.iter().fold(0u64, |sum, i| sum.saturating_add(i.bytes));
+            let dirs = items
+                .iter()
+                .filter(|i| i.is_dir && !i.summary)
+                .fold(0u64, |sum, i| sum.saturating_add(i.bytes));
+            let kept = items
+                .iter()
+                .filter(|i| !i.is_dir && !i.summary)
+                .fold(0u64, |sum, i| sum.saturating_add(i.bytes));
+            (PathBuf::from(path), Node { total, dirs, kept, children, items })
+        })
+        .collect();
+    Index {
+        root: saved.root,
+        root_label: saved.root_label,
+        scanned_at: saved.scanned_at,
+        from_snapshot: true,
+        incomplete: saved.incomplete,
+        needs_access: saved.needs_access,
+        limited: saved.limited,
+        nodes,
+    }
+}
+
+/// The folder index saved on disk: the binary file, else the JSON file of
+/// earlier versions. `None` when there is neither, or both are unreadable.
+fn read_saved_index() -> Option<Index> {
+    if let Some(mut input) = cache::open(INDEX_FILE_V2) {
+        match read_index(&mut input) {
+            Ok(index) => return Some(index),
+            Err(error) => log(&format!("the saved storage index could not be read: {error}")),
+        }
+    }
+    let saved: SavedIndex = cache::load(INDEX_FILE, FORMAT)?;
+    Some(restored_index(saved))
+}
+
+// --- Saving ---------------------------------------------------------------------
+
+/// Folders whose name rows are not in the saved name file, read from `STALE_FILE`.
+fn read_stale() -> BTreeSet<PathBuf> {
+    let Some(bytes) = cache::read_bytes(STALE_FILE) else {
+        return BTreeSet::new();
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// The folders in `STALE` as a list.
+fn stale_snapshot() -> Vec<PathBuf> {
+    lock(&STALE).iter().cloned().collect()
+}
+
+/// Write `stale` as the stale list, or remove the file when it is empty.
+fn write_stale(stale: &[PathBuf]) -> std::io::Result<()> {
+    if stale.is_empty() {
+        return cache::remove(STALE_FILE);
+    }
+    let mut body = String::new();
+    for path in stale {
+        body.push_str(&path.to_string_lossy());
+        body.push('\n');
+    }
+    cache::write_bytes(STALE_FILE, body.as_bytes())
+}
+
+/// Write the folder index, the root view and the name rows, or, when the name
+/// rows are not in memory, the list of folders they are missing. Saves are
+/// serialised; the index is streamed to its file, never built in memory first.
+fn save_all(
+    index: &Index,
+    view: &Folder,
+    names: Option<&NameIndex>,
+    stale: &[PathBuf],
+) -> std::io::Result<()> {
+    let _saving = lock(&SAVE_LOCK);
+    let started = Instant::now();
+    cache::write_with(INDEX_FILE_V2, |out| write_index(out, index))?;
+    // The binary index replaces the JSON one, which is removed to free its space.
+    let _ = cache::remove(INDEX_FILE);
+    cache::save(VIEW_FILE, FORMAT, view)?;
+    let index_ms = started.elapsed().as_millis();
+    let names_started = Instant::now();
+    if NAMES_BROKEN.swap(false, Ordering::SeqCst) {
+        cache::remove(NAMES_FILE)?;
+        cache::remove(STALE_FILE)?;
+        lock(&STALE).clear();
+    } else if let Some(names) = names {
+        cache::write_with(NAMES_FILE, |out| names.write_to(out))?;
+        cache::remove(STALE_FILE)?;
+        lock(&STALE).clear();
+    } else {
+        write_stale(stale)?;
+    }
+    log(&format!(
+        "saved storage scan: index {index_ms} ms, names {} ms, total {} ms",
+        names_started.elapsed().as_millis(),
+        started.elapsed().as_millis(),
+    ));
+    Ok(())
+}
+
+/// Write the saved files on a background thread, so the next launch can show
+/// them at once. `release_names` drops the name rows from memory once they are
+/// saved (a search reads them back from the file). Failures are logged, never shown.
+fn persist(
+    index: Arc<Index>,
+    view: Folder,
+    names: Option<Arc<NameIndex>>,
+    stale: Vec<PathBuf>,
+    release_names: bool,
+) {
+    let at = view.scanned_at;
+    SAVING.fetch_add(1, Ordering::SeqCst);
+    let spawned = std::thread::Builder::new().name("pulse-save".into()).spawn(move || {
+        low_priority();
+        if at >= SAVED_AT.load(Ordering::SeqCst) {
+            match save_all(&index, &view, names.as_deref(), &stale) {
+                Ok(()) => {
+                    SAVED_AT.store(at, Ordering::SeqCst);
+                    if release_names {
+                        release(&names);
+                    }
+                }
+                Err(error) => log(&format!("saving the storage scan failed: {error}")),
+            }
+        }
+        SAVING.fetch_sub(1, Ordering::SeqCst);
+    });
+    if let Err(error) = spawned {
+        SAVING.fetch_sub(1, Ordering::SeqCst);
+        log(&format!("saving the storage scan failed: {error}"));
+    }
+}
+
+/// Drop `saved` from memory, if it is still the name rows in memory.
+fn release(saved: &Option<Arc<NameIndex>>) {
+    let Some(saved) = saved else {
+        return;
+    };
+    let mut slot = lock(&NAMES);
+    if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, saved)) {
+        *slot = None;
+    }
+}
+
+/// Save the index if it changed and the last save is old enough. Called from
+/// the watch loop.
+pub(crate) fn save_if_due() {
+    if !DIRTY.load(Ordering::SeqCst) {
+        return;
+    }
+    {
+        let mut last = lock(&LAST_SAVE);
+        if last.is_some_and(|at| at.elapsed() < SAVE_INTERVAL) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    DIRTY.store(false, Ordering::SeqCst);
+    let Some(index) = held() else {
+        return;
+    };
+    let Ok(view) = folder(&index, &index.root) else {
+        return;
+    };
+    let names = lock(&NAMES).clone();
+    let stale = if names.is_none() { stale_snapshot() } else { Vec::new() };
+    persist(index, view, names, stale, false);
+}
+
+/// Save the index in the calling thread, for an idle unload.
+fn save_now(index: &Arc<Index>) -> Result<(), String> {
+    let view = folder(index, &index.root)?;
+    let names = lock(&NAMES).clone();
+    let stale = if names.is_none() { stale_snapshot() } else { Vec::new() };
+    save_all(index, &view, names.as_deref(), &stale).map_err(|e| e.to_string())
+}
+
+/// Drop the folder index and the name rows from memory after `IDLE_UNLOAD`
+/// without Storage use. Saves first if anything changed. The live watch keeps
+/// running and collects changes in `WAITING` meanwhile.
+fn unload_if_idle() {
+    let idle = match *lock(&LAST_USE) {
+        Some(at) => at.elapsed() >= IDLE_UNLOAD,
+        None => true,
+    };
+    if !idle || lock(&JOB).is_some() {
+        return;
+    }
+    // A load in progress keeps the index and names in memory until it ends.
+    let Ok(_loading) = LOADING.try_lock() else {
+        return;
+    };
+    let Some(index) = held() else {
+        return;
+    };
+    let dirty = DIRTY.load(Ordering::SeqCst);
+    if dirty {
+        SAVING.fetch_add(1, Ordering::SeqCst);
+        let saved = save_now(&index);
+        SAVING.fetch_sub(1, Ordering::SeqCst);
+        if let Err(error) = saved {
+            log(&format!("saving the storage scan before unloading failed: {error}"));
+            return;
+        }
+    }
+    let mut slot = lock(&INDEX);
+    // A change or a new scan made a different index: keep this one for now.
+    if !slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, &index)) {
+        return;
+    }
+    if dirty {
+        DIRTY.store(false, Ordering::SeqCst);
+    }
+    *slot = None;
+    *lock(&NAMES) = None;
+    drop(slot);
+    drop(index);
+    log(&format!(
+        "storage index unloaded after {} s without use, rss {} MB",
+        IDLE_UNLOAD.as_secs(),
+        rss_mb().map_or_else(|| "?".to_string(), |m| m.to_string()),
+    ));
+}
+
+// --- Loading --------------------------------------------------------------------
+
+/// The folder index in memory, read from disk when it is not there. `None`
+/// when no saved index exists.
+fn restore() -> Option<Arc<Index>> {
+    touch();
+    if let Some(index) = held() {
+        return Some(index);
+    }
+    let _loading = lock(&LOADING);
+    if let Some(index) = held() {
+        return Some(index);
+    }
+    let started = Instant::now();
+    let mut index = read_saved_index()?;
+    index.from_snapshot = !SCANNED.load(Ordering::SeqCst);
+    let folders = index.nodes.len();
+    {
+        // The saved stale list is the one to apply, unless this session kept its own.
+        let mut stale = lock(&STALE);
+        if stale.is_empty() {
+            *stale = read_stale();
+        }
+    }
+    let index = Arc::new(index);
+    let mut slot = lock(&INDEX);
+    // A scan that finished while this was loading is newer and wins.
+    let shown = slot.get_or_insert(index).clone();
+    drop(slot);
+    log(&format!(
+        "loaded storage index in {} ms, {folders} folders",
+        started.elapsed().as_millis(),
+    ));
+    Some(shown)
+}
+
+/// Put the freshly read name rows of one folder into `rows`. `fresh` is `None`
+/// when the folder is gone. `false` when the rows cannot be kept in step.
+fn apply_names(rows: &mut NameIndex, folder: &Path, fresh: Option<&NameIndex>) -> bool {
+    match (rows.find_dir(folder), fresh) {
+        (Some(row), Some(sub)) => rows.replace_subtree(row, sub),
+        (Some(row), None) => {
+            rows.remove_subtree(row);
+            rows.compact_if_sparse();
+            true
+        }
+        (None, None) => true,
+        (None, Some(_)) => false,
+    }
+}
+
+/// The name rows, loaded on the first search. The saved rows are first brought
+/// up to date with the folders that changed since they were written. `None`
+/// when they are missing, cannot be kept in step, or a scan is running (search
+/// then uses the folder rows only, without waiting for the scan).
+fn load_names(index: &Index) -> Option<Arc<NameIndex>> {
+    touch();
+    if let Some(names) = lock(&NAMES).clone() {
+        return Some(names);
+    }
+    let _loading = lock(&LOADING);
+    if let Some(names) = lock(&NAMES).clone() {
+        return Some(names);
+    }
+    if NAMES_BROKEN.load(Ordering::SeqCst) {
+        return None;
+    }
+    let started = Instant::now();
+    let mut names = NameIndex::from_bytes(&cache::read_bytes(NAMES_FILE)?)?;
+    let changed = covering_folders(stale_snapshot());
+    if changed.len() > STALE_MAX {
+        NAMES_BROKEN.store(true, Ordering::SeqCst);
+        return None;
+    }
+    // Reading folders again takes the scan lock; never wait for a scan to finish.
+    let _run = if changed.is_empty() {
+        None
+    } else {
+        match RUN.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(_) => return None,
+        }
+    };
+    for folder in &changed {
+        let fresh = if index.nodes.contains_key(folder) {
+            let options = ScanOptions {
+                max_entries: LIVE_MAX_ENTRIES,
+                ..scan_options(None)
+            };
+            let (report, rows) = pulse_core::scan::scan_with_names(&[folder.clone()], &options);
+            if limited(&report) {
+                NAMES_BROKEN.store(true, Ordering::SeqCst);
+                return None;
+            }
+            drop(report);
+            Some(rows)
+        } else {
+            None
+        };
+        if !apply_names(&mut names, folder, fresh.as_ref()) {
+            NAMES_BROKEN.store(true, Ordering::SeqCst);
+            return None;
+        }
+    }
+    let names = Arc::new(names);
+    let mut slot = lock(&NAMES);
+    let shown = slot.get_or_insert(names).clone();
+    drop(slot);
+    log(&format!(
+        "loaded storage names in {} ms, {} folders brought up to date",
+        started.elapsed().as_millis(),
+        changed.len(),
+    ));
+    Some(shown)
 }
 
 fn scan_options(cancel: Option<Arc<AtomicBool>>) -> ScanOptions {
@@ -503,14 +956,14 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>, app: AppHandle) -> 
         growth::save_in_background(&report);
     }
     let indexed = Instant::now();
-    let mut built = build(&report, now(), false);
+    let built = build(&report, now(), false);
     let (kept, folders) = (report.entries.len(), report.folders.len());
     drop(report);
     let mut names = names;
     names.shrink_to_fit();
     let entries = names.live_rows();
-    built.names = Some(names);
     let index = Arc::new(built);
+    let names = Arc::new(names);
     let result = folder(&index, &index.root);
     let epoch = {
         // Only the newest scan is shown.
@@ -520,10 +973,23 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>, app: AppHandle) -> 
         }
         *job = None;
         *lock(&INDEX) = Some(index.clone());
+        *lock(&NAMES) = Some(names.clone());
+        *lock(&SUMMARY) = Some(Summary {
+            root: index.root.clone(),
+            scanned_at: index.scanned_at,
+            from_snapshot: false,
+        });
+        lock(&STALE).clear();
+        lock(&WAITING).clear();
+        lock(&ATTEMPTED).clear();
+        NAMES_BROKEN.store(false, Ordering::SeqCst);
+        SCANNED.store(true, Ordering::SeqCst);
         INDEX_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
     };
+    touch();
     if let Ok(view) = &result {
-        persist(index.clone(), view.clone());
+        // The name rows leave memory once saved; the first search reads them back.
+        persist(index.clone(), view.clone(), Some(names.clone()), Vec::new(), true);
         DIRTY.store(false, Ordering::SeqCst);
         *lock(&LAST_SAVE) = Some(Instant::now());
         // FSEvents reports real paths, so watch the canonical root the index holds.
@@ -543,6 +1009,7 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>, app: AppHandle) -> 
 #[tauri::command]
 pub async fn scan(app: AppHandle, path: Option<String>) -> Result<Folder, String> {
     let root = path.map(PathBuf::from).unwrap_or_else(home);
+    touch();
     // The live refresh belongs to the index it was started for; a new scan replaces it.
     watch::stop();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -576,34 +1043,37 @@ pub struct Status {
     from_snapshot: bool,
 }
 
+/// The scan's state. Reads what the Storage page shows, never loads the index.
 #[tauri::command]
 pub fn scan_status() -> Status {
     let running_root = lock(&JOB).as_ref().map(|j| j.root.clone());
-    let index = held();
+    let shown = lock(&SUMMARY).clone();
     Status {
         running: running_root.is_some(),
         running_root,
-        has_index: index.is_some(),
-        root: index.as_ref().map(|i| i.root.clone()),
-        scanned_at: index.as_ref().map(|i| i.scanned_at),
-        from_snapshot: index.as_ref().is_some_and(|i| i.from_snapshot),
+        has_index: shown.is_some(),
+        root: shown.as_ref().map(|s| s.root.clone()),
+        scanned_at: shown.as_ref().map(|s| s.scanned_at),
+        from_snapshot: shown.as_ref().is_some_and(|s| s.from_snapshot),
     }
 }
 
 /// The newest folder view: the one held in memory, else the root view saved
-/// with the last scan, shown at once. `None` when there is neither. Never scans.
+/// with the last scan, shown at once. `None` when there is neither. Never scans,
+/// and never loads the folder index (that waits for the first drill-down).
 #[tauri::command]
 pub async fn last_scan() -> Result<Option<Folder>, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        touch();
         if let Some(index) = held() {
             return folder(&index, &index.root).map(Some);
         }
         if let Some(mut view) = cache::load::<Folder>(VIEW_FILE, FORMAT) {
-            view.from_snapshot = true;
-            // Load the full index behind the view, so drilling down does not wait for it.
-            let _ = std::thread::Builder::new().name("pulse-index".into()).spawn(|| {
-                low_priority();
-                let _ = restore();
+            view.from_snapshot = !SCANNED.load(Ordering::SeqCst);
+            *lock(&SUMMARY) = Some(Summary {
+                root: view.root.clone(),
+                scanned_at: view.scanned_at,
+                from_snapshot: view.from_snapshot,
             });
             return Ok(Some(view));
         }
@@ -615,6 +1085,11 @@ pub async fn last_scan() -> Result<Option<Folder>, String> {
         let index = Arc::new(build(&report, at, true));
         drop(report);
         let result = folder(&index, &index.root).map(Some);
+        *lock(&SUMMARY) = Some(Summary {
+            root: index.root.clone(),
+            scanned_at: index.scanned_at,
+            from_snapshot: true,
+        });
         let mut slot = lock(&INDEX);
         if slot.is_none() {
             *slot = Some(index);
@@ -739,8 +1214,8 @@ pub async fn search(
         if needle.is_empty() && exts.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(match index.names.as_ref() {
-            Some(names) => search_names(names, &needle, &exts, limit),
+        Ok(match load_names(&index) {
+            Some(names) => search_names(&names, &needle, &exts, limit),
             None => search_folders(&index, &needle, limit),
         })
     })
@@ -757,6 +1232,13 @@ pub(crate) struct Updated {
     pub stale: bool,
 }
 
+/// What `apply_changes` did: the folders read again, and whether the index can
+/// no longer be trusted.
+pub(crate) struct Applied {
+    pub folders: Vec<String>,
+    pub stale: bool,
+}
+
 /// What a live refresh of one folder did.
 pub(crate) enum Refresh {
     /// The folder's subtree was read again and the index was updated.
@@ -765,12 +1247,13 @@ pub(crate) enum Refresh {
     TooLarge,
     /// Nothing was done: a scan is running, or the index was replaced.
     Skipped,
+    /// Not now: the index is not in memory, or a save is writing it. Try again later.
+    Busy,
 }
 
 /// The indexed folder that holds `path`: the folder itself, else its nearest
 /// indexed parent. `None` when `path` is outside the scan.
-pub(crate) fn indexed_folder(path: &Path) -> Option<PathBuf> {
-    let index = held()?;
+fn nearest_indexed(index: &Index, path: &Path) -> Option<PathBuf> {
     let mut at = Some(path);
     while let Some(folder) = at {
         if index.nodes.contains_key(folder) {
@@ -787,15 +1270,19 @@ fn same_index(epoch: u64) -> bool {
 }
 
 /// Whether a refresh may run now: the same index, and no scan in progress.
-pub(crate) fn may_refresh(epoch: u64) -> bool {
+fn may_refresh(epoch: u64) -> bool {
     same_index(epoch) && lock(&JOB).is_none()
 }
 
 /// Read `folder`'s subtree again and update the index in place. Runs after
-/// any cleanup scan in progress, never alongside a storage scan.
-pub(crate) fn refresh_subtree(folder: &Path, epoch: u64) -> Refresh {
+/// any cleanup scan in progress, never alongside a storage scan. When the
+/// name rows are not in memory, the folder is only noted for them.
+fn refresh_subtree(folder: &Path, epoch: u64) -> Refresh {
     if !may_refresh(epoch) {
         return Refresh::Skipped;
+    }
+    if SAVING.load(Ordering::SeqCst) > 0 {
+        return Refresh::Busy;
     }
     let _run = exclusive();
     if !may_refresh(epoch) {
@@ -812,15 +1299,100 @@ pub(crate) fn refresh_subtree(folder: &Path, epoch: u64) -> Refresh {
     let fresh = fold_nodes(&report, SMALLER_FILES);
     drop(report);
     let mut slot = lock(&INDEX);
+    if SAVING.load(Ordering::SeqCst) > 0 {
+        return Refresh::Busy;
+    }
     if !same_index(epoch) {
         return Refresh::Skipped;
     }
     let Some(shared) = slot.as_mut() else {
-        return Refresh::Skipped;
+        return Refresh::Busy;
     };
-    apply_subtree(Arc::make_mut(shared), folder, fresh, &names);
+    let exists = fresh.contains_key(folder);
+    apply_nodes(Arc::make_mut(shared), folder, fresh);
+    let mut names_slot = lock(&NAMES);
+    let kept = names_slot
+        .as_mut()
+        .map(|rows| apply_names(Arc::make_mut(rows), folder, exists.then_some(&names)));
+    match kept {
+        Some(true) => {}
+        Some(false) => {
+            *names_slot = None;
+            NAMES_BROKEN.store(true, Ordering::SeqCst);
+        }
+        None => {
+            let mut stale = lock(&STALE);
+            stale.insert(folder.to_path_buf());
+            if stale.len() > STALE_MAX {
+                stale.clear();
+                NAMES_BROKEN.store(true, Ordering::SeqCst);
+            }
+        }
+    }
     DIRTY.store(true, Ordering::SeqCst);
     Refresh::Applied
+}
+
+/// The folders to read, without duplicates and without any folder that lies
+/// inside another one in the list (reading the outer folder covers it).
+fn covering_folders(mut folders: Vec<PathBuf>) -> Vec<PathBuf> {
+    folders.sort();
+    folders.dedup();
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for folder in &folders {
+        if !folders
+            .iter()
+            .any(|other| other != folder && folder.starts_with(other))
+        {
+            kept.push(folder.clone());
+        }
+    }
+    kept
+}
+
+/// Take in the changed paths from the watch and read again the folders that
+/// need it. While the index is not in memory the paths only wait; they are
+/// applied once it loads. Returns the folders read again, and `stale` when the
+/// changes can no longer be applied.
+pub(crate) fn apply_changes(paths: Vec<PathBuf>, epoch: u64) -> Applied {
+    let mut stale = false;
+    {
+        let mut waiting = lock(&WAITING);
+        waiting.extend(paths);
+        if waiting.len() > WAITING_MAX {
+            waiting.clear();
+            stale = true;
+        }
+    }
+    let Some(index) = held() else {
+        return Applied { folders: Vec::new(), stale };
+    };
+    let raw: Vec<PathBuf> = std::mem::take(&mut *lock(&WAITING)).into_iter().collect();
+    let indexed: Vec<PathBuf> = raw
+        .iter()
+        .filter_map(|path| nearest_indexed(&index, path))
+        .collect();
+    drop(index);
+    let now = Instant::now();
+    lock(&ATTEMPTED).retain(|_, at| now.duration_since(*at) < RETRY);
+    let mut read: Vec<String> = Vec::new();
+    for folder in covering_folders(indexed) {
+        if lock(&ATTEMPTED).contains_key(&folder) {
+            lock(&WAITING).insert(folder);
+            continue;
+        }
+        lock(&ATTEMPTED).insert(folder.clone(), now);
+        match refresh_subtree(&folder, epoch) {
+            Refresh::Applied => read.push(folder.to_string_lossy().into_owned()),
+            Refresh::TooLarge => stale = true,
+            Refresh::Skipped => {}
+            Refresh::Busy => {
+                lock(&ATTEMPTED).remove(&folder);
+                lock(&WAITING).insert(folder);
+            }
+        }
+    }
+    Applied { folders: read, stale }
 }
 
 /// `bytes` moved by `delta`, never below zero.
@@ -858,28 +1430,11 @@ fn refresh_summary(node: &mut Node) {
 /// Put the freshly read `fresh` nodes of `folder`'s subtree into `index`, and
 /// bring the folders above it in step: their totals and folder counts move by
 /// the same change, and their rows for the folder below follow.
-fn apply_subtree(index: &mut Index, folder: &Path, mut fresh: HashMap<PathBuf, Node>, names: &NameIndex) {
+fn apply_nodes(index: &mut Index, folder: &Path, mut fresh: HashMap<PathBuf, Node>) {
     let exists = fresh.contains_key(folder);
     let new_total = fresh.get(folder).map_or(0, |node| node.total);
     let old_total = index.nodes.get(folder).map_or(0, |node| node.total);
     let delta = i128::from(new_total) - i128::from(old_total);
-
-    // Name rows first: they are found by path in the rows as they were.
-    let rows_ok = match index.names.as_mut() {
-        None => true,
-        Some(rows) => match rows.find_dir(folder) {
-            Some(row) if exists => rows.replace_subtree(row, names),
-            Some(row) => {
-                rows.remove_subtree(row);
-                rows.compact_if_sparse();
-                true
-            }
-            None => false,
-        },
-    };
-    if !rows_ok {
-        index.names = None;
-    }
 
     index.nodes.retain(|path, _| !path.starts_with(folder));
     index.nodes.extend(fresh.drain());
@@ -908,27 +1463,5 @@ fn apply_subtree(index: &mut Index, folder: &Path, mut fresh: HashMap<PathBuf, N
         refresh_summary(node);
         child_total = Some(node.total);
         child = parent;
-    }
-}
-
-/// Save the index if it changed and the last save is old enough. Called from
-/// the watch loop.
-pub(crate) fn save_if_due() {
-    if !DIRTY.load(Ordering::SeqCst) {
-        return;
-    }
-    {
-        let mut last = lock(&LAST_SAVE);
-        if last.is_some_and(|at| at.elapsed() < SAVE_INTERVAL) {
-            return;
-        }
-        *last = Some(Instant::now());
-    }
-    DIRTY.store(false, Ordering::SeqCst);
-    let Some(index) = held() else {
-        return;
-    };
-    if let Ok(view) = folder(&index, &index.root) {
-        persist(index, view);
     }
 }

@@ -37,6 +37,12 @@ final class DiskImageInstaller {
     /// The finding whose card is up, or being installed.
     private var current: DiskImageFinding?
     private var installing = false
+    /// The running install's cancellation, and its token (so a late commit
+    /// from an earlier install is ignored).
+    private var installControl: DiskImageInstallControl?
+    private var installToken: UUID?
+    /// The working card offers Cancel (manual installs only; automatic ones show no card).
+    private var cancelOffered = false
     /// A result card (with or without Undo) is up; the next image waits.
     private var resultShowing = false
     private var lastInstall: InstalledRecord?
@@ -49,6 +55,8 @@ final class DiskImageInstaller {
         let name: String
         /// Old copies an automatic update moved to the Trash; empty for a fresh install.
         let replaced: [DiskImageTrashedCopy]
+        /// Where the old copy was running from when the update quit it; Undo reopens these.
+        let relaunch: [URL]
     }
 
     init(preferences: Preferences) {
@@ -120,11 +128,13 @@ final class DiskImageInstaller {
         current = finding
         if case let .app(candidate) = finding {
             if isAutomatic(candidate) {
-                runInstall(candidate, replace: false, automatic: true)
+                runInstall(candidate, replace: false, automatic: true, updating: false)
                 return
             }
             if isAutomaticUpdate(candidate) {
-                runInstall(candidate, replace: true, automatic: true)
+                // A running old copy is asked to quit, then reopened after the update.
+                runInstall(candidate, replace: true, automatic: true,
+                           updating: !runningCopies(of: candidate.bundleID).isEmpty)
                 return
             }
         }
@@ -146,10 +156,11 @@ final class DiskImageInstaller {
             && runningCopies(of: candidate.bundleID).isEmpty
     }
 
-    /// Opt-in: the same bundle id is installed at a LOWER version, the copy is
-    /// not running, the image's app is signed and notarized, and the install
-    /// would only ever replace that app (the name in /Applications, if taken,
-    /// holds the same bundle id). Anything else is asked in the notch.
+    /// Opt-in: the same bundle id is installed at a LOWER version, the image's
+    /// app is signed and notarized, and the install would only ever replace
+    /// that app (the name in /Applications, if taken, holds the same bundle id).
+    /// A running old copy is quit gracefully first (`runInstall`). Anything
+    /// else is asked in the notch.
     private func isAutomaticUpdate(_ candidate: DiskImageCandidate) -> Bool {
         guard preferences.convDiskImageAutoUpdate,
               candidate.trusted,
@@ -157,8 +168,7 @@ final class DiskImageInstaller {
               candidate.installedURL != nil,
               let installed = candidate.installedVersion,
               candidate.installedBundleID?.caseInsensitiveCompare(bundleID) == .orderedSame,
-              installed.isOlder(than: candidate.newVersion),
-              runningCopies(of: bundleID).isEmpty
+              installed.isOlder(than: candidate.newVersion)
         else { return false }
         let fm = FileManager.default
         guard let destination = DiskImageInstallerSupport.collisionURLs(
@@ -184,7 +194,10 @@ final class DiskImageInstaller {
         switch choice {
         case .install, .replace:
             guard !installing, case let .app(candidate) = current else { return }
-            runInstall(candidate, replace: choice == .replace, automatic: false)
+            runInstall(candidate, replace: choice == .replace, automatic: false, updating: false)
+        case .quitAndUpdate:
+            guard !installing, case let .app(candidate) = current else { return }
+            runInstall(candidate, replace: true, automatic: false, updating: true)
         case .undo:
             undo()
         case .openInstaller:
@@ -193,10 +206,51 @@ final class DiskImageInstaller {
         case .showImage:
             if let current { NSWorkspace.shared.open(current.mountURL) }
             finish()
+        case .cancel:
+            cancelInstall()
         case .dismiss:
-            guard !installing else { return }
+            // While an install is working, the close is Cancel.
+            if installing {
+                cancelInstall()
+                return
+            }
             finish()
         }
+    }
+
+    /// Stops the install that the working card is showing. Refused (nothing
+    /// changes) once the final move has begun.
+    private func cancelInstall() {
+        guard installing, cancelOffered, let control = installControl,
+              case let .app(candidate)? = current, control.requestCancel()
+        else { return }
+        cancelOffered = false
+        show(workingPrompt(candidate, detail: L10n.t("Stopping and cleaning up."), cancellable: false))
+    }
+
+    /// The final move has begun: the working card drops Cancel.
+    private func installCommitted(_ token: UUID) {
+        guard installing, installToken == token, cancelOffered,
+              case let .app(candidate)? = current
+        else { return }
+        cancelOffered = false
+        show(workingPrompt(candidate, detail: L10n.t("Copying and checking it."), cancellable: false))
+    }
+
+    private func workingPrompt(_ candidate: DiskImageCandidate, detail: String,
+                               cancellable: Bool) -> DiskImagePrompt {
+        DiskImagePrompt(iconPath: candidate.appURL.path,
+                        title: L10n.t("Installing \(candidate.displayName)"),
+                        detail: detail,
+                        style: .working,
+                        primary: cancellable ? .init(choice: .cancel, label: L10n.t("Cancel")) : nil)
+    }
+
+    private func endInstall() {
+        installing = false
+        installControl = nil
+        installToken = nil
+        cancelOffered = false
     }
 
     /// The pointer is on the card (or left it): the result card stays while
@@ -217,7 +271,7 @@ final class DiskImageInstaller {
         dismissTimer = nil
         hovering = false
         current = nil
-        installing = false
+        endInstall()
         resultShowing = false
         lastInstall = nil
         _ = present?(nil)
@@ -240,45 +294,128 @@ final class DiskImageInstaller {
 
     // MARK: - Install
 
-    private func runInstall(_ candidate: DiskImageCandidate, replace: Bool, automatic: Bool) {
+    /// Installs `candidate`. `updating` means an installed older copy is
+    /// running: it is asked to quit gracefully, and after a successful update
+    /// the new copy is reopened (without taking focus).
+    private func runInstall(_ candidate: DiskImageCandidate, replace: Bool, automatic: Bool, updating: Bool) {
         installing = true
         current = .app(candidate)
         let name = candidate.displayName
-        if !automatic {
-            show(DiskImagePrompt(iconPath: candidate.appURL.path,
-                                 title: L10n.t("Installing \(name)"),
-                                 detail: L10n.t("Copying and checking it."),
-                                 style: .working))
+        let token = UUID()
+        installToken = token
+        // Every install shows the working card with Cancel, automatic ones included.
+        cancelOffered = true
+        let control = DiskImageInstallControl(onCommit: { [weak self] in
+            Task { @MainActor in self?.installCommitted(token) }
+        })
+        installControl = control
+        if cancelOffered {
+            show(workingPrompt(candidate, detail: L10n.t("Copying and checking it."), cancellable: true))
         }
         let trash = preferences.convDiskImageTrashDownload
         Task {
             // A running copy is asked to quit first; if it will not, nothing is touched.
             let running = runningCopies(of: candidate.bundleID)
+            let runningURLs = running.map { $0.bundleURL }
             if !running.isEmpty {
-                running.forEach { $0.terminate() }
-                for _ in 0..<40 where running.contains(where: { !$0.isTerminated }) {
-                    try? await Task.sleep(for: .milliseconds(200))
+                if cancelOffered {
+                    show(workingPrompt(candidate, detail: L10n.t("Asking \(name) to quit."), cancellable: true))
                 }
-                if running.contains(where: { !$0.isTerminated }) {
-                    showProblem(icon: candidate.appURL.path,
-                                title: L10n.t("Could not quit \(name)"),
-                                detail: L10n.t("Quit it yourself, then install again. Nothing was changed."))
+                running.forEach { $0.terminate() }
+                let quit = await awaitQuit(running, steps: updating ? 50 : 40, control: control)
+                if control.isCancelled {
+                    // Cancelled while quitting: whatever quit is reopened, and nothing is copied or moved.
+                    await reopenQuit(running, urls: runningURLs)
+                    showCancelled(candidate)
                     return
                 }
+                if !quit {
+                    if automatic {
+                        showQuitAndUpdateOffer(candidate)
+                    } else {
+                        showProblem(icon: candidate.appURL.path,
+                                    title: L10n.t("Could not quit \(name)"),
+                                    detail: L10n.t("Quit it yourself, then install again. Nothing was changed."))
+                    }
+                    return
+                }
+                if cancelOffered {
+                    show(workingPrompt(candidate, detail: L10n.t("Copying and checking it."), cancellable: true))
+                }
             }
+            let quitURLs = Array(Set(runningURLs.compactMap { $0 }))
             let result = await Task.detached(priority: .utility) {
-                DiskImageInstallWork.install(candidate, trashingDownload: trash, replacing: replace)
+                DiskImageInstallWork.install(candidate, trashingDownload: trash, replacing: replace,
+                                             control: control)
             }.value
-            showResult(result, candidate: candidate, replaced: replace, automatic: automatic)
+            if case let .cancelled(restored) = result.outcome {
+                // Old copies were quit for this update; put back the ones that quit.
+                if restored { await reopenQuit(running, urls: runningURLs) }
+                showCancelled(candidate, restored: restored)
+                return
+            }
+            var reopened = false
+            if updating, !running.isEmpty, result.outcome.installedApp, let destination = result.destinationURL {
+                reopened = await reopen(destination)
+            }
+            showResult(result, candidate: candidate, replaced: replace, automatic: automatic,
+                       updating: updating, reopened: reopened, relaunch: quitURLs)
         }
     }
 
+    /// Waits up to `steps` x 200 ms for every instance to exit; stops early on cancel.
+    private func awaitQuit(_ running: [NSRunningApplication], steps: Int,
+                           control: DiskImageInstallControl? = nil) async -> Bool {
+        var waited = 0
+        while waited < steps, control?.isCancelled != true, running.contains(where: { !$0.isTerminated }) {
+            try? await Task.sleep(for: .milliseconds(200))
+            waited += 1
+        }
+        return !running.contains(where: { !$0.isTerminated })
+    }
+
+    /// Reopens the copies that quit (never one that is still running).
+    private func reopenQuit(_ running: [NSRunningApplication], urls: [URL?]) async {
+        var done = Set<URL>()
+        for (app, url) in zip(running, urls) where app.isTerminated {
+            guard let url, done.insert(url).inserted else { continue }
+            _ = await reopen(url)
+        }
+    }
+
+    /// Opens an app without taking focus.
+    private func reopen(_ url: URL) async -> Bool {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        return (try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)) != nil
+    }
+
+    /// The old copy did not quit in time: the question is asked in the notch.
+    private func showQuitAndUpdateOffer(_ candidate: DiskImageCandidate) {
+        endInstall()
+        resultShowing = false
+        let name = candidate.displayName
+        let shown = show(DiskImagePrompt(
+            iconPath: candidate.appURL.path,
+            title: L10n.t("\(name) is still running"),
+            detail: L10n.t("It did not quit, so the update waits. Nothing was changed."),
+            warning: L10n.t("Quit & update quits it (unsaved work in it may be lost), moves the old copy to the Trash, then installs and reopens this one."),
+            style: .ask,
+            primary: .init(choice: .quitAndUpdate, label: L10n.t("Quit & update")),
+            secondary: .init(choice: .dismiss, label: L10n.t("Not now"))))
+        if !shown { finish() }
+    }
+
     private func showResult(_ result: DiskImageInstallResult, candidate: DiskImageCandidate,
-                            replaced: Bool, automatic: Bool) {
+                            replaced: Bool, automatic: Bool, updating: Bool, reopened: Bool,
+                            relaunch: [URL]) {
         let name = candidate.displayName
         var detail: String
         var warning = false
         switch result.outcome {
+        case let .cancelled(restored):
+            showCancelled(candidate, restored: restored)
+            return
         case let .installed(downloadTrashed):
             detail = downloadTrashed
                 ? L10n.t("Disk image ejected · download moved to the Trash")
@@ -300,19 +437,21 @@ final class DiskImageInstaller {
             return
         }
         let destination = result.destinationURL
-        let updated = replaced && automatic
-        // A fresh install and an automatic update can be undone; a manual Replace stands.
+        let updated = replaced && (automatic || updating)
+        // A fresh install and an update can be undone; a manual Replace stands.
         let undoable = updated ? !result.replaced.isEmpty : !replaced
         if undoable, let destination {
             lastInstall = InstalledRecord(destinationURL: destination, bundleID: candidate.bundleID,
-                                          name: name, replaced: updated ? result.replaced : [])
+                                          name: name, replaced: updated ? result.replaced : [],
+                                          relaunch: updated ? relaunch : [])
         }
-        installing = false
+        endInstall()
         resultShowing = true
         let title: String
         if updated {
             let version = candidate.newVersion.display ?? ""
-            title = version.isEmpty ? L10n.t("Updated \(name)") : L10n.t("Updated \(name) to \(version)")
+            let base = version.isEmpty ? L10n.t("Updated \(name)") : L10n.t("Updated \(name) to \(version)")
+            title = reopened ? L10n.t("\(base) · reopened") : base
         } else {
             title = replaced ? L10n.t("Replaced \(name)") : L10n.t("Installed \(name)")
         }
@@ -331,13 +470,36 @@ final class DiskImageInstaller {
     }
 
     private func showProblem(icon: String, title: String, detail: String) {
-        installing = false
+        endInstall()
         resultShowing = true
         if !show(DiskImagePrompt(iconPath: icon, title: title, detail: detail, style: .problem)) {
             finish()
             return
         }
         armDismiss(after: 15)
+    }
+
+    /// A cancelled install: a short card that goes by itself. `restored` is
+    /// false when an old copy could not be put back from the Trash.
+    private func showCancelled(_ candidate: DiskImageCandidate, restored: Bool = true) {
+        let name = candidate.displayName
+        guard restored else {
+            showProblem(icon: candidate.appURL.path,
+                        title: L10n.t("Could not put back \(name)"),
+                        detail: L10n.t("The old copy is still in the Trash."))
+            return
+        }
+        endInstall()
+        resultShowing = true
+        guard show(DiskImagePrompt(iconPath: candidate.appURL.path,
+                                   title: L10n.t("Cancelled"),
+                                   detail: L10n.t("Nothing was installed. \(name) is unchanged in Applications."),
+                                   style: .done))
+        else {
+            finish()
+            return
+        }
+        armDismiss(after: 3)
     }
 
     /// Moves what was just installed to the Trash. Never deletes.
@@ -384,21 +546,41 @@ final class DiskImageInstaller {
                         detail: L10n.t("\(record.name) is no longer the updated copy, or the old copy is no longer in the Trash."))
             return
         }
-        do {
-            try fm.trashItem(at: url, resultingItemURL: nil)
-            for copy in record.replaced.reversed() {
-                try fm.moveItem(at: copy.inTrash, to: copy.original)
+        // The updated copy may have been reopened: it is quit gracefully first, and
+        // Undo stays in progress (the card cannot be dismissed) until it is done.
+        dismissTimer?.invalidate()
+        dismissTimer = nil
+        installing = true
+        Task {
+            let running = runningCopies(of: record.bundleID)
+            running.forEach { $0.terminate() }
+            guard await awaitQuit(running, steps: 50) else {
+                showProblem(icon: url.path, title: L10n.t("Could not undo"),
+                            detail: L10n.t("\(record.name) did not quit. Quit it yourself, then undo again. Nothing was changed."))
+                return
             }
-        } catch {
-            showProblem(icon: url.path, title: L10n.t("Could not undo"),
-                        detail: L10n.t("\(record.name) could not be put back. Check the Trash and Applications."))
-            return
+            do {
+                try fm.trashItem(at: url, resultingItemURL: nil)
+                for copy in record.replaced.reversed() {
+                    try fm.moveItem(at: copy.inTrash, to: copy.original)
+                }
+            } catch {
+                showProblem(icon: url.path, title: L10n.t("Could not undo"),
+                            detail: L10n.t("\(record.name) could not be put back. Check the Trash and Applications."))
+                return
+            }
+            // The old copy that had been running is reopened, without taking focus.
+            var done = Set<URL>()
+            for old in record.relaunch where done.insert(old).inserted {
+                _ = await reopen(old)
+            }
+            endInstall()
+            resultShowing = true
+            show(DiskImagePrompt(iconPath: (record.replaced.first?.original ?? url).path,
+                                 title: L10n.t("Restored \(record.name)"),
+                                 detail: L10n.t("The updated copy is in the Trash."), style: .done))
+            armDismiss(after: 3)
         }
-        resultShowing = true
-        show(DiskImagePrompt(iconPath: (record.replaced.first?.original ?? url).path,
-                             title: L10n.t("Restored \(record.name)"),
-                             detail: L10n.t("The updated copy is in the Trash."), style: .done))
-        armDismiss(after: 3)
     }
 
     // MARK: - Offers
@@ -562,6 +744,75 @@ enum DiskImageInstallOutcome: Sendable {
     case installedKeepingMount
     case installedKeepingDownload
     case failed(DiskImageInstallFailure)
+    /// Stopped before the final move; nothing new is in Applications. `restored`
+    /// is false when an old copy moved to the Trash could not be put back.
+    case cancelled(restored: Bool)
+
+    /// The app is in /Applications (whatever the disk image or download did after).
+    var installedApp: Bool {
+        switch self {
+        case .installed, .installedKeepingMount, .installedKeepingDownload: return true
+        case .failed, .cancelled: return false
+        }
+    }
+}
+
+/// One install's cancellation: the subprocess it is running (by the PID it
+/// started) and the commit point past which Cancel is refused. Shared by the
+/// main actor (Cancel) and the detached install; every field is guarded by `lock`.
+final class DiskImageInstallControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var committed = false
+    private var running: Process?
+    private let onCommit: (@Sendable () -> Void)?
+
+    init(onCommit: (@Sendable () -> Void)? = nil) {
+        self.onCommit = onCommit
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    /// Stops the install and terminates its running subprocess. False once the
+    /// install is committed (the final move has begun): nothing changes then.
+    func requestCancel() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !committed else { return false }
+        cancelled = true
+        if let running, running.isRunning { running.terminate() }
+        return true
+    }
+
+    /// Called before the final move. False if cancel came first; the move must not run.
+    func commit() -> Bool {
+        lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            return false
+        }
+        committed = true
+        lock.unlock()
+        onCommit?()
+        return true
+    }
+
+    func attach(_ process: Process) {
+        lock.lock()
+        defer { lock.unlock() }
+        running = process
+        if cancelled, process.isRunning { process.terminate() }
+    }
+
+    func detach() {
+        lock.lock()
+        running = nil
+        lock.unlock()
+    }
 }
 
 struct DiskImageInstallResult: Sendable {
@@ -679,7 +930,9 @@ enum DiskImageInstallWork {
     /// .dmg. With `replacing`, an existing copy is moved to the Trash first
     /// (after the new copy is staged and checked; put back if the move fails).
     static func install(_ candidate: DiskImageCandidate, trashingDownload: Bool,
-                        replacing: Bool = false) -> DiskImageInstallResult {
+                        replacing: Bool = false,
+                        control: DiskImageInstallControl? = nil) -> DiskImageInstallResult {
+        let cancelledResult = DiskImageInstallResult(outcome: .cancelled(restored: true), destinationURL: nil)
         let fm = FileManager.default
         let domain = DiskImageInstallerSupport.applicationsDomain(useUserApplications: false)
         guard let applicationsURL = try? fm.url(for: .applicationDirectory, in: domain,
@@ -702,10 +955,10 @@ enum DiskImageInstallWork {
         } catch {
             return DiskImageInstallResult(outcome: .failed(.copy), destinationURL: destinationURL)
         }
-        defer { try? fm.removeItem(at: stagingDirectory) }
-
         let stagedApp = stagingDirectory.appendingPathComponent(candidate.appURL.lastPathComponent,
                                                                  isDirectory: true)
+        // Whatever is still staged on the way out (a cancel, a failed check) goes to the Trash.
+        defer { clearStaging(stagingDirectory, stagedApp: stagedApp, fileManager: fm) }
         // Carrying the mounted image's quarantine over leaves the installed app eligible for
         // path randomization, so macOS runs it from a read-only random location instead of
         // Applications. The checks below are the same assessment that flag defers to.
@@ -713,17 +966,20 @@ enum DiskImageInstallWork {
         // quarantine it has, so macOS still asks the first time it opens.
         var flags = ["--rsrc", "--extattr", "--acl"]
         if candidate.trusted { flags.append("--noqtn") }
-        let copy = run("/usr/bin/ditto", flags + [candidate.appURL.path, stagedApp.path])
+        let copy = run("/usr/bin/ditto", flags + [candidate.appURL.path, stagedApp.path], control: control)
+        if control?.isCancelled == true { return cancelledResult }
         guard copy.status == 0, validBundle(at: stagedApp) else {
             return DiskImageInstallResult(outcome: .failed(.copy), destinationURL: destinationURL)
         }
         if candidate.trusted {
-            guard gatekeeperAccepts(stagedApp) else {
+            guard gatekeeperAccepts(stagedApp, control: control) else {
+                if control?.isCancelled == true { return cancelledResult }
                 return DiskImageInstallResult(outcome: .failed(.verification), destinationURL: destinationURL)
             }
         }
 
         var trashedOld: [DiskImageTrashedCopy] = []
+        var cancelledBeforeMove = false
         do {
             guard let finalCollisionURLs = DiskImageInstallerSupport.collisionURLs(
                 for: candidate.appURL, useUserApplications: false, fileManager: fm),
@@ -734,6 +990,8 @@ enum DiskImageInstallWork {
                 if let installed = candidate.installedURL, fm.fileExists(atPath: installed.path),
                    !olds.contains(installed) { olds.append(installed) }
                 for old in olds {
+                    // Cancel stops before the next old copy is trashed; those already trashed go back.
+                    if control?.isCancelled == true { break }
                     var resulting: NSURL?
                     try fm.trashItem(at: old, resultingItemURL: &resulting)
                     if let resulting {
@@ -745,12 +1003,18 @@ enum DiskImageInstallWork {
                     return DiskImageInstallResult(outcome: .failed(.alreadyInstalled), destinationURL: destinationURL)
                 }
             }
-            try fm.moveItem(at: stagedApp, to: destinationURL)
-        } catch {
-            for entry in trashedOld.reversed() where !fm.fileExists(atPath: entry.original.path) {
-                try? fm.moveItem(at: entry.inTrash, to: entry.original)
+            // The commit point: from here Cancel is refused and the move runs.
+            cancelledBeforeMove = control?.commit() == false
+            if !cancelledBeforeMove {
+                try fm.moveItem(at: stagedApp, to: destinationURL)
             }
+        } catch {
+            restoreTrashed(trashedOld, fileManager: fm)
             return DiskImageInstallResult(outcome: .failed(.copy), destinationURL: destinationURL)
+        }
+        if cancelledBeforeMove {
+            let restored = restoreTrashed(trashedOld, fileManager: fm)
+            return DiskImageInstallResult(outcome: .cancelled(restored: restored), destinationURL: nil)
         }
 
         do {
@@ -778,6 +1042,31 @@ enum DiskImageInstallWork {
         }
     }
 
+    /// Moves a partial staged copy to the Trash, then removes the staging
+    /// folder only if it is empty. Never deletes content.
+    private static func clearStaging(_ stagingDirectory: URL, stagedApp: URL, fileManager fm: FileManager) {
+        if fm.fileExists(atPath: stagedApp.path) {
+            try? fm.trashItem(at: stagedApp, resultingItemURL: nil)
+        }
+        if (try? fm.contentsOfDirectory(atPath: stagingDirectory.path))?.isEmpty == true {
+            try? fm.removeItem(at: stagingDirectory)
+        }
+    }
+
+    /// Puts old copies back from the Trash. Returns false if any could not go back.
+    @discardableResult
+    private static func restoreTrashed(_ copies: [DiskImageTrashedCopy], fileManager fm: FileManager) -> Bool {
+        var allBack = true
+        for entry in copies.reversed() where !fm.fileExists(atPath: entry.original.path) {
+            do {
+                try fm.moveItem(at: entry.inTrash, to: entry.original)
+            } catch {
+                allBack = false
+            }
+        }
+        return allBack
+    }
+
     private static func validBundle(at appURL: URL) -> Bool {
         guard let bundle = Bundle(url: appURL),
               let executableURL = bundle.executableURL,
@@ -788,14 +1077,14 @@ enum DiskImageInstallWork {
         return executable.hasPrefix(root)
     }
 
-    private static func gatekeeperAccepts(_ appURL: URL) -> Bool {
-        let signature = run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path])
+    private static func gatekeeperAccepts(_ appURL: URL, control: DiskImageInstallControl?) -> Bool {
+        let signature = run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path], control: control)
         guard signature.status == 0 else { return false }
-        let status = run("/usr/sbin/spctl", ["--status"])
+        let status = run("/usr/sbin/spctl", ["--status"], control: control)
         if String(data: status.output, encoding: .utf8)?.localizedCaseInsensitiveContains("disabled") == true {
             return true
         }
-        return run("/usr/sbin/spctl", ["-a", "-t", "exec", appURL.path]).status == 0
+        return run("/usr/sbin/spctl", ["-a", "-t", "exec", appURL.path], control: control).status == 0
     }
 
     /// Stricter than `gatekeeperAccepts`, which is Vorssaint's and passes
@@ -821,7 +1110,10 @@ enum DiskImageInstallWork {
     }
 
     private static func run(_ executable: String, _ arguments: [String],
-                            mergingErrors: Bool = false) -> CommandResult {
+                            mergingErrors: Bool = false,
+                            control: DiskImageInstallControl? = nil) -> CommandResult {
+        // A cancelled install starts nothing further.
+        if control?.isCancelled == true { return CommandResult(status: -1, output: Data()) }
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -833,8 +1125,10 @@ enum DiskImageInstallWork {
         } catch {
             return CommandResult(status: -1, output: Data())
         }
+        control?.attach(process)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        control?.detach()
         return CommandResult(status: process.terminationStatus, output: data)
     }
 }

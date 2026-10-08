@@ -238,7 +238,8 @@ export const api = {
     invoke<QuitOutcome>("process_force_quit", { key: r.key, pid: r.lead.pid, startTime: r.lead.start_time }),
   volumes: () => invoke<Volume[]>("volumes"),
   eject: (mount: string) => invoke<void>("eject", { mount }),
-  openFullDiskAccess: () => invoke<void>("open_full_disk_access"),
+  /** Opens Full Disk Access and reveals the hub bundle, so the hub can be added. */
+  openFullDiskAccess: () => invoke<void>("fda_request"),
   cleanupScan: () => invoke<CleanupReport>("cleanup_scan"),
   /** The last saved findings, or null when none were saved. Never scans. */
   cleanupCached: () => invoke<CleanupReport | null>("cleanup_cached"),

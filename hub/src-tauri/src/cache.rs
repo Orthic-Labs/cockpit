@@ -3,8 +3,9 @@
 //! whole to a temporary name and renamed into place, readable only by the
 //! user, and ignored when its version differs or it does not parse.
 
-use std::io::Write;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -48,12 +49,35 @@ pub fn read_bytes(name: &str) -> Option<Vec<u8>> {
     std::fs::read(dir().join(name)).ok()
 }
 
-/// Replace `name` with `body` (the bytes a format writes itself). Atomic like
-/// `save`: a reader never sees a partial file.
-pub fn write_bytes(name: &str, body: &[u8]) -> std::io::Result<()> {
+/// `name` opened for reading in large chunks, or `None` when it is missing.
+pub fn open(name: &str) -> Option<BufReader<File>> {
+    File::open(dir().join(name))
+        .ok()
+        .map(|file| BufReader::with_capacity(1 << 20, file))
+}
+
+/// Replace `name` with the bytes `write` puts in it. The output is buffered and
+/// streamed, so the whole file is never built in memory first. Atomic like
+/// `save`: a reader never sees a partial file, and a failed write leaves the
+/// old file in place.
+pub fn write_with(
+    name: &str,
+    write: impl FnOnce(&mut BufWriter<File>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let dir = dir();
     std::fs::create_dir_all(&dir)?;
     let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    let result = write_temp(&temp, write).and_then(|()| std::fs::rename(&temp, dir.join(name)));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+fn write_temp(
+    temp: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -61,11 +85,17 @@ pub fn write_bytes(name: &str, body: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&temp)?;
-    file.write_all(body)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&temp, dir.join(name))
+    let mut out = BufWriter::with_capacity(1 << 20, options.open(temp)?);
+    write(&mut out)?;
+    out.flush()?;
+    let file = out.into_inner().map_err(|error| error.into_error())?;
+    file.sync_all()
+}
+
+/// Replace `name` with `body` (the bytes a format writes itself). Atomic like
+/// `save`: a reader never sees a partial file.
+pub fn write_bytes(name: &str, body: &[u8]) -> std::io::Result<()> {
+    write_with(name, |out| out.write_all(body))
 }
 
 /// Delete `name` if it exists.

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// What the notch's disk image card can be asked to do.
 enum DiskImageChoice: Equatable, Sendable {
-    case install, replace, undo, openInstaller, showImage, dismiss
+    case install, replace, quitAndUpdate, undo, openInstaller, showImage, cancel, dismiss
 }
 
 /// **A disk image, as the notch shows it**: an app installed on its own (with
@@ -155,8 +155,13 @@ struct DiskImageCard: View {
                         ProgressView()
                             .progressViewStyle(.linear)
                             .tint(Palette.textPrimary)
-                            .padding(.bottom, Design.px(20))
+                            .padding(.bottom, Design.px(prompt.primary == nil ? 20 : 14))
                             .transition(.opacity)
+                        // A working card offers Cancel (and the close) only while cancelling is possible.
+                        if prompt.primary != nil {
+                            buttons
+                                .transition(.opacity)
+                        }
                     } else {
                         buttons
                             .transition(.opacity)
@@ -195,17 +200,18 @@ struct DiskImageCard: View {
                     .contentShape(Circle())
             }
             .buttonStyle(DiskImageCardButtonStyle())
-            .help(L10n.t("Close"))
+            .help(prompt.style == .working ? L10n.t("Cancel") : L10n.t("Close"))
         }
     }
 
     private func symbol(for choice: DiskImageChoice) -> String {
         switch choice {
         case .install:       return "arrow.down.app"
-        case .replace:       return "arrow.triangle.2.circlepath"
+        case .replace, .quitAndUpdate: return "arrow.triangle.2.circlepath"
         case .undo:          return "arrow.uturn.backward"
         case .openInstaller: return "shippingbox"
         case .showImage:     return "folder"
+        case .cancel:        return "stop.circle"
         case .dismiss:       return "clock"
         }
     }

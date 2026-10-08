@@ -196,22 +196,9 @@ export function Settings({ section, notch, onNavigate }: {
 
       {section === "permissions" && (
         <Group title="Permissions">
-          {!state.permissions ? <div className="muted small">Waiting for permission status from Pulse notch…</div> : state.permissions.map((permission) => (
-            <div key={permission.id} className="permission-row">
-              <Row label={permission.title} note={permission.why}>
-                <span className="permission-controls">
-                  <span className={`permission-status ${permission.status}`}>
-                    {permission.status === "granted" ? "Granted" : permission.status === "needsApproval" ? "Needs approval" : permission.status === "off" ? "Off" : "Unknown"}
-                  </span>
-                  <Button size="sm" variant="secondary" disabled={permission.status === "granted"}
-                    onClick={() => send({ command: "permissionRequest", id: permission.id })}>
-                    {permission.id === "automation" ? "Allow" : permission.id === "fullDiskAccess" || permission.id === "finderMenu" || permission.status === "needsApproval" ? "Open Settings" : "Allow"}
-                  </Button>
-                </span>
-              </Row>
-              {state.permissionErrors?.[permission.id] && <div className="error">{state.permissionErrors[permission.id]}</div>}
-            </div>
-          ))}
+          {!state.permissions ? <div className="muted small">Waiting for permission status from Pulse notch…</div> : (
+            <PermissionRows permissions={state.permissions} errors={state.permissionErrors} send={send} />
+          )}
         </Group>
       )}
 
@@ -625,6 +612,80 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
         </div>
       ))}
     </Group>
+  );
+}
+
+/**
+ * The hub's own Full Disk Access, polled while the Permissions section is open.
+ * Null until the first answer arrives.
+ */
+function useHubFullDiskAccess(): string | null {
+  const [hub, setHub] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const probe = () => {
+      invoke<string>("fda_status")
+        .then((value) => { if (alive) setHub(value); })
+        .catch(() => { if (alive) setHub("unknown"); });
+    };
+    probe();
+    const timer = window.setInterval(probe, 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  return hub;
+}
+
+/**
+ * Permission rows from the notch. Full Disk Access is per app and the hub is a
+ * separate app, so that row is granted only when the hub passes too.
+ */
+function PermissionRows({ permissions, errors, send }: {
+  permissions: Permission[];
+  errors?: Record<string, string>;
+  send: Send;
+}) {
+  const hub = useHubFullDiskAccess();
+  return (
+    <>
+      {permissions.map((permission) => {
+        const fda = permission.id === "fullDiskAccess";
+        // The notch's grant alone is not enough: the hub must pass too.
+        const awaitingHub = fda && permission.status === "granted" && hub === null;
+        const needsHub = fda && permission.status === "granted" && hub !== null && hub !== "granted";
+        const status = awaitingHub ? "unknown" : needsHub ? "needsApproval" : permission.status;
+        const text = awaitingHub ? "Checking…"
+          : status === "granted" ? "Granted"
+          : status === "needsApproval" ? "Needs approval"
+          : status === "off" ? "Off" : "Unknown";
+        const opensSettings = fda || permission.id === "finderMenu" || status === "needsApproval";
+        return (
+          <div key={permission.id} className="permission-row">
+            <Row label={permission.title} note={permission.why}>
+              <span className="permission-controls">
+                <span className={`permission-status ${status}`}>{text}</span>
+                <Button size="sm" variant="secondary" disabled={status === "granted"}
+                  onClick={() => fda
+                    ? invoke<void>("fda_request")
+                    : send({ command: "permissionRequest", id: permission.id })}>
+                  {permission.id === "automation" ? "Allow" : opensSettings ? "Open Settings" : "Allow"}
+                </Button>
+              </span>
+            </Row>
+            {fda && (
+              <div className="muted small">
+                {needsHub && <strong>Add Pulse (hub) too. </strong>}
+                Pulse (hub) is a separate app that runs the disk scans. Open Settings reveals it in Finder:
+                drag it into the list, or use +.
+              </div>
+            )}
+            {errors?.[permission.id] && <div className="error">{errors[permission.id]}</div>}
+          </div>
+        );
+      })}
+    </>
   );
 }
 

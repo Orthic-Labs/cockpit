@@ -110,6 +110,7 @@ final class PulsePermissions {
             Self.openPrivacyPane("Privacy_Accessibility")
         case "fullDiskAccess":
             Self.openPrivacyPane("Privacy_AllFiles")
+            Self.revealHubApp()
         case "automation":
             guard preferences.convFinderCutPaste, !requestingFinder else { return }
             requestingFinder = true
@@ -165,6 +166,14 @@ final class PulsePermissions {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Disk scans run in the hub, a separate app with its own Full Disk Access
+    /// grant. Reveal it in Finder so it can be dragged into the list or added with +.
+    static func revealHubApp() {
+        let hub = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Pulse.app", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: hub.path) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([hub])
     }
 
     /// Login Items & Extensions; falls back to the older Extensions pane id.

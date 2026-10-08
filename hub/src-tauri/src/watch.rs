@@ -9,21 +9,18 @@
 //! see `docs/donors.md`). Petal hands changes to its GPUI window; this version
 //! hands them to the hub's scanner.
 
-use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::scanner::{self, Refresh, UPDATED_EVENT, Updated};
+use crate::scanner::{self, UPDATED_EVENT, Updated};
 
 /// How often the changes FSEvents collected are read and applied.
 const POLL: Duration = Duration::from_millis(1_000);
-/// A folder that changed is read again at most this often.
-const RETRY: Duration = Duration::from_secs(10);
 
 /// Generation of the running watch. `stop`, or a newer `start`, moves it on,
 /// and the older watch then ends.
@@ -172,7 +169,6 @@ fn follow(app: AppHandle, root: &Path, since: u64, epoch: u64, generation: u64) 
         scanner::log("live refresh unavailable: FSEvents did not start");
         return;
     };
-    let mut attempted: HashMap<PathBuf, Instant> = HashMap::new();
     while GENERATION.load(Ordering::SeqCst) == generation {
         std::thread::sleep(POLL);
         if GENERATION.load(Ordering::SeqCst) != generation {
@@ -184,47 +180,19 @@ fn follow(app: AppHandle, root: &Path, since: u64, epoch: u64, generation: u64) 
             let _ = app.emit(UPDATED_EVENT, Updated { folders: Vec::new(), stale: true });
             break;
         }
-        let indexed: Vec<PathBuf> = pending
-            .changes
-            .iter()
-            .filter_map(|path| scanner::indexed_folder(path))
-            .collect();
-        let now = Instant::now();
-        let mut read: Vec<String> = Vec::new();
-        let mut stale = false;
-        for folder in covering_folders(indexed) {
-            if attempted.get(&folder).is_some_and(|at| now.duration_since(*at) < RETRY) {
-                continue;
-            }
-            attempted.insert(folder.clone(), now);
-            match scanner::refresh_subtree(&folder, epoch) {
-                Refresh::Applied => read.push(folder.to_string_lossy().into_owned()),
-                Refresh::TooLarge => stale = true,
-                Refresh::Skipped => {}
-            }
-        }
-        if !read.is_empty() || stale {
-            let _ = app.emit(UPDATED_EVENT, Updated { folders: read, stale });
+        // Changes wait in the scanner while the index is not in memory.
+        let applied = scanner::apply_changes(pending.changes, epoch);
+        if !applied.folders.is_empty() || applied.stale {
+            let _ = app.emit(
+                UPDATED_EVENT,
+                Updated {
+                    folders: applied.folders,
+                    stale: applied.stale,
+                },
+            );
         }
         scanner::save_if_due();
     }
-}
-
-/// The folders to read, without duplicates and without any folder that lies
-/// inside another one in the list (reading the outer folder covers it).
-fn covering_folders(mut folders: Vec<PathBuf>) -> Vec<PathBuf> {
-    folders.sort();
-    folders.dedup();
-    let mut kept: Vec<PathBuf> = Vec::new();
-    for folder in &folders {
-        if !folders
-            .iter()
-            .any(|other| other != folder && folder.starts_with(other))
-        {
-            kept.push(folder.clone());
-        }
-    }
-    kept
 }
 
 // --- FFI (CoreServices / CoreFoundation / libdispatch) -----------------------------

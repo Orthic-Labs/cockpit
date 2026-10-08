@@ -3,6 +3,7 @@
 //! re-checked in core immediately before they happen.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use pulse_core::cleanup_scan as cs;
 use trash::macos::{DeleteMethod, TrashContextExtMacos};
@@ -30,17 +31,36 @@ pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
     context.delete(path).map_err(|e| e.to_string())
 }
 
+/// Run the findings scan on its own utility-QoS thread. The core scan is
+/// single-threaded, so there is no pool to cap; it never overlaps a storage scan.
+fn run_cleanup_scan() -> Result<cs::Report, String> {
+    crate::scanner::low_priority();
+    let _exclusive = crate::scanner::exclusive();
+    let started = Instant::now();
+    let running = cs::running_process_names();
+    let report = cs::scan(&home(), &running)?;
+    let scan_ms = started.elapsed().as_millis();
+    let saved = Instant::now();
+    if let Err(error) = cache::save(FINDINGS_FILE, FINDINGS_FORMAT, &report) {
+        crate::scanner::log(&format!("saving cleanup findings failed: {error}"));
+    }
+    crate::scanner::log(&format!(
+        "cleanup scan done: scan {scan_ms} ms, {} findings, save {} ms",
+        report.findings.len(),
+        saved.elapsed().as_millis(),
+    ));
+    Ok(report)
+}
+
 #[tauri::command]
 pub async fn cleanup_scan() -> Result<cs::Report, String> {
     tauri::async_runtime::spawn_blocking(|| -> Result<cs::Report, String> {
-        // Never alongside a storage scan.
-        let _exclusive = crate::scanner::exclusive();
-        let running = cs::running_process_names();
-        let report = cs::scan(&home(), &running)?;
-        if let Err(error) = cache::save(FINDINGS_FILE, FINDINGS_FORMAT, &report) {
-            crate::scanner::log(&format!("saving cleanup findings failed: {error}"));
-        }
-        Ok(report)
+        std::thread::Builder::new()
+            .name("pulse-cleanup".into())
+            .spawn(run_cleanup_scan)
+            .map_err(|e| e.to_string())?
+            .join()
+            .map_err(|_| "cleanup scan failed".to_string())?
     })
     .await
     .map_err(|e| e.to_string())?
