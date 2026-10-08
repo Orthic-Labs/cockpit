@@ -3,7 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Badge, Button, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
 
-interface Account {
+export interface Limit {
+  label: string;
+  /** 0–1, how much of the window is used. */
+  usedFraction: number;
+  /** Length of the window; absent when the provider did not say. */
+  seconds?: number;
+}
+
+export interface Account {
   id: string;
   name: string;
   connected: boolean;
@@ -13,6 +21,7 @@ interface Account {
   summary?: string;
   signInTitle?: string;
   signInExplanation: string;
+  limits?: Limit[];
 }
 
 interface AppRef {
@@ -32,7 +41,7 @@ interface Conveniences {
   cutPasteResults: { name: string; ok: boolean; detail: string }[];
 }
 
-interface NotchState {
+export interface NotchState {
   permissions?: Permission[];
   permissionErrors?: Record<string, string>;
   conveniences?: Conveniences;
@@ -47,7 +56,7 @@ interface NotchState {
   helperError?: string | null;
 }
 
-interface Permission {
+export interface Permission {
   id: string;
   title: string;
   why: string;

@@ -115,6 +115,7 @@ fn initial_app() -> Option<String> {
 fn watch_notch(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let names = [
+            ("dev.orthic.pulse.hub.show.overview", "show-section", "overview"),
             ("dev.orthic.pulse.hub.show.settings", "show-section", "settings"),
             ("dev.orthic.pulse.hub.show.storage", "show-section", "storage"),
             ("dev.orthic.pulse.hub.show.monitor", "show-section", "monitor"),

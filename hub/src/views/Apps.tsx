@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ConfirmDialog, Toggle } from "@rightkit/app-shell/react";
+import { Button, ConfirmDialog, SegmentedControl } from "@rightkit/app-shell/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AppWindow } from "lucide-react";
@@ -21,6 +21,9 @@ import {
 
 const DAY = 86_400;
 const UNUSED_DAYS = 90;
+
+/** Which apps the list shows: every app, ones unused for 90+ days, or ones with an update. */
+type AppFilter = "all" | "unused" | "updates";
 
 function lastUsedText(epoch: number | null): string {
   if (epoch == null) return "Unknown";
@@ -59,8 +62,7 @@ export function Apps() {
   const [icons, setIcons] = useState<Record<string, string | null>>({});
   const [jobs, setJobs] = useState<Record<string, UpdateJob>>({});
   const [query, setQuery] = useState("");
-  const [unusedOnly, setUnusedOnly] = useState(false);
-  const [updatesOnly, setUpdatesOnly] = useState(false);
+  const [filter, setFilter] = useState<AppFilter>("all");
   const [open, setOpen] = useState<AppEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
   const iconsAsked = useRef(new Set<string>());
@@ -172,11 +174,11 @@ export function Apps() {
         (a) =>
           (!q || a.name.toLowerCase().includes(q) || (a.bundle_id ?? "").toLowerCase().includes(q)) &&
           // Unknown last-used is never treated as unused.
-          (!unusedOnly || (a.last_used != null && now - a.last_used >= UNUSED_DAYS * DAY)) &&
-          (!updatesOnly || updates[a.path]?.state === "available"),
+          (filter !== "unused" || (a.last_used != null && now - a.last_used >= UNUSED_DAYS * DAY)) &&
+          (filter !== "updates" || updates[a.path]?.state === "available"),
       )
       .sort((a, b) => b.size_bytes - a.size_bytes);
-  }, [apps, query, unusedOnly, updatesOnly, updates]);
+  }, [apps, query, filter, updates]);
 
   const updateCount = useMemo(
     () => apps.filter((a) => updates[a.path]?.state === "available").length,
@@ -205,11 +207,15 @@ export function Apps() {
     <div className="view">
       <div className="toolbar">
         <input className="search" placeholder="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <Toggle checked={unusedOnly} onChange={setUnusedOnly} label="Unused 90+ days" />
-        <Toggle
-          checked={updatesOnly}
-          onChange={setUpdatesOnly}
-          label={updateCount > 0 ? `Updates (${updateCount})` : "Updates"}
+        <SegmentedControl
+          label="Show apps"
+          value={filter}
+          options={[
+            { value: "all", label: "All" },
+            { value: "unused", label: `Unused ${UNUSED_DAYS}+ days` },
+            { value: "updates", label: updateCount > 0 ? `Updates (${updateCount})` : "Updates" },
+          ]}
+          onChange={(v) => setFilter(v as AppFilter)}
         />
         <Button size="sm" variant="secondary" disabled={refreshing} onClick={refreshList}>
           {refreshing ? "Refreshing…" : "Refresh"}

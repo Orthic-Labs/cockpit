@@ -1646,7 +1646,7 @@ final class NotchWindowController {
         }
         // Pulse fork: a click on the open notch opens the hub — a ring on
         // its own page (disks → Storage, system → Monitor, an account →
-        // Accounts), anywhere else on Storage. Readings refresh on their own.
+        // Accounts), anywhere else on the Overview. Readings refresh on their own.
         if notchRect.contains(local),
            let index = cellIndex(along: placement.along(of: local)),
            model.snapshots.indices.contains(index) {
@@ -1656,7 +1656,7 @@ final class NotchWindowController {
             onOpenHub?(section)
             return
         }
-        if notchRect.contains(local) { onOpenHub?("storage") }
+        if notchRect.contains(local) { onOpenHub?("overview") }
         // Anything else on an open notch does nothing. A click here used to
         // pin it, which read as the notch locking itself: the rings are small
         // targets, a click aimed at one lands beside it easily, and `isPinned`

@@ -167,6 +167,16 @@ final class HubBridge {
                     row["label"] = account.label ?? NSNull()
                     row["plan"] = account.plan ?? NSNull()
                 }
+                // The limit windows behind the rings, for the hub's Overview:
+                // how much of each is used, and its length in seconds.
+                if let snapshot = store.snapshots.first(where: { $0.id == summary.id }) {
+                    row["limits"] = snapshot.windows.compactMap { window -> [String: Any]? in
+                        guard let used = window.usedFraction else { return nil }
+                        var entry: [String: Any] = ["label": window.label, "usedFraction": used]
+                        if let seconds = window.duration { entry["seconds"] = seconds }
+                        return entry
+                    }
+                }
                 if let title = summary.signIn.actionTitle { row["signInTitle"] = title }
                 return row
             }

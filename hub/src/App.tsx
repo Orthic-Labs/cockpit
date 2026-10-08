@@ -6,14 +6,16 @@ import { Storage } from "./views/Storage";
 import { Monitor } from "./views/Monitor";
 import { Apps } from "./views/Apps";
 import { Cleanup } from "./views/Cleanup";
+import { Overview } from "./views/Overview";
 import { Settings, useNotch } from "./views/Settings";
-import { Bell, CircleUser, Gauge, HardDrive, LayoutGrid, Palette, Settings2, ShieldCheck, Sparkles } from "lucide-react";
+import { Bell, CircleUser, Gauge, HardDrive, LayoutDashboard, LayoutGrid, Palette, Settings2, ShieldCheck, Sparkles } from "lucide-react";
 
 const icon = (Icon: typeof HardDrive) => <Icon size={15} strokeWidth={1.75} />;
 
 const groups = [
   {
     items: [
+      { id: "overview", label: "Overview", icon: icon(LayoutDashboard), keywords: ["summary", "home", "dashboard"] },
       { id: "storage", label: "Storage", icon: icon(HardDrive), keywords: ["disk", "files"] },
       { id: "cleanup", label: "Cleanup", icon: icon(Sparkles), keywords: ["trash", "cache", "clean"] },
       { id: "monitor", label: "Monitor", icon: icon(Gauge), keywords: ["cpu", "memory"] },
@@ -33,6 +35,7 @@ const groups = [
 ];
 
 const titles: Record<string, string> = {
+  overview: "Overview",
   storage: "Storage",
   cleanup: "Cleanup",
   monitor: "Monitor",
@@ -49,7 +52,7 @@ const resolve = (section: string | null | undefined) =>
   !section ? null : section === "settings" ? "accounts" : titles[section] ? section : null;
 
 export function App() {
-  const [active, setActive] = useState("storage");
+  const [active, setActive] = useState("overview");
   const notch = useNotch();
   const missingPermissions = notch.state?.permissions?.filter((permission) => permission.required && permission.status !== "granted").length ?? 0;
   const sidebarGroups = groups.map((group) => ({
@@ -86,7 +89,7 @@ export function App() {
       sidebarToggle={false}
       wordmark={<span className="wordmark">Pulse</span>}
     >
-      {active === "storage" ? <Storage /> : active === "cleanup" ? <Cleanup /> : active === "monitor" ? <Monitor /> : active === "apps" ? <Apps /> : <Settings section={active} notch={notch} onNavigate={setActive} />}
+      {active === "overview" ? <Overview notch={notch} onNavigate={setActive} /> : active === "storage" ? <Storage /> : active === "cleanup" ? <Cleanup /> : active === "monitor" ? <Monitor /> : active === "apps" ? <Apps /> : <Settings section={active} notch={notch} onNavigate={setActive} />}
     </AppShell>
   );
 }
