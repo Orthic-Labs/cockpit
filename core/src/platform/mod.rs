@@ -128,10 +128,7 @@ pub use mac_bulk::{BulkChildren, BulkFile};
 /// the facts of a regular file, read in the same call. `None` means the
 /// entry has to be inspected as usual.
 #[cfg(target_os = "macos")]
-pub fn bulk_children_bounded(
-    path: &Path,
-    limit: usize,
-) -> Result<BulkChildren, FsError> {
+pub fn bulk_children_bounded(path: &Path, limit: usize) -> Result<BulkChildren, FsError> {
     unix_native::bulk_children_bounded(path, limit)
 }
 

@@ -116,7 +116,11 @@ fn save<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let body = serde_json::to_vec(&Saved { version: FORMAT, data }).map_err(std::io::Error::other)?;
+    let body = serde_json::to_vec(&Saved {
+        version: FORMAT,
+        data,
+    })
+    .map_err(std::io::Error::other)?;
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -155,13 +159,13 @@ pub fn changes(previous: Option<&Reading>, next: &Reading, disk: &str) -> Vec<Al
         push(AlertKind::Warning, format!("Health is Warning: {reason}."));
     }
     if let Some(previous) = previous {
-        if let (Some(before), Some(after)) = (previous.wear_percent, next.wear_percent) {
-            if after >= before + WEAR_ALERT_POINTS {
-                push(
-                    AlertKind::Wear,
-                    format!("Wear rose from {before}% to {after}%."),
-                );
-            }
+        if let (Some(before), Some(after)) = (previous.wear_percent, next.wear_percent)
+            && after >= before + WEAR_ALERT_POINTS
+        {
+            push(
+                AlertKind::Wear,
+                format!("Wear rose from {before}% to {after}%."),
+            );
         }
         if let Some(after) = next.media_errors {
             let before = previous.media_errors.unwrap_or(0);
@@ -179,7 +183,10 @@ pub fn changes(previous: Option<&Reading>, next: &Reading, disk: &str) -> Vec<Al
 /// What one smartctl run found for a disk.
 #[derive(Debug)]
 pub enum Outcome {
-    Read { reading: Reading, model: Option<String> },
+    Read {
+        reading: Reading,
+        model: Option<String>,
+    },
     /// smartctl ran but the connection gave no SMART status.
     Unavailable { model: Option<String> },
 }
@@ -230,7 +237,10 @@ fn integer(value: Option<&serde_json::Value>) -> Option<u64> {
 /// Parse `smartctl -a -j` output. None when there is no SMART status.
 pub fn parse(json: &serde_json::Value, at: u64) -> Option<(Reading, Option<String>)> {
     let passed = json.pointer("/smart_status/passed")?.as_bool()?;
-    let model = json.get("model_name").and_then(|v| v.as_str()).map(str::to_string);
+    let model = json
+        .get("model_name")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let mut reading = Reading {
         at,
         passed: Some(passed),
@@ -244,25 +254,43 @@ pub fn parse(json: &serde_json::Value, at: u64) -> Option<(Reading, Option<Strin
     };
     if let Some(nvme) = json.get("nvme_smart_health_information_log") {
         reading.wear_percent = integer(nvme.get("percentage_used")).map(|v| v as u32);
-        reading.written_bytes = integer(nvme.get("data_units_written")).map(|units| units * 512_000);
+        reading.written_bytes =
+            integer(nvme.get("data_units_written")).map(|units| units * 512_000);
         reading.critical_warning = integer(nvme.get("critical_warning")).map(|v| v as u32);
         reading.media_errors = integer(nvme.get("media_errors"));
         if reading.temperature_c.is_none() {
             reading.temperature_c = number(nvme.get("temperature"));
         }
-        if let Some(table) = json.pointer("/nvme_self_test_log/table").and_then(|v| v.as_array()) {
+        if let Some(table) = json
+            .pointer("/nvme_self_test_log/table")
+            .and_then(|v| v.as_array())
+        {
             reading.self_tests = table
                 .iter()
                 .take(5)
                 .map(|entry| SelfTest {
-                    kind: entry.pointer("/self_test_code/string").and_then(|v| v.as_str()).unwrap_or("Test").to_string(),
-                    result: entry.pointer("/self_test_result/string").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
-                    passed: entry.pointer("/self_test_result/value").and_then(|v| v.as_u64()).map(|value| value == 0),
+                    kind: entry
+                        .pointer("/self_test_code/string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Test")
+                        .to_string(),
+                    result: entry
+                        .pointer("/self_test_result/string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string(),
+                    passed: entry
+                        .pointer("/self_test_result/value")
+                        .and_then(|v| v.as_u64())
+                        .map(|value| value == 0),
                     power_on_hours: integer(entry.get("power_on_hours")),
                 })
                 .collect();
         }
-    } else if let Some(table) = json.pointer("/ata_smart_attributes/table").and_then(|v| v.as_array()) {
+    } else if let Some(table) = json
+        .pointer("/ata_smart_attributes/table")
+        .and_then(|v| v.as_array())
+    {
         let mut media = 0u64;
         let mut seen_media = false;
         for attribute in table {
@@ -270,7 +298,10 @@ pub fn parse(json: &serde_json::Value, at: u64) -> Option<(Reading, Option<Strin
             let normalized = integer(attribute.get("value")).map(|v| v as u32);
             let raw = integer(attribute.pointer("/raw/value"));
             match name {
-                "Wear_Leveling_Count" | "Media_Wearout_Indicator" | "SSD_Life_Left" | "Percent_Lifetime_Remain" => {
+                "Wear_Leveling_Count"
+                | "Media_Wearout_Indicator"
+                | "SSD_Life_Left"
+                | "Percent_Lifetime_Remain" => {
                     if let Some(normalized) = normalized.filter(|v| *v <= 100) {
                         reading.wear_percent = Some(100 - normalized);
                     }
@@ -288,13 +319,24 @@ pub fn parse(json: &serde_json::Value, at: u64) -> Option<(Reading, Option<Strin
         if seen_media {
             reading.media_errors = Some(media);
         }
-        if let Some(table) = json.pointer("/ata_smart_self_test_log/standard/table").and_then(|v| v.as_array()) {
+        if let Some(table) = json
+            .pointer("/ata_smart_self_test_log/standard/table")
+            .and_then(|v| v.as_array())
+        {
             reading.self_tests = table
                 .iter()
                 .take(5)
                 .map(|entry| SelfTest {
-                    kind: entry.pointer("/type/string").and_then(|v| v.as_str()).unwrap_or("Test").to_string(),
-                    result: entry.pointer("/status/string").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+                    kind: entry
+                        .pointer("/type/string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Test")
+                        .to_string(),
+                    result: entry
+                        .pointer("/status/string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string(),
                     passed: entry.pointer("/status/passed").and_then(|v| v.as_bool()),
                     power_on_hours: integer(entry.get("lifetime_hours")),
                 })
@@ -316,7 +358,10 @@ pub fn sample_disk(tool: &Path, disk: &str, at: u64) -> Outcome {
     match parse(&json, at) {
         Some((reading, model)) => Outcome::Read { reading, model },
         None => Outcome::Unavailable {
-            model: json.get("model_name").and_then(|v| v.as_str()).map(str::to_string),
+            model: json
+                .get("model_name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
         },
     }
 }
@@ -365,27 +410,38 @@ pub fn disk_of_mount(_mount: &str) -> Option<String> {
 /// Mount point and its whole disk, for each mount. Disks shared by several
 /// volumes appear once per volume.
 fn resolve(mounts: &[String]) -> Vec<(String, Option<String>)> {
-    mounts.iter().map(|mount| (mount.clone(), disk_of_mount(mount))).collect()
+    mounts
+        .iter()
+        .map(|mount| (mount.clone(), disk_of_mount(mount)))
+        .collect()
 }
 
 /// Sample every disk behind `mounts` when the interval has passed; otherwise
 /// do nothing. Returns the alerts this pass produced (empty when not due).
-pub fn refresh(dir: &Path, candidates: &[PathBuf], mounts: &[String], now: u64, force: bool) -> Vec<Alert> {
+pub fn refresh(
+    dir: &Path,
+    candidates: &[PathBuf],
+    mounts: &[String],
+    now: u64,
+    force: bool,
+) -> Vec<Alert> {
     let history_path = dir.join(HISTORY_FILE);
     let mut history: History = load(&history_path);
-    if !force {
-        if let Some(last) = history.last_sample {
-            if now.saturating_sub(last) < SAMPLE_INTERVAL_SECS {
-                return Vec::new();
-            }
-        }
+    if !force
+        && let Some(last) = history.last_sample
+        && now.saturating_sub(last) < SAMPLE_INTERVAL_SECS
+    {
+        return Vec::new();
     }
     let Some(tool) = find_tool(candidates) else {
         return Vec::new();
     };
     history.last_sample = Some(now);
     let mut alerts = Vec::new();
-    let mut disks: Vec<String> = resolve(mounts).into_iter().filter_map(|(_, disk)| disk).collect();
+    let mut disks: Vec<String> = resolve(mounts)
+        .into_iter()
+        .filter_map(|(_, disk)| disk)
+        .collect();
     disks.sort();
     disks.dedup();
     for disk in disks {
@@ -396,7 +452,9 @@ pub fn refresh(dir: &Path, candidates: &[PathBuf], mounts: &[String], now: u64, 
                 let previous = entry.readings.last().cloned();
                 alerts.extend(changes(previous.as_ref(), &reading, &disk));
                 entry.readings.push(reading);
-                entry.readings.retain(|r| now.saturating_sub(r.at) <= RETENTION_SECS);
+                entry
+                    .readings
+                    .retain(|r| now.saturating_sub(r.at) <= RETENTION_SECS);
                 entry.reachable = true;
                 if model.is_some() {
                     entry.model = model;

@@ -48,11 +48,7 @@ pub trait FilesystemProvider {
     /// Bounded listing that may also return a regular file's metadata, read in
     /// the same call (`Some`). `None` means the entry is inspected as usual.
     /// The default lists names only.
-    fn children_with_files(
-        &self,
-        path: &Path,
-        limit: usize,
-    ) -> Result<ChildrenWithFiles, FsError> {
+    fn children_with_files(&self, path: &Path, limit: usize) -> Result<ChildrenWithFiles, FsError> {
         self.children_bounded(path, limit)
             .map(|(children, truncated)| {
                 (
@@ -476,11 +472,7 @@ impl FilesystemProvider for CachingStdProvider {
     /// this scan has already identified, their metadata, so those files are
     /// not inspected a second time. Everything else is inspected as before.
     #[cfg(target_os = "macos")]
-    fn children_with_files(
-        &self,
-        path: &Path,
-        limit: usize,
-    ) -> Result<ChildrenWithFiles, FsError> {
+    fn children_with_files(&self, path: &Path, limit: usize) -> Result<ChildrenWithFiles, FsError> {
         self.expect_directory(path)?;
         let (listed, truncated) = platform::bulk_children_bounded(path, limit)?;
         let state = self.lock();
@@ -724,7 +716,10 @@ impl NameIndex {
 
     /// Rows that are not removed.
     pub fn live_rows(&self) -> usize {
-        self.flags.iter().filter(|&&flag| flag & NAME_REMOVED == 0).count()
+        self.flags
+            .iter()
+            .filter(|&&flag| flag & NAME_REMOVED == 0)
+            .count()
     }
 
     pub fn is_live(&self, row: usize) -> bool {
@@ -791,7 +786,9 @@ impl NameIndex {
         if parent == UNINDEXED || (parent != NO_PARENT && parent as usize >= self.parent.len()) {
             return None;
         }
-        let id = u32::try_from(self.parent.len()).ok().filter(|&id| id < UNINDEXED)?;
+        let id = u32::try_from(self.parent.len())
+            .ok()
+            .filter(|&id| id < UNINDEXED)?;
         let start = u32::try_from(self.arena.len()).ok()?;
         let len = u16::try_from(name.len()).ok()?;
         // The arena must stay addressable with u32 offsets.
@@ -864,8 +861,12 @@ impl NameIndex {
             let Some(&parent) = map.get(sub_parent as usize) else {
                 return false;
             };
-            let Some(id) = self.push(parent, sub.name(at), sub.flags[at] & NAME_KIND, sub.size[at])
-            else {
+            let Some(id) = self.push(
+                parent,
+                sub.name(at),
+                sub.flags[at] & NAME_KIND,
+                sub.size[at],
+            ) else {
                 return false;
             };
             map.push(id);
@@ -916,7 +917,12 @@ impl NameIndex {
             } else {
                 map[self.parent[row] as usize]
             };
-            out.push(parent, self.name(row), self.flags[row] & NAME_KIND, self.size[row]);
+            out.push(
+                parent,
+                self.name(row),
+                self.flags[row] & NAME_KIND,
+                self.size[row],
+            );
         }
         out
     }
@@ -925,7 +931,9 @@ impl NameIndex {
     /// each column (start, length, parent, size, kind) and the names.
     pub fn to_bytes(&self) -> Vec<u8> {
         let map = self.live_map();
-        let live: Vec<usize> = (0..self.rows()).filter(|&row| map[row] != NO_PARENT).collect();
+        let live: Vec<usize> = (0..self.rows())
+            .filter(|&row| map[row] != NO_PARENT)
+            .collect();
         let arena_len: usize = live.iter().map(|&row| usize::from(self.len[row])).sum();
         let mut out = Vec::with_capacity(24 + live.len() * NAME_ROW_BYTES + arena_len);
         out.extend_from_slice(&NAME_MAGIC);
@@ -968,7 +976,8 @@ impl NameIndex {
         }
         let version = u32::from_le_bytes(header[4..8].try_into().ok()?);
         let rows = usize::try_from(u64::from_le_bytes(header[8..16].try_into().ok()?)).ok()?;
-        let arena_len = usize::try_from(u64::from_le_bytes(header[16..24].try_into().ok()?)).ok()?;
+        let arena_len =
+            usize::try_from(u64::from_le_bytes(header[16..24].try_into().ok()?)).ok()?;
         if version != NAME_VERSION || rows >= UNINDEXED as usize {
             return None;
         }
@@ -987,7 +996,10 @@ impl NameIndex {
                 .chunks_exact(4)
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect(),
-            len: lens.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+            len: lens
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect(),
             parent: parents
                 .chunks_exact(4)
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))

@@ -1,5 +1,8 @@
 //! Preserve rename-era state without merging or replacing an existing destination.
-use std::{fs, io, path::{Path, PathBuf}};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 /// Move a legacy directory once. Both names existing means Pulse wins; the legacy
 /// directory stays untouched. Failed moves are returned before callers create state.
@@ -93,7 +96,9 @@ const LEGACY_HUB_FOLDER: &str = "dev.orthic.cockpit.hub";
 #[cfg(target_os = "macos")]
 pub fn migrate_mac_state(home: &Path) -> io::Result<()> {
     migrate_directory(
-        &home.join("Library/Application Support").join(LEGACY_MAC_SUPPORT_FOLDER),
+        &home
+            .join("Library/Application Support")
+            .join(LEGACY_MAC_SUPPORT_FOLDER),
         &home.join("Library/Application Support/Pulse"),
     )?;
     for parent in [
