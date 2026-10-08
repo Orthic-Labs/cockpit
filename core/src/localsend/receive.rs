@@ -28,15 +28,26 @@ fn json<T: Serialize>(status: u16, value: &T) -> Answer {
 }
 
 fn message(status: u16, text: &str) -> Answer {
-    (status, Some(serde_json::json!({ "message": text }).to_string().into_bytes()))
+    (
+        status,
+        Some(
+            serde_json::json!({ "message": text })
+                .to_string()
+                .into_bytes(),
+        ),
+    )
 }
 
 pub(crate) fn handle_connection(inner: &Arc<Inner>, socket: TcpStream, address: SocketAddr) {
     let _ = socket.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = socket.set_write_timeout(Some(Duration::from_secs(30)));
-    let Ok(wire) = net::accept_tls(&inner.tls, socket) else { return };
+    let Ok(wire) = net::accept_tls(&inner.tls, socket) else {
+        return;
+    };
     let mut reader = BufReader::new(wire);
-    let Ok(request) = net::read_request(&mut reader) else { return };
+    let Ok(request) = net::read_request(&mut reader) else {
+        return;
+    };
     let (status, body) = route(inner, &mut reader, &request, address.ip());
     let wire = reader.get_mut();
     let _ = net::write_response(wire, status, body.as_deref());
@@ -48,7 +59,12 @@ fn discard(reader: &mut BufReader<Wire>, request: &Request) {
     let _ = net::read_body(reader, &request.headers, 8 * 1024 * 1024, &mut |_| Ok(()));
 }
 
-fn route(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, ip: IpAddr) -> Answer {
+fn route(
+    inner: &Arc<Inner>,
+    reader: &mut BufReader<Wire>,
+    request: &Request,
+    ip: IpAddr,
+) -> Answer {
     let path = request.path.trim_end_matches('/');
     let Some(endpoint) = path.strip_prefix(proto::API) else {
         discard(reader, request);
@@ -84,7 +100,12 @@ fn read_json_body(reader: &mut BufReader<Wire>, request: &Request, max: u64) -> 
     Some(body)
 }
 
-fn register(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, ip: IpAddr) -> Answer {
+fn register(
+    inner: &Arc<Inner>,
+    reader: &mut BufReader<Wire>,
+    request: &Request,
+    ip: IpAddr,
+) -> Answer {
     let Some(body) = read_json_body(reader, request, 64 * 1024) else {
         return message(400, "Invalid body");
     };
@@ -99,7 +120,12 @@ fn register(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request,
 
 // ---- prepare-upload --------------------------------------------------------
 
-fn prepare_upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, ip: IpAddr) -> Answer {
+fn prepare_upload(
+    inner: &Arc<Inner>,
+    reader: &mut BufReader<Wire>,
+    request: &Request,
+    ip: IpAddr,
+) -> Answer {
     let Some(body) = read_json_body(reader, request, 16 * 1024 * 1024) else {
         return message(400, "Invalid body");
     };
@@ -121,7 +147,11 @@ fn prepare_upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Re
         for id in stale {
             if let Some(session) = sessions.remove(&id) {
                 session.cancel.store(true, Ordering::Relaxed);
-                inner.end_transfer(&session.transfer_id, "failed", Some("The sender stopped responding.".into()));
+                inner.end_transfer(
+                    &session.transfer_id,
+                    "failed",
+                    Some("The sender stopped responding.".into()),
+                );
             }
         }
         if !sessions.is_empty() || !lock(&inner.pending).is_empty() {
@@ -133,12 +163,22 @@ fn prepare_upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Re
     let total: u64 = parsed.files.values().map(|f| f.size).sum();
     let is_message = proto::is_message(&parsed.files);
     let known = inner.is_known(&parsed.info.fingerprint, ip);
-    let alias: String = parsed.info.alias.chars().filter(|c| !c.is_control()).take(80).collect();
+    let alias: String = parsed
+        .info
+        .alias
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(80)
+        .collect();
     let request_id = proto::random_hex(8);
 
     let incoming = Incoming {
         id: request_id.clone(),
-        from: if alias.is_empty() { "A device".to_string() } else { alias.clone() },
+        from: if alias.is_empty() {
+            "A device".to_string()
+        } else {
+            alias.clone()
+        },
         device_model: parsed.info.device_model.clone(),
         fingerprint: parsed.info.fingerprint.clone(),
         ip: ip.to_string(),
@@ -237,7 +277,11 @@ fn prepare_upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Re
                 return (204, None);
             }
             Err(e) => {
-                inner.end_transfer(&transfer_id, "failed", Some(format!("Couldn't save the message: {e}")));
+                inner.end_transfer(
+                    &transfer_id,
+                    "failed",
+                    Some(format!("Couldn't save the message: {e}")),
+                );
                 return message(500, "Unknown error by receiver");
             }
         }
@@ -285,7 +329,11 @@ fn prepare_upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Re
 // ---- upload ----------------------------------------------------------------
 
 fn same_token(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 struct Claimed {
@@ -295,7 +343,12 @@ struct Claimed {
     save_dir: PathBuf,
 }
 
-fn upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, ip: IpAddr) -> Answer {
+fn upload(
+    inner: &Arc<Inner>,
+    reader: &mut BufReader<Wire>,
+    request: &Request,
+    ip: IpAddr,
+) -> Answer {
     let (Some(session_id), Some(file_id), Some(token)) = (
         request.param("sessionId"),
         request.param("fileId"),
@@ -345,7 +398,11 @@ fn upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, i
         Ok(path) => path,
         Err(e) => {
             discard(reader, request);
-            inner.end_transfer(&claimed.transfer_id, "failed", Some(format!("Couldn't save the file: {e}")));
+            inner.end_transfer(
+                &claimed.transfer_id,
+                "failed",
+                Some(format!("Couldn't save the file: {e}")),
+            );
             return message(500, "Unknown error by receiver");
         }
     };
@@ -355,7 +412,11 @@ fn upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, i
         Err(e) => {
             let _ = std::fs::remove_file(&final_path);
             discard(reader, request);
-            inner.end_transfer(&claimed.transfer_id, "failed", Some(format!("Couldn't save the file: {e}")));
+            inner.end_transfer(
+                &claimed.transfer_id,
+                "failed",
+                Some(format!("Couldn't save the file: {e}")),
+            );
             return message(500, "Unknown error by receiver");
         }
     };
@@ -402,14 +463,22 @@ fn upload(inner: &Arc<Inner>, reader: &mut BufReader<Wire>, request: &Request, i
         if !actual.eq_ignore_ascii_case(expected) {
             let _ = std::fs::remove_file(&part_path);
             let _ = std::fs::remove_file(&final_path);
-            inner.end_transfer(&claimed.transfer_id, "failed", Some(format!("{display_name} arrived damaged.")));
+            inner.end_transfer(
+                &claimed.transfer_id,
+                "failed",
+                Some(format!("{display_name} arrived damaged.")),
+            );
             return message(422, "Checksum mismatch");
         }
     }
     if let Err(e) = std::fs::rename(&part_path, &final_path) {
         let _ = std::fs::remove_file(&part_path);
         let _ = std::fs::remove_file(&final_path);
-        inner.end_transfer(&claimed.transfer_id, "failed", Some(format!("Couldn't save the file: {e}")));
+        inner.end_transfer(
+            &claimed.transfer_id,
+            "failed",
+            Some(format!("Couldn't save the file: {e}")),
+        );
         return message(500, "Unknown error by receiver");
     }
     finish_file(inner, session_id, file_id, final_path);
@@ -427,7 +496,9 @@ fn partial_path(final_path: &Path) -> PathBuf {
 fn finish_file(inner: &Arc<Inner>, session_id: &str, file_id: &str, path: PathBuf) {
     let finished = {
         let mut sessions = lock(&inner.sessions);
-        let Some(session) = sessions.get_mut(session_id) else { return };
+        let Some(session) = sessions.get_mut(session_id) else {
+            return;
+        };
         if let Some(file) = session.files.get_mut(file_id)
             && !file.done
         {
@@ -446,7 +517,11 @@ fn finish_file(inner: &Arc<Inner>, session_id: &str, file_id: &str, path: PathBu
     if let Some(session) = completed {
         inner.trust(&session.peer_fingerprint);
         let folder = session.save_dir.to_string_lossy().into_owned();
-        let saved: Vec<String> = session.saved.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let saved: Vec<String> = session
+            .saved
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
         inner.update_transfer(&transfer_id, true, |t| {
             t.saved_to = Some(folder);
             t.saved_files = saved;

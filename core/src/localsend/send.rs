@@ -127,9 +127,12 @@ fn push_file(entries: &mut Vec<Entry>, path: &Path, name: String, size: u64) {
 fn walk(directory: &Path, prefix: &str, entries: &mut Vec<Entry>) -> Result<(), String> {
     let mut stack = vec![(directory.to_path_buf(), prefix.to_string())];
     while let Some((dir, relative)) = stack.pop() {
-        let listing = std::fs::read_dir(&dir).map_err(|e| format!("Can't read {}: {e}", dir.display()))?;
+        let listing =
+            std::fs::read_dir(&dir).map_err(|e| format!("Can't read {}: {e}", dir.display()))?;
         for child in listing.flatten() {
-            let Ok(kind) = child.file_type() else { continue };
+            let Ok(kind) = child.file_type() else {
+                continue;
+            };
             let name = format!("{relative}/{}", child.file_name().to_string_lossy());
             if kind.is_symlink() {
                 continue;
@@ -224,10 +227,17 @@ pub fn deliver(
     }
     let mut info = me.clone();
     info.announce = None;
-    let body = serde_json::to_vec(&PrepareUploadRequest { info, files }).map_err(|e| e.to_string())?;
+    let body =
+        serde_json::to_vec(&PrepareUploadRequest { info, files }).map_err(|e| e.to_string())?;
     let prepare = format!("{}/prepare-upload", proto::API);
     // The other person may take a while to say yes.
-    let reply = exchange(peer, &prepare, Some(&body), Duration::from_secs(190), register);
+    let reply = exchange(
+        peer,
+        &prepare,
+        Some(&body),
+        Duration::from_secs(190),
+        register,
+    );
     if cancel.load(Ordering::Relaxed) {
         return Ok(Outcome::Cancelled);
     }
@@ -237,13 +247,26 @@ pub fn deliver(
             .map_err(|_| format!("{} sent an answer Pulse doesn't understand.", peer.alias))?,
         204 => return Ok(Outcome::Done),
         403 => return Ok(Outcome::Declined),
-        401 => return Err(format!("{} needs a PIN, which Pulse doesn't support yet.", peer.alias)),
+        401 => {
+            return Err(format!(
+                "{} needs a PIN, which Pulse doesn't support yet.",
+                peer.alias
+            ));
+        }
         409 => return Err(format!("{} is busy with another transfer.", peer.alias)),
-        429 => return Err(format!("{} says there are too many requests. Try again shortly.", peer.alias)),
+        429 => {
+            return Err(format!(
+                "{} says there are too many requests. Try again shortly.",
+                peer.alias
+            ));
+        }
         other => return Err(format!("{} answered {other}.", peer.alias)),
     };
     // A partial accept sends only the files it wants.
-    progress.files_total = entries.iter().filter(|e| session.files.contains_key(&e.id)).count();
+    progress.files_total = entries
+        .iter()
+        .filter(|e| session.files.contains_key(&e.id))
+        .count();
     progress.total = entries
         .iter()
         .filter(|e| session.files.contains_key(&e.id))
@@ -253,7 +276,9 @@ pub fn deliver(
     on(progress.clone());
 
     for entry in entries {
-        let Some(token) = session.files.get(&entry.id) else { continue };
+        let Some(token) = session.files.get(&entry.id) else {
+            continue;
+        };
         if cancel.load(Ordering::Relaxed) {
             send_cancel(peer, &session.session_id);
             return Ok(Outcome::Cancelled);
@@ -288,8 +313,14 @@ fn upload_one(
     progress: &mut Progress,
     on: &mut dyn FnMut(Progress),
 ) -> Result<(), String> {
-    let mut wire = net::connect(peer.ip, peer.port, peer.https, &peer.fingerprint, Duration::from_secs(120))
-        .map_err(|e| format!("Couldn't reach {}: {e}", peer.alias))?;
+    let mut wire = net::connect(
+        peer.ip,
+        peer.port,
+        peer.https,
+        &peer.fingerprint,
+        Duration::from_secs(120),
+    )
+    .map_err(|e| format!("Couldn't reach {}: {e}", peer.alias))?;
     register(wire.tcp().try_clone().ok());
     let host = format!("{}:{}", peer.ip, peer.port);
     let result = net::call(
@@ -317,7 +348,10 @@ fn upload_one(
                     let want = remaining.min(buffer.len() as u64) as usize;
                     let n = file.read(&mut buffer[..want])?;
                     if n == 0 {
-                        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "the file got shorter"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "the file got shorter",
+                        ));
                     }
                     w.write_all(&buffer[..n])?;
                     remaining -= n as u64;
@@ -334,14 +368,24 @@ fn upload_one(
     match reply.status {
         200 | 204 => Ok(()),
         403 => Err(format!("{} refused {}.", peer.alias, entry.name)),
-        422 => Err(format!("{} reported {} arrived damaged.", peer.alias, entry.name)),
-        other => Err(format!("{} answered {other} for {}.", peer.alias, entry.name)),
+        422 => Err(format!(
+            "{} reported {} arrived damaged.",
+            peer.alias, entry.name
+        )),
+        other => Err(format!(
+            "{} answered {other} for {}.",
+            peer.alias, entry.name
+        )),
     }
 }
 
 /// Tell the peer the session is over. Best effort.
 fn send_cancel(peer: &Peer, session: &str) {
-    let target = format!("{}/cancel?sessionId={}", proto::API, proto::url_encode(session));
+    let target = format!(
+        "{}/cancel?sessionId={}",
+        proto::API,
+        proto::url_encode(session)
+    );
     let _ = net::request_json(
         peer.ip,
         peer.port,

@@ -190,7 +190,9 @@ pub(crate) struct Inner {
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -225,7 +227,10 @@ impl Inner {
         };
         let changed = {
             let mut devices = lock(&self.devices);
-            match devices.iter_mut().find(|s| s.device.fingerprint == device.fingerprint) {
+            match devices
+                .iter_mut()
+                .find(|s| s.device.fingerprint == device.fingerprint)
+            {
                 Some(seen) => {
                     let changed = seen.device.alias != device.alias
                         || seen.device.ip != device.ip
@@ -252,7 +257,10 @@ impl Inner {
     }
 
     pub fn device_list(&self) -> Vec<Device> {
-        let mut list: Vec<Device> = lock(&self.devices).iter().map(|s| s.device.clone()).collect();
+        let mut list: Vec<Device> = lock(&self.devices)
+            .iter()
+            .map(|s| s.device.clone())
+            .collect();
         list.sort_by(|a, b| a.alias.to_lowercase().cmp(&b.alias.to_lowercase()));
         list
     }
@@ -324,17 +332,20 @@ impl Inner {
     pub fn end_transfer(&self, id: &str, state: &str, error: Option<String>) {
         let ended = {
             let mut transfers = lock(&self.transfers);
-            transfers.iter_mut().find(|t| t.id == id && t.is_open()).map(|t| {
-                t.state = state.to_string();
-                t.error = error;
-                t.finished = Some(now_ms());
-                if state == "done" {
-                    t.done_bytes = t.total_bytes;
-                    t.files_done = t.files_total;
-                }
-                t.current = None;
-                t.clone()
-            })
+            transfers
+                .iter_mut()
+                .find(|t| t.id == id && t.is_open())
+                .map(|t| {
+                    t.state = state.to_string();
+                    t.error = error;
+                    t.finished = Some(now_ms());
+                    if state == "done" {
+                        t.done_bytes = t.total_bytes;
+                        t.files_done = t.files_total;
+                    }
+                    t.current = None;
+                    t.clone()
+                })
         };
         if let Some(transfer) = ended {
             self.emit(Event::Finished(transfer));
@@ -348,7 +359,10 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn start(config: Config, on_event: Arc<dyn Fn(Event) + Send + Sync>) -> Result<Service, String> {
+    pub fn start(
+        config: Config,
+        on_event: Arc<dyn Fn(Event) + Send + Sync>,
+    ) -> Result<Service, String> {
         let identity = net::Identity::load_or_create(&config.state_dir)
             .map_err(|e| format!("Couldn't create this Mac's sharing certificate: {e}"))?;
         let tls = net::server_config(&identity)
@@ -417,7 +431,10 @@ impl Service {
     pub fn snapshot(&self) -> Snapshot {
         let inner = &self.inner;
         let cfg = inner.config();
-        let mut incoming: Vec<Incoming> = lock(&inner.pending).values().map(|p| p.incoming.clone()).collect();
+        let mut incoming: Vec<Incoming> = lock(&inner.pending)
+            .values()
+            .map(|p| p.incoming.clone())
+            .collect();
         incoming.sort_by(|a, b| a.id.cmp(&b.id));
         Snapshot {
             alias: cfg.alias,
@@ -462,7 +479,11 @@ impl Service {
             devices
                 .iter()
                 .find(|s| s.device.fingerprint == target)
-                .or_else(|| devices.iter().find(|s| s.device.alias.eq_ignore_ascii_case(target)))
+                .or_else(|| {
+                    devices
+                        .iter()
+                        .find(|s| s.device.alias.eq_ignore_ascii_case(target))
+                })
                 .map(|s| s.device.clone())
         }
         .ok_or_else(|| "That device is no longer nearby.".to_string())?;
@@ -592,8 +613,12 @@ fn spawn_discovery(inner: Arc<Inner>, socket: UdpSocket) {
         let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
         let mut buffer = vec![0u8; 64 * 1024];
         while !inner.stop.load(Ordering::Relaxed) {
-            let Ok((n, from)) = socket.recv_from(&mut buffer) else { continue };
-            let Some(heard) = discovery::parse(&buffer[..n], from) else { continue };
+            let Ok((n, from)) = socket.recv_from(&mut buffer) else {
+                continue;
+            };
+            let Some(heard) = discovery::parse(&buffer[..n], from) else {
+                continue;
+            };
             if heard.info.fingerprint == inner.me.fingerprint {
                 continue;
             }
@@ -686,7 +711,10 @@ fn spawn_liveness(inner: Arc<Inner>) {
                     });
                     let removed = {
                         let mut devices = lock(&inner.devices);
-                        match devices.iter().position(|s| s.device.fingerprint == device.fingerprint) {
+                        match devices
+                            .iter()
+                            .position(|s| s.device.fingerprint == device.fingerprint)
+                        {
                             Some(index) if alive => {
                                 devices[index].last_seen = Instant::now();
                                 devices[index].misses = 0;
@@ -713,7 +741,13 @@ fn spawn_liveness(inner: Arc<Inner>) {
     });
 }
 
-fn run_send(inner: Arc<Inner>, id: String, peer: Peer, items: Vec<SendItem>, handle: Arc<CancelHandle>) {
+fn run_send(
+    inner: Arc<Inner>,
+    id: String,
+    peer: Peer,
+    items: Vec<SendItem>,
+    handle: Arc<CancelHandle>,
+) {
     let finish = |state: &str, error: Option<String>| {
         inner.end_transfer(&id, state, error);
         lock(&inner.cancels).remove(&id);
@@ -729,17 +763,24 @@ fn run_send(inner: Arc<Inner>, id: String, peer: Peer, items: Vec<SendItem>, han
     let register = |stream: Option<TcpStream>| {
         *lock(&handle.stream) = stream;
     };
-    let result = send::deliver(&inner.me, &peer, &entries, &handle.flag, &register, &mut |p| {
-        let waiting = p.phase == send::Phase::Waiting;
-        inner.update_transfer(&id, p.total > 0 && p.done >= p.total, |t| {
-            t.state = if waiting { "waiting" } else { "active" }.to_string();
-            t.total_bytes = p.total;
-            t.done_bytes = p.done;
-            t.files_total = p.files_total;
-            t.files_done = p.files_done;
-            t.current = p.current.clone();
-        });
-    });
+    let result = send::deliver(
+        &inner.me,
+        &peer,
+        &entries,
+        &handle.flag,
+        &register,
+        &mut |p| {
+            let waiting = p.phase == send::Phase::Waiting;
+            inner.update_transfer(&id, p.total > 0 && p.done >= p.total, |t| {
+                t.state = if waiting { "waiting" } else { "active" }.to_string();
+                t.total_bytes = p.total;
+                t.done_bytes = p.done;
+                t.files_total = p.files_total;
+                t.files_done = p.files_done;
+                t.current = p.current.clone();
+            });
+        },
+    );
     match result {
         Ok(send::Outcome::Done) => finish("done", None),
         Ok(send::Outcome::Declined) => finish("declined", None),

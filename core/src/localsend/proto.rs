@@ -171,7 +171,10 @@ pub fn reserve_unique(base: &Path, parts: &[String]) -> io::Result<PathBuf> {
         };
         let path = dir.join(candidate);
         if !path.starts_with(base) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "path escapes the save folder"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path escapes the save folder",
+            ));
         }
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(_) => return Ok(path),
@@ -179,7 +182,10 @@ pub fn reserve_unique(base: &Path, parts: &[String]) -> io::Result<PathBuf> {
             Err(e) => return Err(e),
         }
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "too many files with that name"))
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "too many files with that name",
+    ))
 }
 
 pub fn mime_for(name: &str) -> &'static str {

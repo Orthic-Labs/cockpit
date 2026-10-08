@@ -301,7 +301,10 @@ fn read_line_limited<R: BufRead>(reader: &mut R, limit: u64) -> io::Result<Strin
     let mut line = String::new();
     let read = reader.by_ref().take(limit).read_line(&mut line)?;
     if read == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "connection closed",
+        ));
     }
     if !line.ends_with('\n') {
         return Err(bad("line too long"));
@@ -328,7 +331,10 @@ fn read_headers<R: BufRead>(reader: &mut R) -> io::Result<Vec<(String, String)>>
 pub fn read_request<R: BufRead>(reader: &mut R) -> io::Result<Request> {
     let line = read_line_limited(reader, 16 * 1024)?;
     let mut parts = line.split_whitespace();
-    let method = parts.next().ok_or_else(|| bad("empty request"))?.to_string();
+    let method = parts
+        .next()
+        .ok_or_else(|| bad("empty request"))?
+        .to_string();
     let target = parts.next().ok_or_else(|| bad("no request target"))?;
     let (path, query_text) = target.split_once('?').unwrap_or((target, ""));
     let query = query_text
@@ -359,12 +365,14 @@ pub fn read_body<R: BufRead>(
     let find = |name: &str| header_of(headers, name);
     let mut buffer = vec![0u8; 64 * 1024];
     let mut total = 0u64;
-    let chunked = find("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
+    let chunked =
+        find("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
     if chunked {
         loop {
             let size_line = read_line_limited(reader, 1024)?;
             let size_text = size_line.split(';').next().unwrap_or("").trim();
-            let mut remaining = u64::from_str_radix(size_text, 16).map_err(|_| bad("bad chunk size"))?;
+            let mut remaining =
+                u64::from_str_radix(size_text, 16).map_err(|_| bad("bad chunk size"))?;
             if remaining == 0 {
                 while !read_line_limited(reader, 16 * 1024)?.is_empty() {}
                 return Ok(total);
@@ -373,7 +381,10 @@ pub fn read_body<R: BufRead>(
                 let want = remaining.min(buffer.len() as u64) as usize;
                 let n = reader.read(&mut buffer[..want])?;
                 if n == 0 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "body cut short"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "body cut short",
+                    ));
                 }
                 total += n as u64;
                 if total > max {
@@ -397,7 +408,10 @@ pub fn read_body<R: BufRead>(
         let want = remaining.min(buffer.len() as u64) as usize;
         let n = reader.read(&mut buffer[..want])?;
         if n == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "body cut short"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "body cut short",
+            ));
         }
         total += n as u64;
         sink(&buffer[..n])?;
@@ -421,9 +435,16 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-pub fn write_response<W: Write>(writer: &mut W, status: u16, json: Option<&[u8]>) -> io::Result<()> {
+pub fn write_response<W: Write>(
+    writer: &mut W,
+    status: u16,
+    json: Option<&[u8]>,
+) -> io::Result<()> {
     let body = json.unwrap_or(&[]);
-    let mut head = format!("HTTP/1.1 {status} {}\r\nConnection: close\r\n", reason(status));
+    let mut head = format!(
+        "HTTP/1.1 {status} {}\r\nConnection: close\r\n",
+        reason(status)
+    );
     if json.is_some() {
         head.push_str("Content-Type: application/json\r\n");
     }
@@ -471,7 +492,9 @@ pub fn call(
         .ok_or_else(|| bad("bad status line"))?;
     let headers = read_headers(&mut reader)?;
     let mut body = Vec::new();
-    let has_length = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length"));
+    let has_length = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-length"));
     let chunked = headers.iter().any(|(k, v)| {
         k.eq_ignore_ascii_case("transfer-encoding") && v.to_ascii_lowercase().contains("chunked")
     });

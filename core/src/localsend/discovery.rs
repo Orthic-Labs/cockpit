@@ -104,7 +104,9 @@ pub fn listen(port: u16) -> io::Result<UdpSocket> {
     let interfaces = local_ipv4s();
     let mut joined = false;
     for ip in &interfaces {
-        joined |= socket.join_multicast_v4(&proto::MULTICAST_GROUP, ip).is_ok();
+        joined |= socket
+            .join_multicast_v4(&proto::MULTICAST_GROUP, ip)
+            .is_ok();
     }
     if !joined {
         socket.join_multicast_v4(&proto::MULTICAST_GROUP, &Ipv4Addr::UNSPECIFIED)?;
@@ -174,12 +176,18 @@ pub fn scan(me: &DeviceInfo, window: Duration) -> io::Result<Vec<Heard>> {
             Ok((n, from)) => {
                 if let Some(device) = parse(&buffer[..n], from)
                     && device.info.fingerprint != me.fingerprint
-                    && !heard.iter().any(|h| h.info.fingerprint == device.info.fingerprint)
+                    && !heard
+                        .iter()
+                        .any(|h| h.info.fingerprint == device.info.fingerprint)
                 {
                     heard.push(device);
                 }
             }
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
             Err(e) => return Err(e),
         }
     }

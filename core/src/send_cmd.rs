@@ -88,7 +88,12 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
             println!("No nearby devices. Open LocalSend on the other device and try again.");
         } else {
             for (peer, info) in &devices {
-                println!("{}\t{}\t{}", info.alias, info.device_type.as_deref().unwrap_or("device"), peer.ip);
+                println!(
+                    "{}\t{}\t{}",
+                    info.alias,
+                    info.device_type.as_deref().unwrap_or("device"),
+                    peer.ip
+                );
             }
         }
         return Ok(());
@@ -105,7 +110,9 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
             SendItem::Path(if path.is_absolute() {
                 path
             } else {
-                std::env::current_dir().map(|d| d.join(&path)).unwrap_or(path)
+                std::env::current_dir()
+                    .map(|d| d.join(&path))
+                    .unwrap_or(path)
             })
         })
         .collect();
@@ -130,7 +137,10 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
                 return Err(if names.is_empty() {
                     "No nearby devices. Open LocalSend on the other device and try again.".into()
                 } else {
-                    format!("No nearby device called \"{to}\". Nearby: {}", names.join(", "))
+                    format!(
+                        "No nearby device called \"{to}\". Nearby: {}",
+                        names.join(", ")
+                    )
                 });
             }
             _ => {
@@ -139,7 +149,10 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
                     .filter(|(_, i)| i.alias.to_lowercase().contains(&wanted))
                     .map(|(_, i)| i.alias.as_str())
                     .collect();
-                return Err(format!("\"{to}\" matches more than one device: {}", names.join(", ")));
+                return Err(format!(
+                    "\"{to}\" matches more than one device: {}",
+                    names.join(", ")
+                ));
             }
         }
     };
@@ -148,9 +161,16 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     let files = entries.len();
 
     if machine {
-        println!("{}", json!({"event": "waiting", "to": peer.alias, "files": files, "bytes": total}));
+        println!(
+            "{}",
+            json!({"event": "waiting", "to": peer.alias, "files": files, "bytes": total})
+        );
     } else {
-        eprintln!("Waiting for {} to accept {files} file(s), {}…", peer.alias, human(total));
+        eprintln!(
+            "Waiting for {} to accept {files} file(s), {}…",
+            peer.alias,
+            human(total)
+        );
     }
 
     let cancel = AtomicBool::new(false);
@@ -168,8 +188,16 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
                        "filesDone": p.files_done, "files": p.files_total, "file": p.current})
             );
         } else if interactive {
-            let percent = if p.total == 0 { 100 } else { p.done * 100 / p.total };
-            eprint!("\rSending {percent}% ({} of {})   ", human(p.done), human(p.total));
+            let percent = if p.total == 0 {
+                100
+            } else {
+                p.done * 100 / p.total
+            };
+            eprint!(
+                "\rSending {percent}% ({} of {})   ",
+                human(p.done),
+                human(p.total)
+            );
             let _ = std::io::stderr().flush();
         }
     })?;
@@ -179,7 +207,10 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     match outcome {
         Outcome::Done => {
             if machine {
-                println!("{}", json!({"event": "done", "to": peer.alias, "files": files, "bytes": total}));
+                println!(
+                    "{}",
+                    json!({"event": "done", "to": peer.alias, "files": files, "bytes": total})
+                );
             } else {
                 println!("Sent {files} file(s), {}, to {}.", human(total), peer.alias);
             }
