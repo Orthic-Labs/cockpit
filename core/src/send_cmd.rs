@@ -188,11 +188,7 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
                        "filesDone": p.files_done, "files": p.files_total, "file": p.current})
             );
         } else if interactive {
-            let percent = if p.total == 0 {
-                100
-            } else {
-                p.done * 100 / p.total
-            };
+            let percent = (p.done * 100).checked_div(p.total).unwrap_or(100);
             eprint!(
                 "\rSending {percent}% ({} of {})   ",
                 human(p.done),
