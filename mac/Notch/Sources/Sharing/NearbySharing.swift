@@ -90,7 +90,6 @@ final class NearbySharing {
     /// Whether the preference is on.
     var enabled: () -> Bool = { true }
 
-    private(set) var selected: String?
     private(set) var dropTargeting = false
     private var state: ShareState?
     private var started = false
@@ -181,17 +180,16 @@ final class NearbySharing {
 
     var devices: [ShareDevice] { fresh(state)?.devices ?? [] }
 
-    /// Where a paste or drop goes: the chosen device, or the only one nearby.
+    /// Where a paste or drop goes without asking: the only device nearby. With
+    /// several, every send asks, so nothing goes to a device by habit.
     var target: ShareDevice? {
         let list = devices
-        if let selected, let device = list.first(where: { $0.fingerprint == selected }) { return device }
         return list.count == 1 ? list[0] : nil
     }
 
     /// A click on a device in the hover card. A paste or drop that was waiting
     /// for an answer goes to it at once.
     func select(_ fingerprint: String) {
-        selected = fingerprint
         if let waiting = pending, let device = devices.first(where: { $0.fingerprint == fingerprint }) {
             pending = nil
             deliver(waiting.urls, waiting.text, to: device)
@@ -221,7 +219,6 @@ final class NearbySharing {
     }
 
     private func deliver(_ urls: [URL], _ text: String?, to device: ShareDevice) {
-        selected = device.fingerprint
         var body: [String: Any] = [
             "command": "send", "to": device.fingerprint, "paths": urls.map(\.path),
         ]
@@ -411,21 +408,16 @@ final class NearbySharing {
         }
 
         var windows = [headline]
-        let aimed = target?.fingerprint
         for device in devices {
             windows.append(LimitWindow(
-                id: "nearby:" + device.fingerprint, label: device.alias,
-                detail: device.fingerprint == aimed ? "✓ " + L10n.t("Target") : kind(of: device)))
+                id: "nearby:" + device.fingerprint, label: device.alias, detail: kind(of: device)))
         }
         if live?.localNetwork == "blocked" {
             windows.append(LimitWindow(id: "hint-network", label: "",
                                        detail: L10n.t("Allow Local Network for Pulse in System Settings.")))
         } else if !devices.isEmpty {
             windows.append(LimitWindow(id: Self.pasteRowID, label: L10n.t("Paste clipboard")))
-            if aimed == nil {
-                windows.append(LimitWindow(id: "hint-pick", label: "",
-                                           detail: L10n.t("Click a device to make it the target")))
-            } else if !canPasteWithKeyboard {
+            if !canPasteWithKeyboard {
                 windows.append(LimitWindow(id: "hint-keys", label: "",
                                            detail: L10n.t("Allow Accessibility to paste with ⌘V")))
             } else {
