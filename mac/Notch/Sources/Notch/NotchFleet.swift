@@ -68,6 +68,14 @@ final class NotchFleet {
     private var updatePrompt: UpdatePrompt?
 
     private var updatePending = false
+    private var permissionsPending = false
+
+    func apply(permissionsPending: Bool) {
+        self.permissionsPending = permissionsPending
+        for controller in controllers.values {
+            controller.model.permissionsPending = permissionsPending
+        }
+    }
 
     /// A newer version waiting — see `NotchViewModel.updatePending`.
     func apply(updatePending: Bool) {
@@ -429,13 +437,19 @@ final class NotchFleet {
         controller.onRefresh = onRefresh
         controller.onLook = { [weak self] in self?.onLook?() }
         controller.onRefreshProvider = onRefreshProvider
-        controller.onOpenSettings = onOpenSettings
+        let openSettings: () -> Void = { [weak self] in
+            guard let self else { return }
+            if self.permissionsPending { self.onOpenHub?("permissions") }
+            else { self.onOpenSettings?() }
+        }
+        controller.onOpenSettings = openSettings
         controller.onOpenHub = onOpenHub
-        controller.model.onOpenSettings = onOpenSettings
+        controller.model.onOpenSettings = openSettings
         controller.model.onFocusSession = onFocusSession
         controller.model.onUpdateChoice = { [weak self] in self?.onUpdateChoice?($0) }
         controller.apply(updatePrompt: updatePrompt)
         controller.model.updatePending = updatePending
+        controller.model.permissionsPending = permissionsPending
         controller.onReposition = onReposition
         controller.onMoveToEdge = onMoveToEdge
         controller.signInItems = signInItems

@@ -42,6 +42,7 @@ struct SettingsOrb: View {
     var quick: Bool = false
     /// **A red dot**: a newer version is waiting — see `Updater.pending`.
     var badge: Bool = false
+    var permissionsBadge: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -241,16 +242,18 @@ struct SettingsOrb: View {
         // A newer version waiting: a red dot on the middle of the arc, which
         // is the edge of the button too — there hovered or not.
         .overlay {
-            if badge, !convex {
+            if permissionsBadge || (badge && !convex) {
                 Circle()
-                    .fill(Palette.critical)
+                    .fill(permissionsBadge ? Color(hex: 0xFFB340) : Palette.critical)
                     .overlay(Circle().strokeBorder(Palette.notch, lineWidth: Self.badgeRing))
-                    .frame(width: Self.badgeSize, height: Self.badgeSize)
+                    .frame(width: permissionsBadge ? 6 : Self.badgeSize,
+                           height: permissionsBadge ? 6 : Self.badgeSize)
                     .offset(badgeOffset(hovered: isHovered))
                     .transition(.scale(scale: 0.3).combined(with: .opacity))
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: badge)
+        .animation(.easeOut(duration: 0.2), value: permissionsBadge)
         // Sized to the larger of the two states, and never clipped: the arc
         // may sit well outside this frame when it has stayed back on the
         // corner the button hangs from.

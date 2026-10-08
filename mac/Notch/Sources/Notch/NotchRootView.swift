@@ -65,7 +65,8 @@ struct NotchRootView: View {
                                     separation: arcSeparation,
                                     returning: arcStraight,
                                     quick: arcQuick,
-                                    badge: model.updatePending)
+                                    badge: model.updatePending,
+                                    permissionsBadge: model.permissionsPending)
                         // Its own timing, here, next to it: the notch's own
                         // unfold spring is set further out for everything that
                         // changes as it opens or folds, and took the arc over —
@@ -356,6 +357,19 @@ struct NotchRootView: View {
             .overlay(alignment: contentAlignment) { if wing.carriesCells { cells } }
             .overlay(alignment: wing.onTheLeft ? .topTrailing : .topLeading) {
                 if !wing.carriesCells { readingAcross(wing) }
+            }
+            .overlay {
+                // The existing orb badge carries this while open; folded,
+                // leave only a four-point dot on the visible carrying wing.
+                if wing.carriesCells, model.permissionsPending, !model.isExpanded {
+                    Circle()
+                        .fill(Color(hex: 0xFFB340))
+                        .frame(width: 4, height: 4)
+                        .offset(x: model.edge.isVertical ? 0 : (wing.onTheLeft ? -model.cutoutBleed / 2 : model.cutoutBleed / 2),
+                                y: model.edge.isVertical ? model.cutoutBleed / 2 : 0)
+                        .allowsHitTesting(false)
+                        .accessibilityLabel("Permissions need approval")
+                }
             }
             // Masked by the notch itself, not by its bounding box. Without this
             // the cells simply sit on top of a shrinking shape and appear to

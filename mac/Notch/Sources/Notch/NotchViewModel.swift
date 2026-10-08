@@ -92,6 +92,7 @@ final class NotchViewModel: ObservableObject {
     var onUpdateChoice: ((UpdateChoice) -> Void)?
     /// A newer version waiting, put off — the red dot on the settings button.
     @Published var updatePending = false
+    @Published var permissionsPending = false
     /// A tap on a session row in the tooltip: jump to the terminal tab the
     /// session runs in. Takes the session's pid; wired to `SessionFocus`.
     var onFocusSession: ((pid_t) -> Void)?

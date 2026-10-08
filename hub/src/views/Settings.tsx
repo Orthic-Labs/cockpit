@@ -33,6 +33,8 @@ interface Conveniences {
 }
 
 interface NotchState {
+  permissions?: Permission[];
+  permissionErrors?: Record<string, string>;
   conveniences?: Conveniences;
   version: string;
   settings: Record<string, string | number | boolean>;
@@ -45,9 +47,17 @@ interface NotchState {
   helperError?: string | null;
 }
 
+interface Permission {
+  id: string;
+  title: string;
+  why: string;
+  status: "granted" | "needsApproval" | "off" | "unknown";
+  required: boolean;
+}
+
 type Send = (command: Record<string, unknown>) => void;
 
-function useNotch() {
+export function useNotch() {
   const [state, setState] = useState<NotchState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
@@ -59,8 +69,7 @@ function useNotch() {
       .catch((e) => setError(String(e)));
   }, []);
   useEffect(() => {
-    load();
-    const un = listen("notch-state", load);
+    const un = listen("notch-state", load).then((unlisten) => { load(); return unlisten; });
     const poll = setInterval(load, 3000);
     return () => {
       clearInterval(poll);
@@ -77,8 +86,12 @@ function useNotch() {
 const label = (raw: string) =>
   raw.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()).replace(/ ([A-Z])/g, (_, c) => ` ${c.toLowerCase()}`);
 
-export function Settings({ section }: { section: string }) {
-  const { state, error, send } = useNotch();
+export function Settings({ section, notch, onNavigate }: {
+  section: string;
+  notch: ReturnType<typeof useNotch>;
+  onNavigate: (section: string) => void;
+}) {
+  const { state, error, send } = notch;
   if (!state) {
     return <div className="view muted">{error ?? "Reading the notch's settings…"}</div>;
   }
@@ -125,6 +138,27 @@ export function Settings({ section }: { section: string }) {
   return (
     <div className="view settings">
       {error && <div className="error">{error}</div>}
+
+      {section === "permissions" && (
+        <Group title="Permissions">
+          {!state.permissions ? <div className="muted small">Waiting for permission status from Pulse notch…</div> : state.permissions.map((permission) => (
+            <div key={permission.id} className="permission-row">
+              <Row label={permission.title} note={permission.why}>
+                <span className="permission-controls">
+                  <span className={`permission-status ${permission.status}`}>
+                    {permission.status === "granted" ? "Granted" : permission.status === "needsApproval" ? "Needs approval" : permission.status === "off" ? "Off" : "Unknown"}
+                  </span>
+                  <Button size="sm" variant="secondary" disabled={permission.status === "granted"}
+                    onClick={() => send({ command: "permissionRequest", id: permission.id })}>
+                    {permission.id === "automation" ? "Allow" : permission.id === "fullDiskAccess" || permission.status === "needsApproval" ? "Open Settings" : "Allow"}
+                  </Button>
+                </span>
+              </Row>
+              {state.permissionErrors?.[permission.id] && <div className="error">{state.permissionErrors[permission.id]}</div>}
+            </div>
+          ))}
+        </Group>
+      )}
 
       {section === "accounts" && <Accounts state={state} send={send} />}
 
@@ -213,13 +247,6 @@ export function Settings({ section }: { section: string }) {
                 label="Uninstall without password"
               />
             </Row>
-            {state.helper === "requiresApproval" && (
-              <Row label="Approve Pulse in System Settings → Login Items" note="Switch Pulse on under Allow in the Background.">
-                <Button size="sm" variant="secondary" onClick={() => send({ command: "openLoginItems" })}>
-                  Open Login Items
-                </Button>
-              </Row>
-            )}
             <div className="muted small">
               {state.helper === "enabled"
                 ? "On. Root-owned items go to the Trash without a password."
@@ -228,9 +255,10 @@ export function Settings({ section }: { section: string }) {
                   : state.helper === "notFound"
                     ? "This build of Pulse does not include the helper."
                     : state.helper === "needsReenable"
-                      ? "Off after rename. Re-enable here, then approve Pulse in Login Items."
+                      ? "Off after rename. Re-enable in Permissions, then approve Pulse in Login Items."
                       : "Off. Root-owned items ask for an administrator password in Finder."}
             </div>
+            <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>
             {state.helperError ? <div className="error">{state.helperError}</div> : null}
           </Group>
           <Group title="Launcher">
@@ -253,10 +281,11 @@ export function Settings({ section }: { section: string }) {
                 {state.conveniences.fnStatus === "running"
                   ? "Running."
                   : state.conveniences.fnStatus === "needsAccessibility"
-                    ? "Needs Accessibility permission (General, Conveniences)."
+                    ? "Needs Accessibility permission."
                     : `Failed: ${state.conveniences.fnDetail || "unknown reason"}.`}
               </div>
             )}
+            {Boolean(s.convFnCommand) && <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>}
           </Group>
           <Group title="Readings">
             {bool("asksProviderOnLook", "Ask the provider every time you look",
@@ -264,7 +293,7 @@ export function Settings({ section }: { section: string }) {
             <Row label="Refresh"><Button size="sm" variant="secondary" onClick={() => send({ command: "refresh" })}>Refresh now</Button></Row>
           </Group>
           {state.conveniences && (
-            <ConveniencesGroup c={state.conveniences} s={s} set={set} send={send} />
+            <ConveniencesGroup c={state.conveniences} s={s} set={set} onNavigate={onNavigate} />
           )}
           <div className="muted small">Pulse notch {state.version} · built on Codenotch (MIT)</div>
         </>
@@ -273,11 +302,11 @@ export function Settings({ section }: { section: string }) {
   );
 }
 
-function ConveniencesGroup({ c, s, set, send }: {
+function ConveniencesGroup({ c, s, set, onNavigate }: {
   c: Conveniences;
   s: NotchState["settings"];
   set: (key: string, value: unknown) => void;
-  send: Send;
+  onNavigate: (section: string) => void;
 }) {
   const [pick, setPick] = useState("");
   const listed = c.autoQuitApps.map((a) => a.id);
@@ -292,16 +321,10 @@ function ConveniencesGroup({ c, s, set, send }: {
       <Row
         label="Accessibility"
         note={c.accessibility
-          ? c.active || !c.wanted ? "Allowed." : "Allowed; starting."
+          ? "Allowed."
           : "Needs Accessibility permission. Until it is granted these stay off."}
       >
-        {c.accessibility ? (
-          <span className="muted small">Allowed</span>
-        ) : (
-          <Button size="sm" variant="secondary" onClick={() => send({ command: "openAccessibilitySettings" })}>
-            Open System Settings
-          </Button>
-        )}
+        <Button size="sm" variant="secondary" onClick={() => onNavigate("permissions")}>Permissions</Button>
       </Row>
       {toggle("convFinderCutPaste", "Cut and paste in Finder",
         "⌘X marks the selected items, ⌘V in a Finder window moves them there. Never overwrites; a name clash gets \" 2\".")}

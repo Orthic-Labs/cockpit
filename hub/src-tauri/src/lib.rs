@@ -120,6 +120,7 @@ fn watch_notch(app: tauri::AppHandle) {
             ("dev.orthic.pulse.hub.show.appearance", "show-section", "appearance"),
             ("dev.orthic.pulse.hub.show.notifications", "show-section", "notifications"),
             ("dev.orthic.pulse.hub.show.general", "show-section", "general"),
+            ("dev.orthic.pulse.hub.show.permissions", "show-section", "permissions"),
             ("dev.orthic.pulse.notch.state", "notch-state", ""),
         ];
         let mut tokens = Vec::new();
@@ -140,8 +141,19 @@ fn watch_notch(app: tauri::AppHandle) {
             std::thread::sleep(std::time::Duration::from_millis(900));
             let _ = app.emit("show-section", section);
         }
+        let mut visibility_posted = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        let mut was_visible = false;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
+            let visible = app.get_webview_window("main")
+                .and_then(|window| window.is_visible().ok()).unwrap_or(false);
+            if visible && (!was_visible || visibility_posted.elapsed() >= std::time::Duration::from_secs(2)) {
+                post("dev.orthic.pulse.hub.visible");
+                visibility_posted = std::time::Instant::now();
+            } else if !visible && was_visible {
+                post("dev.orthic.pulse.hub.hidden");
+            }
+            was_visible = visible;
             for (token, event, payload) in &tokens {
                 let mut changed = 0i32;
                 if unsafe { notify_check(*token, &mut changed) } == 0 && changed != 0 {

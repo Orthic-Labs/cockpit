@@ -425,12 +425,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bridgeActions.sendTestNotification = { [weak self] in self?.sendTestNotification() }
             let conveniences = ConveniencesService(preferences: preferences)
             bridgeActions.conveniences = { [weak conveniences] in conveniences?.stateSnapshot() ?? [:] }
-            bridgeActions.openAccessibilitySettings = { [weak conveniences] in conveniences?.openAccessibilitySettings() }
             let launcher = LauncherController(preferences: preferences,
                                               snapshots: { [weak store] in store?.snapshots ?? [] })
             launcher.start()
             self.launcher = launcher
             bridgeActions.launcherStatus = { [weak launcher] in launcher?.status }
+            bridgeActions.permissionsChanged = { [weak fleet] in fleet?.apply(permissionsPending: $0) }
             let bridge = HubBridge(preferences: preferences, store: store, actions: bridgeActions)
             conveniences.onChange = { [weak bridge] in bridge?.republish() }
             bridge.start()
@@ -862,6 +862,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor func openSettings() { _ = HubLauncher.open(section: "settings") }
     func applicationWillTerminate(_ notification: Notification) {
+        hubBridge?.stop()
         conveniences?.stop()
         tokenRefresher?.stop()
         piResponseMonitor?.stop()

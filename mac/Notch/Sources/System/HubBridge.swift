@@ -24,18 +24,21 @@ final class HubBridge {
         var sendTestNotification: () -> Void = {}
         /// Mac conveniences: permission state, running apps, Auto Quit list.
         var conveniences: () -> [String: Any] = { [:] }
-        var openAccessibilitySettings: () -> Void = {}
         /// Why the launcher hotkey is not working, when it is not.
         var launcherStatus: () -> String? = { nil }
+        var permissionsChanged: (Bool) -> Void = { _ in }
     }
 
     private let preferences: Preferences
     private let store: UsageStore
     private let actions: Actions
+    private let permissions: PulsePermissions
     private var cancellables = Set<AnyCancellable>()
     private var pendingWrite: DispatchWorkItem?
     private var helperError: String?
     private var helperWatch: Timer?
+    private var permissionWatch: Timer?
+    private var hubVisibleUntil = Date.distantPast
 
     static var directory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -50,13 +53,14 @@ final class HubBridge {
         self.preferences = preferences
         self.store = store
         self.actions = actions
+        self.permissions = PulsePermissions(preferences: preferences)
     }
 
     func start() {
         try? FileManager.default.createDirectory(at: Self.commandsDirectory,
                                                  withIntermediateDirectories: true)
         preferences.objectWillChange
-            .sink { [weak self] _ in self?.scheduleWrite() }
+            .sink { [weak self] _ in self?.republish() }
             .store(in: &cancellables)
         // Accounts only: system rings refresh every two seconds and carry
         // nothing the hub's Settings shows.
@@ -68,12 +72,58 @@ final class HubBridge {
             .sink { [weak self] _ in self?.scheduleWrite() }
             .store(in: &cancellables)
         DarwinNotify.observe(Self.commandNotification) { [weak self] in self?.drainCommands() }
+        // The hub remains running when its window closes. A visibility lease
+        // also expires if it crashes, so hidden hubs do not keep probing TCC.
+        DarwinNotify.observe("dev.orthic.pulse.hub.visible") { [weak self] in
+            guard let self else { return }
+            let wasHidden = self.hubVisibleUntil < Date()
+            self.hubVisibleUntil = Date().addingTimeInterval(6)
+            if wasHidden { self.republish() }
+        }
+        DarwinNotify.observe("dev.orthic.pulse.hub.hidden") { [weak self] in
+            self?.hubVisibleUntil = .distantPast
+        }
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.republish() }
+            .store(in: &cancellables)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                   app.bundleIdentifier == HubLauncher.bundleID { self?.republish() }
+            }
+            .store(in: &cancellables)
+        permissions.onChange = { [weak self] in
+            guard let self else { return }
+            self.actions.permissionsChanged(self.permissions.missingRequired)
+            self.scheduleWrite()
+        }
+        permissions.refresh()
+        permissionWatch = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.hubVisibleUntil > Date() else { return }
+                self.permissions.refresh()
+                self.scheduleWrite()
+            }
+        }
         drainCommands()
         scheduleWrite()
     }
 
     /// Publish again soon: something the hub shows changed outside Preferences.
-    func republish() { scheduleWrite() }
+    func republish() {
+        scheduleWrite()
+        // Preferences emits before storing its new value.
+        DispatchQueue.main.async { [weak self] in self?.permissions.refresh() }
+    }
+
+    func stop() {
+        permissions.onChange = nil
+        permissionWatch?.invalidate()
+        helperWatch?.invalidate()
+        pendingWrite?.cancel()
+        cancellables.removeAll()
+    }
 
     // MARK: - State out
 
@@ -98,6 +148,7 @@ final class HubBridge {
             if case .display(let id) = preferences.displayPreference { return id }
             return "followActiveWindow"
         }()
+        settings["launchAtLogin"] = permissions.entries.first { $0.id == "login" }?.status == .granted
         let displays = DisplayOption.connected.map { ["id": $0.id, "name": $0.name] }
         let accounts: [[String: Any]] = store.providerSummaries
             .filter { $0.kind == .usage }
@@ -132,6 +183,8 @@ final class HubBridge {
             "launcherStatus": actions.launcherStatus() ?? NSNull(),
             "helper": PrivilegedHelper.state,
             "helperError": helperError ?? NSNull(),
+            "permissions": permissions.entries.map(\.snapshot),
+            "permissionErrors": permissions.errors,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         else { return }
@@ -154,7 +207,7 @@ final class HubBridge {
             else { continue }
             apply(command)
         }
-        scheduleWrite()
+        republish()
     }
 
     private func apply(_ command: [String: Any]) {
@@ -183,7 +236,15 @@ final class HubBridge {
         case "previewSessionLimitAlert": actions.previewSessionLimitAlert()
         case "previewWeeklyLimitAlert": actions.previewWeeklyLimitAlert()
         case "sendTestNotification": actions.sendTestNotification()
-        case "openAccessibilitySettings": actions.openAccessibilitySettings()
+        case "openAccessibilitySettings": permissions.request("accessibility")
+        case "permissionRequest":
+            if let id = command["id"] as? String {
+                permissions.request(id)
+                if id == "helper" {
+                    helperError = permissions.errors[id]
+                    watchHelper()
+                }
+            }
         case "helperEnable":
             helperError = PrivilegedHelper.enable()
             watchHelper()
@@ -205,7 +266,7 @@ final class HubBridge {
         helperWatch = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self else { timer.invalidate(); return }
-                self.scheduleWrite()
+                self.republish()
                 if PrivilegedHelper.state != "requiresApproval" || Date() > until {
                     timer.invalidate()
                     self.helperWatch = nil

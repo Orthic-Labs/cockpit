@@ -6,8 +6,8 @@ import { Storage } from "./views/Storage";
 import { Monitor } from "./views/Monitor";
 import { Apps } from "./views/Apps";
 import { Cleanup } from "./views/Cleanup";
-import { Settings } from "./views/Settings";
-import { Bell, CircleUser, Gauge, HardDrive, LayoutGrid, Palette, Settings2, Sparkles } from "lucide-react";
+import { Settings, useNotch } from "./views/Settings";
+import { Bell, CircleUser, Gauge, HardDrive, LayoutGrid, Palette, Settings2, ShieldCheck, Sparkles } from "lucide-react";
 
 const icon = (Icon: typeof HardDrive) => <Icon size={15} strokeWidth={1.75} />;
 
@@ -23,6 +23,7 @@ const groups = [
   {
     title: "Settings",
     items: [
+      { id: "permissions", label: "Permissions", icon: icon(ShieldCheck), keywords: ["accessibility", "approval", "helper", "privacy"] },
       { id: "accounts", label: "Accounts", icon: icon(CircleUser), keywords: ["claude", "codex", "sign in"] },
       { id: "appearance", label: "Appearance", icon: icon(Palette), keywords: ["notch", "size", "edge"] },
       { id: "notifications", label: "Notifications", icon: icon(Bell), keywords: ["alerts", "sound"] },
@@ -40,9 +41,10 @@ const titles: Record<string, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   general: "General",
+  permissions: "Permissions",
 };
 
-const settingsIds = new Set(["accounts", "appearance", "notifications", "general"]);
+const settingsIds = new Set(["permissions", "accounts", "appearance", "notifications", "general"]);
 
 /** `--section settings` (from the notch's settings handle) opens Accounts. */
 const resolve = (section: string | null | undefined) =>
@@ -50,6 +52,18 @@ const resolve = (section: string | null | undefined) =>
 
 export function App() {
   const [active, setActive] = useState("storage");
+  const notch = useNotch();
+  const missingPermissions = notch.state?.permissions?.filter((permission) => permission.required && permission.status !== "granted").length ?? 0;
+  const sidebarGroups = groups.map((group) => ({
+    ...group,
+    items: group.items.map((item) => item.id === "permissions" ? {
+      ...item,
+      icon: <span className="permission-nav-icon">
+        {icon(ShieldCheck)}
+        {missingPermissions > 0 && <span className="permission-count" aria-label={`${missingPermissions} required permissions missing`}>{missingPermissions}</span>}
+      </span>,
+    } : item),
+  }));
 
   useEffect(() => {
     invoke<string | null>("initial_section").then((s) => {
@@ -65,7 +79,7 @@ export function App() {
 
   return (
     <AppShell
-      groups={groups}
+      groups={sidebarGroups}
       activeId={active}
       onNavigate={setActive}
       title={titles[active]}
@@ -76,7 +90,7 @@ export function App() {
       onOpenSettings={() => setActive("accounts")}
       settingsActive={settingsIds.has(active)}
     >
-      {active === "storage" ? <Storage /> : active === "cleanup" ? <Cleanup /> : active === "monitor" ? <Monitor /> : active === "apps" ? <Apps /> : <Settings section={active} />}
+      {active === "storage" ? <Storage /> : active === "cleanup" ? <Cleanup /> : active === "monitor" ? <Monitor /> : active === "apps" ? <Apps /> : <Settings section={active} notch={notch} onNavigate={setActive} />}
     </AppShell>
   );
 }

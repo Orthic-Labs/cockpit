@@ -1588,6 +1588,12 @@ final class NotchWindowController {
         // Use the event position even if the pointer has moved since the click.
         let local = CGPoint(x: locationInWindow.x, y: panel.frame.height - locationInWindow.y)
 
+        if model.permissionsPending,
+           notchRect.contains(local) || (model.isExpanded && isOverHandle(local)) {
+            onOpenHub?("permissions")
+            return
+        }
+
         // The handle sits inside the notch, so it has to be tested before the
         // cells — otherwise the cell band nearest the foot of the stack swallows
         // it and clicking the gear refetches a provider instead.
