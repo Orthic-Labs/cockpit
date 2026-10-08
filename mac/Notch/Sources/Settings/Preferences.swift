@@ -651,11 +651,11 @@ final class Preferences: ObservableObject {
         // On unless turned off: it is how the notch is carried to another edge,
         // and a control that is missing by default is one nobody finds.
         self.accentColor = defaults.string(forKey: Keys.accentColor)
-            .flatMap(AccentColorChoice.init(rawValue:)) ?? .system
+            .flatMap(AccentColorChoice.init(rawValue:)) ?? .green
         self.notchSurfaceStyle = defaults.string(forKey: Keys.notchSurfaceStyle)
             .flatMap(NotchSurfaceStyle.init(rawValue:)) ?? .glass
-        let storedWatchLimit = defaults.object(forKey: Keys.watchLimit) as? Double ?? 0.50
-        let storedCriticalLimit = defaults.object(forKey: Keys.criticalLimit) as? Double ?? 0.70
+        let storedWatchLimit = defaults.object(forKey: Keys.watchLimit) as? Double ?? 0.70
+        let storedCriticalLimit = defaults.object(forKey: Keys.criticalLimit) as? Double ?? 0.90
         // `didSet` does the clamping, and it does not run for these assignments,
         // so a stored pair that crossed over is repaired here instead.
         let critical = min(max(storedCriticalLimit, 0.02), 1.0)

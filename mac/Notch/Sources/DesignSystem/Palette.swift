@@ -29,10 +29,10 @@ enum Palette {
     /// Named so `UsageBand.rampColor` can interpolate between them per-appearance rather
     /// than blending two already-resolved `Color`s (which would mix in whichever appearance
     /// happened to be current when the `Color` was built, not the one it draws in).
-    static let amplePair: (dark: UInt32, light: UInt32) = (0x00FF88, 0x00A356)
-    static let watchPair: (dark: UInt32, light: UInt32) = (0xF2FF00, 0xB08800)
+    static let amplePair: (dark: UInt32, light: UInt32) = (0x2E6B4A, 0x2A6E47)   // muted dark green: present, not loud
+    static let watchPair: (dark: UInt32, light: UInt32) = (0xC2570F, 0xB4530F)   // dark orange
     /// Already 3.5:1 on white, so the warning colour is the same in both.
-    static let criticalPair: (dark: UInt32, light: UInt32) = (0xFF3F00, 0xFF3F00)
+    static let criticalPair: (dark: UInt32, light: UInt32) = (0xA51D24, 0x9B1B1B) // deep red
 
     static let ample         = Color(dark: NSColor(hex: amplePair.dark), light: NSColor(hex: amplePair.light))
     static let watch         = Color(dark: NSColor(hex: watchPair.dark), light: NSColor(hex: watchPair.light))

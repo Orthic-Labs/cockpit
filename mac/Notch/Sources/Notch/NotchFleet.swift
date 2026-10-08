@@ -35,8 +35,8 @@ final class NotchFleet {
     private var displayPreference: DisplayPreference = .followActiveWindow
     private var resetTimeFormat: ResetTimeFormat = .automatic
     private var accentColor: AccentColorChoice = .system
-    private var watchLimit: Double = 0.50
-    private var criticalLimit: Double = 0.70
+    private var watchLimit: Double = 0.70
+    private var criticalLimit: Double = 0.90
     private var colorTransitionStyle: ColorTransitionStyle = .hardStep
     /// One choice for the whole fleet, like the edge and the size: a weekly
     /// ring on one display and not another would read as a bug.

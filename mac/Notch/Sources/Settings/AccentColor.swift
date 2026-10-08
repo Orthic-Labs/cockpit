@@ -27,7 +27,7 @@ enum AccentColorChoice: String, CaseIterable, Identifiable {
         case .red:      return "#EB4236"
         case .orange:   return "#EB8436"
         case .yellow:   return "#FFD400"
-        case .green:    return "#00FF88"
+        case .green:    return "#2E6B4A"
         case .teal:     return "#00E5CC"
         case .blue:     return "#36A8EB"
         case .indigo:   return "#6C5CE7"

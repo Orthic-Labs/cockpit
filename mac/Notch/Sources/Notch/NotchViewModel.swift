@@ -139,8 +139,8 @@ final class NotchViewModel: ObservableObject {
     @Published var weeklyRing: WeeklyRing = .off
     @Published var weeklyRingDashed: Bool = false
     @Published var weeklyReading: Bool = false
-    @Published var watchLimit: Double = 0.50
-    @Published var criticalLimit: Double = 0.70
+    @Published var watchLimit: Double = 0.70
+    @Published var criticalLimit: Double = 0.90
     /// Mirrored from Settings like `surfaceStyle`, just below.
     @Published var colorTransitionStyle: ColorTransitionStyle = .hardStep
     /// Mirrors the persisted Appearance choice so the separate notch window

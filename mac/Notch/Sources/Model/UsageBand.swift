@@ -12,7 +12,7 @@ enum UsageBand: String, Codable, Equatable {
     case critical    // nearly out
     case exhausted   // limit hit, waiting for the reset
 
-    static func band(for usedFraction: Double, watchLimit: Double = 0.50, criticalLimit: Double = 0.70) -> UsageBand {
+    static func band(for usedFraction: Double, watchLimit: Double = 0.70, criticalLimit: Double = 0.90) -> UsageBand {
         switch usedFraction {
         case ..<watchLimit: return .ample
         case ..<criticalLimit: return .watch
@@ -66,11 +66,11 @@ enum UsageBand: String, Codable, Equatable {
 }
 
 private struct UsageWatchLimitKey: EnvironmentKey {
-    static let defaultValue: Double = 0.50
+    static let defaultValue: Double = 0.70
 }
 
 private struct UsageCriticalLimitKey: EnvironmentKey {
-    static let defaultValue: Double = 0.70
+    static let defaultValue: Double = 0.90
 }
 
 extension EnvironmentValues {
