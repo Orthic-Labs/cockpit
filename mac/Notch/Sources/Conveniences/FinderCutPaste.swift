@@ -37,6 +37,13 @@ final class FinderCutPaste {
         lock.lock(); cut = nil; swallowedKeys = []; lock.unlock()
     }
 
+    /// The Finder menu's Cut has put the items on the pasteboard: the next ⌘V
+    /// in Finder moves them, exactly as after ⌘X.
+    func markCut() {
+        let now = NSPasteboard.general.changeCount
+        lock.lock(); cut = Cut(before: now, changeCount: now); lock.unlock()
+    }
+
     // MARK: - Tap handler (tap thread)
 
     func handle(_ type: CGEventType, _ event: CGEvent) -> TapDecision {

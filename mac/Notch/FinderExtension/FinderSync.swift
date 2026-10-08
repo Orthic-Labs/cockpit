@@ -5,8 +5,8 @@ import FinderSync
 // UninstallyFinder extension (github.com/gostonx/uninstally, MIT, (c) 2026
 // Codenta). See docs/donors.md.
 
-/// Adds Copy Path, Copy Path (escaped) and Open in Terminal as top-level items
-/// in Finder's right-click menu, system-wide.
+/// Adds Cut, Copy Path and Open in Terminal as top-level items in Finder's
+/// right-click menu, system-wide.
 ///
 /// Finder Sync extensions must be sandboxed, so this does nothing but the
 /// pasteboard and a Launch Services open; it never touches file contents.
@@ -45,10 +45,12 @@ final class FinderSync: FIFinderSync {
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
         guard menuKind == .contextualMenuForItems || menuKind == .contextualMenuForContainer else { return nil }
-        // Top-level items, no submenu: Copy Path first, then the rest.
+        // Top-level items, no submenu. Cut only for selected items.
         let menu = NSMenu(title: "")
+        if menuKind == .contextualMenuForItems {
+            menu.addItem(item("Cut", #selector(cut(_:)), symbol: "scissors"))
+        }
         menu.addItem(item("Copy Path", #selector(copyPath(_:)), symbol: "doc.on.clipboard"))
-        menu.addItem(item("Copy Path (escaped)", #selector(copyEscapedPath(_:)), symbol: "terminal"))
         menu.addItem(item("Open in Terminal", #selector(openInTerminal(_:)), symbol: "apple.terminal"))
         return menu
     }
@@ -68,11 +70,17 @@ final class FinderSync: FIFinderSync {
         write(paths.joined(separator: "\n"))
     }
 
-    @objc private func copyEscapedPath(_ sender: AnyObject?) {
-        let paths = targets().map { Self.shellQuoted($0.path) }
-        guard !paths.isEmpty else { return }
-        // Space-separated so the result pastes straight into a command line.
-        write(paths.joined(separator: " "))
+    /// Puts the items on the pasteboard as files, as Finder's Copy does, and
+    /// tells Pulse, whose next ⌘V in Finder then moves them (Move Item Here).
+    @objc private func cut(_ sender: AnyObject?) {
+        guard let selected = FIFinderSyncController.default().selectedItemURLs(), !selected.isEmpty
+        else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects(selected as [NSURL])
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("dev.orthic.pulse.finder.cut" as CFString), nil, nil, true)
     }
 
     @objc private func openInTerminal(_ sender: AnyObject?) {
@@ -97,11 +105,6 @@ final class FinderSync: FIFinderSync {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-    }
-
-    /// Single-quote for POSIX shells: `it's` becomes `'it'\''s'`.
-    static func shellQuoted(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// A real folder; app bundles and other packages count as files.

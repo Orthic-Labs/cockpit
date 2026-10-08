@@ -54,6 +54,11 @@ final class ConveniencesService {
         }
         windowHotKeys.onChange = { [weak self] in self?.onChange?() }
         windowHotKeys.start()
+        // The Finder menu's Cut (the sandboxed extension can only signal).
+        DarwinNotify.observe("dev.orthic.pulse.finder.cut") { [weak self] in
+            guard let self, self.preferences.convFinderCutPaste else { return }
+            self.finder.markCut()
+        }
         reconcile()
     }
 
