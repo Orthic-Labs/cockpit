@@ -27,13 +27,13 @@ use windows::Win32::NetworkManagement::IpHelper::{
 };
 use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives};
+use windows::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
 use windows::Win32::System::Performance::{
     PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA,
     PDH_NO_DATA, PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData,
     PdhGetFormattedCounterArrayW, PdhOpenQueryW,
-};
-use windows::Win32::System::LibraryLoader::{
-    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::GetSystemTimes;
@@ -298,21 +298,21 @@ fn extras_loop() {
             "PdhGetFormattedCounterArrayW",
             "gpu",
         );
-        if let Some(nvml) = &nvml {
-            if tick % NVML_EVERY == 0 {
-                temperature = match nvml.temperature() {
-                    Some(celsius) => Reading::Value(vec![Temp {
-                        source: "GPU",
-                        celsius,
-                    }]),
-                    None => Reading::Unavailable,
-                };
-                log_transition(
-                    temp_latch.observe(matches!(temperature, Reading::Unavailable)),
-                    "nvmlDeviceGetTemperature",
-                    "gpu_temperature",
-                );
-            }
+        if let Some(nvml) = &nvml
+            && tick.is_multiple_of(NVML_EVERY)
+        {
+            temperature = match nvml.temperature() {
+                Some(celsius) => Reading::Value(vec![Temp {
+                    source: "GPU",
+                    celsius,
+                }]),
+                None => Reading::Unavailable,
+            };
+            log_transition(
+                temp_latch.observe(matches!(temperature, Reading::Unavailable)),
+                "nvmlDeviceGetTemperature",
+                "gpu_temperature",
+            );
         }
         tick = tick.wrapping_add(1);
         {
@@ -364,9 +364,8 @@ impl Nvml {
         let device_at: unsafe extern "C" fn(u32, *mut NvmlDevice) -> i32 = unsafe {
             std::mem::transmute(GetProcAddress(module, s!("nvmlDeviceGetHandleByIndex_v2"))?)
         };
-        let get_temperature: unsafe extern "C" fn(NvmlDevice, i32, *mut u32) -> i32 = unsafe {
-            std::mem::transmute(GetProcAddress(module, s!("nvmlDeviceGetTemperature"))?)
-        };
+        let get_temperature: unsafe extern "C" fn(NvmlDevice, i32, *mut u32) -> i32 =
+            unsafe { std::mem::transmute(GetProcAddress(module, s!("nvmlDeviceGetTemperature"))?) };
         // SAFETY: `init` takes no arguments; NVML_SUCCESS is 0.
         if unsafe { init() } != 0 {
             return None;

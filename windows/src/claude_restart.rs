@@ -94,7 +94,9 @@ pub fn start() {
             }
         });
     if spawned.is_err() {
-        set(Phase::Failed("The restart could not be started".to_string()));
+        set(Phase::Failed(
+            "The restart could not be started".to_string(),
+        ));
     }
 }
 
@@ -159,7 +161,11 @@ fn run_cli() -> Option<String> {
         .output();
     let output = match output {
         Ok(output) => output,
-        Err(error) => return Some(format!("Could not run the Pulse command line tool: {error}")),
+        Err(error) => {
+            return Some(format!(
+                "Could not run the Pulse command line tool: {error}"
+            ));
+        }
     };
     if output.status.success() {
         return None;

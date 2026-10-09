@@ -1656,11 +1656,25 @@ impl Pen<'_> {
                 glyphs::symbol(self.canvas, Symbol::Xmark, centre, X_SIZE * s, ink, 1.0);
             }
             Head::Done => {
-                glyphs::symbol(self.canvas, Symbol::Check, centre, PILL_SYMBOL * s, ink, 1.0);
+                glyphs::symbol(
+                    self.canvas,
+                    Symbol::Check,
+                    centre,
+                    PILL_SYMBOL * s,
+                    ink,
+                    1.0,
+                );
             }
             Head::Failed => {
                 let red = layout::BAND_CRITICAL;
-                glyphs::symbol(self.canvas, Symbol::Warning, centre, PILL_SYMBOL * s, red, 1.0);
+                glyphs::symbol(
+                    self.canvas,
+                    Symbol::Warning,
+                    centre,
+                    PILL_SYMBOL * s,
+                    red,
+                    1.0,
+                );
             }
         }
     }

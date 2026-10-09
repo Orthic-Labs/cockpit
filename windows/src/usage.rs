@@ -431,7 +431,9 @@ enum Outcome {
     Failed(Status),
     /// Claude Desktop's account has no usable cached reading: no windows, and never another
     /// account's.
-    NoReading { account: String },
+    NoReading {
+        account: String,
+    },
 }
 
 /// Folds one poll into the published reading: fresh data replaces it; a failure keeps the
@@ -461,7 +463,11 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
             Usage {
                 status: Status::Ok,
                 // A cached reading carries no plan; the one already known stays.
-                plan: if endpoint { plan } else { plan.or(previous.plan) },
+                plan: if endpoint {
+                    plan
+                } else {
+                    plan.or(previous.plan)
+                },
                 windows,
                 updated: Some(updated),
                 block,
@@ -1146,10 +1152,7 @@ pub fn codex_credits_text(root: &Value) -> Option<String> {
 /// Unused resets: `available_count` is trusted even when the `credits` list is truncated; an
 /// available credit already past its expiry is not counted.
 pub fn codex_resets(root: &Value, now: u64) -> ResetCredits {
-    let items = root
-        .get("credits")
-        .and_then(Value::as_array)
-        .unwrap_or(&[]);
+    let items = root.get("credits").and_then(Value::as_array).unwrap_or(&[]);
     let expiries: Vec<Option<u64>> = items
         .iter()
         .filter(|item| item.get("status").and_then(Value::as_str) == Some("available"))
@@ -1294,7 +1297,11 @@ pub fn civil_from_days(days: i64) -> (i64, usize, i64) {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let shifted = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * shifted + 2) / 5 + 1;
-    let month = if shifted < 10 { shifted + 3 } else { shifted - 9 };
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     (year, month as usize, day)
 }

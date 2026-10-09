@@ -106,9 +106,12 @@ pub fn signed_in_account() -> Option<String> {
 pub fn is_account_id(text: &str) -> bool {
     let parts: Vec<&str> = text.split('-').collect();
     parts.len() == 5
-        && parts.iter().zip([8usize, 4, 4, 4, 12]).all(|(part, length)| {
-            part.len() == length && part.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
+        && parts
+            .iter()
+            .zip([8usize, 4, 4, 4, 12])
+            .all(|(part, length)| {
+                part.len() == length && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
 }
 
 /// The organizations Desktop filed under an account: the folder names under its session
@@ -351,7 +354,10 @@ fn candidate_of(entry: &[u8], organizations: &[String]) -> Option<Candidate> {
     let key_length = le32(entry, 32) as usize;
     // State 0 is a normal entry (1 is evicted, 2 doomed); a non-zero long-key address means
     // the key is stored elsewhere.
-    if le32(entry, 20) != 0 || key_length == 0 || key_length > MAX_INLINE_KEY || le32(entry, 36) != 0
+    if le32(entry, 20) != 0
+        || key_length == 0
+        || key_length > MAX_INLINE_KEY
+        || le32(entry, 36) != 0
     {
         return None;
     }
@@ -363,7 +369,10 @@ fn candidate_of(entry: &[u8], organizations: &[String]) -> Option<Candidate> {
     let sizes = [le32(entry, 40) as i32, le32(entry, 44) as i32];
     let addresses = [le32(entry, 56), le32(entry, 60)];
     Some(Candidate {
-        sizes: [usize::try_from(sizes[0]).ok()?, usize::try_from(sizes[1]).ok()?],
+        sizes: [
+            usize::try_from(sizes[0]).ok()?,
+            usize::try_from(sizes[1]).ok()?,
+        ],
         addresses,
     })
 }

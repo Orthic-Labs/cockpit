@@ -954,40 +954,39 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
 /// changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     let ring = send::ring();
-    let (views, slot, badges, handle) = {
-        let app = lock_state();
-        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
-            return;
-        };
-        // The folded pill shows no readings, so its identity is the empty list.
-        let views = if panel.slot.folded {
-            Vec::new()
-        } else {
-            layout::views(app.machine.as_ref(), usage, &ring)
-        };
-        // The settings handle part the pointer is on (the folded pill has none).
-        let handle = app
-            .ui
-            .handle
-            .filter(|h| h.0 == key && !panel.slot.folded)
-            .map(|h| h.1);
-        let drawn = (
-            &views,
-            panel.slot.edge,
-            panel.slot.folded,
-            panel.slot.dpi,
-            app.badges,
-            handle,
-        );
-        if panel
-            .drawn
-            .as_ref()
-            .is_some_and(|shown| (&shown.0, shown.1, shown.2, shown.3, shown.4, shown.5) == drawn)
+    let (views, slot, badges, handle) =
         {
-            return;
-        }
-        (views, panel.slot, app.badges, handle)
-    };
+            let app = lock_state();
+            let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+                return;
+            };
+            // The folded pill shows no readings, so its identity is the empty list.
+            let views = if panel.slot.folded {
+                Vec::new()
+            } else {
+                layout::views(app.machine.as_ref(), usage, &ring)
+            };
+            // The settings handle part the pointer is on (the folded pill has none).
+            let handle = app
+                .ui
+                .handle
+                .filter(|h| h.0 == key && !panel.slot.folded)
+                .map(|h| h.1);
+            let drawn = (
+                &views,
+                panel.slot.edge,
+                panel.slot.folded,
+                panel.slot.dpi,
+                app.badges,
+                handle,
+            );
+            if panel.drawn.as_ref().is_some_and(|shown| {
+                (&shown.0, shown.1, shown.2, shown.3, shown.4, shown.5) == drawn
+            }) {
+                return;
+            }
+            (views, panel.slot, app.badges, handle)
+        };
     let Some(canvas) = with_text(|text| {
         render::render_notch(
             &views,
@@ -1878,10 +1877,9 @@ fn on_mouse_leave(hwnd: HWND) {
     if handle_was_out {
         redraw_panel(key, &usage::snapshot());
     }
-    let over_send = lock_state()
-        .ui
-        .hover
-        .is_some_and(|(hovered, cell)| hovered == key && (cell == SEND_CELL || is_claude_cell(cell)));
+    let over_send = lock_state().ui.hover.is_some_and(|(hovered, cell)| {
+        hovered == key && (cell == SEND_CELL || is_claude_cell(cell))
+    });
     if over_send {
         arm_hover_grace();
     } else {
@@ -2512,11 +2510,9 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                 let takes_pointer = {
                     let app = lock_state();
                     app.ui.menu.is_some()
-                        || app
-                            .ui
-                            .card_shown
-                            .as_ref()
-                            .is_some_and(|c| c.cell == SEND_CELL || c.notice || is_claude_cell(c.cell))
+                        || app.ui.card_shown.as_ref().is_some_and(|c| {
+                            c.cell == SEND_CELL || c.notice || is_claude_cell(c.cell)
+                        })
                 };
                 return if takes_pointer {
                     LRESULT(HTCLIENT as isize)

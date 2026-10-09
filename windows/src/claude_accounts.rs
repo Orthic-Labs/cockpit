@@ -91,8 +91,7 @@ fn default_name(id: &str) -> String {
 
 fn file_path() -> Option<PathBuf> {
     let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
-    base.is_absolute()
-        .then(|| base.join("Pulse").join(FILE))
+    base.is_absolute().then(|| base.join("Pulse").join(FILE))
 }
 
 fn with_book<R>(action: impl FnOnce(&mut Book) -> R) -> R {
@@ -324,7 +323,9 @@ pub fn record(
 fn rename(id: &str, proposed: &str) {
     let name: String = proposed.trim().chars().take(NAME_MAX_CHARS).collect();
     let value = (!name.is_empty()).then_some(name);
-    let on_disk = desktop::account_folders().iter().any(|(folder, _)| folder == id);
+    let on_disk = desktop::account_folders()
+        .iter()
+        .any(|(folder, _)| folder == id);
     with_book(|book| {
         let Some(index) = book.entries.iter().position(|e| e.id == id) else {
             let Some(value) = value else {
@@ -360,7 +361,9 @@ fn rename(id: &str, proposed: &str) {
 /// whose folder is still on disk: it would reappear at once, and forgetting it would only
 /// lose its name.
 fn forget(id: &str, keeping_active: Option<&str>) {
-    let on_disk = desktop::account_folders().iter().any(|(folder, _)| folder == id);
+    let on_disk = desktop::account_folders()
+        .iter()
+        .any(|(folder, _)| folder == id);
     if keeping_active == Some(id) || on_disk {
         return;
     }

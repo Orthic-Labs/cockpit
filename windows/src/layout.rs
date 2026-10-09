@@ -379,8 +379,7 @@ fn orb_offset(edge: Edge, x: i32, y: i32, dpi: u32) -> (f32, f32) {
 pub fn handle_at(edge: Edge, x: i32, y: i32, dpi: u32, grip_out: bool) -> Option<Handle> {
     let (along, depth) = orb_offset(edge, x, y, dpi);
     if grip_out
-        && along >= ORB_RADIUS + GRIP_GAP / 2.0
-        && along <= ORB_OVERHANG
+        && (ORB_RADIUS + GRIP_GAP / 2.0..=ORB_OVERHANG).contains(&along)
         && depth.abs() <= GRIP_PITCH + GRIP_DOT / 2.0 + 3.0
     {
         return Some(Handle::Grip);
