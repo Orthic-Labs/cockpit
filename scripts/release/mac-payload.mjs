@@ -2,6 +2,7 @@
 
 import { cp, mkdir, readFile, writeFile, chmod, stat, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -17,6 +18,7 @@ const paths = {
   helper: join(stagingRoot, appName, 'Contents', 'Helpers', 'pulse'),
   hub: join(stagingRoot, appName, 'Contents', 'Helpers', 'Pulse.app'),
   privilegedHelper: join(stagingRoot, appName, 'Contents', 'Helpers', 'PulseHelper'),
+  smartctl: join(stagingRoot, appName, 'Contents', 'Helpers', 'smartctl'),
   elevate: join(stagingRoot, appName, 'Contents', 'Helpers', 'pulse-elevate'),
   finder: join(stagingRoot, appName, 'Contents', 'PlugIns', 'PulseFinder.appex'),
   finderExecutable: join(stagingRoot, appName, 'Contents', 'PlugIns', 'PulseFinder.appex', 'Contents', 'MacOS', 'PulseFinder'),
@@ -62,15 +64,40 @@ async function copyTree(source, target, label) {
   await cp(source, target, { recursive: true, force: true });
 }
 
-// TODO(smartctl): bundle the official smartmontools 7.5 macOS build as
-// Contents/Helpers/smartctl. Not wired yet: the upstream macOS artifact URL
-// and its published SHA-256 are not pinned here, so nothing is fetched at build
-// time. When added: download over HTTPS, verify the SHA-256 against the
-// published checksum, copy it into Helpers (mode 0755), copy
-// release/smartmontools-NOTICE.txt into Contents/Resources, and add
-// dist/staging/Pulse.app/Contents/Helpers/smartctl to sign.prePackageFiles in
-// right-release.config.mjs before Contents/MacOS/Pulse. Until then the hub and
-// the notch look for smartctl at Contents/Helpers, then Homebrew.
+// smartctl: the signed smartmontools 7.5 macOS arm64 build published by
+// RightKit. It is a bare Mach-O that is not notarized on its own; it ships
+// inside Pulse.app so the app's notarization covers it. Fetched at candidate
+// time (CI has network), SHA-256 verified exactly, never committed.
+const smartctl = {
+  url: 'https://github.com/Orthic-Labs/rightkit-native-tools/releases/download/smartmontools-7.5-1/smartctl-7.5-macos-arm64',
+  sha256: 'be345ce931c2e03e96e282076e92ef2eebf65eb7e9e782902762d09215a653eb'
+};
+
+async function fetchSmartctl() {
+  const cacheDir = join(process.env.RUNNER_TEMP || '/tmp', 'pulse-smartctl');
+  const cached = join(cacheDir, smartctl.sha256);
+  try {
+    const bytes = await readFile(cached);
+    if (createHash('sha256').update(bytes).digest('hex') === smartctl.sha256) return cached;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const response = await fetch(smartctl.url, { redirect: 'follow' });
+  if (!response.ok) fail(`smartctl download failed: HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const actual = createHash('sha256').update(bytes).digest('hex');
+  if (actual !== smartctl.sha256) fail(`smartctl SHA-256 mismatch: expected ${smartctl.sha256}, got ${actual}`);
+  await mkdir(cacheDir, { recursive: true });
+  await writeFile(cached, bytes);
+  return cached;
+}
+
+// Contents/Helpers/smartctl (beside pulse and PulseHelper) plus its licence
+// folder in Contents/Resources/ThirdParty/smartmontools.
+async function placeSmartctl(app) {
+  await copyExecutable(await fetchSmartctl(), join(app, 'Contents', 'Helpers', 'smartctl'), 'smartctl');
+  await copyTree(join(repoRoot, 'third_party', 'smartmontools'), join(app, 'Contents', 'Resources', 'ThirdParty', 'smartmontools'), 'smartmontools licence folder');
+}
 
 // Pulse.app is the notch (Codenotch fork, xcodebuild) with the CLI and the
 // hub (Tauri) inside Contents/Helpers. The notch's own Info.plist is kept.
@@ -137,6 +164,7 @@ async function candidate() {
   await copyExecutable(source.helper, helper, 'Pulse CLI');
   await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Pulse.app'), 'hub app (Tauri)');
   await placePrivilegedHelper(app, source.notch);
+  await placeSmartctl(app);
   await cp(join(repoRoot, 'mac/Notch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
   await copyExecutable(appExecutable, join(root, 'raw', 'Pulse'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'pulse'), 'Pulse CLI');
@@ -176,6 +204,8 @@ async function prepare() {
   }
   await requireFile(paths.hubExecutable, 'staged hub executable');
   await chmod(paths.hubExecutable, 0o755);
+  await requireFile(paths.smartctl, 'staged smartctl');
+  await chmod(paths.smartctl, 0o755);
   // Finder Sync extension, embedded in Contents/PlugIns by the Pulse target.
   await requireFile(paths.finderExecutable, 'staged Finder extension');
   await chmod(paths.finderExecutable, 0o755);
@@ -216,7 +246,7 @@ async function packageMac({ local = false } = {}) {
     // The privileged helper and pulse-elevate need no entitlements. The Finder
     // extension must be sandboxed and gets only its own entitlements (never
     // the app's Apple Events entitlement); matches the bundle or its binary.
-    optionsForFile: file => /\/Contents\/Helpers\/(PulseHelper|pulse-elevate)$/.test(file)
+    optionsForFile: file => /\/Contents\/Helpers\/(PulseHelper|pulse-elevate|smartctl)$/.test(file)
       ? { hardenedRuntime: true }
       : /\/Contents\/PlugIns\/PulseFinder\.appex(\/|$)/.test(file)
         ? { hardenedRuntime: true, entitlements: finderEntitlements }

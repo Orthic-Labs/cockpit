@@ -39,7 +39,7 @@ if (action === 'admit') {
   const root=env.RIGHT_GIT_ARTIFACT_ROOT;
   const app=env.PULSE_CHECK_APP || path.join(root,'pulse','mac','Pulse.app');
   run('plutil',['-lint',path.join(app,'Contents/Info.plist')]);
-  for(const f of ['Contents/MacOS/Pulse','Contents/Helpers/pulse','Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub','Contents/Helpers/Pulse.app/Contents/Info.plist','Contents/Helpers/PulseHelper','Contents/Helpers/pulse-elevate','Contents/PlugIns/PulseFinder.appex/Contents/MacOS/PulseFinder','Contents/PlugIns/PulseFinder.appex/Contents/Info.plist','Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
+  for(const f of ['Contents/MacOS/Pulse','Contents/Helpers/pulse','Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub','Contents/Helpers/Pulse.app/Contents/Info.plist','Contents/Helpers/PulseHelper','Contents/Helpers/pulse-elevate','Contents/Helpers/smartctl','Contents/Resources/ThirdParty/smartmontools/GPL-2.0.txt','Contents/Resources/ThirdParty/smartmontools/README.md','Contents/PlugIns/PulseFinder.appex/Contents/MacOS/PulseFinder','Contents/PlugIns/PulseFinder.appex/Contents/Info.plist','Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist']) if(!existsSync(path.join(app,f)))throw new Error(`Missing ${f}`);
   const plist=run('plutil',['-convert','json','-o','-',path.join(app,'Contents/Info.plist')],{encoding:'utf8',stdio:'pipe'});
   const info=JSON.parse(plist);
   if(info.CFBundleIdentifier!=='dev.orthic.pulse'||info.LSUIElement!==true)throw new Error('Notch Info.plist: wrong identity or Dock presence');

@@ -33,8 +33,8 @@ actor DriveHealth {
     private static let interval: TimeInterval = 600
     private static let retry: TimeInterval = 60
     private static let searchPaths = [
+        Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/smartctl").path,
         "/opt/homebrew/bin/smartctl", "/usr/local/bin/smartctl",
-        Bundle.main.bundlePath + "/Contents/Helpers/smartctl",
     ]
 
     private var disks: [String: Disk] = [:]

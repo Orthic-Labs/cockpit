@@ -10,7 +10,7 @@ export default {
  targets:{mac:{
   signed:true,signingContract:'macos-developer-id-notarized-portable-v1',packageKind:'dmg',architecture:'arm64',publishBlocked:'Preview installer delivery; publication is separate',
   prePackage:{cmd:'pnpm',args:['run','rightkit:prepare:mac']},
-  sign:{prePackageFiles:['dist/staging/Pulse.app/Contents/Helpers/PulseHelper','dist/staging/Pulse.app/Contents/Helpers/pulse-elevate','dist/staging/Pulse.app/Contents/PlugIns/PulseFinder.appex/Contents/MacOS/PulseFinder','dist/staging/Pulse.app/Contents/MacOS/Pulse','dist/staging/Pulse.app/Contents/Helpers/pulse','dist/staging/Pulse.app/Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub'],receipt:'.right-release/receipts/macos-signing.json'},
+  sign:{prePackageFiles:['dist/staging/Pulse.app/Contents/Helpers/smartctl','dist/staging/Pulse.app/Contents/Helpers/PulseHelper','dist/staging/Pulse.app/Contents/Helpers/pulse-elevate','dist/staging/Pulse.app/Contents/PlugIns/PulseFinder.appex/Contents/MacOS/PulseFinder','dist/staging/Pulse.app/Contents/MacOS/Pulse','dist/staging/Pulse.app/Contents/Helpers/pulse','dist/staging/Pulse.app/Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub'],receipt:'.right-release/receipts/macos-signing.json'},
   package:{cmd:'pnpm',args:['run','rightkit:package:mac']},
   artifacts:['dist/releases/mac/Pulse.dmg'],
   notarize:{file:'dist/releases/mac/Pulse.dmg',receipt:'.right-release/receipts/macos-notarization.json'},

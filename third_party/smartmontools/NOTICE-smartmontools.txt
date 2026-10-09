@@ -1,0 +1,19 @@
+smartctl (smartmontools 7.5) — NOTICE
+Copyright (C) 2002-2025 Bruce Allen, Christian Franke and the smartmontools contributors.
+https://www.smartmontools.org/
+
+smartctl is licensed under the GNU General Public License, version 2 or (at your option) any
+later version (SPDX: GPL-2.0-or-later). The full licence text is third-party/GPL-2.0.txt.
+
+smartctl is distributed as a separate executable program. The application that bundles it
+(for example Pulse.app/Contents/Helpers/smartctl) starts it as a child process and exchanges
+data over standard output only; it is not linked into the application.
+
+The binary is built, unmodified, from the upstream source tarball
+smartmontools-7.5.tar.gz (sha256 690b83ca331378da9ea0d9d61008c4b22dde391387b9bbad7f29387f2595f76e),
+with the script native-artifacts/smartmontools/build-macos.sh. No patches are applied.
+
+Source offer: the corresponding source (that exact tarball, plus the build script and
+third-party/BUILD-NOTES-smartctl-macos-arm64.txt) is published next to every binary
+distribution at: https://github.com/Orthic-Labs/rightkit-native-tools/releases/tag/smartmontools-7.5-1.
+You may also obtain it from https://github.com/smartmontools/smartmontools/releases/tag/RELEASE_7_5.

@@ -14,9 +14,13 @@ its own license; the notices below are reproduced as those licenses require.
 - Uninstally (https://github.com/gostonx/uninstally), MIT License. Leftover
   detection rules and the Finder Sync extension layout adapted in core/ and
   mac/Notch/FinderExtension/.
-- smartmontools (https://www.smartmontools.org), GPL-2.0, is run as a separate
-  program when present and is not part of Pulse; see
-  release/smartmontools-NOTICE.txt.
+- smartmontools 7.5 (https://www.smartmontools.org), GPL-2.0. The unmodified
+  smartctl is bundled at Pulse.app/Contents/Helpers/smartctl and run only as a
+  separate program (command line; no linking); it is not part of Pulse. Source
+  (GPL-2.0 tarball and signature):
+  https://github.com/Orthic-Labs/rightkit-native-tools/releases/tag/smartmontools-7.5-1
+  Licence text and notice: third_party/smartmontools/ (Pulse.app/Contents/
+  Resources/ThirdParty/smartmontools/); see also release/smartmontools-NOTICE.txt.
 - zstd (mac/Notch/Sources/Vendor/zstd), used under its BSD license option.
 
 MIT License (applies to the MIT-licensed components above):
