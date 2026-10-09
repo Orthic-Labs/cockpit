@@ -1,6 +1,6 @@
 # Managed by right-git — do not hand-edit. Run `right-git sync` to update.
 # Template: profiles/rust-hybrid/ci.yml | Template version: 1.8.0
-name: cockpit-ci
+name: pulse-ci
 on:
   pull_request:
   push:
@@ -22,9 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Full validation stays on one declared runner; prefer configured
-        # Windows when available, otherwise preserve first configured OS.
-        os: ["xcode-27"]
+        # ciAllOs: the gate runs on every matrix.os runner, in declared order.
+        os: ["xcode-27", "windows-2025"]
         node: ["26.8.1"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -45,7 +44,7 @@ jobs:
               changed=false
               while IFS= read -r changed_path; do
                 case "$changed_path" in
-                  *.rs|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|build.rs|*/build.rs|rust-toolchain|*/rust-toolchain|rust-toolchain.toml|*/rust-toolchain.toml|.cargo/*|*/.cargo/*|.rightgit.json|.github/workflows/*.yml|.github/workflows/*.yaml|scripts/gate.sh)
+                  *.rs|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|rust-toolchain|*/rust-toolchain|rust-toolchain.toml|*/rust-toolchain.toml|.cargo/*|*/.cargo/*|.rightgit.json|.github/workflows/*.yml|.github/workflows/*.yaml|scripts/gate.sh)
                     changed=true
                     break
                     ;;
@@ -66,6 +65,11 @@ jobs:
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.24.0
+      - run: pnpm install --frozen-lockfile
+
+      - name: RightKit ownership (protected registry roots)
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}" && pnpm exec right-release ownership --app .
       - uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0
         if: steps.rust-changes.outputs.required == 'true'
         with:
@@ -76,7 +80,7 @@ jobs:
           workspaces: |
             . -> target
             windows -> target
-          shared-key: cockpit-rust
+          shared-key: pulse-rust
           add-job-id-key: false
           cache-workspace-crates: false
           cache-on-failure: true
@@ -94,3 +98,11 @@ jobs:
           CARGO_INCREMENTAL: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
           CARGO_PROFILE_TEST_DEBUG: "0"
+      - name: Upload QA evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qa-evidence-${{ matrix.os || runner.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pulse-hub-qa
+          retention-days: 7
+          if-no-files-found: ignore

@@ -19,7 +19,7 @@
     "postinstall": "node scripts/release/dispatch-env.mjs"
   },
   "devDependencies": {
-    "@rightkit/release": "0.2.135",
+    "@rightkit/release": "0.2.136",
     "@electron/osx-sign": "2.7.1"
   },
   "optionalDependencies": {

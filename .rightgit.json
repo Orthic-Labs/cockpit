@@ -7,7 +7,8 @@
   ],
   "matrix": {
     "os": [
-      "xcode-27"
+      "xcode-27",
+      "windows-2025"
     ],
     "node": [
       "26.8.1"
@@ -43,5 +44,8 @@
       }
     ],
     "signMacos": true
-  }
+  },
+  "qaEvidencePath": "pulse-hub-qa",
+  "qaEvidenceRetentionDays": 7,
+  "ciAllOs": true
 }

@@ -80,6 +80,10 @@ jobs:
         with:
           version: 11.24.0
       - run: pnpm install --frozen-lockfile
+
+      - name: RightKit ownership (protected registry roots)
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ inputs.source_revision }}" && pnpm exec right-release ownership --app .
       - name: Admit exact main revision & version
         id: admit
         run: pnpm run release:admit
@@ -129,7 +133,7 @@ jobs:
           workspaces: |
             . -> target
             windows -> target
-          shared-key: cockpit-rust
+          shared-key: pulse-rust
           add-job-id-key: false
           cache-workspace-crates: false
           cache-on-failure: true
