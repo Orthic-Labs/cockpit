@@ -960,6 +960,416 @@ fn windows_interactions(ctl: &Control, sec: &Section, bridge: &Path, sc: &Scenar
     }
 }
 
+// ------------------------------------------------------------------- the control crawl (macOS)
+
+/// Page-side helpers shared by every crawl probe (prepended to each snippet; `eval` runs a
+/// function body). `enumerate()` lists the visible controls outside the nav, in document order:
+/// native and ARIA controls plus rows that merely have a click handler (pointer cursor on the
+/// outermost such element), keeping the innermost when one control holds another.
+#[cfg(target_os = "macos")]
+const CRAWL_JS: &str = r#"
+const SEL = 'button,[role=button],[role=switch],[role=radio],[role=tab],[role=checkbox],[role=link],[role=menuitem],[role=slider],[role=combobox],[role=option],a[href],select,input,textarea,summary,[tabindex="0"]';
+const clean = (t) => (t || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+const labelOf = (el) => {
+  let t = clean(el.getAttribute('aria-label'));
+  if (!t && el.getAttribute('aria-labelledby')) {
+    t = clean(el.getAttribute('aria-labelledby').split(' ').map((id) => document.getElementById(id)?.textContent || '').join(' '));
+  }
+  if (!t) t = clean(el.innerText || el.textContent);
+  if (!t) t = clean(el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || (el.tagName === 'INPUT' ? el.value : ''));
+  if (!t) t = el.tagName.toLowerCase() + '.' + clean(String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className)).split(' ')[0];
+  return t;
+};
+const roleOf = (el) => {
+  const r = el.getAttribute('role');
+  if (r) return r;
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'a') return 'link';
+  if (tag === 'select') return 'select';
+  if (tag === 'textarea') return 'textbox';
+  if (tag === 'input') {
+    const t = (el.type || 'text').toLowerCase();
+    return t === 'checkbox' ? 'checkbox' : t === 'radio' ? 'radio' : t === 'range' ? 'slider' : 'textbox';
+  }
+  if (el.classList.contains('rk-toggle')) return 'switch';
+  return tag === 'button' || tag === 'summary' ? 'button' : 'clickable';
+};
+const enumerate = () => {
+  const found = new Set();
+  const visible = (el) => {
+    if (el.closest('nav.rk-nav') || el.closest('.rk-caption')) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none';
+  };
+  document.querySelectorAll(SEL).forEach((el) => { if (visible(el)) found.add(el); });
+  document.querySelectorAll('div,li,tr,span,section,article,label,p').forEach((el) => {
+    if (found.has(el) || el.closest(SEL) || !visible(el)) return;
+    if (getComputedStyle(el).cursor !== 'pointer') return;
+    const parent = el.parentElement;
+    if (parent && getComputedStyle(parent).cursor === 'pointer' && !parent.closest(SEL)) return;
+    found.add(el);
+  });
+  const all = [...found];
+  const leaves = all.filter((el) => !all.some((o) => o !== el && el.contains(o)));
+  leaves.sort((a, b) => (a.compareDocumentPosition(b) & 4 ? -1 : 1));
+  return leaves;
+};
+const MARK_SEL = '[role=switch],[role=radio],[role=tab],[role=checkbox],input[type=checkbox],input[type=radio],[aria-expanded],[aria-pressed],[aria-selected]';
+const markOf = (el) => [roleOf(el), labelOf(el), el.getAttribute('aria-checked') ?? (el.checked !== undefined ? String(el.checked) : ''), el.getAttribute('aria-pressed') ?? '', el.getAttribute('aria-selected') ?? '', el.getAttribute('aria-expanded') ?? ''].join('|');
+const marks = () => [...document.querySelectorAll(MARK_SEL)].filter((el) => !el.closest('nav.rk-nav')).map(markOf);
+const styleSig = (el) => {
+  const one = (e) => { const c = getComputedStyle(e); return [c.backgroundColor, c.color, c.boxShadow, c.transform, c.opacity, c.filter, c.borderColor, c.outlineStyle, c.textDecorationLine].join(';'); };
+  return one(el) + '#' + (el.firstElementChild ? one(el.firstElementChild) : '');
+};
+const dialogs = () => document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open],.rk-modal,.rk-sheet,.modal').length;
+"#;
+
+#[cfg(target_os = "macos")]
+fn crawl_js(body: &str, subs: &[(&str, String)]) -> String {
+    let mut b = body.to_string();
+    for (key, value) in subs {
+        b = b.replace(key, value);
+    }
+    format!("{CRAWL_JS}\n{b}")
+}
+
+#[cfg(target_os = "macos")]
+const DESTRUCTIVE_WORDS: &[&str] = &[
+    "forget", "uninstall", "delete", "remove", "restart", "quit", "erase", "trash", "clean", "cleanup", "reclaim", "reset",
+    "wipe", "disconnect", "clear", "terminate", "kill", "stop", "apply", "purge", "revoke", "empty",
+];
+#[cfg(target_os = "macos")]
+const DESTRUCTIVE_PHRASES: &[&str] = &["sign out", "log out", "move to"];
+#[cfg(target_os = "macos")]
+const EXTERNAL_WORDS: &[&str] = &["reveal", "grant", "allow", "download", "install", "feedback", "report"];
+#[cfg(target_os = "macos")]
+const EXTERNAL_PHRASES: &[&str] = &[
+    "system settings", "open settings", "open in finder", "show in finder", "request access", "check for update", "sign in",
+    "log in", "learn more", "release notes", "documentation", "send test",
+];
+
+#[cfg(target_os = "macos")]
+struct Found {
+    idx: usize,
+    label: String,
+    role: String,
+    disabled: bool,
+    href: String,
+}
+
+/// Why a control is hovered but never clicked, or None when pressing it is safe in the fixture home.
+#[cfg(target_os = "macos")]
+fn skip_reason(sec: &Section, f: &Found) -> Option<&'static str> {
+    let l = f.label.to_lowercase();
+    let words: Vec<&str> = l.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has_word = |list: &[&str]| words.iter().any(|w| list.contains(w));
+    let has_phrase = |list: &[&str]| list.iter().any(|p| l.contains(*p));
+    let setting = matches!(f.role.as_str(), "switch" | "radio" | "checkbox" | "tab" | "textbox");
+    if f.disabled {
+        return Some("not clicked: disabled");
+    }
+    if has_word(DESTRUCTIVE_WORDS) || has_phrase(DESTRUCTIVE_PHRASES) {
+        return Some("not clicked: destructive");
+    }
+    if matches!(f.role.as_str(), "slider" | "select" | "combobox") {
+        return Some("not clicked: native value control (popup or drag)");
+    }
+    if f.href.starts_with("http") || f.href.starts_with("mailto") {
+        return Some("not clicked: external link");
+    }
+    if !setting && (has_word(EXTERNAL_WORDS) || has_phrase(EXTERNAL_PHRASES) || sec.id == "permissions") {
+        return Some("not clicked: opens an external app or system prompt");
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn slug(label: &str) -> String {
+    let mut out = String::new();
+    for c in label.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    let out: String = out.chars().take(48).collect();
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "control".to_string()
+    } else {
+        out
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn list_controls(ctl: &Control) -> Vec<Found> {
+    let js = crawl_js(
+        "return enumerate().map((el, i) => ({i, label: labelOf(el), role: roleOf(el), disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true', href: el.getAttribute('href') || ''}));",
+        &[],
+    );
+    ctl.eval(&js)
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|v| Found {
+            idx: v["i"].as_u64().unwrap_or(0) as usize,
+            label: s(v["label"].clone()),
+            role: s(v["role"].clone()),
+            disabled: v["disabled"] == true,
+            href: s(v["href"].clone()),
+        })
+        .collect()
+}
+
+/// Brings the section back after a control navigated away or changed a pane.
+#[cfg(target_os = "macos")]
+fn reopen(ctl: &Control, sec: &Section) {
+    let want = format!("return document.querySelector('.rk-top__title')?.textContent?.trim() === {}", json!(sec.title));
+    if ctl.eval(&want).ok() != Some(json!(true)) {
+        let nav = format!(
+            "const b=[...document.querySelectorAll('nav.rk-nav button')].find(e=>e.textContent.trim()==={}); if(!b) return false; b.click(); return true;",
+            json!(sec.title)
+        );
+        let _ = ctl.wait_eval(&nav, Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    if sec.id == "storage" {
+        let _ = ctl.eval("const b=[...document.querySelectorAll('button,[role=radio],[role=tab]')].find(e=>e.textContent.trim()==='Folders'); if(b && b.getAttribute('aria-checked') !== 'true' && b.getAttribute('aria-selected') !== 'true') b.click(); return true;");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn page_state(ctl: &Control) -> Value {
+    let js = crawl_js(
+        "return {title: document.querySelector('.rk-top__title')?.textContent?.trim() ?? '', text: document.body.innerText, marks: marks(), dialogs: dialogs()};",
+        &[],
+    );
+    ctl.eval(&js).unwrap_or(Value::Null)
+}
+
+/// What changed between two page states, in words, plus the commands the hub left for the notch.
+#[cfg(target_os = "macos")]
+fn describe(before: &Value, after: &Value, commands: &[Value]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if before["title"] != after["title"] {
+        parts.push(format!("page: {} -> {}", s(before["title"].clone()), s(after["title"].clone())));
+    }
+    let (mb, ma) = (before["marks"].as_array().cloned().unwrap_or_default(), after["marks"].as_array().cloned().unwrap_or_default());
+    for (b, a) in mb.iter().zip(ma.iter()) {
+        if b != a && parts.len() < 6 {
+            parts.push(format!("state: {} -> {}", s(b.clone()).replace('|', " "), s(a.clone()).replace('|', " ")));
+        }
+    }
+    if before["dialogs"] != after["dialogs"] {
+        parts.push(format!("dialogs: {} -> {}", before["dialogs"], after["dialogs"]));
+    }
+    let lines = |v: &Value| -> std::collections::HashSet<String> {
+        s(v["text"].clone()).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    };
+    let (lb, la) = (lines(before), lines(after));
+    let added: Vec<&String> = la.difference(&lb).collect();
+    let removed = lb.difference(&la).count();
+    if !added.is_empty() || removed > 0 {
+        let mut sample: Vec<String> = added.iter().map(|l| l.chars().take(50).collect::<String>()).collect();
+        sample.sort();
+        sample.truncate(2);
+        parts.push(format!("text: +{} -{} lines (e.g. {})", added.len(), removed, sample.join(" / ")));
+    }
+    for c in commands.iter().take(2) {
+        let t = c.to_string();
+        parts.push(format!("command: {}", t.chars().take(120).collect::<String>()));
+    }
+    if parts.is_empty() {
+        "no observable change".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+/// Undoes a control's effect so the next control meets the page as it was: toggles and radios
+/// go back to their earlier state, dialogs close, focus leaves any field, the section reopens.
+#[cfg(target_os = "macos")]
+fn restore(ctl: &Control, sec: &Section, before_marks: &Value) {
+    let undo = crawl_js(
+        "const prev = __PREV__; const els = [...document.querySelectorAll(MARK_SEL)].filter((el) => !el.closest('nav.rk-nav')); let n = 0; if (els.length === prev.length) { els.forEach((el, j) => { const now = markOf(el); if (prev[j] === now) return; const role = roleOf(el); const was = prev[j].split('|'); if ((role === 'radio' || role === 'tab') && was[2] !== 'true' && was[4] !== 'true') return; el.click(); n++; }); } if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); return n;",
+        &[("__PREV__", before_marks.to_string())],
+    );
+    let _ = ctl.eval(&undo);
+    if page_state(ctl)["dialogs"].as_u64().unwrap_or(0) > 0 {
+        let _ = ctl.key("Escape");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    reopen(ctl, sec);
+}
+
+#[cfg(target_os = "macos")]
+fn file_bytes(p: &Path) -> Vec<u8> {
+    std::fs::read(p).unwrap_or_default()
+}
+
+/// Hovers, presses and clicks every control of the open section, saving
+/// `<surface>__<control>__hover|pressed|after.png` and one inventory entry each.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn crawl_section(ctl: &Control, sec: &Section, surface: &str, shots: &Path, commands: &Path, deadline: std::time::Instant, per_section: usize, inventory: &mut Vec<Value>) {
+    let controls = list_controls(ctl);
+    let mut used: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (n, f) in controls.iter().enumerate() {
+        let mut slug_name = slug(&f.label);
+        let seen = used.entry(slug_name.clone()).or_insert(0);
+        *seen += 1;
+        if *seen > 1 {
+            slug_name = format!("{slug_name}-{seen}");
+        }
+        let mut entry = json!({
+            "surface": surface, "label": f.label, "role": f.role, "slug": slug_name,
+            "hover": null, "pressed": null, "after": null,
+            "hover_style_changed": null, "press_pixels_changed": null,
+            "clicked": false, "action": "", "disabled": f.disabled,
+        });
+        if n >= per_section || std::time::Instant::now() > deadline {
+            entry["action"] = json!("not captured: time or per-section budget");
+            inventory.push(entry);
+            continue;
+        }
+        // The control may have moved or vanished since the list was taken.
+        let probe_js = crawl_js(
+            "const el = enumerate()[__IDX__]; if (!el) return null; if (labelOf(el) !== __LABEL__) return {moved: true}; el.scrollIntoView({block: 'center'}); const r = el.getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height};",
+            &[("__IDX__", f.idx.to_string()), ("__LABEL__", json!(f.label).to_string())],
+        );
+        let probe = ctl.eval(&probe_js).unwrap_or(Value::Null);
+        let (Some(x), Some(y)) = (probe["x"].as_f64(), probe["y"].as_f64()) else {
+            entry["action"] = json!("not captured: the control moved or disappeared");
+            inventory.push(entry);
+            continue;
+        };
+        let sig_js = crawl_js("const el = enumerate()[__IDX__]; return el ? styleSig(el) : '';", &[("__IDX__", f.idx.to_string())]);
+        let name = |state: &str| format!("{surface}__{slug_name}__{state}.png");
+
+        // Hover: the pointer rests on the control; compare its computed look with the pointer elsewhere.
+        let _ = ctl.move_to(2.0, 2.0);
+        std::thread::sleep(Duration::from_millis(80));
+        let rest_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
+        let _ = ctl.move_to(x, y);
+        std::thread::sleep(Duration::from_millis(120));
+        let hover_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
+        let hover_png = shots.join(name("hover"));
+        if ctl.screenshot_to(&hover_png).is_ok() {
+            entry["hover"] = json!(name("hover"));
+        }
+        entry["hover_style_changed"] = json!(rest_sig != hover_sig);
+
+        if let Some(why) = skip_reason(sec, f) {
+            entry["action"] = json!(why);
+            let _ = ctl.move_to(2.0, 2.0);
+            inventory.push(entry);
+            continue;
+        }
+
+        // Pressed: mouse down and look; mouse up completes the click.
+        let before = page_state(ctl);
+        let commands_before = commands_seen(commands);
+        let _ = ctl.pointer("down", x, y, "left", &[]);
+        std::thread::sleep(Duration::from_millis(100));
+        let pressed_png = shots.join(name("pressed"));
+        if ctl.screenshot_to(&pressed_png).is_ok() {
+            entry["pressed"] = json!(name("pressed"));
+        }
+        let _ = ctl.pointer("up", x, y, "left", &[]);
+        std::thread::sleep(Duration::from_millis(400));
+        let after_png = shots.join(name("after"));
+        if ctl.screenshot_to(&after_png).is_ok() {
+            entry["after"] = json!(name("after"));
+        }
+        entry["press_pixels_changed"] = json!(file_bytes(&hover_png) != file_bytes(&pressed_png));
+        let after = page_state(ctl);
+        let new_commands: Vec<Value> = commands_seen(commands).into_iter().filter(|c| !commands_before.contains(c)).collect();
+        entry["clicked"] = json!(true);
+        entry["action"] = json!(describe(&before, &after, &new_commands));
+        inventory.push(entry);
+
+        restore(ctl, sec, &before["marks"]);
+    }
+    let _ = ctl.move_to(2.0, 2.0);
+}
+
+#[cfg(target_os = "macos")]
+fn write_inventory(shots: &Path, inventory: &[Value]) {
+    let _ = std::fs::write(shots.join("inventory.json"), serde_json::to_vec_pretty(&json!({"platform": "mac", "controls": inventory})).unwrap_or_default());
+    let yn = |v: &Value| match v.as_bool() {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "-",
+    };
+    let cell = |t: String| t.replace('|', "/").replace('\n', " ");
+    let captured = inventory.iter().filter(|e| !e["hover"].is_null()).count();
+    let clicked = inventory.iter().filter(|e| e["clicked"] == true).count();
+    let mut md = String::from("# Mac hub controls\n\n");
+    md.push_str(&format!("{} controls listed, {} with a hover shot, {} clicked.\n\n", inventory.len(), captured, clicked));
+    md.push_str("| Surface | Control | Role | Hover shot | Hover look changed | Pressed pixels changed | Action observed |\n|---|---|---|---|---|---|---|\n");
+    for e in inventory {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            cell(s(e["surface"].clone())),
+            cell(s(e["label"].clone())),
+            cell(s(e["role"].clone())),
+            if e["hover"].is_null() { "no" } else { "yes" },
+            yn(&e["hover_style_changed"]),
+            yn(&e["press_pixels_changed"]),
+            cell(s(e["action"].clone())),
+        ));
+    }
+    let _ = std::fs::write(shots.join("inventory.md"), md);
+}
+
+/// The sidebar's own items: hover, press and click each (the click opens that section).
+#[cfg(target_os = "macos")]
+fn crawl_nav(ctl: &Control, shots: &Path, inventory: &mut Vec<Value>) {
+    for sec in SECTIONS.iter() {
+        let probe = format!(
+            "const b=[...document.querySelectorAll('nav.rk-nav button')].find(e=>e.textContent.trim()==={}); if(!b) return null; const r=b.getBoundingClientRect(); return {{x: r.x + r.width / 2, y: r.y + r.height / 2}};",
+            json!(sec.title)
+        );
+        let at = ctl.eval(&probe).unwrap_or(Value::Null);
+        let (Some(x), Some(y)) = (at["x"].as_f64(), at["y"].as_f64()) else { continue };
+        let name = |state: &str| format!("nav__{}__{state}.png", sec.id);
+        let mut entry = json!({
+            "surface": "nav", "label": sec.title, "role": "button", "slug": sec.id,
+            "hover": null, "pressed": null, "after": null, "hover_style_changed": null,
+            "press_pixels_changed": null, "clicked": true, "action": "", "disabled": false,
+        });
+        let _ = ctl.move_to(x, y);
+        std::thread::sleep(Duration::from_millis(120));
+        let hover_png = shots.join(name("hover"));
+        if ctl.screenshot_to(&hover_png).is_ok() {
+            entry["hover"] = json!(name("hover"));
+        }
+        let before = page_state(ctl);
+        let _ = ctl.pointer("down", x, y, "left", &[]);
+        std::thread::sleep(Duration::from_millis(100));
+        let pressed_png = shots.join(name("pressed"));
+        if ctl.screenshot_to(&pressed_png).is_ok() {
+            entry["pressed"] = json!(name("pressed"));
+        }
+        let _ = ctl.pointer("up", x, y, "left", &[]);
+        std::thread::sleep(Duration::from_millis(500));
+        let after_png = shots.join(name("after"));
+        if ctl.screenshot_to(&after_png).is_ok() {
+            entry["after"] = json!(name("after"));
+        }
+        entry["press_pixels_changed"] = json!(file_bytes(&hover_png) != file_bytes(&pressed_png));
+        entry["action"] = json!(describe(&before, &page_state(ctl), &[]));
+        inventory.push(entry);
+    }
+    let _ = ctl.move_to(2.0, 2.0);
+}
+
 // ------------------------------------------------------------------------------------- the tour
 
 fn hub_tour(h: &Harness) {
@@ -996,6 +1406,11 @@ fn hub_tour(h: &Harness) {
 
         let ctl = launch_hub(&ws, &home, sc);
         let mut problems: Vec<String> = Vec::new();
+        // The control crawl (macOS): every control hovered, pressed and clicked per section, within one time budget.
+        #[cfg(target_os = "macos")]
+        let mut inventory: Vec<Value> = Vec::new();
+        #[cfg(target_os = "macos")]
+        let crawl_deadline = std::time::Instant::now() + Duration::from_secs(270);
 
         for (index, sec) in SECTIONS.iter().enumerate() {
             if index > 0 {
@@ -1068,9 +1483,21 @@ fn hub_tour(h: &Harness) {
             ctl.screenshot_to(&shot).expect("screenshot");
             sc.keep(&format!("{:02}-{}", index + 1, sec.id), &shot);
 
+            // Every control of this section: hover, pressed and after-click shots plus an inventory entry each.
+            #[cfg(target_os = "macos")]
+            {
+                crawl_section(&ctl, sec, sec.id, &shots, &bridge.join("hub-commands"), crawl_deadline, 40, &mut inventory);
+                write_inventory(&shots, &inventory);
+            }
+
             // After the screenshot (pressing scrolls the page): use the section's controls as a person would.
             #[cfg(windows)]
             windows_interactions(&ctl, sec, &bridge, sc, &shots, &mut problems);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            crawl_nav(&ctl, &shots, &mut inventory);
+            write_inventory(&shots, &inventory);
         }
         let _ = std::fs::remove_dir_all(&home);
         if !problems.is_empty() {

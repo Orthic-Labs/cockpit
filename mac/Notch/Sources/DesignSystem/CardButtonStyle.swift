@@ -10,18 +10,40 @@ struct CardButtonStyle: ButtonStyle {
     }
 }
 
+/// A state the CI view renderer forces on every card button and hover row in a
+/// render (App/ViewShots.swift), so hover and pressed pictures are the real styles,
+/// not retouched pixels. Nil everywhere else.
+enum CardButtonForcedState {
+    case hover, pressed
+}
+
+private struct CardButtonForcedStateKey: EnvironmentKey {
+    static let defaultValue: CardButtonForcedState? = nil
+}
+
+extension EnvironmentValues {
+    var cardButtonForcedState: CardButtonForcedState? {
+        get { self[CardButtonForcedStateKey.self] }
+        set { self[CardButtonForcedStateKey.self] = newValue }
+    }
+}
+
 private struct CardButtonBody: View {
     let configuration: ButtonStyleConfiguration
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.cardButtonForcedState) private var forced
     @State private var hovering = false
+
+    private var pressed: Bool { configuration.isPressed || forced == .pressed }
+    private var hovered: Bool { (hovering || forced == .hover) && isEnabled }
 
     var body: some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .scaleEffect(pressed && !reduceMotion ? 0.96 : 1)
             // Hover lifts the pill's dark fill to a clearly lighter grey; press goes further.
             // Smaller values were invisible on the black notch.
-            .brightness(configuration.isPressed ? 0.32 : hovering && isEnabled ? 0.22 : 0)
+            .brightness(pressed ? 0.32 : hovered ? 0.22 : 0)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
             .onHover { inside in
@@ -37,12 +59,13 @@ private struct CardButtonBody: View {
 struct CardRowHover: ViewModifier {
     var enabled = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.cardButtonForcedState) private var forced
     @State private var hovering = false
 
     func body(content: Content) -> some View {
         content
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(hovering && enabled ? 0.16 : 0)))
+                .fill(Color.white.opacity((hovering || forced != nil) && enabled ? 0.16 : 0)))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
             .onHover { inside in
                 hovering = inside

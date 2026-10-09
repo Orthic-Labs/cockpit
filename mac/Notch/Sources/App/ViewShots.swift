@@ -8,6 +8,12 @@ import SwiftUI
 // fixture, renders it with ImageRenderer at scale 2 on the entry's backdrop
 // colour and writes <id>.png. It is run by scripts/gate.sh on the macOS leg and
 // never by the shipping app: nothing here is reachable without that variable.
+//
+// qa/notch-views-hover.json, read from beside the views file (or PULSE_VIEWS_HOVER_JSON), adds a
+// `-hover` and a `-pressed` variant of every view that has card buttons or hover rows: each
+// entry names its `base` view and the base is rendered again with
+// `cardButtonForcedState` set to .hover or .pressed, so the pictures use the real styles. A
+// variant whose base cannot be built is reported and skipped; it never fails the run.
 
 // MARK: - Still rendering
 
@@ -158,10 +164,34 @@ enum ViewShots {
         }
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
+        let hoverPath = env["PULSE_VIEWS_HOVER_JSON"]
+            ?? URL(fileURLWithPath: path).deletingLastPathComponent()
+                .appendingPathComponent("notch-views-hover.json").path
+        let hoverList = (FileManager.default.contents(atPath: hoverPath)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [[String: Any]]) ?? []
+
         let now = Date()
         var failures = 0
         var written = 0
-        for entry in list {
+        var variantsWritten = 0
+        var variantsSkipped = 0
+        for entry in list + hoverList {
+            if let base = entry["base"] as? String, let id = entry["id"] as? String {
+                let forced: CardButtonForcedState = entry["state"] as? String == "pressed" ? .pressed : .hover
+                guard let source = list.first(where: { $0["id"] as? String == base }),
+                      let fixture = source["fixture"] as? [String: Any],
+                      let built = Self.build(Fx(fixture), now: now),
+                      let png = Self.render(built.view, backdrop: Self.backdrop(source["backdrop"] as? String),
+                                            crop: built.crop, forced: forced),
+                      (try? png.write(to: out.appendingPathComponent("\(id).png"))) != nil
+                else {
+                    fputs("view-shots: variant \(id) skipped (could not render \(base))\n", stderr)
+                    variantsSkipped += 1
+                    continue
+                }
+                variantsWritten += 1
+                continue
+            }
             guard let id = entry["id"] as? String,
                   let fixture = entry["fixture"] as? [String: Any] else {
                 fputs("view-shots: an entry has no id or fixture\n", stderr)
@@ -185,6 +215,7 @@ enum ViewShots {
             }
         }
         print("view-shots: wrote \(written) of \(list.count) views to \(out.path)")
+        print("view-shots: hover and pressed variants: \(variantsWritten) written, \(variantsSkipped) skipped")
         exit(failures == 0 ? 0 : 1)
     }
 
@@ -195,10 +226,12 @@ enum ViewShots {
         return NSColor(hex: UInt32(digits, radix: 16) ?? 0)
     }
 
-    private static func render(_ view: AnyView, backdrop: NSColor, crop: Bool) -> Data? {
+    private static func render(_ view: AnyView, backdrop: NSColor, crop: Bool,
+                               forced: CardButtonForcedState? = nil) -> Data? {
         let styled = view
             .environment(\.viewShotStill, true)
             .environment(\.isEnabled, true)
+            .environment(\.cardButtonForcedState, forced)
             .environment(\.colorScheme, .dark)
             .environment(\.codenotchAccentColor, AccentColorChoice.green.color)
             .environment(\.notchSurfaceStyle, .solid)
@@ -332,7 +365,7 @@ enum ViewShots {
 
         case "menu":
             let items = fx.a("items").map { (title: $0.s("title") ?? "", shortcut: $0.s("shortcut") ?? "") }
-            return (AnyView(MenuFacsimile(items: items)), false)
+            return (AnyView(MenuFacsimile(items: items, highlighted: fx.n("highlight").map { Int($0) })), false)
 
         case "notch":
             return (notch(fx, now: now), true)
@@ -419,13 +452,27 @@ enum ViewShots {
             glyph: glyphs[c.s("glyph") ?? ""] ?? .claude,
             fidelity: .official,
             status: status,
-            windows: c.a("windows").map { window($0, now: now) },
+            windows: sendBar(c.a("windows").map { window($0, now: now) }),
             headlineID: c.s("headline"),
             weeklyID: c.s("weekly"),
             block: block,
             kind: SystemProviders.isSystem(providerID: id) ? .system : .usage,
             plan: c.s("plan"),
             headerAccessory: c.s("headerNote"))
+    }
+
+    /// The Send card's bottom bar (commit 5d981c33): the fixtures still carry the old separate
+    /// Copy last and Paste rows (the Windows renderer reads those), so they fold into the one
+    /// `action:bar` row the notch now builds, "Copy last" left and "Paste" right, after the hints.
+    private static func sendBar(_ windows: [LimitWindow]) -> [LimitWindow] {
+        let copy = windows.first { $0.id == NearbySharing.copyLastRowID }
+        let paste = windows.first { $0.id == NearbySharing.pasteRowID }
+        guard copy != nil || paste != nil else { return windows }
+        var folded = windows.filter { $0.id != NearbySharing.copyLastRowID && $0.id != NearbySharing.pasteRowID }
+        let hasDevices = windows.contains { $0.id.hasPrefix("nearby:") }
+        folded.append(LimitWindow(id: NearbySharing.actionsRowID, label: copy?.label ?? "",
+                                  detail: hasDevices ? L10n.t("Paste") : nil))
+        return folded
     }
 
     private static func sessions(_ c: Fx, now: Date) -> [AgentSession] {
@@ -528,10 +575,11 @@ enum ViewShots {
 /// be drawn off-screen, so this is a drawn stand-in with the same item and key.
 private struct MenuFacsimile: View {
     let items: [(title: String, shortcut: String)]
+    var highlighted: Int? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 HStack {
                     Text(verbatim: item.title)
                     Spacer(minLength: 24)
@@ -541,6 +589,8 @@ private struct MenuFacsimile: View {
                 .foregroundStyle(Palette.textPrimary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(index == highlighted ? Color.accentColor : Color.clear))
             }
         }
         .padding(6)
@@ -549,3 +599,4 @@ private struct MenuFacsimile: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
     }
 }
+

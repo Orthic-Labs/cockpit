@@ -1,0 +1,596 @@
+[
+ {
+  "id": "menu-quit-hover-quit",
+  "fixture": {
+   "kind": "menu",
+   "items": [
+    {
+     "title": "Quit Pulse",
+     "shortcut": "⌘Q"
+    }
+   ],
+   "highlight": 0
+  },
+  "backdrop": "#2B2B2F",
+  "state": "hover",
+  "control": "Quit Pulse",
+  "note": "native NSMenu highlight; menus have no separate pressed look"
+ },
+ {
+  "id": "menu-quit-pressed-quit",
+  "fixture": {
+   "kind": "menu",
+   "items": [
+    {
+     "title": "Quit Pulse",
+     "shortcut": "⌘Q"
+    }
+   ],
+   "highlight": 0
+  },
+  "backdrop": "#2B2B2F",
+  "state": "pressed",
+  "control": "Quit Pulse",
+  "note": "native NSMenu highlight; menus have no separate pressed look"
+ },
+ {
+  "id": "tooltip-send-devices-hover",
+  "base": "tooltip-send-devices",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "tooltip-send-devices-pressed",
+  "base": "tooltip-send-devices",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "tooltip-send-copy-last-hover",
+  "base": "tooltip-send-copy-last",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "tooltip-send-copy-last-pressed",
+  "base": "tooltip-send-copy-last",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "tooltip-send-transferring-hover",
+  "base": "tooltip-send-transferring",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "tooltip-send-transferring-pressed",
+  "base": "tooltip-send-transferring",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-empty-hover",
+  "base": "send-picker-empty",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-empty-pressed",
+  "base": "send-picker-empty",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-scanning-hover",
+  "base": "send-picker-scanning",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-scanning-pressed",
+  "base": "send-picker-scanning",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-devices-hover",
+  "base": "send-picker-devices",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-devices-pressed",
+  "base": "send-picker-devices",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-text-hover",
+  "base": "send-picker-text",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-picker-text-pressed",
+  "base": "send-picker-text",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-waiting-accept-hover",
+  "base": "send-waiting-accept",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-waiting-accept-pressed",
+  "base": "send-waiting-accept",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-sending-progress-hover",
+  "base": "send-sending-progress",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-sending-progress-pressed",
+  "base": "send-sending-progress",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-sending-multi-hover",
+  "base": "send-sending-multi",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-sending-multi-pressed",
+  "base": "send-sending-multi",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-sent-hover",
+  "base": "send-sent",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-sent-pressed",
+  "base": "send-sent",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-declined-hover",
+  "base": "send-declined",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-declined-pressed",
+  "base": "send-declined",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-error-hover",
+  "base": "send-error",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-error-pressed",
+  "base": "send-error",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-incoming-files-hover",
+  "base": "send-incoming-files",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-incoming-files-pressed",
+  "base": "send-incoming-files",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-incoming-file-single-hover",
+  "base": "send-incoming-file-single",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-incoming-file-single-pressed",
+  "base": "send-incoming-file-single",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-incoming-message-hover",
+  "base": "send-incoming-message",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-incoming-message-pressed",
+  "base": "send-incoming-message",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-saved-hover",
+  "base": "send-saved",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-saved-pressed",
+  "base": "send-saved",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-saved-multi-hover",
+  "base": "send-saved-multi",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-saved-multi-pressed",
+  "base": "send-saved-multi",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-message-text-hover",
+  "base": "send-message-text",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-message-text-pressed",
+  "base": "send-message-text",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-message-link-hover",
+  "base": "send-message-link",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-message-link-pressed",
+  "base": "send-message-link",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-message-copied-hover",
+  "base": "send-message-copied",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-message-copied-pressed",
+  "base": "send-message-copied",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-nothing-hover",
+  "base": "send-note-nothing",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-nothing-pressed",
+  "base": "send-note-nothing",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-not-running-hover",
+  "base": "send-note-not-running",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-not-running-pressed",
+  "base": "send-note-not-running",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-declined-hover",
+  "base": "send-note-declined",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-declined-pressed",
+  "base": "send-note-declined",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-receive-failed-hover",
+  "base": "send-note-receive-failed",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "send-note-receive-failed-pressed",
+  "base": "send-note-receive-failed",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-install-ask-hover",
+  "base": "disk-install-ask",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-install-ask-pressed",
+  "base": "disk-install-ask",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-install-untrusted-hover",
+  "base": "disk-install-untrusted",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-install-untrusted-pressed",
+  "base": "disk-install-untrusted",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-replace-ask-hover",
+  "base": "disk-replace-ask",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-replace-ask-pressed",
+  "base": "disk-replace-ask",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-quit-update-ask-hover",
+  "base": "disk-quit-update-ask",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-quit-update-ask-pressed",
+  "base": "disk-quit-update-ask",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-installing-cancel-hover",
+  "base": "disk-installing-cancel",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-installing-cancel-pressed",
+  "base": "disk-installing-cancel",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-installed-undo-hover",
+  "base": "disk-installed-undo",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-installed-undo-pressed",
+  "base": "disk-installed-undo",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-updated-undo-hover",
+  "base": "disk-updated-undo",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-updated-undo-pressed",
+  "base": "disk-updated-undo",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-undone-hover",
+  "base": "disk-undone",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-undone-pressed",
+  "base": "disk-undone",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-cancelled-hover",
+  "base": "disk-cancelled",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-cancelled-pressed",
+  "base": "disk-cancelled",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-install-failed-hover",
+  "base": "disk-install-failed",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-install-failed-pressed",
+  "base": "disk-install-failed",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-still-open-hover",
+  "base": "disk-still-open",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-still-open-pressed",
+  "base": "disk-still-open",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-installer-package-hover",
+  "base": "disk-installer-package",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-installer-package-pressed",
+  "base": "disk-installer-package",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-several-apps-hover",
+  "base": "disk-several-apps",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "disk-several-apps-pressed",
+  "base": "disk-several-apps",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "update-available-hover",
+  "base": "update-available",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "update-available-pressed",
+  "base": "update-available",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "update-available-no-notes-hover",
+  "base": "update-available-no-notes",
+  "state": "hover",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ },
+ {
+  "id": "update-available-no-notes-pressed",
+  "base": "update-available-no-notes",
+  "state": "pressed",
+  "target": "all",
+  "backdrop": "#2B2B2F"
+ }
+]
