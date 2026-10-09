@@ -133,6 +133,8 @@ fn watch_notch(app: tauri::AppHandle) {
             ("dev.orthic.pulse.hub.show.settings", "show-section", "settings"),
             ("dev.orthic.pulse.hub.show.storage", "show-section", "storage"),
             ("dev.orthic.pulse.hub.show.monitor", "show-section", "monitor"),
+            ("dev.orthic.pulse.hub.show.cleanup", "show-section", "cleanup"),
+            ("dev.orthic.pulse.hub.show.apps", "show-section", "apps"),
             ("dev.orthic.pulse.hub.show.accounts", "show-section", "accounts"),
             ("dev.orthic.pulse.hub.show.appearance", "show-section", "appearance"),
             ("dev.orthic.pulse.hub.show.notifications", "show-section", "notifications"),
