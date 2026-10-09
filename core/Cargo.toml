@@ -20,6 +20,8 @@ sysinfo.workspace = true
 thiserror.workspace = true
 rustls = { workspace = true, optional = true }
 rcgen = { workspace = true, optional = true }
+# Filename index for storage search; default features (rusqlite) stay off.
+rightkit-search = { version = "=0.2.0", default-features = false, features = ["filename-index"] }
 sha2 = { workspace = true, optional = true }
 
 [features]

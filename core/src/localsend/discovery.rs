@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 pub fn local_ipv4s() -> Vec<Ipv4Addr> {
     let networks = sysinfo::Networks::new_with_refreshed_list();
     let mut found = Vec::new();
-    for (_, data) in networks.iter() {
+    for data in networks.values() {
         for network in data.ip_networks() {
             if let IpAddr::V4(ip) = network.addr
                 && !ip.is_loopback()
