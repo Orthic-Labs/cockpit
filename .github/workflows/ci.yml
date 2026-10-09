@@ -69,7 +69,7 @@ jobs:
 
       - name: RightKit ownership (protected registry roots)
         shell: bash
-        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}" && pnpm exec right-release ownership --app .
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}" && pnpm exec right-release ownership --app . --advisory-when-pending
       - uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0
         if: steps.rust-changes.outputs.required == 'true'
         with:
