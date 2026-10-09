@@ -19,7 +19,7 @@
 
 #![allow(dead_code)]
 
-use crate::card::{CardContent, Row};
+use crate::card::{CardContent, Mark, Row};
 use crate::diag;
 use crate::json::{self, Value};
 use std::collections::HashSet;
@@ -323,10 +323,12 @@ impl Prompt {
     fn panel(&self) -> Panel {
         let mut rows = Vec::new();
         let mut actions = Vec::new();
-        let note = |rows: &mut Vec<Row>,
-                    actions: &mut Vec<Option<Action>>,
-                    row: Row,
-                    action: Option<Action>| {
+        let (title, subtitle, lead) = headline(&self.title, &self.detail);
+        if let Some(row) = lead {
+            rows.push(row);
+            actions.push(None);
+        }
+        let mut push = |row: Row, action: Option<Action>| {
             rows.push(row);
             actions.push(action);
         };
@@ -336,42 +338,19 @@ impl Prompt {
         };
         match &self.view {
             View::Plain => {
-                if !self.detail.is_empty() {
-                    note(
-                        &mut rows,
-                        &mut actions,
-                        Row::Note(self.detail.clone()),
-                        None,
-                    );
-                }
                 for (label, action) in &self.buttons {
-                    note(&mut rows, &mut actions, button(label), Some(action.clone()));
+                    push(button(label), Some(action.clone()));
                 }
             }
             View::List {
                 rows: devices,
                 scanning,
             } => {
-                if !self.detail.is_empty() {
-                    note(
-                        &mut rows,
-                        &mut actions,
-                        Row::Note(self.detail.clone()),
-                        None,
-                    );
-                }
                 if devices.is_empty() {
-                    note(
-                        &mut rows,
-                        &mut actions,
-                        Row::Note("Waiting for a device to appear…".into()),
-                        None,
-                    );
+                    push(Row::Note("Waiting for a device to appear\u{2026}".into()), None);
                 }
                 for (fingerprint, alias, model) in devices {
-                    note(
-                        &mut rows,
-                        &mut actions,
+                    push(
                         Row::Pair {
                             label: alias.clone(),
                             value: model.clone(),
@@ -380,81 +359,80 @@ impl Prompt {
                     );
                 }
                 let again = if *scanning {
-                    "Looking…"
+                    "Looking\u{2026}"
                 } else {
                     "Look again"
                 };
-                note(
-                    &mut rows,
-                    &mut actions,
-                    button(again),
-                    (!*scanning).then_some(Action::Refresh),
-                );
-                note(
-                    &mut rows,
-                    &mut actions,
-                    button("Cancel"),
-                    Some(Action::Close),
-                );
+                push(button(again), (!*scanning).then_some(Action::Refresh));
+                push(button("Cancel"), Some(Action::Close));
             }
             View::Transfer {
                 stage,
                 fraction,
                 can_cancel,
             } => {
-                let value = match (stage, fraction) {
-                    (Stage::Active, Some(f)) => percent(*f),
-                    (Stage::Done, _) => "100%".to_string(),
-                    _ => String::new(),
-                };
-                let bar = match stage {
-                    Stage::Waiting | Stage::Active => Some(*fraction),
-                    Stage::Done => Some(Some(1.0)),
-                    Stage::Problem => None,
-                };
-                match bar {
-                    Some(fraction) => note(
-                        &mut rows,
-                        &mut actions,
+                // The Mac shows a bare bar (indeterminate until the receiver answers) while a
+                // transfer runs, and nothing but the words once it has ended.
+                if matches!(stage, Stage::Waiting | Stage::Active) {
+                    push(
                         Row::Bar {
-                            label: self.detail.clone(),
-                            value,
-                            fraction,
+                            label: String::new(),
+                            value: String::new(),
+                            fraction: *fraction,
                         },
                         None,
-                    ),
-                    None if !self.detail.is_empty() => note(
-                        &mut rows,
-                        &mut actions,
-                        Row::Note(self.detail.clone()),
-                        None,
-                    ),
-                    None => {}
-                }
-                if *can_cancel {
-                    note(
-                        &mut rows,
-                        &mut actions,
-                        button("Cancel"),
-                        Some(Action::Cancel),
                     );
                 }
-                note(
-                    &mut rows,
-                    &mut actions,
-                    button("Close"),
-                    Some(Action::Close),
-                );
+                if *can_cancel {
+                    push(button("Cancel"), Some(Action::Cancel));
+                }
+                push(button("Close"), Some(Action::Close));
             }
         }
         Panel {
             content: CardContent {
-                title: self.title.clone(),
-                accessory: None,
+                title,
+                subtitle,
+                mark: Mark::Send,
                 rows,
+                ..CardContent::default()
             },
             actions,
         }
+    }
+}
+
+/// Longest title the card's title line holds (the Mac cuts a long one in the middle, so the
+/// name's start and the count at its end both stay readable).
+const TITLE_CHARS: usize = 26;
+/// Longest detail the quiet line under the title holds; a longer one wraps as a paragraph.
+const SUBTITLE_CHARS: usize = 34;
+
+/// `text` cut in the middle with an ellipsis to at most `max` characters.
+pub fn middle_cut(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep.div_ceil(2);
+    let tail = keep - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('\u{2026}');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
+/// A send card's title, the quiet line under it, and the paragraph row that carries a detail
+/// too long for that line.
+pub fn headline(title: &str, detail: &str) -> (String, Option<String>, Option<Row>) {
+    let title = middle_cut(title, TITLE_CHARS);
+    if detail.is_empty() {
+        (title, None, None)
+    } else if detail.chars().count() <= SUBTITLE_CHARS && !detail.contains('\n') {
+        (title, Some(detail.to_string()), None)
+    } else {
+        (title, None, Some(Row::Note(detail.to_string())))
     }
 }
 
@@ -1294,30 +1272,19 @@ impl Model {
             let fraction = transfer.fraction();
             if transfer.state == "waiting" {
                 add(
-                    Row::Bar {
+                    Row::Meter {
                         label,
-                        value: String::new(),
+                        trailing: String::new(),
                         fraction: None,
+                        summary: if transfer.direction == "send" {
+                            format!("Waiting for {} to accept", transfer.peer)
+                        } else {
+                            "Waiting".to_string()
+                        },
                     },
-                    None,
-                );
-                add(
-                    Row::Note(if transfer.direction == "send" {
-                        format!("Waiting for {} to accept", transfer.peer)
-                    } else {
-                        "Waiting".to_string()
-                    }),
                     None,
                 );
             } else {
-                add(
-                    Row::Bar {
-                        label,
-                        value: percent(fraction),
-                        fraction: Some(fraction),
-                    },
-                    None,
-                );
                 let mut detail = format!(
                     "{} of {}",
                     bytes_text(transfer.done_bytes),
@@ -1330,7 +1297,15 @@ impl Model {
                         transfer.files_total
                     ));
                 }
-                add(Row::Note(detail), None);
+                add(
+                    Row::Meter {
+                        label,
+                        trailing: String::new(),
+                        fraction: Some(fraction),
+                        summary: detail,
+                    },
+                    None,
+                );
             }
             add(
                 Row::Pair {
@@ -1362,11 +1337,17 @@ impl Model {
             } else {
                 "Starting…".to_string()
             };
-            add(Row::Note(line), None);
+            add(
+                Row::Pair {
+                    label: "Nearby sharing".into(),
+                    value: line,
+                },
+                None,
+            );
         }
         if let Some(live) = live {
             for warning in &live.warnings {
-                add(Row::Note(warning.clone()), None);
+                add(Row::Text(warning.clone()), None);
             }
         }
         for device in &devices {
@@ -1380,19 +1361,19 @@ impl Model {
         }
         let blocked = live.is_some_and(|s| s.local_network.as_deref() == Some("blocked"));
         if blocked {
-            add(Row::Note(FIREWALL_HINT.into()), None);
+            add(Row::Text(FIREWALL_HINT.into()), None);
         }
         if live.is_some_and(|s| s.running) {
             if !devices.is_empty() {
                 add(
                     Row::Pair {
                         label: "Paste clipboard".into(),
-                        value: "Ctrl+V".into(),
+                        value: String::new(),
                     },
                     Some(Action::Paste),
                 );
                 add(
-                    Row::Note("Ctrl+V sends the clipboard · drop files here".into()),
+                    Row::Text("Ctrl+V sends the clipboard · drop files here".into()),
                     None,
                 );
             }
@@ -1408,9 +1389,11 @@ impl Model {
         }
         Panel {
             content: CardContent {
-                title: "Nearby sharing".into(),
+                title: "Send".into(),
                 accessory: None,
                 rows,
+                mark: Mark::Send,
+                ..CardContent::default()
             },
             actions,
         }

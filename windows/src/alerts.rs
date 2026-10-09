@@ -8,7 +8,7 @@
 //! switched on. An archived (stale) reading is never a baseline and the first live reading of
 //! a window only records, so nothing rings at start-up.
 
-use crate::card::{CardContent, Row};
+use crate::card::{CardContent, Mark, Row};
 use crate::send::{Action, Panel};
 use crate::settings::PillSettings;
 use crate::usage::{LimitWindow, Usage};
@@ -358,13 +358,14 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
         None => (title, subtitle, status.to_string()),
     };
     let mut rows = Vec::new();
-    if !subtitle.is_empty() {
-        rows.push(Row::Note(subtitle));
-    }
     if !status.is_empty() {
-        rows.push(Row::Pair {
-            label: format!("\u{25CF} {status}"),
-            value: String::new(),
+        // A spent limit reads red with the critical dot, as the Mac's red status line does;
+        // the rest keep the bullet (the shared renderer has no green status line).
+        let spent = alert.notice.is_none() && alert.kind != Kind::Reset;
+        rows.push(if spent {
+            Row::Alert(status)
+        } else {
+            Row::Text(format!("\u{25CF} {status}"))
         });
     }
     if let Some(resets_at) = alert.resets_at {
@@ -374,10 +375,15 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
         )));
     }
     CardContent {
-        title,
         // The Mac's close button; a click anywhere on the card puts it away.
         accessory: Some("\u{d7}".to_string()),
-        rows,
+        subtitle: (!subtitle.is_empty()).then_some(subtitle),
+        mark: match (alert.notice.is_some(), provider.as_str()) {
+            (true, _) => Mark::None,
+            (false, "Codex") => Mark::Codex,
+            (false, _) => Mark::Claude,
+        },
+        ..CardContent::plain(title, rows)
     }
 }
 

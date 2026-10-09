@@ -223,6 +223,7 @@ pub fn card(version: &str, notes: &str, phase: Phase) -> Panel {
             title,
             accessory: None,
             rows,
+            ..CardContent::default()
         },
         actions,
     }

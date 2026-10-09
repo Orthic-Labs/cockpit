@@ -92,7 +92,7 @@ impl Canvas {
                 let qy = (fy - cy).abs() - h / 2.0 + radius;
                 let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
                 let distance = outside + qx.max(qy).min(0.0) - radius;
-                self.blend(px, py, color, (0.5 - distance) * alpha);
+                self.blend(px, py, color, (0.5 - distance).clamp(0.0, 1.0) * alpha);
             }
         }
     }
@@ -144,6 +144,118 @@ impl Canvas {
                     body.max(cap(start_cap)).max(cap(end_cap))
                 };
                 self.blend(px, py, color, coverage * alpha);
+            }
+        }
+    }
+
+    /// Even-odd fill of one or more closed loops (device pixels), anti-aliased with eight
+    /// sub-scanlines per row and exact horizontal coverage.
+    pub fn fill_polygon(&mut self, loops: &[Vec<(f32, f32)>], color: Rgb, alpha: f32) {
+        const SUB: usize = 8;
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for point in loops.iter().flatten() {
+            top = top.min(point.1);
+            bottom = bottom.max(point.1);
+        }
+        if top > bottom {
+            return;
+        }
+        let first_row = top.floor().max(0.0) as usize;
+        let last_row = (bottom.ceil().max(0.0) as usize).min(self.height);
+        let mut cover = vec![0.0f32; self.width];
+        let mut crossings: Vec<f32> = Vec::new();
+        for row in first_row..last_row {
+            cover.fill(0.0);
+            for sub in 0..SUB {
+                let y = row as f32 + (sub as f32 + 0.5) / SUB as f32;
+                crossings.clear();
+                for outline in loops {
+                    for (i, &(ax, ay)) in outline.iter().enumerate() {
+                        let (bx, by) = outline[(i + 1) % outline.len()];
+                        if (ay <= y) != (by <= y) {
+                            crossings.push(ax + (y - ay) * (bx - ax) / (by - ay));
+                        }
+                    }
+                }
+                crossings.sort_by(f32::total_cmp);
+                for pair in crossings.chunks_exact(2) {
+                    let left = pair[0].max(0.0);
+                    let right = pair[1].min(self.width as f32);
+                    if right <= left {
+                        continue;
+                    }
+                    let last = (right.ceil() as usize).min(self.width);
+                    for column in left.floor() as usize..last {
+                        let lo = left.max(column as f32);
+                        let hi = right.min(column as f32 + 1.0);
+                        if hi > lo {
+                            cover[column] += (hi - lo) / SUB as f32;
+                        }
+                    }
+                }
+            }
+            for (column, &amount) in cover.iter().enumerate() {
+                if amount > 0.0 {
+                    self.blend(column, row, color, amount * alpha);
+                }
+            }
+        }
+    }
+
+    /// Stroked polyline with round joins and caps (`closed` joins the last point to the
+    /// first). Coverage comes from each pixel's distance to the nearest segment.
+    pub fn stroke_polyline(
+        &mut self,
+        points: &[(f32, f32)],
+        width: f32,
+        closed: bool,
+        color: Rgb,
+        alpha: f32,
+    ) {
+        if points.is_empty() {
+            return;
+        }
+        let half = width / 2.0;
+        let mut segments: Vec<((f32, f32), (f32, f32))> =
+            points.windows(2).map(|pair| (pair[0], pair[1])).collect();
+        if closed && points.len() > 2 {
+            segments.push((points[points.len() - 1], points[0]));
+        }
+        if segments.is_empty() {
+            segments.push((points[0], points[0]));
+        }
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for point in points {
+            min_x = min_x.min(point.0);
+            min_y = min_y.min(point.1);
+            max_x = max_x.max(point.0);
+            max_y = max_y.max(point.1);
+        }
+        let reach = half + 1.0;
+        let x0 = (min_x - reach).floor().max(0.0) as usize;
+        let y0 = (min_y - reach).floor().max(0.0) as usize;
+        let x1 = ((max_x + reach).ceil().max(0.0) as usize).min(self.width);
+        let y1 = ((max_y + reach).ceil().max(0.0) as usize).min(self.height);
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let (fx, fy) = (px as f32 + 0.5, py as f32 + 0.5);
+                let mut nearest = f32::MAX;
+                for &((ax, ay), (bx, by)) in &segments {
+                    let (dx, dy) = (bx - ax, by - ay);
+                    let length_sq = dx * dx + dy * dy;
+                    let t = if length_sq > 0.0 {
+                        (((fx - ax) * dx + (fy - ay) * dy) / length_sq).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    nearest = nearest.min((fx - (ax + t * dx)).hypot(fy - (ay + t * dy)));
+                }
+                self.blend(
+                    px,
+                    py,
+                    color,
+                    (0.5 + half - nearest).clamp(0.0, 1.0) * alpha,
+                );
             }
         }
     }

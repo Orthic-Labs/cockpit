@@ -166,6 +166,7 @@ impl Card {
                 title: self.title.clone(),
                 accessory: None,
                 rows,
+                ..CardContent::default()
             },
             actions,
         }

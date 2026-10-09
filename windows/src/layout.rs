@@ -1,18 +1,21 @@
-//! Notch geometry and the view model for its six cells. Metrics are in DIPs (1/96 inch)
-//! and scale with the monitor DPI; they follow the Mac notch's design frame (44 pt ring,
-//! 5.8 pt track, 3 pt arc, thin inner ring for the weekly window). Pure code.
+//! Notch geometry and the view model for its five cells. Metrics are in DIPs (1/96 inch)
+//! and scale with the monitor DPI; they are the Mac notch's design frame (a 44 pt ring in a
+//! 117 px design ring, so one design px is `DESIGN` DIPs). Pure code.
 
 use crate::send;
 use crate::sensors::Machine;
 use crate::usage::Usage;
 
-pub const CELL_COUNT: usize = 6;
+pub const CELL_COUNT: usize = 5;
 /// Index of the nearby-sharing cell in `Cell::ALL`.
-pub const SEND_CELL: usize = 5;
+pub const SEND_CELL: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
+    /// The System ring: memory on the main arc, CPU on the thin inner one.
     Cpu,
+    /// Kept for the card mapping; the notch draws memory inside the System ring.
+    #[allow(dead_code)]
     Memory,
     Disk,
     Claude,
@@ -22,14 +25,8 @@ pub enum Cell {
 }
 
 impl Cell {
-    pub const ALL: [Cell; CELL_COUNT] = [
-        Cell::Cpu,
-        Cell::Memory,
-        Cell::Disk,
-        Cell::Claude,
-        Cell::Codex,
-        Cell::Send,
-    ];
+    pub const ALL: [Cell; CELL_COUNT] =
+        [Cell::Claude, Cell::Codex, Cell::Cpu, Cell::Disk, Cell::Send];
 
     /// Hub section a click opens (same mapping as the Mac notch).
     pub fn section(self) -> &'static str {
@@ -41,14 +38,13 @@ impl Cell {
         }
     }
 
-    /// Short text mark drawn inside the ring.
+    /// Key of the mark drawn inside the ring (see `glyphs::Glyph::from_key`).
     pub fn glyph(self) -> &'static str {
         match self {
-            Cell::Cpu => "CPU",
-            Cell::Memory => "RAM",
-            Cell::Disk => "DSK",
-            Cell::Claude => "Cl",
-            Cell::Codex => "Cx",
+            Cell::Cpu | Cell::Memory => "cpu",
+            Cell::Disk => "disk",
+            Cell::Claude => "claude",
+            Cell::Codex => "openai",
             Cell::Send => send::GLYPH,
         }
     }
@@ -110,29 +106,41 @@ pub struct Badges {
 }
 
 // Metrics in DIPs.
+/// DIPs per Mac design px (the design frame measures the 44 pt ring as 117 px).
+pub const DESIGN: f32 = 44.0 / 117.0;
 pub const RING: f32 = 44.0;
-pub const TRACK_STROKE: f32 = 5.8;
-pub const PROGRESS_STROKE: f32 = 3.0;
-pub const WEEKLY_RADIUS: f32 = 14.1;
-pub const WEEKLY_STROKE: f32 = 1.9;
-pub const PAD_X: f32 = 16.0;
-pub const PAD_TOP: f32 = 8.3;
-pub const PAD_BOTTOM: f32 = 8.3;
-pub const SPACING: f32 = 10.0;
-pub const LABEL_GAP: f32 = 5.0;
-pub const LABEL_HEIGHT: f32 = 13.0;
-pub const BODY_CORNER: f32 = 26.0;
+pub const TRACK_STROKE: f32 = 15.5 * DESIGN;
+pub const PROGRESS_STROKE: f32 = 8.0 * DESIGN;
+pub const WEEKLY_RADIUS: f32 = 37.5 * DESIGN;
+pub const WEEKLY_STROKE: f32 = 5.0 * DESIGN;
+/// Space between neighbouring rings along the stack.
+pub const SPACING: f32 = 26.0 * DESIGN;
+/// Space from the end of the straight body to the first ring (and from the last ring).
+pub const PAD_ALONG: f32 = 22.0 * DESIGN;
+/// How far the ears' layout reserves at each end of the body (the Mac `curlRadius`).
+pub const CURL: f32 = 103.0 * DESIGN;
+/// Radius of the body's far corners.
+pub const CORNER: f32 = 70.0 * DESIGN;
+/// Depth of the open body, bezel band included.
+pub const DEPTH: f32 = 161.0 * DESIGN;
+/// The band the Mac shape keeps past the screen edge so no hairline of wallpaper shows.
+pub const BAND: f32 = 2.0;
+/// Length of the whole open shape along the screen edge, ears included.
+pub const SHAPE_LENGTH: f32 =
+    2.0 * CURL + 2.0 * PAD_ALONG + CELL_COUNT as f32 * RING + (CELL_COUNT - 1) as f32 * SPACING;
+/// Settings orb arc: gap inside the ear, and stroke width.
+pub const ORB_GAP: f32 = 27.0 * DESIGN;
+pub const ORB_STROKE: f32 = 18.0 * DESIGN;
+/// How far the orb arc's round cap reaches past the end of the shape.
+pub const ORB_OVERHANG: f32 = ORB_STROKE / 2.0;
 /// Gap between the notch and a hover card.
 pub const CARD_GAP: f32 = 6.0;
-
-/// Margin around a ring across a side-edge notch (the Mac's 161 px depth less the ring).
-pub const SIDE_PAD: f32 = PAD_TOP;
-/// Folded pill: thickness off the edge and length along it.
-pub const PILL_THICK: f32 = 12.0;
-pub const PILL_LONG: f32 = 88.0;
+/// Folded pill: depth (band included) and length along the edge.
+pub const PILL_DEPTH: f32 = 26.0 * DESIGN;
+pub const PILL_LONG: f32 = 210.0 * DESIGN;
 /// Inner activity ring (Mac `activityDiameter` 72 px of the 117 px ring, 5.5 px stroke).
-pub const ACTIVITY_RADIUS: f32 = 13.55;
-pub const ACTIVITY_STROKE: f32 = 2.07;
+pub const ACTIVITY_RADIUS: f32 = 36.0 * DESIGN;
+pub const ACTIVITY_STROKE: f32 = 5.5 * DESIGN;
 pub const BADGE_PERMISSIONS: u32 = 0xFFB340;
 pub const BADGE_UPDATE: u32 = 0xA51D24;
 
@@ -161,30 +169,28 @@ pub fn band_color(fraction: f32) -> u32 {
     }
 }
 
-/// Notch body size in device pixels.
+/// Canvas depth (across the notch) in device pixels once the bezel band is cropped away.
+fn open_depth(dpi: u32) -> i32 {
+    ((DEPTH - BAND) * scale(dpi)).round() as i32
+}
+
+/// Notch body size in device pixels on a top or bottom edge: the whole shape, ears
+/// included, plus the orb arc's cap.
 pub fn body_size(dpi: u32) -> (i32, i32) {
     let s = scale(dpi);
-    let n = CELL_COUNT as f32;
-    let width = 2.0 * PAD_X + n * RING + (n - 1.0) * SPACING;
-    let height = PAD_TOP + RING + LABEL_GAP + LABEL_HEIGHT + PAD_BOTTOM;
-    ((width * s).round() as i32, (height * s).round() as i32)
+    let along = ((SHAPE_LENGTH + ORB_OVERHANG) * s).round() as i32;
+    (along, open_depth(dpi))
 }
 
-/// Left edge of cell `index` in device pixels.
-pub fn cell_left(index: usize, dpi: u32) -> f32 {
-    (PAD_X + index as f32 * (RING + SPACING)) * scale(dpi)
-}
-
-/// Cell under a point in notch-local device pixels, or `None` outside the body.
-pub fn cell_at(x: i32, y: i32, dpi: u32) -> Option<usize> {
-    let (width, height) = body_size(dpi);
-    if x < 0 || y < 0 || x >= width || y >= height {
-        return None;
+/// Canvas position of the point `along` the stack and `depth` in from the screen edge,
+/// both in device pixels, on a canvas `across` pixels deep.
+pub fn to_canvas(edge: Edge, along: f32, depth: f32, across: f32) -> (f32, f32) {
+    match edge {
+        Edge::Top => (along, depth),
+        Edge::Bottom => (along, across - depth),
+        Edge::Left => (depth, along),
+        Edge::Right => (across - depth, along),
     }
-    let s = scale(dpi);
-    let first_edge = (PAD_X - SPACING / 2.0) * s;
-    let index = ((x as f32 - first_edge) / ((RING + SPACING) * s)).floor();
-    Some((index.max(0.0) as usize).min(CELL_COUNT - 1))
 }
 
 /// What one cell shows, quantised to whole percents so identical readings compare equal and
@@ -200,8 +206,6 @@ pub struct CellView {
     pub stale: bool,
     /// Sharing cannot work: the glyph is drawn in the warning colour.
     pub problem: bool,
-    /// Text under the ring: `42%` or `--`.
-    pub label: String,
     /// A limit is spent: both arcs read as exhausted and the glyph is dimmed.
     pub blocked: bool,
     /// Ring colour decided by the reading itself rather than by the used share (Memory).
@@ -213,10 +217,6 @@ pub struct CellView {
 
 fn percent(fraction: f32) -> u8 {
     (fraction.clamp(0.0, 1.0) * 100.0).round() as u8
-}
-
-fn label(value: Option<u8>) -> String {
-    value.map_or_else(|| "--".to_string(), |p| format!("{p}%"))
 }
 
 /// Memory ring colour. The Mac colours the ring by the kernel's memory-pressure state; Windows
@@ -244,7 +244,8 @@ pub fn memory_band(machine: Option<&Machine>) -> Option<u32> {
     })
 }
 
-/// Builds the six cell views. Unknown readings are `None` and show as `--`.
+/// Builds the five cell views (Claude, Codex, System, Disks, Send). Unknown readings are
+/// `None` and draw as a dimmed, empty ring.
 pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -> Vec<CellView> {
     views_with(machine, usage, ring, Activity::None)
 }
@@ -256,19 +257,15 @@ pub fn views_with(
     ring: &send::Ring,
     claude: Activity,
 ) -> Vec<CellView> {
-    let system = |cell: Cell, fraction: Option<f32>| {
-        let main = fraction.map(percent);
-        CellView {
-            glyph: cell.glyph(),
-            main,
-            inner: None,
-            stale: false,
-            problem: false,
-            label: label(main),
-            blocked: false,
-            band: None,
-            activity: Activity::None,
-        }
+    let system = |cell: Cell, main: Option<f32>, inner: Option<f32>| CellView {
+        glyph: cell.glyph(),
+        main: main.map(percent),
+        inner: inner.map(percent),
+        stale: main.is_none(),
+        problem: false,
+        blocked: false,
+        band: None,
+        activity: Activity::None,
     };
     let ai = |cell: Cell, usage: &Usage, activity: Activity| {
         let main = usage.headline().map(|w| percent(w.fraction));
@@ -276,29 +273,44 @@ pub fn views_with(
             glyph: cell.glyph(),
             main,
             inner: usage.weekly().map(|w| percent(w.fraction)),
-            stale: usage.is_stale(),
+            stale: usage.is_stale() || main.is_none(),
             problem: false,
-            label: label(main),
             blocked: usage.block.is_some(),
             band: None,
             activity,
         }
     };
-    let mut memory = system(Cell::Memory, machine.and_then(Machine::memory_fraction));
-    memory.band = memory_band(machine);
+    // System: memory leads, CPU is the thin inner ring (CPU alone when memory is unknown).
+    let memory = machine.and_then(Machine::memory_fraction);
+    let cpu = machine.and_then(|m| m.cpu);
+    let mut system_cell = match memory {
+        Some(_) => system(Cell::Cpu, memory, cpu),
+        None => system(Cell::Cpu, cpu, None),
+    };
+    if memory.is_some() {
+        system_cell.band = memory_band(machine);
+    }
+    // Disks: an external (non-system) drive leads and the system drive is the inner ring;
+    // with no external drive the system drive leads alone.
+    let startup = machine.and_then(Machine::disk_fraction);
+    let external = machine
+        .and_then(|m| m.drives.iter().find(|d| !d.system))
+        .map(|d| d.used_fraction());
+    let disks = match external {
+        Some(_) => system(Cell::Disk, external, startup),
+        None => system(Cell::Disk, startup, None),
+    };
     vec![
-        system(Cell::Cpu, machine.and_then(|m| m.cpu)),
-        memory,
-        system(Cell::Disk, machine.and_then(Machine::disk_fraction)),
         ai(Cell::Claude, &usage[0], claude),
         ai(Cell::Codex, &usage[1], Activity::None),
+        system_cell,
+        disks,
         CellView {
             glyph: Cell::Send.glyph(),
             main: ring.fraction.filter(|_| ring.active).map(percent),
             inner: None,
             stale: false,
             problem: ring.problem,
-            label: ring.label.clone(),
             blocked: false,
             band: None,
             activity: Activity::None,
@@ -308,29 +320,22 @@ pub fn views_with(
 
 // ---- orientation: the notch on any screen edge ----------------------------------------------
 
-/// Height one ring plus its label takes along a side-edge stack, in DIPs.
-fn side_cell() -> f32 {
-    RING + LABEL_GAP + LABEL_HEIGHT
-}
-
 /// Notch body size in device pixels on `edge`. Top and bottom keep the horizontal row; left
-/// and right stack the six rings downwards, the percent label under each ring.
+/// and right stack the five rings downwards.
 pub fn body_size_for(edge: Edge, dpi: u32) -> (i32, i32) {
-    if !edge.is_vertical() {
-        return body_size(dpi);
+    let (along, depth) = body_size(dpi);
+    if edge.is_vertical() {
+        (depth, along)
+    } else {
+        (along, depth)
     }
-    let s = scale(dpi);
-    let n = CELL_COUNT as f32;
-    let width = 2.0 * SIDE_PAD + RING;
-    let height = 2.0 * SIDE_PAD + n * side_cell() + (n - 1.0) * SPACING;
-    ((width * s).round() as i32, (height * s).round() as i32)
 }
 
 /// Folded pill size in device pixels on `edge`.
 pub fn pill_size_for(edge: Edge, dpi: u32) -> (i32, i32) {
     let s = scale(dpi);
     let (thick, long) = (
-        (PILL_THICK * s).round() as i32,
+        ((PILL_DEPTH - BAND) * s).round() as i32,
         (PILL_LONG * s).round() as i32,
     );
     if edge.is_vertical() {
@@ -352,31 +357,21 @@ pub fn panel_size(edge: Edge, folded: bool, dpi: u32) -> (i32, i32) {
 /// Centre of cell `index`'s ring in notch-local device pixels.
 pub fn ring_center(edge: Edge, index: usize, dpi: u32) -> (f32, f32) {
     let s = scale(dpi);
-    if edge.is_vertical() {
-        (
-            (SIDE_PAD + RING / 2.0) * s,
-            (SIDE_PAD + index as f32 * (side_cell() + SPACING) + RING / 2.0) * s,
-        )
-    } else {
-        (
-            cell_left(index, dpi) + RING * s / 2.0,
-            (PAD_TOP + RING / 2.0) * s,
-        )
-    }
+    let along = (CURL + PAD_ALONG + RING / 2.0 + index as f32 * (RING + SPACING)) * s;
+    let depth = (DEPTH / 2.0 - BAND) * s;
+    to_canvas(edge, along, depth, open_depth(dpi) as f32)
 }
 
 /// Cell under a point in notch-local device pixels on `edge`.
 pub fn cell_at_for(edge: Edge, x: i32, y: i32, dpi: u32) -> Option<usize> {
-    if !edge.is_vertical() {
-        return cell_at(x, y, dpi);
-    }
     let (width, height) = body_size_for(edge, dpi);
     if x < 0 || y < 0 || x >= width || y >= height {
         return None;
     }
     let s = scale(dpi);
-    let first_edge = (SIDE_PAD - SPACING / 2.0) * s;
-    let index = ((y as f32 - first_edge) / ((side_cell() + SPACING) * s)).floor();
+    let along = (if edge.is_vertical() { y } else { x }) as f32;
+    let first_edge = (CURL + PAD_ALONG - SPACING / 2.0) * s;
+    let index = ((along - first_edge) / ((RING + SPACING) * s)).floor();
     Some((index.max(0.0) as usize).min(CELL_COUNT - 1))
 }
 

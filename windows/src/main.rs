@@ -17,6 +17,7 @@ mod canvas;
 mod card;
 mod diag;
 mod drive_health;
+mod glyphs;
 mod http;
 mod hub;
 mod installer;
@@ -1263,6 +1264,12 @@ fn sync_card() {
             panel.actions.push(None);
         }
     }
+    // The shown card carries the tail `show_card` gave it; compare the content without it.
+    panel.content.tail = lock_state()
+        .ui
+        .card_shown
+        .as_ref()
+        .and_then(|shown| shown.panel.content.tail);
     let unchanged = lock_state().ui.card_shown.as_ref().is_some_and(|shown| {
         shown.key == key
             && shown.cell == cell
@@ -1291,7 +1298,7 @@ fn sync_card() {
 
 /// Shows (or updates) `panel` as the card of `cell` of the notch `key`, beside the notch on
 /// the side away from its screen edge.
-fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool, notice: bool) {
+fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notice: bool) {
     let (dpi, monitor, edge, folded) = {
         let app = lock_state();
         if app.shutting_down {
@@ -1312,6 +1319,9 @@ fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool, notice: b
         return;
     }
     let s = layout::scale(dpi);
+    // The card's tail leaves the side facing the notch; its offset (set once the card is
+    // placed) keeps the point on the hovered ring when the monitor pushes the card aside.
+    panel.content.tail = Some(card::Tail { edge, offset: 0 });
     let card_size = render::card_size(&panel.content, dpi);
     let (ring_x, ring_y) = layout::ring_center(edge, cell, dpi);
     // A popup pinned to the folded pill hangs from the pill's middle.
@@ -1329,6 +1339,12 @@ fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool, notice: b
         (layout::CARD_GAP * s).round() as i32,
         (monitor.left, monitor.top, monitor.right, monitor.bottom),
     );
+    let offset = if edge.is_vertical() {
+        centre - (y + card_size.1 / 2)
+    } else {
+        centre - (x + card_size.0 / 2)
+    };
+    panel.content.tail = Some(card::Tail { edge, offset });
     let Some(card_key) = ensure_card() else {
         return;
     };

@@ -717,36 +717,3 @@ pub fn jwt_expiry(token: &str) -> Option<u64> {
     let claims = json::parse(&bytes, CREDENTIAL_MAX_BYTES)?;
     claims.get("exp").and_then(Value::as_f64).map(|e| e as u64)
 }
-
-/// "2h 14m", "5d 3h", "12m" until `resets_at`; "now" once it has passed.
-pub fn reset_in(resets_at: u64, now: u64) -> String {
-    let remaining = resets_at.saturating_sub(now);
-    let (days, hours, minutes) = (
-        remaining / 86_400,
-        remaining % 86_400 / 3600,
-        remaining % 3600 / 60,
-    );
-    if remaining == 0 {
-        "now".into()
-    } else if days > 0 {
-        format!("{days}d {hours}h")
-    } else if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else {
-        format!("{}m", minutes.max(1))
-    }
-}
-
-/// "just now", "12 min ago", "3 h ago", "2 d ago".
-pub fn age_text(updated: u64, now: u64) -> String {
-    let seconds = now.saturating_sub(updated);
-    if seconds < 90 {
-        "just now".into()
-    } else if seconds < 3600 {
-        format!("{} min ago", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{} h ago", seconds / 3600)
-    } else {
-        format!("{} d ago", seconds / 86_400)
-    }
-}

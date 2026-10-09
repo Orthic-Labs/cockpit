@@ -12,7 +12,7 @@
 //! monitor only; here a Claude session that was busy and is now idle holds `Success` for
 //! `SUCCESS_HOLD_MS` (the "just completed" ring), tracked across polls.
 
-use crate::card::Row;
+use crate::card::{Dot, Row, elapsed_text};
 use crate::json::{self, Value};
 use crate::layout::Activity;
 use std::collections::BTreeMap;
@@ -341,22 +341,32 @@ fn rank(state: State) -> u8 {
     }
 }
 
-/// Hover-card rows for the sessions: name and state with its age, then what it is waiting
-/// for or where it runs. Waiting first, as on the Mac card.
+/// Hover-card rows for the sessions, as the Mac card lists them: a rule, then each session's
+/// name and status (waiting first) over what it is waiting for or where it runs, with how
+/// long it has been so.
 pub fn card_rows(sessions: &[Session], now_ms: u64) -> Vec<Row> {
     let mut ordered: Vec<&Session> = sessions.iter().collect();
     ordered.sort_by_key(|s| rank(s.state));
     let mut rows = Vec::new();
+    if !ordered.is_empty() {
+        rows.push(Row::Rule);
+    }
     for session in ordered.iter().take(CARD_ROWS) {
-        let minutes = now_ms.saturating_sub(session.since_ms) / 60_000;
-        rows.push(Row::Pair {
-            label: session.name.clone(),
-            value: format!("{} \u{b7} {}m", word(session.state), minutes),
+        rows.push(Row::Session {
+            name: session.name.clone(),
+            dot: match session.state {
+                State::Busy => Dot::Busy,
+                State::Waiting => Dot::Waiting,
+                State::Success => Dot::Success,
+                State::Idle => Dot::Idle,
+            },
+            word: word(session.state).to_string(),
+            detail: match (&session.state, &session.waiting_for) {
+                (State::Waiting, Some(question)) => question.clone(),
+                _ => session.detail.clone(),
+            },
+            age: elapsed_text(now_ms.saturating_sub(session.since_ms) / 1000),
         });
-        rows.push(Row::Note(match (&session.state, &session.waiting_for) {
-            (State::Waiting, Some(question)) => question.clone(),
-            _ => session.detail.clone(),
-        }));
     }
     if ordered.len() > CARD_ROWS {
         rows.push(Row::Note(format!("and {} more", ordered.len() - CARD_ROWS)));

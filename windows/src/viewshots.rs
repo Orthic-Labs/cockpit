@@ -14,7 +14,7 @@
 
 use crate::alerts;
 use crate::canvas::Canvas;
-use crate::card::{self, CardContent, Row};
+use crate::card::{self, CardContent, Mark, Row, Tail};
 use crate::drive_health::{self, Report};
 use crate::json::{self, Value};
 use crate::layout::{self, Badges, Cell, CellView, Edge};
@@ -540,6 +540,7 @@ impl Rows {
                 title: title.to_string(),
                 accessory: None,
                 rows: self.rows,
+                ..CardContent::default()
             },
             actions: self.actions,
         }
@@ -564,17 +565,18 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     match transfer.and_then(|w| num_of(w, "used").map(|f| (w, f as f32))) {
         Some((window, fraction)) => {
             panel.add(
-                Row::Bar {
+                Row::Meter {
                     label: str_of(window, "label").unwrap_or("").to_string(),
-                    value: percent_text(fraction),
+                    trailing: String::new(),
                     fraction: Some(fraction),
+                    summary: detail.to_string(),
                 },
                 None,
             );
-            panel.note(detail);
             panel.button("Cancel", Some(Action::Cancel));
         }
-        None => panel.note(detail),
+        None if !detail.is_empty() => panel.add(pair("Nearby sharing", detail), None),
+        None => {}
     }
     let devices: Vec<(&str, &str, &str)> = windows
         .iter()
@@ -591,7 +593,7 @@ fn send_hover(cell: Option<&Value>) -> Panel {
         .iter()
         .any(|w| str_of(w, "id") == Some("hint-network"))
     {
-        panel.note(send::FIREWALL_HINT);
+        panel.add(Row::Text(send::FIREWALL_HINT.to_string()), None);
     }
     for (fingerprint, alias, kind) in &devices {
         panel.add(
@@ -601,12 +603,17 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     }
     if running {
         if !devices.is_empty() {
-            panel.add(pair("Paste clipboard", "Ctrl+V"), Some(Action::Paste));
-            panel.note("Ctrl+V sends the clipboard \u{b7} drop files here");
+            panel.button("Paste clipboard", Some(Action::Paste));
+            panel.add(
+                Row::Text("Ctrl+V sends the clipboard \u{b7} drop files here".to_string()),
+                None,
+            );
         }
         panel.button("Look again", Some(Action::Refresh));
     }
-    panel.finish("Nearby sharing")
+    let mut panel = panel.finish("Send");
+    panel.content.mark = Mark::Send;
+    panel
 }
 
 /// A notch card of the send flow (`send::Prompt::panel`): the device list, a transfer, or a
@@ -614,14 +621,17 @@ fn send_hover(cell: Option<&Value>) -> Panel {
 fn prompt_panel(fixture: &Value) -> Panel {
     let title = str_of(fixture, "title").unwrap_or("");
     let detail = str_of(fixture, "detail").unwrap_or("");
+    let (title, subtitle, lead) = send::headline(title, detail);
     let mut panel = Rows::default();
+    if let Some(row) = lead {
+        panel.add(row, None);
+    }
     match fixture.get("send") {
         Some(send) => match send.get("transfer") {
-            Some(transfer) => transfer_rows(&mut panel, detail, transfer),
-            None => list_rows(&mut panel, detail, send),
+            Some(transfer) => transfer_rows(&mut panel, transfer),
+            None => list_rows(&mut panel, send),
         },
         None => {
-            panel.note(detail);
             for key in ["primary", "secondary"] {
                 let Some(button) = fixture.get(key) else {
                     continue;
@@ -636,13 +646,20 @@ fn prompt_panel(fixture: &Value) -> Panel {
                 };
                 panel.button(str_of(button, "label").unwrap_or(""), Some(action));
             }
+            // Live cards: a request has only Accept and Decline; received results add Close.
+            let first = fixture.get("primary").and_then(|b| str_of(b, "choice"));
+            if first.is_some_and(|choice| choice != "install") {
+                panel.button("Close", Some(Action::Close));
+            }
         }
     }
-    panel.finish(title)
+    let mut panel = panel.finish(&title);
+    panel.content.subtitle = subtitle;
+    panel.content.mark = Mark::Send;
+    panel
 }
 
-fn list_rows(panel: &mut Rows, detail: &str, send: &Value) {
-    panel.note(detail);
+fn list_rows(panel: &mut Rows, send: &Value) {
     let devices = arr(send, "rows");
     if devices.is_empty() {
         panel.note("Waiting for a device to appear\u{2026}");
@@ -666,33 +683,17 @@ fn list_rows(panel: &mut Rows, detail: &str, send: &Value) {
     panel.button("Cancel", Some(Action::Close));
 }
 
-fn transfer_rows(panel: &mut Rows, detail: &str, transfer: &Value) {
+fn transfer_rows(panel: &mut Rows, transfer: &Value) {
     let state = str_of(transfer, "state").unwrap_or("waiting");
-    let fraction = num_of(transfer, "fraction").map(|f| f as f32);
-    match state {
-        "waiting" | "active" => {
-            let value = match (state, fraction) {
-                ("active", Some(f)) => percent_text(f),
-                _ => String::new(),
-            };
-            panel.add(
-                Row::Bar {
-                    label: detail.to_string(),
-                    value,
-                    fraction,
-                },
-                None,
-            );
-        }
-        "done" => panel.add(
+    if matches!(state, "waiting" | "active") {
+        panel.add(
             Row::Bar {
-                label: detail.to_string(),
-                value: "100%".to_string(),
-                fraction: Some(1.0),
+                label: String::new(),
+                value: String::new(),
+                fraction: num_of(transfer, "fraction").map(|f| f as f32),
             },
             None,
-        ),
-        _ => panel.note(detail),
+        );
     }
     if flag(transfer, "canCancel") {
         panel.button("Cancel", Some(Action::Cancel));
@@ -759,21 +760,36 @@ fn alert_panel(fixture: &Value) -> Panel {
     Panel { content, actions }
 }
 
+/// A card with its tail pointing back at a notch on the right, like the Mac's card shots.
 fn card_canvas(panel: &Panel, text: &mut TextPainter) -> Canvas {
-    let clickable: Vec<bool> = panel.actions.iter().map(Option::is_some).collect();
-    render::render_card(&panel.content, &clickable, DPI, text)
+    card_canvas_at(panel, Edge::Right, text)
 }
 
-/// One ring. Windows draws CPU and Memory as separate cells, so the System cell's ring is the
-/// Memory ring.
+/// A card with its tail toward a notch on `edge`.
+fn card_canvas_at(panel: &Panel, edge: Edge, text: &mut TextPainter) -> Canvas {
+    let clickable: Vec<bool> = panel.actions.iter().map(Option::is_some).collect();
+    let mut content = panel.content.clone();
+    content.tail = Some(Tail { edge, offset: 0 });
+    render::render_card(&content, &clickable, DPI, text)
+}
+
+/// The Claude card's session list (what the live notch appends under the limit windows).
+fn add_sessions(panel: &mut Panel, listed: &[Session]) {
+    for row in sessions::card_rows(listed, NOW * 1000) {
+        panel.content.rows.push(row);
+        panel.actions.push(None);
+    }
+}
+
+/// One ring, by its place in the notch (the System ring carries memory and CPU).
 fn ring(fixture: &Value, text: &mut TextPainter) -> Outcome {
     let cell = fixture.get("cell").ok_or("Fixture has no cell")?;
     let index = match str_of(cell, "id") {
-        Some("system-cpu") => 1,
-        Some("system-disks") => 2,
-        Some("claude") => 3,
-        Some("codex") => 4,
-        Some("system-send") => 5,
+        Some("claude") => 0,
+        Some("codex") => 1,
+        Some("system-cpu") => 2,
+        Some("system-disks") => 3,
+        Some("system-send") => 4,
         _ => return Err("Unknown ring cell"),
     };
     let mut views = Scene::from_cells(&[cell]).views();
@@ -799,7 +815,11 @@ fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
             } else {
                 Cell::Codex
             };
-            Ok(vec![(card_canvas(&scene.panel(which), text), 0, 0)])
+            let mut panel = scene.panel(which);
+            if which == Cell::Claude {
+                add_sessions(&mut panel, &fixture_sessions(cell));
+            }
+            Ok(vec![(card_canvas(&panel, text), 0, 0)])
         }
         // One System card; Windows draws memory as a used share, with no pressure word.
         "system-cpu" => Ok(vec![(card_canvas(&scene.panel(Cell::Cpu), text), 0, 0)]),
@@ -817,7 +837,7 @@ fn overlay(views: &mut [CellView], cells: &[&Value]) {
     for cell in cells {
         match str_of(cell, "id") {
             Some("claude") => {
-                if let Some(view) = views.get_mut(3) {
+                if let Some(view) = views.get_mut(0) {
                     view.activity = sessions::activity(&fixture_sessions(cell));
                 }
             }
@@ -831,7 +851,7 @@ fn overlay(views: &mut [CellView], cells: &[&Value]) {
                         Some("critical") => Some(layout::BAND_CRITICAL),
                         _ => None,
                     });
-                match (views.get_mut(1), band) {
+                match (views.get_mut(2), band) {
                     (Some(view), Some(Some(colour))) => view.band = Some(colour),
                     (Some(view), Some(None)) if pressure_unknown(cell) => view.band = None,
                     _ => {}
@@ -879,8 +899,16 @@ fn notch(_id: &str, fixture: &Value, text: &mut TextPainter) -> Outcome {
     let scene = Scene::from_cells(&cells);
     let mut views = scene.views();
     overlay(&mut views, &cells);
-    let body = render::render_notch(&views, edge, folded, badges, DPI, text);
-    let notch_rect = (0, 0, body.width as i32, body.height as i32);
+    let body = render::render_notch_shot(&views, edge, folded, badges, DPI, text);
+    // The body keeps the Mac's bezel band along the welded side; the notch proper starts after it.
+    let band = (layout::BAND * layout::scale(DPI)).round() as i32;
+    let (offset_x, offset_y) = match edge {
+        Edge::Top => (0, band),
+        Edge::Left => (band, 0),
+        Edge::Bottom | Edge::Right => (0, 0),
+    };
+    let (panel_w, panel_h) = layout::panel_size(edge, folded, DPI);
+    let notch_rect = (offset_x, offset_y, offset_x + panel_w, offset_y + panel_h);
     let mut parts = vec![(body, 0, 0)];
     if let Some(hover) = str_of(fixture, "hover").filter(|_| !folded) {
         let cell = windows_cell(hover).ok_or("Unknown hover cell")?;
@@ -895,17 +923,14 @@ fn notch(_id: &str, fixture: &Value, text: &mut TextPainter) -> Outcome {
                 .find(|c| str_of(c, "id") == Some("claude"))
                 .map(|c| fixture_sessions(c))
                 .unwrap_or_default();
-            for row in sessions::card_rows(&listed, NOW * 1000) {
-                panel.content.rows.push(row);
-                panel.actions.push(None);
-            }
+            add_sessions(&mut panel, &listed);
         }
-        let card = card_canvas(&panel, text);
+        let card = card_canvas_at(&panel, edge, text);
         let (ring_x, ring_y) = layout::ring_center(edge, index, DPI);
         let centre = if edge.is_vertical() {
-            ring_y as i32
+            ring_y as i32 + offset_y
         } else {
-            ring_x as i32
+            ring_x as i32 + offset_x
         };
         let gap = (layout::CARD_GAP * layout::scale(DPI)).round() as i32;
         // The card may start left of or above the notch: the open monitor lets it, and the
