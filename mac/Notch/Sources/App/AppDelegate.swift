@@ -109,7 +109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Self.retireOlderInstances()
         // A hub left by an earlier Pulse is retired before this one uses a hub.
-        MainActor.assumeIsolated { HubLauncher.retireHubsFromEarlierLaunches() }
+        MainActor.assumeIsolated {
+            HubLauncher.retireHubsFromEarlierLaunches()
+            // The hub is the daemon: it runs whenever the notch runs.
+            HubLauncher.supervise()
+        }
         // An installer's quit may be a plain SIGTERM, which skips
         // applicationWillTerminate and would orphan the hub. Route it through
         // a normal terminate so the hub goes down with Pulse.

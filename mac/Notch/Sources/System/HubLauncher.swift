@@ -142,6 +142,31 @@ enum HubLauncher {
 
     static var isRunning: Bool { hubRunning }
 
+    private static var quitting = false
+    private static var supervisor: Timer?
+    private static var lastLaunch = Date.distantPast
+
+    /// The hub is Pulse's daemon: while the notch runs, the hub runs. Starts it now
+    /// and every few seconds starts it again if it is gone (30 s between attempts so
+    /// a hub that dies at once does not spin). Stops with `terminate()`.
+    static func supervise() {
+        guard supervisor == nil else { return }
+        ensureRunning()
+        let timer = Timer(timeInterval: 5, repeats: true) { _ in
+            Task { @MainActor in ensureRunning() }
+        }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        supervisor = timer
+    }
+
+    private static func ensureRunning() {
+        guard !quitting, !hubRunning else { return }
+        guard Date().timeIntervalSince(lastLaunch) >= 30 else { return }
+        lastLaunch = Date()
+        launchInBackground()
+    }
+
     /// Starts the hub with no window and no Dock icon, so nearby sharing works
     /// while nobody has the hub open. Does nothing when it is already running.
     static func launchInBackground() {
@@ -171,6 +196,9 @@ enum HubLauncher {
     /// Stops every hub this process started (SIGTERM, then SIGKILL after 3 s).
     /// Called when the notch quits, including on SIGTERM from an installer.
     static func terminate() {
+        quitting = true
+        supervisor?.invalidate()
+        supervisor = nil
         let me = getpid()
         var pids = hubProcesses().filter { $0.parent == me }.map(\.pid)
         if let process = child, process.isRunning,
