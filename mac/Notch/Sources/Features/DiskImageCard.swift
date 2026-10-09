@@ -228,7 +228,7 @@ struct DiskImageCard: View {
                     .background(Circle().fill(Palette.textPrimary.opacity(0.14)))
                     .contentShape(Circle())
             }
-            .buttonStyle(DiskImageCardButtonStyle())
+            .buttonStyle(CardButtonStyle())
             .help(prompt.style == .working ? L10n.t("Cancel") : L10n.t("Close"))
         }
     }
@@ -264,7 +264,7 @@ struct DiskImageCard: View {
             .background(Capsule().fill(Palette.textPrimary.opacity(0.14)))
             .contentShape(Capsule())
         }
-        .buttonStyle(DiskImageCardButtonStyle())
+        .buttonStyle(CardButtonStyle())
     }
 
     private var tail: some View {
@@ -283,15 +283,5 @@ struct DiskImageCard: View {
         case .down:     VStack(spacing: 0) { tail; card }
         case .up:       VStack(spacing: 0) { card; tail }
         }
-    }
-}
-
-/// A press that dips, for the card's buttons.
-private struct DiskImageCardButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

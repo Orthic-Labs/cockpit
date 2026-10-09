@@ -475,15 +475,22 @@ private struct LimitWindowRow: View {
     }
 
     var body: some View {
-        rows
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if let device = nearbyDevice {
-                    MainActor.assumeIsolated { NearbySharing.shared.select(device) }
-                } else if window.id == NearbySharing.pasteRowID {
-                    MainActor.assumeIsolated { NearbySharing.shared.pasteClipboard() }
-                }
+        if window.id == NearbySharing.pasteRowID {
+            Button {
+                MainActor.assumeIsolated { NearbySharing.shared.pasteClipboard() }
+            } label: {
+                rows.contentShape(Rectangle())
             }
+            .buttonStyle(CardButtonStyle())
+        } else {
+            rows
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if let device = nearbyDevice {
+                        MainActor.assumeIsolated { NearbySharing.shared.select(device) }
+                    }
+                }
+        }
     }
 
     @ViewBuilder private var rows: some View {

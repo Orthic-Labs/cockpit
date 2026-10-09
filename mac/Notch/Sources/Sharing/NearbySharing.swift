@@ -460,7 +460,14 @@ final class NearbySharing {
             if choice == .copyText {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
-            } else if choice == .openLink, let url = Self.link(in: text) {
+                // A brief "Copied" in place of the card, then it goes.
+                show(DiskImagePrompt(iconPath: iconPath("/System/Applications/Messages.app"),
+                                     title: L10n.t("Copied"), detail: "", style: .done),
+                     as: .note)
+                scheduleExpiry(after: 1.2)
+                return
+            }
+            if choice == .openLink, let url = Self.link(in: text) {
                 NSWorkspace.shared.open(url)
             }
             clearCard()

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pulse Overview v3</title>
+<style>
+@font-face{font-family:Tanker;src:url('../../hub/public/fonts/Tanker-400.woff2') format('woff2');font-weight:400;font-display:swap}
+/* Tokens: the values used by docs/design-refresh/overview.html (mockup palette; the shipped app takes shell.css tokens). */
+:root{--rk-brand:#0a84ff;--rk-accent:var(--rk-brand);--rk-accent-ink:#071624;--rk-focus:#75b9ff;--rk-chrome:#121215;--rk-plane:#19191d;--rk-panel:#232328;--rk-fill-2:#303036;--rk-ink:#f3f1ee;--rk-ink-2:#c0bcb6;--rk-ink-3:#b4afa8;--rk-hairline:#53535b;--rk-ok:#85dfa8;--rk-ok-soft:#183629;--rk-warn:#ffd080;--rk-warn-soft:#3c2e17;--rk-bad:#ffb0ab;--rk-bad-soft:#422524;--rk-radius:12px;--rk-titlebar-height:52px;--rk-lights-width:72px;--rk-sidebar-width:170px;--rk-wordmark:Tanker,sans-serif;--rk-wordmark-font:var(--rk-wordmark);--rk-elevated:#1f1f23;--rk-sunk:#1c1c1f;--rk-fill:rgba(242,240,236,.055);color-scheme:dark;font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;font-size:13px}
+:root[data-theme=light]{--rk-chrome:#eeeae4;--rk-plane:#f7f4ee;--rk-panel:#fff;--rk-fill-2:#e9e5df;--rk-ink:#231f1a;--rk-ink-2:#59534b;--rk-ink-3:#655e55;--rk-hairline:#b4aea5;--rk-ok:#205c36;--rk-ok-soft:#e5f1e9;--rk-warn:#713900;--rk-warn-soft:#fff0d9;--rk-bad:#a5192c;--rk-bad-soft:#fce8e8;--rk-focus:#0055aa;--rk-elevated:#fff;--rk-fill:rgba(35,31,26,.05);color-scheme:light}
+html,body{margin:0}body{background:#000;color:var(--rk-ink);font:13px/1.4 -apple-system,system-ui,sans-serif;padding:0 0 24px}
+:root[data-theme=light] body{background:#cfcac2}
+.tools{display:flex;flex-wrap:wrap;gap:14px;align-items:center;width:900px;margin:0 auto;padding:10px 0;font-size:12px;color:var(--rk-ink-2)}
+.tools label{display:flex;gap:6px;align-items:center}.tools b{color:var(--rk-ink)}
+.win{width:900px;height:600px;margin:0 auto;border-radius:12px;overflow:hidden;position:relative}
+.win.is-min{width:820px;height:520px}
+.win .rk-shell{height:100%}
+.win .rk-top__lights i{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--rk-fill-2);margin:20px 0 0 0}
+.lights{display:flex;gap:8px;align-items:flex-start;padding-left:2px}
+/* ---- shell.css (frame, titlebar, sidebar, fuse; lines 71-140 and 142-150, verbatim) ---- */
+.rk-shell, .rk-shell *, .rk-shell *::before, .rk-shell *::after { box-sizing: border-box; }
+.rk-shell {
+  display: flex; flex-direction: column; height: 100vh; background: var(--rk-chrome); color: var(--rk-ink);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased; letter-spacing: -.003em; user-select: none; -webkit-user-select: none;
+}
+:where(.rk-shell) button { font: inherit; color: inherit; cursor: default; }
+.rk-shell input, .rk-shell textarea, .rk-shell .selectable { user-select: text; -webkit-user-select: text; }
+
+/* Fused titlebar: spans the window on the same chrome surface as the sidebar. */
+.rk-top { display: flex; align-items: center; gap: 10px; height: var(--rk-titlebar-height); padding: 0 14px 0 0; background: var(--rk-chrome); flex: none; }
+.rk-top__side { display: flex; align-items: center; width: var(--rk-sidebar-width); flex: none; height: 100%; padding: 0 14px 0 16px; gap: 10px; }
+.rk-top__lights { width: var(--rk-lights-width); height: 100%; flex: none; }
+.rk-top__title { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.rk-top__drag { flex: 1; align-self: stretch; }
+.rk-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 0; border-radius: 99px; background: var(--rk-fill-2); font-size: 11.5px; color: var(--rk-ink-2); white-space: nowrap; }
+.rk-pill--warn { background: var(--rk-warn-soft); color: var(--rk-warn); }
+
+/* Windows / Linux caption buttons. */
+.rk-caption { display: flex; align-self: stretch; margin-right: -14px; margin-left: 6px; }
+.rk-caption__btn { width: 46px; border: 0; background: transparent; color: var(--rk-ink-2); display: flex; align-items: center; justify-content: center; }
+.rk-caption__btn:hover { background: var(--rk-fill-2); color: var(--rk-ink); }
+.rk-caption__btn:focus-visible { outline: 2px solid var(--rk-focus); outline-offset: -2px; }
+.rk-caption__close:hover { background: #c42b1c; color: #fff; }
+
+.rk-body { flex: 1; min-height: 0; display: flex; }
+.rk-side[hidden] { display: none; }
+.rk-side { background: var(--rk-chrome); width: var(--rk-sidebar-width); flex: none; display: flex; flex-direction: column; min-height: 0; }
+.rk-plane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--rk-plane); border-top-left-radius: 20px; overflow: hidden; }
+
+.rk-search { margin: 8px 10px 6px; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 7px; background: var(--rk-fill-2); color: var(--rk-ink-3); font-size: 13px; flex: none; }
+.rk-search:focus-within { background: var(--rk-elevated); box-shadow: 0 0 0 2px var(--rk-focus); }
+.rk-search svg { width: 14px; height: 14px; flex: none; }
+.rk-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--rk-ink); font: inherit; }
+.rk-search .rightkit-kbd-chord { display: inline-flex; gap: var(--rightkit-kbd-gap, 2px); margin-left: auto; }
+.rk-search .rightkit-kbd-key { font: 11px -apple-system, system-ui, sans-serif; color: var(--rk-ink-3); }
+
+.rk-nav { overflow-y: auto; overflow-x: hidden; padding: 0 0 14px; flex: 1; scrollbar-width: thin; }
+.rk-group { margin-top: 14px; }
+.rk-group h6 { margin: 0 8px 3px; padding: 0 10px; font-size: 11px; font-weight: 600; color: var(--rk-ink-3); }
+
+/* The active row extends to the plane edge and joins it with concave 12px
+   radial-mask corners — never a detached pill. */
+.rk-item { position: relative; display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); height: 30px; margin: 0 8px; padding: 0 8px 0 10px; border: 0; background: none; border-radius: 8px; color: var(--rk-ink); text-align: left; font-size: 13px; transition: background-color .12s; }
+.rk-item:hover { background: var(--rk-fill); }
+.rk-item:focus-visible { outline: 2px solid var(--rk-focus); outline-offset: -2px; }
+.rk-item > svg:not(.rk-fuse) { width: 16px; height: 16px; flex: none; color: var(--rk-accent); }
+.rk-item__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rk-item__badge { margin-left: auto; font-size: 11px; color: var(--rk-ink-3); display: inline-flex; align-items: center; }
+.rk-item.is-active { z-index: 1; width: calc(100% - 8px); margin-right: 0; border-radius: 12px 0 0 12px; background: var(--rk-plane); }
+/* FuseCurves work in any position:relative row, not only .rk-item; --rk-fuse-fill sets the joined surface. */
+.rk-fuse { position: absolute; right: 0; width: 12px; height: 12px; fill: var(--rk-fuse-fill, var(--rk-plane)); color: initial; pointer-events: none; }
+.rk-fuse--top { top: -12px; }
+.rk-fuse--bottom { bottom: -12px; transform: scaleY(-1); }
+
+.rk-side__foot { display: flex; flex-direction: column; flex: none; }
+.rk-status { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: var(--rk-ink-2); padding: 10px 18px; }
+.rk-status__row { display: flex; justify-content: space-between; }
+.rk-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--rk-ink-3); }
+.rk-dot--ok { background: var(--rk-ok-dot); }
+.rk-dot--warn { background: var(--rk-warn-dot); }
+.rk-dot--bad { background: var(--rk-bad); }
+
+/* Bottom-left wordmark with settings and appearance beside it. */
+.rk-brand-foot { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 10px 0 16px; border-top: .5px solid var(--rk-hairline); }
+.rk-wordmark { margin-right: auto; font: 400 20px/1 var(--rk-wordmark-font, inherit); color: var(--rk-ink); white-space: nowrap; user-select: none; }
+.rk-wordmark em, .rk-wordmark span { font-style: normal; color: var(--rk-accent); }
+.rk-icon-btn { width: 28px; height: 28px; flex: none; border-radius: 7px; display: grid; place-items: center; color: var(--rk-ink-2); border: 0; background: none; transition: background-color .12s, color .12s; }
+.rk-icon-btn:hover, .rk-icon-btn.is-open { background: var(--rk-fill-2); color: var(--rk-ink); }
+.rk-icon-btn svg { width: 16px; height: 16px; }
+/* ---- Layout additions ------------------------------------------------------------------- */
+.rk-shell { position: relative; overflow: hidden; }
+.rk-top__toggle { margin-left: -4px; }
+.rk-shell.is-collapsed .rk-top__side { width: auto; padding-right: 6px; }
+.rk-shell.no-sidebar .rk-plane { border-top-left-radius: 0; }
+.rk-search--trigger { width: calc(100% - 20px); border: 0; text-align: left; cursor: default; }
+.rk-search--trigger:hover { background: var(--rk-fill-3); }
+.rk-search--trigger:focus-visible { outline: 2px solid var(--rk-focus); outline-offset: 0; }
+.rk-search__text { flex: 1; min-width: 0; }
+/* ---- hub/src/styles.css (shipped) ---- */
+.view { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; flex: 1; min-height: 0; }
+/* The fused-tab cut. The plane's top-left corner is rounded 20px, and the active row's top fuse
+   curve reaches 12px above the row, so the curve meets the plane edge (row top - 12px) below the
+   plane top. Nothing sits above the nav, so the first row's top is nav padding + the first group's
+   14px margin. The curve clears the rounded corner only when that is >= 20 + 12 = 32px; with 22px
+   padding the first row starts at 36px (fuse at 24px, 4px clear for antialiasing). Every other row sits
+   lower still, so no active row can reach the corner. */
+.rk-nav { padding-top: 22px; }
+.rk-top__title { font-family: var(--rk-wordmark); font-weight: 400; font-size: 18px; letter-spacing: 0.01em; }
+.wordmark { font-family: var(--rk-wordmark); font-weight: 400; font-size: 20px; letter-spacing: 0.01em; }
+/* Overview: one status line, then a 2 x 3 grid of equal cards. At the default 900 x 600 window
+   (plane 730 x 548) it fits without scrolling, with or without the permissions banner; it scrolls only
+   in windows smaller than that. Rows share the spare height by weight and never shrink below their content. */
+.view.ov { overflow: auto; flex-wrap: nowrap; gap: 10px; padding: 12px 18px 14px; scroll-padding: 10px; }
+.ov > * { flex: none; }
+.ov > .ov-grid { flex: 1 0 auto; }
+.ov button:focus-visible { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 3px; }
+
+.ov-attention { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--rk-warn-soft); color: var(--rk-warn); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
+.ov-attention:hover { filter: brightness(1.08); }
+
+.ov-hero { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 12px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); }
+.ov-hero-mark { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; }
+.ov-hero-mark.ok { background: var(--rk-ok-soft, var(--rk-plane)); color: var(--rk-ok); }
+.ov-hero-mark.warn { background: var(--rk-warn-soft, var(--rk-plane)); color: var(--rk-warn); }
+.ov-hero-mark.bad { background: var(--rk-bad-soft, var(--rk-plane)); color: var(--rk-bad); }
+.ov-hero-copy { flex: 1; min-width: 0; }
+.ov-hero-title { margin: 0; font-size: 15px; line-height: 1.25; font-weight: 650; color: var(--rk-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-hero-reason { margin: 1px 0 0; font-size: 12px; line-height: 1.35; color: var(--rk-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-hero-actions { flex: none; display: flex; gap: 6px; }
+.ov-action { min-height: 28px; padding: 3px 12px; border: 1px solid var(--rk-hairline); border-radius: 7px; background: var(--rk-fill-2); color: var(--rk-ink); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.ov-action:hover { filter: brightness(1.08); }
+.ov-action.primary { background: var(--rk-accent); border-color: var(--rk-accent); color: var(--rk-accent-ink, #fff); }
+
+.ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(min-content, 1.15fr) minmax(min-content, 1.1fr) minmax(min-content, 0.85fr); gap: 10px; min-width: 0; }
+.ov-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px 14px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); color: var(--rk-ink); }
+.ov-card-head { display: flex; align-items: center; gap: 7px; flex: none; width: 100%; height: 18px; padding: 0; border: 0; background: none; color: var(--rk-ink); font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer; }
+.ov-card-head:hover { filter: none; }
+.ov-card-head:hover .ov-card-go { color: var(--rk-ink); }
+.ov-card-title { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.ov-card-title svg { flex: none; color: var(--rk-accent); }
+.ov-card-go { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; font-size: 12px; font-weight: 400; color: var(--rk-ink-2); white-space: nowrap; }
+/* The body takes the card's spare height and centres its content, so cards in a row look alike. */
+.ov-body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 8px; min-width: 0; }
+
+/* Two equal columns inside a card (Performance, Network). */
+.ov-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; min-width: 0; }
+.ov-meter { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.ov-meter-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.ov-label { min-width: 0; font-size: 12px; color: var(--rk-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-label--icon { display: inline-flex; align-items: center; gap: 4px; }
+.ov-value { flex: none; display: inline-flex; align-items: center; gap: 2px; font-size: 18px; font-weight: 650; line-height: 1.2; color: var(--rk-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-value small { font-size: 12px; font-weight: 400; color: var(--rk-ink-2); }
+.ov-value > .ov-level { margin-right: 5px; }
+.ov-trend { height: 22px; min-width: 0; }
+.ov-trend--tall { height: 32px; }
+.ov-trend .chart-spark { height: 100% !important; }
+.ov-note { display: block; min-height: 16px; font-size: 11.5px; line-height: 16px; color: var(--rk-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-note.warn { color: var(--rk-warn); }
+.ov-note.bad { color: var(--rk-bad); }
+.ov-strong { font-weight: 650; color: var(--rk-ink); font-variant-numeric: tabular-nums; }
+
+.ov-bar { display: block; height: 6px; border-radius: 3px; background: var(--rk-plane); overflow: hidden; }
+.ov-bar i { display: block; height: 100%; border-radius: 3px; }
+.ov-bar i.ok { background: var(--rk-ok); }
+.ov-bar i.warn { background: var(--rk-warn); }
+.ov-bar i.bad { background: var(--rk-bad); }
+.ov-level { display: inline-flex; align-items: center; gap: 5px; font-weight: 400; }
+.ov-level.ok { color: var(--rk-ok); }
+.ov-level.warn { color: var(--rk-warn); }
+.ov-level.bad { color: var(--rk-bad); }
+.ov-level b { color: var(--rk-ink); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Label, bar, value on one line (AI usage, Storage); a drive adds its note under the bar. */
+.ov-lines { display: grid; gap: 8px; min-width: 0; }
+.ov-line { display: grid; grid-template-columns: minmax(0, 9.5em) minmax(0, 1fr) 4.2em; align-items: center; column-gap: 12px; min-width: 0; }
+.ov-lines--drives .ov-line { grid-template-columns: minmax(0, 9.5em) minmax(0, 1fr) 6.2em; row-gap: 2px; }
+.ov-line-label { min-width: 0; font-size: 12px; color: var(--rk-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-line-value { display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; font-size: 15px; font-weight: 650; line-height: 1.3; color: var(--rk-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-line-value small { font-size: 12px; font-weight: 400; color: var(--rk-ink-2); }
+.ov-line-value > .ov-level { margin-right: 4px; }
+.ov-line-note { grid-column: 2 / -1; font-size: 12px; line-height: 16px; color: var(--rk-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-lines--drives .ov-line-label { font-size: 13px; }
+
+/* Cleanup and Apps: the number, what it means, then one footer line. */
+.ov-hl { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 30px; min-width: 0; }
+.ov-hl .ov-sub { text-align: right; }
+.ov-big { font-size: 24px; line-height: 1.2; font-weight: 650; color: var(--rk-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; min-width: 0; }
+.ov-sub { font-size: 12px; color: var(--rk-ink-2); overflow-wrap: anywhere; }
+.ov-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 0; border-radius: 6px; background: var(--rk-plane); color: var(--rk-ink); font: inherit; font-size: 12px; cursor: pointer; }
+.ov-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--rk-accent); }
+
+/* Below the default window size the page may scroll; tighten it first so it rarely needs to. */
+@media (max-width: 860px) {
+  .view.ov { gap: 8px; padding: 10px 12px; }
+  .ov-grid { gap: 8px; }
+  .ov-card { padding: 10px 12px; gap: 6px; }
+  .ov-body { gap: 6px; }
+  .ov-cols { gap: 0 14px; }
+  .ov-meter { gap: 3px; }
+  .ov-trend { height: 18px; }
+  .ov-trend--tall { height: 26px; }
+  .ov-lines { gap: 6px; }
+  .ov-big { font-size: 21px; }
+  .ov-value { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov *, .ov *::before, .ov *::after { animation: none !important; transition: none !important; }
+}
+
+/* ---- hub/src/views/monitor.css (spark rules) ---- */
+.chart-spark { display: block; width: 100%; overflow: visible; }
+.chart-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.chart-dashed { stroke-dasharray: 4 3; }
+.chart-fill { fill: currentColor; fill-opacity: 0.14; stroke: none; }
+/* ---- mockup only: the 860px media block under .win.is-min, so the 820 x 520 toggle works at any browser width ---- */
+.ov-attention[hidden]{display:none}
+  .win.is-min .view.ov { gap: 8px; padding: 10px 12px; }
+  .win.is-min .ov-grid { gap: 8px; }
+  .win.is-min .ov-card { padding: 10px 12px; gap: 6px; }
+  .win.is-min .ov-body { gap: 6px; }
+  .win.is-min .ov-cols { gap: 0 14px; }
+  .win.is-min .ov-meter { gap: 3px; }
+  .win.is-min .ov-trend { height: 18px; }
+  .win.is-min .ov-trend--tall { height: 26px; }
+  .win.is-min .ov-lines { gap: 6px; }
+  .win.is-min .ov-big { font-size: 21px; }
+  .win.is-min .ov-value { font-size: 16px; }
+</style></head><body>
+<div class="tools"><b>Pulse · Overview v3</b>
+<label>Theme <select id="theme"><option>dark</option><option>light</option></select></label>
+<label>Window <select id="size"><option value="">900 × 600 (default)</option><option value="min">820 × 520 (minimum)</option></select></label>
+<label><input type="checkbox" id="ban"> permissions banner</label>
+<span id="fit" role="status"></span></div>
+<div class="win" id="win"><div class="rk-shell rk-shell--fused">
+<header class="rk-top"><div class="rk-top__side"><span class="rk-top__lights" aria-hidden="true"><span class="lights"><i></i><i></i><i></i></span></span></div><div class="rk-top__title">Overview</div><div class="rk-top__drag"></div></header>
+<div class="rk-body"><aside class="rk-side" aria-label="Sections"><nav class="rk-nav" aria-label="Sections"><div class="rk-group"><button type="button" class="rk-item is-active" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg><span class="rk-item__label">Overview</span><svg class="rk-fuse rk-fuse--top" data-rk-fuse="top" aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 12 12" style="position:absolute;right:0;top:-12px;width:12px;height:12px;pointer-events:none;"><path d="M12 0V12H0A12 12 0 0 0 12 0Z"/></svg><svg class="rk-fuse rk-fuse--bottom" data-rk-fuse="bottom" aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 12 12" style="position:absolute;right:0;bottom:-12px;width:12px;height:12px;pointer-events:none;transform:scaleY(-1)"><path d="M12 0V12H0A12 12 0 0 0 12 0Z"/></svg></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg><span class="rk-item__label">Storage</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg><span class="rk-item__label">Cleanup</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span class="rk-item__label">Monitor</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span class="rk-item__label">Apps</span></button></div><div class="rk-group"><h6>Settings</h6><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg><span class="rk-item__label">Permissions</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg><span class="rk-item__label">Accounts</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></svg><span class="rk-item__label">Appearance</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg><span class="rk-item__label">Notifications</span></button><button type="button" class="rk-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 17H5"/><path d="M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg><span class="rk-item__label">General</span></button></div></nav>
+<div class="rk-side__foot"><footer class="rk-brand-foot"><span class="rk-wordmark"><span class="wordmark">Pulse</span></span><button class="rk-icon-btn" aria-label="Appearance"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg></button></footer></div></aside>
+<section class="rk-plane" data-rk-plane><div class="view ov"><button type="button" class="ov-attention" id="banner" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg><span>2 permissions need approval</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button><section class="ov-hero" role="status"><span class="ov-hero-mark ok"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg></span><div class="ov-hero-copy"><h2 class="ov-hero-title">Your Mac is running well</h2><p class="ov-hero-reason" title="CPU at 67% and 17.5 GB of 25.8 GB memory in use (68%): both comfortable. Storage is fine. 52.8 GB can be cleared · 3 app updates available.">CPU at 67% and 17.5 GB of 25.8 GB memory in use (68%): both comfortable. Storage is fine. 52.8 GB can be cleared · 3 app updates available.</p></div><div class="ov-hero-actions"><button type="button" class="ov-action primary">Review 52.8 GB to clear</button><button type="button" class="ov-action">Update apps</button></div></section><div class="ov-grid"><section class="ov-card" aria-label="Performance"><button type="button" class="ov-card-head" aria-label="Performance, open Monitor"><span class="ov-card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>Performance</span><span class="ov-card-go">Monitor<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span></button><div class="ov-body"><div class="ov-cols"><div class="ov-meter"><div class="ov-meter-row"><span class="ov-label">CPU</span><span class="ov-value"><span class="ov-level ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span></span>67<small>%</small></span></div><span class="ov-bar" role="progressbar" aria-label="CPU" aria-valuemin="0" aria-valuemax="100" aria-valuenow="67"><i class="ok" style="width:67.0%"></i></span><div class="ov-trend"><svg class="chart-spark" role="img" aria-label="CPU: now 67%, over the last 10 minutes from 51% to 79%" viewBox="0 0 200 22" preserveAspectRatio="none" style="height:22px"><g style="color:var(--rk-ok)"><path class="chart-fill" d="M0.0 7.9L3.4 8.4L6.8 8.7L10.2 9.1L13.6 8.9L16.9 8.9L20.3 9.6L23.7 9.6L27.1 9.2L30.5 8.6L33.9 8.6L37.3 8.5L40.7 8.6L44.1 8.5L47.5 8.3L50.8 9.1L54.2 9.4L57.6 9.6L61.0 9.9L64.4 10.3L67.8 10.8L71.2 10.0L74.6 10.0L78.0 10.0L81.4 10.7L84.7 11.4L88.1 11.1L91.5 10.6L94.9 10.9L98.3 11.8L101.7 11.3L105.1 12.1L108.5 12.0L111.9 11.5L115.3 11.0L118.6 10.8L122.0 11.4L125.4 11.8L128.8 12.2L132.2 12.8L135.6 12.2L139.0 11.8L142.4 10.9L145.8 10.5L149.2 9.9L152.5 10.0L155.9 9.2L159.3 10.0L162.7 10.5L166.1 9.8L169.5 10.6L172.9 10.9L176.3 11.3L179.7 12.1L183.1 11.8L186.4 12.6L189.8 11.9L193.2 11.5L196.6 11.9L200.0 7.8L200.0 22L0.0 22Z"/><path class="chart-line" d="M0.0 7.9L3.4 8.4L6.8 8.7L10.2 9.1L13.6 8.9L16.9 8.9L20.3 9.6L23.7 9.6L27.1 9.2L30.5 8.6L33.9 8.6L37.3 8.5L40.7 8.6L44.1 8.5L47.5 8.3L50.8 9.1L54.2 9.4L57.6 9.6L61.0 9.9L64.4 10.3L67.8 10.8L71.2 10.0L74.6 10.0L78.0 10.0L81.4 10.7L84.7 11.4L88.1 11.1L91.5 10.6L94.9 10.9L98.3 11.8L101.7 11.3L105.1 12.1L108.5 12.0L111.9 11.5L115.3 11.0L118.6 10.8L122.0 11.4L125.4 11.8L128.8 12.2L132.2 12.8L135.6 12.2L139.0 11.8L142.4 10.9L145.8 10.5L149.2 9.9L152.5 10.0L155.9 9.2L159.3 10.0L162.7 10.5L166.1 9.8L169.5 10.6L172.9 10.9L176.3 11.3L179.7 12.1L183.1 11.8L186.4 12.6L189.8 11.9L193.2 11.5L196.6 11.9L200.0 7.8"/></g></svg></div><span class="ov-note" title="Fine">Fine</span></div><div class="ov-meter"><div class="ov-meter-row"><span class="ov-label">Memory</span><span class="ov-value"><span class="ov-level ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span></span>17.5<small>GB</small></span></div><span class="ov-bar" role="progressbar" aria-label="Memory" aria-valuemin="0" aria-valuemax="100" aria-valuenow="68"><i class="ok" style="width:67.80000000000001%"></i></span><div class="ov-trend"><svg class="chart-spark" role="img" aria-label="Memory: now 68%, over the last 10 minutes" viewBox="0 0 200 22" preserveAspectRatio="none" style="height:22px"><g style="color:var(--rk-ok)"><path class="chart-fill" d="M0.0 7.7L3.4 7.7L6.8 7.7L10.2 7.7L13.6 7.6L16.9 7.7L20.3 7.6L23.7 7.5L27.1 7.5L30.5 7.6L33.9 7.6L37.3 7.5L40.7 7.4L44.1 7.4L47.5 7.5L50.8 7.6L54.2 7.6L57.6 7.6L61.0 7.5L64.4 7.6L67.8 7.7L71.2 7.7L74.6 7.8L78.0 7.7L81.4 7.7L84.7 7.7L88.1 7.6L91.5 7.6L94.9 7.5L98.3 7.5L101.7 7.5L105.1 7.5L108.5 7.5L111.9 7.6L115.3 7.5L118.6 7.4L122.0 7.4L125.4 7.5L128.8 7.5L132.2 7.4L135.6 7.4L139.0 7.4L142.4 7.5L145.8 7.4L149.2 7.5L152.5 7.5L155.9 7.6L159.3 7.6L162.7 7.7L166.1 7.8L169.5 7.8L172.9 7.8L176.3 7.8L179.7 7.8L183.1 7.8L186.4 7.7L189.8 7.7L193.2 7.7L196.6 7.8L200.0 7.6L200.0 22L0.0 22Z"/><path class="chart-line" d="M0.0 7.7L3.4 7.7L6.8 7.7L10.2 7.7L13.6 7.6L16.9 7.7L20.3 7.6L23.7 7.5L27.1 7.5L30.5 7.6L33.9 7.6L37.3 7.5L40.7 7.4L44.1 7.4L47.5 7.5L50.8 7.6L54.2 7.6L57.6 7.6L61.0 7.5L64.4 7.6L67.8 7.7L71.2 7.7L74.6 7.8L78.0 7.7L81.4 7.7L84.7 7.7L88.1 7.6L91.5 7.6L94.9 7.5L98.3 7.5L101.7 7.5L105.1 7.5L108.5 7.5L111.9 7.6L115.3 7.5L118.6 7.4L122.0 7.4L125.4 7.5L128.8 7.5L132.2 7.4L135.6 7.4L139.0 7.4L142.4 7.5L145.8 7.4L149.2 7.5L152.5 7.5L155.9 7.6L159.3 7.6L162.7 7.7L166.1 7.8L169.5 7.8L172.9 7.8L176.3 7.8L179.7 7.8L183.1 7.8L186.4 7.7L189.8 7.7L193.2 7.7L196.6 7.8L200.0 7.6"/></g></svg></div><span class="ov-note" title="of 25.8 GB · 68% · normal">of 25.8 GB · 68% · normal</span></div></div></div></section><section class="ov-card" aria-label="Network &amp; swap"><button type="button" class="ov-card-head" aria-label="Network &amp; swap, open Monitor"><span class="ov-card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>Network &amp; swap</span><span class="ov-card-go">Monitor<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span></button><div class="ov-body"><div class="ov-cols"><div class="ov-meter"><div class="ov-meter-row"><span class="ov-label ov-label--icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>Down</span><span class="ov-value">13<small>KB/s</small></span></div><div class="ov-trend ov-trend--tall"><svg class="chart-spark" role="img" aria-label="Network down: now 13 KB/s" viewBox="0 0 200 32" preserveAspectRatio="none" style="height:32px"><g style="color:var(--rk-accent)"><path class="chart-fill" d="M0.0 9.1L3.4 12.2L6.8 16.2L10.2 25.9L13.6 29.6L16.9 23.8L20.3 15.2L23.7 16.1L27.1 9.8L30.5 1.8L33.9 10.1L37.3 22.4L40.7 27.0L44.1 30.5L47.5 30.5L50.8 17.6L54.2 16.5L57.6 26.8L61.0 19.1L64.4 27.1L67.8 19.3L71.2 27.9L74.6 19.0L78.0 24.2L81.4 30.5L84.7 22.7L88.1 28.9L91.5 30.5L94.9 30.5L98.3 19.8L101.7 30.5L105.1 24.1L108.5 30.5L111.9 30.5L115.3 20.4L118.6 11.7L122.0 21.3L125.4 9.9L128.8 13.1L132.2 9.6L135.6 11.9L139.0 23.7L142.4 30.5L145.8 30.5L149.2 30.5L152.5 30.5L155.9 21.2L159.3 23.2L162.7 30.5L166.1 30.5L169.5 30.5L172.9 30.5L176.3 30.5L179.7 30.5L183.1 30.2L186.4 24.1L189.8 27.1L193.2 16.3L196.6 8.3L200.0 26.7L200.0 32L0.0 32Z"/><path class="chart-line" d="M0.0 9.1L3.4 12.2L6.8 16.2L10.2 25.9L13.6 29.6L16.9 23.8L20.3 15.2L23.7 16.1L27.1 9.8L30.5 1.8L33.9 10.1L37.3 22.4L40.7 27.0L44.1 30.5L47.5 30.5L50.8 17.6L54.2 16.5L57.6 26.8L61.0 19.1L64.4 27.1L67.8 19.3L71.2 27.9L74.6 19.0L78.0 24.2L81.4 30.5L84.7 22.7L88.1 28.9L91.5 30.5L94.9 30.5L98.3 19.8L101.7 30.5L105.1 24.1L108.5 30.5L111.9 30.5L115.3 20.4L118.6 11.7L122.0 21.3L125.4 9.9L128.8 13.1L132.2 9.6L135.6 11.9L139.0 23.7L142.4 30.5L145.8 30.5L149.2 30.5L152.5 30.5L155.9 21.2L159.3 23.2L162.7 30.5L166.1 30.5L169.5 30.5L172.9 30.5L176.3 30.5L179.7 30.5L183.1 30.2L186.4 24.1L189.8 27.1L193.2 16.3L196.6 8.3L200.0 26.7"/></g></svg></div></div><div class="ov-meter"><div class="ov-meter-row"><span class="ov-label ov-label--icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>Up</span><span class="ov-value">186<small>KB/s</small></span></div><div class="ov-trend ov-trend--tall"><svg class="chart-spark" role="img" aria-label="Network up: now 186 KB/s" viewBox="0 0 200 32" preserveAspectRatio="none" style="height:32px"><g style="color:var(--rk-ink-2)"><path class="chart-fill" d="M0.0 26.8L3.4 27.6L6.8 28.2L10.2 26.6L13.6 27.2L16.9 26.2L20.3 26.0L23.7 25.3L27.1 23.6L30.5 23.2L33.9 21.7L37.3 21.2L40.7 20.6L44.1 20.0L47.5 20.6L50.8 20.5L54.2 19.2L57.6 20.8L61.0 19.2L64.4 18.3L67.8 17.9L71.2 17.0L74.6 17.7L78.0 17.0L81.4 15.9L84.7 16.7L88.1 15.6L91.5 16.7L94.9 18.2L98.3 19.1L101.7 18.8L105.1 19.7L108.5 20.9L111.9 19.2L115.3 18.1L118.6 17.5L122.0 16.2L125.4 17.2L128.8 18.0L132.2 17.9L135.6 18.9L139.0 20.3L142.4 22.0L145.8 22.7L149.2 22.7L152.5 21.0L155.9 22.1L159.3 21.7L162.7 21.0L166.1 19.3L169.5 20.5L172.9 20.3L176.3 21.1L179.7 21.8L183.1 23.0L186.4 23.2L189.8 22.2L193.2 22.1L196.6 23.4L200.0 25.1L200.0 32L0.0 32Z"/><path class="chart-line" d="M0.0 26.8L3.4 27.6L6.8 28.2L10.2 26.6L13.6 27.2L16.9 26.2L20.3 26.0L23.7 25.3L27.1 23.6L30.5 23.2L33.9 21.7L37.3 21.2L40.7 20.6L44.1 20.0L47.5 20.6L50.8 20.5L54.2 19.2L57.6 20.8L61.0 19.2L64.4 18.3L67.8 17.9L71.2 17.0L74.6 17.7L78.0 17.0L81.4 15.9L84.7 16.7L88.1 15.6L91.5 16.7L94.9 18.2L98.3 19.1L101.7 18.8L105.1 19.7L108.5 20.9L111.9 19.2L115.3 18.1L118.6 17.5L122.0 16.2L125.4 17.2L128.8 18.0L132.2 17.9L135.6 18.9L139.0 20.3L142.4 22.0L145.8 22.7L149.2 22.7L152.5 21.0L155.9 22.1L159.3 21.7L162.7 21.0L166.1 19.3L169.5 20.5L172.9 20.3L176.3 21.1L179.7 21.8L183.1 23.0L186.4 23.2L189.8 22.2L193.2 22.1L196.6 23.4L200.0 25.1"/></g></svg></div></div></div><div class="ov-foot"><span class="ov-note">Swap <b class="ov-strong">5.0 GB</b> in use</span><span class="ov-note">Wi-Fi</span></div></div></section><section class="ov-card" aria-label="AI usage"><button type="button" class="ov-card-head" aria-label="AI usage, open Accounts"><span class="ov-card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg>AI usage</span><span class="ov-card-go">Accounts<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span></button><div class="ov-body"><div class="ov-lines"><div class="ov-line"><span class="ov-line-label" title="Codex · Weekly">Codex · Weekly</span><span class="ov-bar" role="progressbar" aria-label="Codex · Weekly" aria-valuemin="0" aria-valuemax="100" aria-valuenow="23"><i class="ok" style="width:23.0%"></i></span><span class="ov-line-value"><span class="ov-level ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span></span>23<small>%</small></span></div><div class="ov-line"><span class="ov-line-label" title="Claude · 5-hour">Claude · 5-hour</span><span class="ov-bar" role="progressbar" aria-label="Claude · 5-hour" aria-valuemin="0" aria-valuemax="100" aria-valuenow="12"><i class="ok" style="width:12.0%"></i></span><span class="ov-line-value"><span class="ov-level ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span></span>12<small>%</small></span></div><div class="ov-line"><span class="ov-line-label" title="Claude · Weekly">Claude · Weekly</span><span class="ov-bar" role="progressbar" aria-label="Claude · Weekly" aria-valuemin="0" aria-valuemax="100" aria-valuenow="11"><i class="ok" style="width:11.0%"></i></span><span class="ov-line-value"><span class="ov-level ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span></span>11<small>%</small></span></div></div></div></section><section class="ov-card" aria-label="Storage"><button type="button" class="ov-card-head" aria-label="Storage, open Storage"><span class="ov-card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg>Storage</span><span class="ov-card-go">Storage<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span></button><div class="ov-body"><div class="ov-lines ov-lines--drives"><div class="ov-line"><span class="ov-level ov-line-label ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span><b title="Macintosh HD">Macintosh HD</b></span><span class="ov-bar" role="progressbar" aria-label="Macintosh HD used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="62"><i class="ok" style="width:62.0%"></i></span><span class="ov-line-value">188 GB <small>free</small></span><span class="ov-line-note">of 494 GB · 62% used</span></div><div class="ov-line"><span class="ov-level ov-line-label ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="ov-vh">Fine</span><b title="D">D</b></span><span class="ov-bar" role="progressbar" aria-label="D used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="40"><i class="ok" style="width:40.0%"></i></span><span class="ov-line-value">1.2 TB <small>free</small></span><span class="ov-line-note">of 2.0 TB · 40% used</span></div></div></div></section><section class="ov-card" aria-label="Cleanup"><button type="button" class="ov-card-head" aria-label="Cleanup, open Review"><span class="ov-card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>Cleanup</span><span class="ov-card-go">Review<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span></button><div class="ov-body"><div class="ov-hl"><span class="ov-big">52.8 GB</span><span class="ov-sub">can be cleared</span></div><div class="ov-foot"><span class="ov-sub">Last scan 3 h ago</span></div></div></section><section class="ov-card" aria-label="Apps"><button type="button" class="ov-card-head" aria-label="Apps, open Apps"><span class="ov-card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>Apps</span><span class="ov-card-go">Apps<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span></button><div class="ov-body"><div class="ov-hl"><span class="ov-big">38 apps</span><span class="ov-sub">39.2 GB installed</span></div><div class="ov-foot"><button type="button" class="ov-pill"><i aria-hidden="true"></i>3 updates available</button></div></div></section></div></div></section></div></div></div>
+<script>
+const $=s=>document.querySelector(s);
+function fit(){const o=$('.ov'),d=o.scrollHeight-o.clientHeight,w=$('#win');
+ const nav=$('.rk-nav'),first=nav.querySelector('.rk-item'),r=first.getBoundingClientRect(),p=$('.rk-plane').getBoundingClientRect();
+ $('#fit').textContent=(d<=0?'No scroll':'Scrolls by '+d+' px')+' · view '+o.clientWidth+'×'+o.clientHeight+' · first row top '+Math.round(r.top-p.top)+' px below plane, fuse top '+Math.round(r.top-p.top-12)+' px (need ≥ 20)';}
+$('#theme').onchange=e=>{document.documentElement.dataset.theme=e.target.value;fit()};
+$('#size').onchange=e=>{$('#win').classList.toggle('is-min',!!e.target.value);fit()};
+$('#ban').onchange=e=>{$('#banner').hidden=!e.target.checked;fit()};
+document.fonts.ready.then(fit);fit();
+</script></body></html>

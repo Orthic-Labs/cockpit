@@ -138,7 +138,7 @@ struct SendCardBody: View {
             .background(Circle().fill(Palette.textPrimary.opacity(0.14)))
             .contentShape(Circle())
         }
-        .buttonStyle(SendCardButtonStyle())
+        .buttonStyle(CardButtonStyle())
         .disabled(send.scanning)
         .help(L10n.t("Look again"))
     }
@@ -152,7 +152,7 @@ struct SendCardBody: View {
                 .background(Circle().fill(Palette.textPrimary.opacity(0.14)))
                 .contentShape(Circle())
         }
-        .buttonStyle(SendCardButtonStyle())
+        .buttonStyle(CardButtonStyle())
         .help(L10n.t("Cancel"))
     }
 
@@ -209,7 +209,7 @@ struct SendCardBody: View {
                             .background(Capsule().fill(Palette.textPrimary.opacity(0.14)))
                             .contentShape(Capsule())
                         }
-                        .buttonStyle(SendCardButtonStyle())
+                        .buttonStyle(CardButtonStyle())
                     }
                     closeButton
                 }
@@ -258,16 +258,7 @@ private struct SendDeviceRow: View {
                 .fill(Palette.textPrimary.opacity(hovering ? 0.20 : 0.10)))
             .contentShape(RoundedRectangle(cornerRadius: Design.px(32), style: .circular))
         }
-        .buttonStyle(SendCardButtonStyle())
+        .buttonStyle(CardButtonStyle())
         .onHover { hovering = $0 }
-    }
-}
-
-private struct SendCardButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

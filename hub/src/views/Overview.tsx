@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowDown,
+  ArrowDownUp,
   ArrowUp,
   ChevronRight,
   CircleCheck,
@@ -192,7 +193,7 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
 
       <section className="ov-hero" role="status">
         <span className={`ov-hero-mark ${headline.level}`}>
-          <HeroIcon size={24} strokeWidth={1.75} aria-hidden="true" />
+          <HeroIcon size={20} strokeWidth={1.75} aria-hidden="true" />
         </span>
         <div className="ov-hero-copy">
           <h2 className="ov-hero-title">{headline.title}</h2>
@@ -207,15 +208,21 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
         </div>
       </section>
 
-      <div className="ov-row ov-row--2">
+      <div className="ov-grid">
         <OvCard icon={<Gauge size={16} strokeWidth={1.75} />} title="Performance" go="Monitor" onOpen={() => onNavigate("monitor")}>
-          <div className="ov-meters ov-meters--two">
-            <Meter label="CPU" value={cpu == null ? "—" : `${Math.round(cpu)}`} unit="%" fraction={(cpu ?? 0) / 100} measured={cpu != null}
+          <div className="ov-cols">
+            <Meter
+              label="CPU"
+              value={cpu == null ? "—" : `${Math.round(cpu)}`}
+              unit="%"
+              fraction={(cpu ?? 0) / 100}
+              measured={cpu != null}
               spark={
                 recent.length > 1 && (
                   <Sparkline
                     label="CPU"
                     max={100}
+                    height={SPARK}
                     series={[{ label: "CPU", color: levelColor(recent[recent.length - 1].cpu), values: recent.map((r) => r.cpu) }]}
                     format={(v) => `${Math.round(v)}%`}
                   />
@@ -224,7 +231,8 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
             />
             <Meter
               label="Memory"
-              value={memUsed == null ? "—" : bytes(memUsed)}
+              value={memUsed == null ? "—" : splitBytes(memUsed)[0]}
+              unit={memUsed == null ? undefined : splitBytes(memUsed)[1]}
               fraction={memFraction}
               measured={memUsed != null}
               level={memLevel}
@@ -234,124 +242,161 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
                   <Sparkline
                     label="Memory"
                     max={100}
+                    height={SPARK}
                     series={[{ label: "Memory", color: levelColor(memPercent(recent[recent.length - 1])), values: recent.map(memPercent) }]}
                     format={(v) => `${Math.round(v)}%`}
                   />
                 )
               }
             />
-            <div className="ov-stat">
-              <span className="ov-label">Swap</span>
-              <span className="ov-value">
+          </div>
+        </OvCard>
+
+        <OvCard icon={<ArrowDownUp size={16} strokeWidth={1.75} />} title="Network & swap" go="Monitor" onOpen={() => onNavigate("monitor")}>
+          {network ? (
+            <div className="ov-cols">
+              <Flow
+                label="Down"
+                icon={<ArrowDown size={13} aria-hidden="true" />}
+                value={network.down}
+                spark={
+                  recent.some((r) => r.netDown != null) && (
+                    <Sparkline
+                      label="Network down"
+                      minTop={100_000}
+                      height={SPARK_TALL}
+                      series={[{ label: "Down", color: "var(--rk-accent)", values: recent.map((r) => r.netDown) }]}
+                      format={(v) => `${bytes(v)}/s`}
+                    />
+                  )
+                }
+              />
+              <Flow
+                label="Up"
+                icon={<ArrowUp size={13} aria-hidden="true" />}
+                value={network.up}
+                spark={
+                  recent.some((r) => r.netUp != null) && (
+                    <Sparkline
+                      label="Network up"
+                      minTop={100_000}
+                      height={SPARK_TALL}
+                      series={[{ label: "Up", color: "var(--rk-ink-2)", values: recent.map((r) => r.netUp) }]}
+                      format={(v) => `${bytes(v)}/s`}
+                    />
+                  )
+                }
+              />
+            </div>
+          ) : (
+            <span className="ov-sub">Network not available</span>
+          )}
+          <div className="ov-foot">
+            <span className="ov-note">
+              Swap{" "}
+              <b className="ov-strong">
                 {swapTotal == null ? "—" : swapTotal === 0 ? "None" : bytes(swapUsed)}
-                {swapTotal != null && swapTotal > 0 && <small> in use</small>}
-              </span>
-            </div>
-            <div className="ov-stat">
-              <span className="ov-label">{network ? `Network · ${network.kind}` : "Network"}</span>
-              <span className="ov-value ov-net">
-                {network ? (
-                  <>
-                    <span>
-                      <ArrowDown size={14} aria-label="Down" /> {bytes(network.down)}
-                      <small>/s</small>
-                    </span>
-                    <span>
-                      <ArrowUp size={14} aria-label="Up" /> {bytes(network.up)}
-                      <small>/s</small>
-                    </span>
-                  </>
-                ) : (
-                  <small>Not available</small>
-                )}
-              </span>
-              {recent.some((r) => r.netDown != null) && (
-                <div className="overview-spark">
-                  <Sparkline
-                    label="Network"
-                    minTop={100_000}
-                    series={[
-                      { label: "Down", color: "var(--rk-accent)", values: recent.map((r) => r.netDown) },
-                      { label: "Up", color: "var(--rk-ink-2)", values: recent.map((r) => r.netUp), dashed: true },
-                    ]}
-                    format={(v) => `${bytes(v)}/s`}
-                  />
-                </div>
-              )}
-            </div>
+              </b>
+              {swapTotal != null && swapTotal > 0 && " in use"}
+            </span>
+            {network && <span className="ov-note">{network.kind}</span>}
           </div>
         </OvCard>
 
         <OvCard icon={<CircleUser size={16} strokeWidth={1.75} />} title="AI usage" go="Accounts" onOpen={() => onNavigate("accounts")}>
-          <div className="ov-meters">
-            {notchDown ? (
-              <span className="ov-sub">Notch not running</span>
-            ) : !notch.state ? (
-              <span className="ov-sub">Reading…</span>
-            ) : accounts.length === 0 ? (
-              <span className="ov-sub">No accounts shown</span>
-            ) : (
-              accounts.map((a) => <AccountUsage key={a.id} account={a} />)
-            )}
-          </div>
+          {notchDown ? (
+            <span className="ov-sub">Notch not running</span>
+          ) : !notch.state ? (
+            <span className="ov-sub">Reading…</span>
+          ) : accounts.length === 0 ? (
+            <span className="ov-sub">No accounts shown</span>
+          ) : (
+            <div className="ov-lines">
+              {accounts.map((a) => (
+                <AccountUsage key={a.id} account={a} />
+              ))}
+            </div>
+          )}
         </OvCard>
-      </div>
 
-      <div className="ov-row ov-row--3">
         <OvCard icon={<HardDrive size={16} strokeWidth={1.75} />} title="Storage" go="Storage" onOpen={() => onNavigate("storage")}>
           {volumes == null ? (
             <span className="ov-sub">Reading…</span>
           ) : drives.length === 0 ? (
             <span className="ov-sub">No drives found</span>
           ) : (
-            drives.map((v) => <Volume_ key={v.mount_point} volume={v} />)
+            <div className="ov-lines ov-lines--drives">
+              {drives.map((v) => (
+                <Volume_ key={v.mount_point} volume={v} />
+              ))}
+            </div>
           )}
         </OvCard>
 
         <OvCard icon={<Sparkles size={16} strokeWidth={1.75} />} title="Cleanup" go={cleanup == null ? "Scan" : "Review"} onOpen={() => onNavigate("cleanup")}>
           {cleanup === undefined ? (
-            <span className="ov-big">Reading…</span>
+            <div className="ov-hl">
+              <span className="ov-big">Reading…</span>
+            </div>
           ) : cleanup == null ? (
             <>
-              <span className="ov-big">Not scanned</span>
-              <span className="ov-sub">Look for what can go</span>
-              <button type="button" className="ov-action primary ov-cta" onClick={() => onNavigate("cleanup")}>
-                Scan for clutter
-              </button>
+              <div className="ov-hl">
+                <span className="ov-big">Not scanned</span>
+                <button type="button" className="ov-action primary" onClick={() => onNavigate("cleanup")}>
+                  Scan for clutter
+                </button>
+              </div>
+              <div className="ov-foot">
+                <span className="ov-sub">Look for what can go</span>
+              </div>
             </>
           ) : (
             <>
-              <span className="ov-big">{bytes(canGo)}</span>
-              <span className="ov-sub">can be cleared · last scan {ago(cleanup.scanned_at)}</span>
+              <div className="ov-hl">
+                <span className="ov-big">{bytes(canGo)}</span>
+                <span className="ov-sub">can be cleared</span>
+              </div>
+              <div className="ov-foot">
+                <span className="ov-sub">Last scan {ago(cleanup.scanned_at)}</span>
+              </div>
             </>
           )}
         </OvCard>
 
         <OvCard icon={<LayoutGrid size={16} strokeWidth={1.75} />} title="Apps" go="Apps" onOpen={() => onNavigate("apps")}>
           {apps === undefined ? (
-            <span className="ov-big">Reading…</span>
+            <div className="ov-hl">
+              <span className="ov-big">Reading…</span>
+            </div>
           ) : apps == null || apps.saved_at == null ? (
             <>
-              <span className="ov-big">Not listed</span>
-              <span className="ov-sub">Open Apps to list what is installed</span>
+              <div className="ov-hl">
+                <span className="ov-big">Not listed</span>
+              </div>
+              <div className="ov-foot">
+                <span className="ov-sub">Open Apps to list what is installed</span>
+              </div>
             </>
           ) : (
-            <>
+            <div className="ov-hl">
               <span className="ov-big">{installed.length} apps</span>
               <span className="ov-sub">{bytes(installedBytes)} installed</span>
-            </>
+            </div>
           )}
-          {updates !== undefined &&
-            (available > 0 ? (
-              <button type="button" className="ov-pill" onClick={() => onNavigate("apps")}>
-                <i aria-hidden="true" />
-                {available} update{available === 1 ? "" : "s"} available
-              </button>
-            ) : (
-              <span className="ov-sub">
-                {updates == null || updates.checked_at == null ? "Updates not checked yet" : "No updates found"}
-              </span>
-            ))}
+          {updates !== undefined && (
+            <div className="ov-foot">
+              {available > 0 ? (
+                <button type="button" className="ov-pill" onClick={() => onNavigate("apps")}>
+                  <i aria-hidden="true" />
+                  {available} update{available === 1 ? "" : "s"} available
+                </button>
+              ) : (
+                <span className="ov-sub">
+                  {updates == null || updates.checked_at == null ? "Updates not checked yet" : "No updates found"}
+                </span>
+              )}
+            </div>
+          )}
         </OvCard>
       </div>
     </div>
@@ -482,9 +527,23 @@ function AccountUsage({ account }: { account: Account }) {
   if (rows.length === 0) return <span className="ov-sub">{account.name} · no readings yet</span>;
   return (
     <>
-      {rows.map((r) => (
-        <Meter key={r.label} label={`${account.name} · ${r.label}`} value={`${Math.round(clamp(r.fraction) * 100)}`} unit="%" fraction={r.fraction} />
-      ))}
+      {rows.map((r) => {
+        const level = levelFor(clamp(r.fraction));
+        const name = `${account.name} · ${r.label}`;
+        return (
+          <div className="ov-line" key={r.label}>
+            <span className="ov-line-label" title={name}>{name}</span>
+            <Bar fraction={r.fraction} level={level} label={name} />
+            <span className="ov-line-value">
+              <span className={`ov-level ${level}`}>
+                <LevelMark level={level} size={14} />
+              </span>
+              {Math.round(clamp(r.fraction) * 100)}
+              <small>%</small>
+            </span>
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -493,18 +552,16 @@ function Volume_({ volume }: { volume: Volume }) {
   const used = usedOf(volume);
   const level = levelFor(used);
   return (
-    <div className="ov-vol">
-      <div className="ov-meter-row">
-        <span className={`ov-level ${level}`}>
-          <LevelMark level={level} size={14} />
-          <b>{volume.name}</b>
-        </span>
-        <span className="ov-value ov-value--sm">
-          {bytes(volume.available_bytes)} <small>free</small>
-        </span>
-      </div>
+    <div className="ov-line">
+      <span className={`ov-level ov-line-label ${level}`}>
+        <LevelMark level={level} size={14} />
+        <b title={volume.name}>{volume.name}</b>
+      </span>
       <Bar fraction={used} level={level} label={`${volume.name} used`} />
-      <span className="ov-note">
+      <span className="ov-line-value">
+        {bytes(volume.available_bytes)} <small>free</small>
+      </span>
+      <span className="ov-line-note">
         of {bytes(volume.total_bytes)} · {percent(used)} used{level === "ok" ? "" : ` · ${WORD[level]}`}
       </span>
     </div>
@@ -546,10 +603,21 @@ function OvCard({
           <ChevronRight size={14} aria-hidden="true" />
         </span>
       </button>
-      {children}
+      <div className="ov-body">{children}</div>
     </section>
   );
 }
+
+/** "17.5 GB" as ["17.5", "GB"], so the unit can be set small and the number keeps its room. */
+function splitBytes(n: number | null | undefined): [string, string] {
+  const s = bytes(n);
+  const i = s.indexOf(" ");
+  return i < 0 ? [s, ""] : [s.slice(0, i), s.slice(i + 1)];
+}
+
+/** Sparkline heights: under a bar (Meter) or on its own (Flow); both fill the same slot height. */
+const SPARK = 22;
+const SPARK_TALL = 32;
 
 function Meter({
   label,
@@ -572,6 +640,8 @@ function Meter({
   measured?: boolean;
 }) {
   const lv = level ?? levelFor(clamp(fraction));
+  // The slot under the bar always exists so both columns keep the same height.
+  const text = note ?? (measured ? WORD[lv] : "");
   return (
     <div className="ov-meter">
       <div className="ov-meter-row">
@@ -587,12 +657,29 @@ function Meter({
         </span>
       </div>
       <Bar fraction={fraction} level={lv} label={label} />
-      {spark ? <div className="overview-spark">{spark}</div> : null}
-      {note != null ? (
-        <span className="ov-note">{note}</span>
-      ) : (
-        lv !== "ok" && <span className={`ov-note ${lv}`}>{WORD[lv]}</span>
-      )}
+      <div className="ov-trend">{spark || null}</div>
+      <span className={`ov-note${note == null && lv !== "ok" ? ` ${lv}` : ""}`} title={text || undefined}>
+        {text}
+      </span>
+    </div>
+  );
+}
+
+/** One direction of network traffic: label and rate on one line, its recent trend below. */
+function Flow({ label, icon, value, spark }: { label: string; icon: ReactNode; value: number; spark?: ReactNode }) {
+  return (
+    <div className="ov-meter">
+      <div className="ov-meter-row">
+        <span className="ov-label ov-label--icon">
+          {icon}
+          {label}
+        </span>
+        <span className="ov-value">
+          {splitBytes(value)[0]}
+          <small>{splitBytes(value)[1]}/s</small>
+        </span>
+      </div>
+      <div className="ov-trend ov-trend--tall">{spark || null}</div>
     </div>
   );
 }
