@@ -4,6 +4,8 @@ pub mod activity;
 #[cfg(unix)]
 pub mod app_manager;
 pub mod apps;
+#[cfg(feature = "localsend")]
+pub mod bridge;
 pub mod claude_sync;
 pub mod cleanup;
 pub mod cleanup_scan;

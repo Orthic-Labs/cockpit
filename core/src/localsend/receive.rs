@@ -136,6 +136,21 @@ fn prepare_upload(
         return message(400, "Invalid body");
     }
 
+    // A Pulse bridge message is verified and handed to the host; it never
+    // waits behind a file transfer, is never shown, and never touches disk.
+    if proto::is_bridge(&parsed.files) {
+        return bridge_in(inner, &parsed);
+    }
+    let is_pair = proto::is_pair(&parsed.files);
+    let pair_offer = if is_pair {
+        parse_pair_offer(&parsed.files)
+    } else {
+        None
+    };
+    if is_pair && pair_offer.is_none() {
+        return message(400, "Invalid body");
+    }
+
     // One transfer at a time; an abandoned one is cleared.
     {
         let mut sessions = lock(&inner.sessions);
@@ -208,7 +223,8 @@ fn prepare_upload(
     };
 
     // A message needs no yes: it is shown, as the LocalSend app does.
-    let accepted = if is_message || (config.accept_known && known) {
+    // A pairing offer always asks, even from a known device.
+    let accepted = if is_message || (!is_pair && config.accept_known && known) {
         true
     } else {
         let pending = Arc::new(Pending {
@@ -234,6 +250,13 @@ fn prepare_upload(
     };
     if !accepted {
         return message(403, "Rejected");
+    }
+
+    // The user said yes to pairing: keep the offered key next to the fingerprint.
+    if let Some(offer) = pair_offer {
+        inner.store_pair(&parsed.info.fingerprint, &incoming.from, &offer);
+        inner.emit(Event::Changed);
+        return (204, None);
     }
 
     let transfer_id = proto::random_hex(8);
@@ -311,6 +334,53 @@ fn prepare_upload(
             files: tokens,
         },
     )
+}
+
+// ---- Pulse bridge ----------------------------------------------------------
+
+/// The 32-byte key a pairing offer carries, as 64 hex characters.
+fn parse_pair_offer(files: &std::collections::BTreeMap<String, FileMeta>) -> Option<String> {
+    let preview = files.values().next()?.preview.as_ref()?;
+    let value: serde_json::Value = serde_json::from_str(preview).ok()?;
+    let offer = value.get("offer")?.as_str()?;
+    (offer.len() == 64 && crate::bridge::envelope::from_hex(offer).is_some())
+        .then(|| offer.to_ascii_lowercase())
+}
+
+/// A bridge envelope: known paired device, matching identity, valid signature,
+/// fresh clock and nonce. 204 when taken; the host hears `Event::Bridge`.
+fn bridge_in(inner: &Arc<Inner>, parsed: &PrepareUploadRequest) -> Answer {
+    use crate::bridge::envelope::{self, Envelope};
+    let fingerprint = parsed.info.fingerprint.as_str();
+    let Some(key) = inner.pair_key(fingerprint) else {
+        return message(403, "Unknown device");
+    };
+    let Some(text) = parsed
+        .files
+        .values()
+        .next()
+        .and_then(|f| f.preview.as_ref())
+    else {
+        return message(400, "Invalid body");
+    };
+    let env = match Envelope::from_json(text) {
+        Ok(env) => env,
+        Err(_) => return message(400, "Invalid body"),
+    };
+    if env.from.device != fingerprint || env.to.device != inner.me.fingerprint {
+        return message(403, "Rejected: wrong device");
+    }
+    let checked = {
+        let mut replay = lock(&inner.replay);
+        envelope::accept(&env, Some(key.as_slice()), envelope::now_ms(), &mut replay)
+    };
+    match checked {
+        Ok(()) => {
+            inner.emit(Event::Bridge(env));
+            (204, None)
+        }
+        Err(e) => message(403, &format!("Rejected: {e}")),
+    }
 }
 
 // ---- upload ----------------------------------------------------------------

@@ -14,7 +14,26 @@ export interface ShareState {
   warnings: string[];
   /** macOS Local Network access: "granted" once a multicast send worked, "blocked" when macOS refuses. */
   localNetwork: "unknown" | "granted" | "blocked";
+  /** The agent bridge (pulse_core::bridge): chats on this computer and on nearby ones. */
+  bridge?: {
+    enabled: boolean;
+    active?: boolean;
+    localChats?: number;
+    remoteChats?: number;
+    peers?: number;
+    lastError?: string | null;
+    device?: string;
+  };
 }
+
+interface BridgeChange { target: string; path: string; action: string; note: string }
+interface BridgeReport { dryRun: boolean; command: string; changes: BridgeChange[] }
+
+const TARGET_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  "claude-desktop": "Claude Desktop",
+  codex: "Codex",
+};
 
 /** Polls the sharing service; also refreshes when the service says something changed. */
 export function useShareState(): ShareState | null {
@@ -56,6 +75,72 @@ function Row({ label, note, children }: { label: string; note?: string; children
       </div>
       <div className="ck-ctl">{children}</div>
     </div>
+  );
+}
+
+/** The "Agent bridge" block: chats talking to chats on nearby computers. */
+function AgentBridge({ share }: { share: ShareState | null }) {
+  const bridge = share?.bridge;
+  const enabled = bridge?.enabled !== false;
+  const [report, setReport] = useState<BridgeReport | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = (on: boolean) => {
+    invoke<void>("bridge_set_enabled", { on }).catch((e) => setMessage(String(e)));
+  };
+  const register = (command: "bridge_register" | "bridge_unregister") => {
+    setBusy(true);
+    setMessage(null);
+    invoke<BridgeReport>(command)
+      .then((r) => setReport(r))
+      .catch((e) => { setReport(null); setMessage(String(e)); })
+      .finally(() => setBusy(false));
+  };
+
+  let status = "";
+  if (!enabled) status = "Off.";
+  else if (!share?.running) status = "Starts with nearby sharing.";
+  else {
+    const local = bridge?.localChats ?? 0;
+    const remote = bridge?.remoteChats ?? 0;
+    const device = remote === 1 ? "another computer" : "other computers";
+    status = `${local} ${local === 1 ? "chat" : "chats"} on this ${isWindows ? "PC" : "Mac"}, ${remote} on ${device}.`;
+  }
+
+  return (
+    <>
+      <Row
+        label="Agent bridge"
+        note="Lets Claude and Codex chats on this computer message chats on nearby Pulse computers. Nothing leaves your network."
+      >
+        <Toggle checked={enabled} onChange={toggle} label="Agent bridge" />
+      </Row>
+      {enabled && (
+        <Row
+          label="Register with Claude and Codex"
+          note="Adds the Pulse tools to Claude Code, Claude Desktop and Codex. Restart a chat to see them."
+        >
+          <span className="ck-ctls">
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => register("bridge_register")}>
+              Register with Claude and Codex
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => register("bridge_unregister")}>
+              Unregister
+            </Button>
+          </span>
+        </Row>
+      )}
+      {report && report.changes.map((c) => (
+        <div key={c.target} className="ck-sub ck-foot">
+          {TARGET_NAMES[c.target] ?? c.target}: {c.action}. {c.path}
+        </div>
+      ))}
+      {message && <div className="error" role="alert">{message}</div>}
+      <div className={bridge?.lastError ? "error" : "ck-sub ck-foot"} role="status">
+        {bridge?.lastError ?? status}
+      </div>
+    </>
   );
 }
 
@@ -123,6 +208,7 @@ export function NearbyGroup({ s, set }: {
             <Toggle checked={s.nearbyAcceptKnown === true} onChange={(v) => set("nearbyAcceptKnown", v)}
               label="Accept from known devices automatically" />
           </Row>
+          <AgentBridge share={share} />
         </>
       )}
       <div className={share?.error ? "error" : "ck-sub ck-foot"} role={share?.error ? "alert" : "status"}>{status}</div>

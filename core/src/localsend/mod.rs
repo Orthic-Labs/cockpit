@@ -13,8 +13,9 @@ pub mod send;
 
 pub use send::{Entry, Peer, SendItem};
 
+use crate::bridge::envelope::{self, Envelope, ReplayGuard};
 use proto::DeviceInfo;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
@@ -136,8 +137,87 @@ pub enum Event {
     Progress(Transfer),
     /// A transfer reached an end state.
     Finished(Transfer),
-    /// Anything else (a transfer dismissed).
+    /// A signed Pulse bridge message from a paired device arrived and verified.
+    /// Hosts pass it to `bridge::relay::incoming`; nothing is saved or shown.
+    Bridge(Envelope),
+    /// Anything else (a transfer dismissed, a device paired).
     Changed,
+}
+
+/// A device that completed bridge pairing: both sides keep the same 32-byte key.
+#[derive(Clone, Debug)]
+pub(crate) struct Pair {
+    pub alias: String,
+    /// 64 hex characters.
+    pub key: String,
+}
+
+/// One entry of `known-devices.json`: a bare fingerprint (accepted before) or
+/// an object that also holds the pair key.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum KnownEntry {
+    Plain(String),
+    Paired {
+        fingerprint: String,
+        #[serde(default)]
+        alias: String,
+        key: String,
+    },
+}
+
+fn load_known(path: &std::path::Path) -> (HashSet<String>, HashMap<String, Pair>) {
+    let mut trusted = HashSet::new();
+    let mut pairs = HashMap::new();
+    let entries = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<KnownEntry>>(&bytes).ok())
+        .unwrap_or_default();
+    for entry in entries {
+        match entry {
+            KnownEntry::Plain(fingerprint) => {
+                trusted.insert(fingerprint);
+            }
+            KnownEntry::Paired {
+                fingerprint,
+                alias,
+                key,
+            } => {
+                if envelope::from_hex(&key).is_some_and(|k| k.len() == 32) {
+                    pairs.insert(fingerprint.clone(), Pair { alias, key });
+                }
+                trusted.insert(fingerprint);
+            }
+        }
+    }
+    (trusted, pairs)
+}
+
+/// Write `contents` next to `path` and rename it into place; the key file is
+/// private on Unix.
+fn write_atomic(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().unwrap_or(path);
+    std::fs::create_dir_all(parent)?;
+    let temp = path.with_extension(format!("tmp-{}", proto::random_hex(4)));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = options.open(&temp).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()
+    });
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 pub(crate) struct Seen {
@@ -186,6 +266,10 @@ pub(crate) struct Inner {
     pub sessions: Mutex<HashMap<String, Session>>,
     pub cancels: Mutex<HashMap<String, Arc<CancelHandle>>>,
     pub trusted: Mutex<HashSet<String>>,
+    /// Pulse bridge pair keys by device fingerprint (also in `known-devices.json`).
+    pub pairs: Mutex<HashMap<String, Pair>>,
+    /// Nonces of bridge messages already accepted.
+    pub replay: Mutex<ReplayGuard>,
     pub on_event: Arc<dyn Fn(Event) + Send + Sync>,
     pub last_progress: Mutex<Instant>,
     pub connections: AtomicUsize,
@@ -323,13 +407,53 @@ impl Inner {
         }
         let added = lock(&self.trusted).insert(fingerprint.to_string());
         if added {
-            let list: Vec<String> = lock(&self.trusted).iter().cloned().collect();
-            let path = self.config().state_dir.join("known-devices.json");
-            if let Ok(text) = serde_json::to_vec(&list) {
-                let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
-                let _ = std::fs::write(path, text);
-            }
+            self.save_known();
         }
+    }
+
+    /// Persist the accepted devices and their pair keys.
+    fn save_known(&self) {
+        let mut fingerprints: Vec<String> = lock(&self.trusted).iter().cloned().collect();
+        fingerprints.sort();
+        let pairs = lock(&self.pairs).clone();
+        let list: Vec<KnownEntry> = fingerprints
+            .into_iter()
+            .map(|fingerprint| match pairs.get(&fingerprint) {
+                Some(pair) => KnownEntry::Paired {
+                    alias: pair.alias.clone(),
+                    key: pair.key.clone(),
+                    fingerprint,
+                },
+                None => KnownEntry::Plain(fingerprint),
+            })
+            .collect();
+        let path = self.config().state_dir.join("known-devices.json");
+        if let Ok(text) = serde_json::to_vec(&list) {
+            let _ = write_atomic(&path, &text);
+        }
+    }
+
+    /// Remember the pair key for a device the user accepted, and trust it.
+    pub fn store_pair(&self, fingerprint: &str, alias: &str, key: &str) {
+        if fingerprint.is_empty() {
+            return;
+        }
+        lock(&self.pairs).insert(
+            fingerprint.to_string(),
+            Pair {
+                alias: alias.to_string(),
+                key: key.to_string(),
+            },
+        );
+        lock(&self.trusted).insert(fingerprint.to_string());
+        self.save_known();
+    }
+
+    /// The pair key for a device, decoded.
+    pub fn pair_key(&self, fingerprint: &str) -> Option<Vec<u8>> {
+        lock(&self.pairs)
+            .get(fingerprint)
+            .and_then(|p| envelope::from_hex(&p.key))
     }
 
     pub fn add_transfer(&self, transfer: Transfer) {
@@ -395,6 +519,51 @@ impl Inner {
     }
 }
 
+/// One `prepare-upload` that carries its whole payload in `preview`; returns
+/// the HTTP status. Used by bridge messages and pairing offers.
+fn post_preview(
+    me: &DeviceInfo,
+    device: &Device,
+    file_type: &str,
+    file_name: &str,
+    preview: String,
+    timeout: Duration,
+) -> Result<u16, String> {
+    let ip: IpAddr = device
+        .ip
+        .parse()
+        .map_err(|_| "That device has no usable address.".to_string())?;
+    let mut files = std::collections::BTreeMap::new();
+    files.insert(
+        "b0".to_string(),
+        proto::FileMeta {
+            id: "b0".to_string(),
+            file_name: file_name.to_string(),
+            size: preview.len() as u64,
+            file_type: file_type.to_string(),
+            sha256: None,
+            preview: Some(preview),
+            metadata: None,
+        },
+    );
+    let mut info = me.clone();
+    info.announce = None;
+    let body = serde_json::to_vec(&proto::PrepareUploadRequest { info, files })
+        .map_err(|e| e.to_string())?;
+    net::request_json(
+        ip,
+        device.port,
+        device.protocol == "https",
+        &device.fingerprint,
+        "POST",
+        &format!("{}/prepare-upload", proto::API),
+        Some(&body),
+        timeout,
+    )
+    .map(|reply| reply.status)
+    .map_err(|e| format!("Couldn't reach {}: {e}", device.alias))
+}
+
 /// The words for a taken port. Hosts recognise it by `PORT_IN_USE`.
 pub const PORT_IN_USE: &str = "already in use";
 
@@ -441,12 +610,7 @@ impl Service {
             .set_nonblocking(true)
             .map_err(|e| format!("Couldn't listen on port {}: {e}", config.port))?;
 
-        let trusted: HashSet<String> = std::fs::read(config.state_dir.join("known-devices.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+        let (trusted, pairs) = load_known(&config.state_dir.join("known-devices.json"));
         let me = DeviceInfo {
             alias: config.alias.clone(),
             version: proto::VERSION.to_string(),
@@ -469,6 +633,8 @@ impl Service {
             sessions: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
             trusted: Mutex::new(trusted),
+            pairs: Mutex::new(pairs),
+            replay: Mutex::new(ReplayGuard::default()),
             on_event,
             last_progress: Mutex::new(Instant::now()),
             connections: AtomicUsize::new(0),
@@ -546,22 +712,112 @@ impl Service {
         lock(&self.inner.cfg).save_dir = directory;
     }
 
+    /// The nearby device with this fingerprint (or, failing that, alias).
+    fn find_device(&self, target: &str) -> Option<Device> {
+        let devices = lock(&self.inner.devices);
+        devices
+            .iter()
+            .find(|s| s.device.fingerprint == target)
+            .or_else(|| {
+                devices
+                    .iter()
+                    .find(|s| s.device.alias.eq_ignore_ascii_case(target))
+            })
+            .map(|s| s.device.clone())
+    }
+
+    /// Whether this device completed Pulse bridge pairing (both sides hold a key).
+    pub fn is_paired(&self, fingerprint: &str) -> bool {
+        lock(&self.inner.pairs).contains_key(fingerprint)
+    }
+
+    /// Fingerprints of every paired device, nearby or not.
+    pub fn paired_fingerprints(&self) -> Vec<String> {
+        lock(&self.inner.pairs).keys().cloned().collect()
+    }
+
+    /// This computer's name as other devices list it.
+    pub fn alias(&self) -> String {
+        self.inner.config().alias
+    }
+
+    /// Sign `envelope` with the pair key of the device (fingerprint or alias)
+    /// and deliver it as a bridge upload. No prompt appears on the other side;
+    /// it is accepted only from a paired device with a valid signature.
+    /// Blocks until the device answers (at most 20 seconds); `from.device` and
+    /// `to.device` are set here.
+    pub fn send_bridge(&self, target: &str, mut envelope: Envelope) -> Result<(), String> {
+        let device = self
+            .find_device(target)
+            .ok_or_else(|| "That device is no longer nearby.".to_string())?;
+        let key = self.inner.pair_key(&device.fingerprint).ok_or_else(|| {
+            format!(
+                "{} isn't paired for the Pulse bridge yet. Pair it first.",
+                device.alias
+            )
+        })?;
+        envelope.from.device = self.inner.me.fingerprint.clone();
+        envelope.to.device = device.fingerprint.clone();
+        envelope.sign(&key);
+        let status = post_preview(
+            &self.inner.me,
+            &device,
+            envelope::BRIDGE_FILE_TYPE,
+            "pulse-bridge.json",
+            envelope.to_json(),
+            Duration::from_secs(20),
+        )?;
+        match status {
+            204 | 200 => Ok(()),
+            403 => Err(format!(
+                "{} rejected the message (not paired on its side, or the clocks differ).",
+                device.alias
+            )),
+            other => Err(format!(
+                "{} answered {other}; it may not run Pulse with the bridge.",
+                device.alias
+            )),
+        }
+    }
+
+    /// Ask the device (fingerprint or alias) to pair for the Pulse bridge. A
+    /// prompt appears there; on accept both sides keep the same new 32-byte
+    /// key in `known-devices.json`. Blocks until answered (at most 190 seconds).
+    pub fn bridge_pair(&self, target: &str) -> Result<(), String> {
+        let device = self
+            .find_device(target)
+            .ok_or_else(|| "That device is no longer nearby.".to_string())?;
+        let key = envelope::new_pair_key();
+        let offer = serde_json::json!({ "offer": key }).to_string();
+        let status = post_preview(
+            &self.inner.me,
+            &device,
+            envelope::PAIR_FILE_TYPE,
+            "Pulse bridge pairing",
+            offer,
+            Duration::from_secs(190),
+        )?;
+        match status {
+            204 => {
+                self.inner
+                    .store_pair(&device.fingerprint, &device.alias, &key);
+                self.inner.emit(Event::Changed);
+                Ok(())
+            }
+            403 => Err(format!("{} declined the pairing.", device.alias)),
+            other => Err(format!(
+                "{} answered {other}; it may not run Pulse with the bridge.",
+                device.alias
+            )),
+        }
+    }
+
     /// Send to the device with this fingerprint (or, failing that, alias).
     /// Returns the transfer id; progress arrives as events.
     pub fn send(&self, target: &str, items: Vec<SendItem>) -> Result<String, String> {
-        let device = {
-            let devices = lock(&self.inner.devices);
-            devices
-                .iter()
-                .find(|s| s.device.fingerprint == target)
-                .or_else(|| {
-                    devices
-                        .iter()
-                        .find(|s| s.device.alias.eq_ignore_ascii_case(target))
-                })
-                .map(|s| s.device.clone())
-        }
-        .ok_or_else(|| "That device is no longer nearby.".to_string())?;
+        let device = self
+            .find_device(target)
+            .ok_or_else(|| "That device is no longer nearby.".to_string())?;
         let ip: IpAddr = device
             .ip
             .parse()

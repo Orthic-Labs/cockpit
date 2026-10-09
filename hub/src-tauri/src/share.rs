@@ -21,9 +21,15 @@
 //! `nearby_alias`, `nearby_save_folder`, `nearby_accept_known`), re-read when its
 //! modified time changes. The notch (windows/src/send.rs) is the other end.
 //!
+//! The agent bridge (chats on this computer talking to chats on nearby ones,
+//! `pulse_core::bridge`) rides the same service: `agent_bridge` below starts the
+//! reply socket and the roster/relay tick while sharing is running and the
+//! bridge is on (`bridge-settings.json`, hub-owned, default on).
+//!
 //! The page gets the same news as Tauri events: `share-devices`, `share-incoming`,
 //! `share-incoming-resolved`, `share-progress`, `share-state`.
 
+use pulse_core::bridge::deliver_claude::{self, ReplyHub};
 use pulse_core::localsend::{Config, Event, SendItem, Service};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -144,6 +150,8 @@ static SERVICE: Mutex<Option<Arc<Service>>> = Mutex::new(None);
 static RUNNING: Mutex<Option<Config>> = Mutex::new(None);
 static ERROR: Mutex<Option<String>> = Mutex::new(None);
 static NOTICE: Mutex<Option<(u64, String)>> = Mutex::new(None);
+static BRIDGE_ENABLED: AtomicBool = AtomicBool::new(true);
+static BRIDGE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static DIRTY: AtomicBool = AtomicBool::new(true);
 static NOTICE_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -361,6 +369,14 @@ fn on_event(event: Event) {
         Event::Progress(transfer) | Event::Finished(transfer) => {
             let _ = app.emit("share-progress", transfer);
         }
+        Event::Bridge(envelope) => {
+            // Delivery can take seconds (chat acknowledgement, Codex queue): off the service thread.
+            if let Some(service) = current_service() {
+                if BRIDGE_ENABLED.load(Ordering::Relaxed) {
+                    std::thread::spawn(move || pulse_core::bridge::on_inbound(&service, envelope));
+                }
+            }
+        }
         Event::Changed => {}
     }
 }
@@ -443,6 +459,98 @@ fn stop() {
     DIRTY.store(true, Ordering::Relaxed);
 }
 
+// ---- agent bridge ----------------------------------------------------------------
+
+mod agent_bridge {
+    use super::*;
+
+    fn settings_path() -> PathBuf {
+        bridge_dir().join("bridge-settings.json")
+    }
+
+    /// Read the hub-owned switch; absent or unreadable means on.
+    pub fn load() {
+        let on = std::fs::read_to_string(settings_path())
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v["enabled"].as_bool())
+            .unwrap_or(true);
+        BRIDGE_ENABLED.store(on, Ordering::Relaxed);
+    }
+
+    pub fn set_enabled(on: bool) {
+        BRIDGE_ENABLED.store(on, Ordering::Relaxed);
+        let dir = bridge_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let temp = dir.join("bridge-settings.json.tmp");
+        if std::fs::write(&temp, json!({"enabled": on}).to_string()).is_ok() {
+            let _ = std::fs::rename(&temp, settings_path());
+        }
+        DIRTY.store(true, Ordering::Relaxed);
+    }
+
+    /// Start or stop the reply socket so it matches "sharing is running and the bridge is on".
+    pub fn sync() {
+        let want = BRIDGE_ENABLED.load(Ordering::Relaxed) && current_service().is_some();
+        let have = BRIDGE_ACTIVE.load(Ordering::Relaxed);
+        if want && !have {
+            let on_reply = Arc::new(|reply: deliver_claude::ReplyMessage| {
+                if let Some(service) = current_service() {
+                    std::thread::spawn(move || pulse_core::bridge::on_local_reply(&service, reply));
+                }
+            });
+            let is_known = Arc::new(|id: &str| pulse_core::bridge::is_known_local_session(id));
+            deliver_claude::set_reply_hub(Some(ReplyHub::new(on_reply, is_known)));
+            BRIDGE_ACTIVE.store(true, Ordering::Relaxed);
+            DIRTY.store(true, Ordering::Relaxed);
+        } else if !want && have {
+            deliver_claude::set_reply_hub(None);
+            BRIDGE_ACTIVE.store(false, Ordering::Relaxed);
+            DIRTY.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Roster publish and outbound relay, every couple of seconds, off the main loop.
+    pub fn start_tick() {
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
+                if !BRIDGE_ACTIVE.load(Ordering::Relaxed) {
+                    continue;
+                }
+                if let Some(service) = current_service() {
+                    pulse_core::bridge::tick(&service);
+                    DIRTY.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+
+    /// `{enabled, active, localChats, remoteChats, peers, lastError}` for the page.
+    pub fn state() -> Value {
+        let mut value = serde_json::to_value(pulse_core::bridge::status()).unwrap_or(Value::Null);
+        if !value.is_object() {
+            value = json!({});
+        }
+        let object = value.as_object_mut().expect("object");
+        object.insert("enabled".into(), json!(BRIDGE_ENABLED.load(Ordering::Relaxed)));
+        object.insert("active".into(), json!(BRIDGE_ACTIVE.load(Ordering::Relaxed)));
+        object.insert("device".into(), json!(computer_name()));
+        value
+    }
+
+    pub fn register(uninstall: bool) -> Result<Value, String> {
+        let options = pulse_core::bridge::install::Options {
+            claude: true,
+            codex: true,
+            dry_run: false,
+            command: None,
+        };
+        let report = pulse_core::bridge::install::apply(uninstall, &options)?;
+        serde_json::to_value(report).map_err(|e| e.to_string())
+    }
+}
+
 // ---- state out ---------------------------------------------------------------
 
 fn state_value() -> Value {
@@ -476,6 +584,7 @@ fn state_value() -> Value {
                 item["isMessageN"] = json!(message as u8);
             }
         }
+        object.insert("bridge".into(), agent_bridge::state());
         object.insert("error".into(), error.map(Value::from).unwrap_or(Value::Null));
         object.insert(
             "notice".into(),
@@ -591,7 +700,10 @@ pub fn start_background(app: AppHandle) {
         let mut last_write = Instant::now() - Duration::from_secs(10);
         let mut last_reconcile = Instant::now() - Duration::from_secs(60);
         let mut last_drain = Instant::now();
+        agent_bridge::load();
+        agent_bridge::start_tick();
         reconcile();
+        let mut last_bridge_sync = Instant::now() - Duration::from_secs(10);
         loop {
             std::thread::sleep(Duration::from_millis(100));
             if commands.fired() || last_drain.elapsed() >= Duration::from_secs(1) {
@@ -614,6 +726,10 @@ pub fn start_background(app: AppHandle) {
             if settings_changed || (failing && last_reconcile.elapsed() >= Duration::from_secs(10)) {
                 last_reconcile = Instant::now();
                 reconcile();
+            }
+            if last_bridge_sync.elapsed() >= Duration::from_secs(1) {
+                last_bridge_sync = Instant::now();
+                agent_bridge::sync();
             }
             let due = DIRTY.load(Ordering::Relaxed) && last_write.elapsed() >= Duration::from_millis(120);
             if due || last_write.elapsed() >= Duration::from_secs(4) {
@@ -666,6 +782,23 @@ pub fn share_dismiss(id: String) {
     if let Some(service) = current_service() {
         service.dismiss(&id);
     }
+}
+
+/// Turn the agent bridge on or off (hub-owned switch, default on).
+#[tauri::command]
+pub fn bridge_set_enabled(on: bool) {
+    agent_bridge::set_enabled(on);
+}
+
+/// Register the Pulse MCP server with Claude (Code and Desktop) and Codex; returns what was written.
+#[tauri::command]
+pub fn bridge_register() -> Result<Value, String> {
+    agent_bridge::register(false)
+}
+
+#[tauri::command]
+pub fn bridge_unregister() -> Result<Value, String> {
+    agent_bridge::register(true)
 }
 
 /// Open System Settings at Local Network (macOS) or the Windows Firewall's
