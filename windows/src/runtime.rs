@@ -27,6 +27,7 @@ use windows::core::{BOOL, Error, HRESULT, PCWSTR, PWSTR};
 pub(crate) mod winsec {
     use super::*;
 
+    #[allow(clippy::upper_case_acronyms)]
     pub type PSID = *mut c_void;
 
     #[repr(C)]
@@ -55,6 +56,7 @@ pub(crate) mod winsec {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct ACL {
         pub AclRevision: u8,
         pub Sbz1: u8,
@@ -366,14 +368,14 @@ impl UserSecurity {
         // the required length; any other outcome is a hard failure.
         let mut needed = 0u32;
         unsafe {
-            winsec::GetTokenInformation(
+            let _ = winsec::GetTokenInformation(
                 token.0,
                 winsec::TOKEN_USER,
                 std::ptr::null_mut(),
                 0,
                 &mut needed,
-            )
-        };
+            );
+        }
         if needed == 0 || needed > 64 * 1024 {
             return Err(Error::new(E_INVALIDARG, "unexpected TokenUser size"));
         }

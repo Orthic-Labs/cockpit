@@ -601,14 +601,13 @@ fn desired_placements(found: &[MonitorSpec]) -> Vec<Placed> {
     let settings = lock_state().settings.clone();
     found
         .iter()
-        .filter_map(|spec| {
-            settings.monitor(&spec.id).enabled.then(|| Placed {
-                spec: spec.clone(),
-                slot: Slot {
-                    along: settings.position(&spec.id),
-                    dpi: monitor_dpi(spec.bounds),
-                },
-            })
+        .filter(|spec| settings.monitor(&spec.id).enabled)
+        .map(|spec| Placed {
+            spec: spec.clone(),
+            slot: Slot {
+                along: settings.position(&spec.id),
+                dpi: monitor_dpi(spec.bounds),
+            },
         })
         .collect()
 }

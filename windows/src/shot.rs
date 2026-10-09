@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
+use windows::Win32::Foundation::GlobalFree;
 use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
 };
@@ -61,7 +62,6 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::Foundation::GlobalFree;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId, Sleep};
@@ -297,6 +297,8 @@ struct Session {
 }
 
 struct Thumb {
+    // Owns the thumbnail window; dropping the Thumb destroys it.
+    #[allow(dead_code)]
     window: OwnedWindow,
     path: Option<PathBuf>,
 }

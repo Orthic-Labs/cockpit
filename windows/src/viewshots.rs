@@ -390,11 +390,7 @@ impl<'a> Scene<'a> {
     }
 
     fn views(&self) -> Vec<CellView> {
-        layout::views(
-            Some(&self.machine),
-            &self.usage,
-            &ring_from(self.send_cell),
-        )
+        layout::views(Some(&self.machine), &self.usage, &ring_from(self.send_cell))
     }
 
     fn panel(&self, cell: Cell) -> Panel {
@@ -463,9 +459,7 @@ fn pair(label: &str, value: &str) -> Row {
 /// here from the fixture).
 fn send_hover(cell: Option<&Value>) -> Panel {
     let windows = cell.map_or(&[][..], |c| arr(c, "windows"));
-    let transfer = windows
-        .iter()
-        .find(|w| str_of(w, "id") == Some("transfer"));
+    let transfer = windows.iter().find(|w| str_of(w, "id") == Some("transfer"));
     let detail = transfer.and_then(|w| str_of(w, "detail")).unwrap_or("");
     let running = detail != "Off";
     let mut panel = Rows::default();
@@ -769,7 +763,11 @@ fn compose(parts: &[(Canvas, i32, i32)], backdrop: u32) -> Image {
     }
     let width = inner_width + 2 * MARGIN;
     let height = inner_height + 2 * MARGIN;
-    let colour = [(backdrop >> 16) as u8, (backdrop >> 8) as u8, backdrop as u8];
+    let colour = [
+        (backdrop >> 16) as u8,
+        (backdrop >> 8) as u8,
+        backdrop as u8,
+    ];
     let mut rgb = Vec::with_capacity(width * height * 3);
     for _ in 0..width * height {
         rgb.extend_from_slice(&colour);
