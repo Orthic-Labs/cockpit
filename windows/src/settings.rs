@@ -7,7 +7,7 @@
 //! Optional additions (omitted while at their defaults, ignored by older readers):
 //! `"launch_at_login":true` and `"positions":{"<monitor-key>":<per-mille>}`, the Alt-drag
 //! position of the notch's centre along that monitor's top edge (0..=1000, default 500),
-//! `"mac_shortcuts":true` (Alt+A/C/V/X/Z editing shortcuts on), `"screenshot_shortcuts":false`
+//! `"mac_shortcuts":false` (Alt+A/C/V/X/Z editing shortcuts off), `"screenshot_shortcuts":false`
 //! (Alt+Shift+4/5 screenshots off) and `"screenshot_to_desktop":false` (clipboard only).
 //! Nearby sharing (written by the hub's settings, kept here so a save never drops them):
 //! `"nearby_enabled":false`, `"nearby_alias":"<name>"`, `"nearby_save_folder":"<path>"` and
@@ -135,7 +135,7 @@ pub struct PillSettings {
     pub monitors: BTreeMap<String, MonitorSetting>,
     /// Start with Windows (HKCU Run entry). Off by default.
     pub launch_at_login: bool,
-    /// Alt+A/C/V/X/Z act as Ctrl+A/C/V/X/Z (Alt+Shift+Z redoes). Off by default.
+    /// Alt+A/C/V/X/Z act as Ctrl+A/C/V/X/Z (Alt+Shift+Z redoes), like Cmd on the Mac. On by default.
     pub mac_shortcuts: bool,
     /// Alt+Shift+4 / Alt+Shift+5 screenshots. On by default.
     pub screenshot_shortcuts: bool,
@@ -198,7 +198,7 @@ impl PillSettings {
             monitors: BTreeMap::new(),
             edge_default: Edge::Top,
             launch_at_login: false,
-            mac_shortcuts: false,
+            mac_shortcuts: true,
             screenshot_shortcuts: true,
             screenshot_to_desktop: true,
             positions: BTreeMap::new(),
@@ -811,8 +811,8 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
     if !settings.folds {
         out.push_str(",\"folds\":false");
     }
-    if settings.mac_shortcuts {
-        out.push_str(",\"mac_shortcuts\":true");
+    if !settings.mac_shortcuts {
+        out.push_str(",\"mac_shortcuts\":false");
     }
     if !settings.screenshot_shortcuts {
         out.push_str(",\"screenshot_shortcuts\":false");
