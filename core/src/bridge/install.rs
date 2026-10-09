@@ -355,9 +355,7 @@ fn header_name(line: &str) -> Option<String> {
     let end = t.find(']')?;
     Some(
         t[1..end]
-            .replace('"', "")
-            .replace('\'', "")
-            .replace(' ', ""),
+            .replace(['"', '\'', ' '], ""),
     )
 }
 
