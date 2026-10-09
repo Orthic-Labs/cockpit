@@ -4,8 +4,8 @@
 #[cfg(unix)]
 use pulse_core::EntryKind;
 use pulse_core::{
-    FileMetadata, FilesystemProvider, FsError, ScanOptions, StdFilesystemProvider,
-    VolumeIdentity, VolumeUsage, scan_paths, scan_with_provider,
+    FileMetadata, FilesystemProvider, FsError, ScanOptions, StdFilesystemProvider, VolumeIdentity,
+    VolumeUsage, scan_paths, scan_with_provider,
 };
 use std::cell::Cell;
 use std::fs;

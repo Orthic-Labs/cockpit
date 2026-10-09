@@ -818,7 +818,11 @@ mod pinned {
         // fetched; the kernel rejects it on directory opens
         // (STATUS_INVALID_PARAMETER, seen on windows-2025), where it has no
         // data to protect, so it is passed for files only.
-        let no_recall = if options & FILE_DIRECTORY_FILE != 0 { 0 } else { FILE_OPEN_NO_RECALL };
+        let no_recall = if options & FILE_DIRECTORY_FILE != 0 {
+            0
+        } else {
+            FILE_OPEN_NO_RECALL
+        };
         let mut last = NTSTATUS(0);
         for attribute_flags in [
             OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
@@ -1114,7 +1118,15 @@ mod pinned {
             }
             let _ = self.unlink(from);
             // Flush the pinned directory handle before reporting publication.
-            unsafe { FlushFileBuffers(self.handle.raw()) }.map_err(|_| last_err())?;
+            // NTFS refuses FlushFileBuffers on directory handles with
+            // ERROR_ACCESS_DENIED (seen on windows-2025); the link itself is a
+            // journaled metadata change, so only that refusal is tolerated.
+            if unsafe { FlushFileBuffers(self.handle.raw()) }.is_err() {
+                let error = last_err();
+                if error.raw_os_error() != Some(5) {
+                    return Err(error);
+                }
+            }
             Ok(())
         }
 
