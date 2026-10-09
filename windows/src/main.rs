@@ -18,6 +18,7 @@ mod diag;
 mod http;
 mod hub;
 mod json;
+mod keys;
 mod layout;
 mod lifecycle;
 mod raii;
@@ -25,6 +26,7 @@ mod render;
 mod runtime;
 mod sensors;
 mod settings;
+mod shot;
 mod surface;
 mod usage;
 mod visibility;
@@ -276,6 +278,8 @@ fn load_settings() {
 
 /// Writes only when settings differ from what is on disk and the stored file was usable.
 fn persist_settings() {
+    // The Alt+Shift+5 toolbar can flip the screenshot destination at runtime.
+    lock_state().settings.screenshot_to_desktop = shot::save_to_desktop();
     let (current, writable, changed) = {
         let app = lock_state();
         (
@@ -327,6 +331,24 @@ fn run_pill() -> Result<(), Error> {
     if !arm_timer(controller.hwnd(), HIDDEN_INTERVAL_MS) {
         return Err(Error::from_win32());
     }
+
+    // Global keyboard layer (Mac-style Alt shortcuts, screenshot hotkeys). Declared after the
+    // timer so the hook thread stops first; `shots` is declared before `_keys` so the hook
+    // stops posting before the screenshot thread exits.
+    let (mac_shortcuts, screenshot_shortcuts) = {
+        let app = lock_state();
+        (
+            app.settings.mac_shortcuts,
+            app.settings.screenshot_shortcuts,
+        )
+    };
+    shot::set_save_to_desktop(lock_state().settings.screenshot_to_desktop);
+    let shots = if screenshot_shortcuts {
+        shot::start()
+    } else {
+        None
+    };
+    let _keys = keys::start(mac_shortcuts, shots.is_some());
 
     usage::start(controller.key());
     reconcile_panels();

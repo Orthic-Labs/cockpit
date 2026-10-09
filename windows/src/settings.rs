@@ -6,7 +6,9 @@
 //!   "monitors":{"<monitor-key>":{"enabled":true,"anchor":"top-right"}}}`
 //! Optional additions (omitted while at their defaults, ignored by older readers):
 //! `"launch_at_login":false` and `"positions":{"<monitor-key>":<per-mille>}`, the Alt-drag
-//! position of the notch's centre along that monitor's top edge (0..=1000, default 500).
+//! position of the notch's centre along that monitor's top edge (0..=1000, default 500),
+//! `"mac_shortcuts":false` (Alt+A/C/V/X/Z editing shortcuts off), `"screenshot_shortcuts":false`
+//! (Alt+Shift+4/5 screenshots off) and `"screenshot_to_desktop":false` (clipboard only).
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -85,6 +87,13 @@ pub struct PillSettings {
     pub monitors: BTreeMap<String, MonitorSetting>,
     /// Start with Windows (HKCU Run entry). On by default.
     pub launch_at_login: bool,
+    /// Alt+A/C/V/X/Z act as Ctrl+A/C/V/X/Z (Alt+Shift+Z redoes). On by default.
+    pub mac_shortcuts: bool,
+    /// Alt+Shift+4 / Alt+Shift+5 screenshots. On by default.
+    pub screenshot_shortcuts: bool,
+    /// Screenshots also save a PNG to the Desktop (always copied to the clipboard). On by
+    /// default; the Alt+Shift+5 toolbar flips it.
+    pub screenshot_to_desktop: bool,
     /// Per-monitor notch position along the top edge, per mille of the monitor width.
     pub positions: BTreeMap<String, u16>,
 }
@@ -96,6 +105,9 @@ impl PillSettings {
             cadence_seconds: CADENCE_DEFAULT,
             monitors: BTreeMap::new(),
             launch_at_login: true,
+            mac_shortcuts: true,
+            screenshot_shortcuts: true,
+            screenshot_to_desktop: true,
             positions: BTreeMap::new(),
         }
     }
@@ -479,6 +491,17 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         Some(Json::Bool(value)) => settings.launch_at_login = *value,
         Some(_) => return Err(ParseError::Malformed),
     }
+    for (name, slot) in [
+        ("mac_shortcuts", &mut settings.mac_shortcuts),
+        ("screenshot_shortcuts", &mut settings.screenshot_shortcuts),
+        ("screenshot_to_desktop", &mut settings.screenshot_to_desktop),
+    ] {
+        match member(&root, name) {
+            None | Some(Json::Null) => {}
+            Some(Json::Bool(value)) => *slot = *value,
+            Some(_) => return Err(ParseError::Malformed),
+        }
+    }
     match member(&root, "positions") {
         None | Some(Json::Null) => {}
         Some(Json::Object(entries)) => {
@@ -538,6 +561,15 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
     out.push('}');
     if !settings.launch_at_login {
         out.push_str(",\"launch_at_login\":false");
+    }
+    if !settings.mac_shortcuts {
+        out.push_str(",\"mac_shortcuts\":false");
+    }
+    if !settings.screenshot_shortcuts {
+        out.push_str(",\"screenshot_shortcuts\":false");
+    }
+    if !settings.screenshot_to_desktop {
+        out.push_str(",\"screenshot_to_desktop\":false");
     }
     if !settings.positions.is_empty() {
         out.push_str(",\"positions\":{");
