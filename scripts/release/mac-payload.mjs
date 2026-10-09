@@ -69,7 +69,7 @@ async function copyTree(source, target, label) {
 // inside Pulse.app so the app's notarization covers it. Fetched at candidate
 // time (CI has network), SHA-256 verified exactly, never committed.
 const smartctl = {
-  url: 'https://github.com/Orthic-Labs/rightkit-native-tools/releases/download/smartmontools-7.5-1/smartctl-7.5-macos-arm64',
+  url: 'https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/smartctl-7.5-macos-arm64',
   sha256: 'be345ce931c2e03e96e282076e92ef2eebf65eb7e9e782902762d09215a653eb'
 };
 

@@ -15,5 +15,5 @@ with the script native-artifacts/smartmontools/build-macos.sh. No patches are ap
 
 Source offer: the corresponding source (that exact tarball, plus the build script and
 third-party/BUILD-NOTES-smartctl-macos-arm64.txt) is published next to every binary
-distribution at: https://github.com/Orthic-Labs/rightkit-native-tools/releases/tag/smartmontools-7.5-1.
+distribution at: https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/ (smartmontools-7.5.tar.gz, .asc, SHA256SUMS).
 You may also obtain it from https://github.com/smartmontools/smartmontools/releases/tag/RELEASE_7_5.

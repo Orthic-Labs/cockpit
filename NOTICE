@@ -18,7 +18,7 @@ its own license; the notices below are reproduced as those licenses require.
   smartctl is bundled at Pulse.app/Contents/Helpers/smartctl and run only as a
   separate program (command line; no linking); it is not part of Pulse. Source
   (GPL-2.0 tarball and signature):
-  https://github.com/Orthic-Labs/rightkit-native-tools/releases/tag/smartmontools-7.5-1
+  https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/ (smartmontools-7.5.tar.gz, .asc, SHA256SUMS)
   Licence text and notice: third_party/smartmontools/ (Pulse.app/Contents/
   Resources/ThirdParty/smartmontools/); see also release/smartmontools-NOTICE.txt.
 - zstd (mac/Notch/Sources/Vendor/zstd), used under its BSD license option.
