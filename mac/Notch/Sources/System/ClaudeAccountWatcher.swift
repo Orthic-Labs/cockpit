@@ -72,6 +72,13 @@ final class ClaudeAccountWatcher {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
+    /// Claude Desktop's signed-in account id (non-secret), or nil when Desktop
+    /// is not installed or signed out.
+    nonisolated static func desktopAccountUUID() -> String? {
+        account(at: FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/config.json"))
+    }
+
     nonisolated private static func account(at url: URL) -> String? {
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

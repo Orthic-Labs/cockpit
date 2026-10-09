@@ -5,7 +5,8 @@ import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightki
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
-import { isWindows } from "../api";
+import { isWindows, tone } from "../api";
+import { Bar } from "./Storage";
 import "./settings.css";
 
 export interface Limit {
@@ -14,6 +15,27 @@ export interface Limit {
   usedFraction: number;
   /** Length of the window; absent when the provider did not say. */
   seconds?: number;
+}
+
+/** One window of a Claude account's last saved reading (Sources/Providers/ClaudeAccountBook.swift). */
+export interface ClaudeWindow {
+  label: string;
+  usedFraction: number;
+  /** Epoch seconds when the window resets; past it the saved percentage is no longer true. */
+  resetsAt: number;
+  seconds?: number;
+}
+
+/** A Claude account the notch has seen: the signed-in one live, the rest as last saved. */
+export interface ClaudeAccount {
+  id: string;
+  name: string;
+  email?: string;
+  plan?: string;
+  active: boolean;
+  /** Epoch seconds of the last reading; null before the first. */
+  capturedAt: number | null;
+  windows: ClaudeWindow[];
 }
 
 export interface Account {
@@ -27,6 +49,8 @@ export interface Account {
   signInTitle?: string;
   signInExplanation: string;
   limits?: Limit[];
+  /** Only on the Claude row. */
+  claudeAccounts?: ClaudeAccount[];
 }
 
 interface AppRef {
@@ -578,6 +602,88 @@ function WindowManagementGroup({ w, accessibility, s, set }: {
   );
 }
 
+/** "2 h 10 min" until `secs` (epoch seconds), or null once it has passed. */
+function resetsIn(secs: number): string | null {
+  const left = secs - Date.now() / 1000;
+  if (left <= 0) return null;
+  const minutes = Math.max(1, Math.round(left / 60));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return `${days} d ${hours} h`;
+  if (hours > 0) return `${hours} h ${minutes % 60} min`;
+  return `${minutes} min`;
+}
+
+/** Session and weekly (all models) windows; the first two the notch saved if neither is found. */
+function claudeWindows(windows: ClaudeWindow[]): { title: string; window: ClaudeWindow }[] {
+  const HOUR = 3600;
+  const session = windows.find((w) => w.seconds != null && Math.abs(w.seconds - 5 * HOUR) < 60);
+  const weeklies = windows.filter((w) => w.seconds != null && w.seconds >= 6 * 24 * HOUR && w.seconds <= 8 * 24 * HOUR);
+  const weekly = weeklies.find((w) => w.label === "All models") ?? weeklies[0];
+  const rows: { title: string; window: ClaudeWindow }[] = [];
+  if (session) rows.push({ title: "Session", window: session });
+  if (weekly) rows.push({ title: "Weekly", window: weekly });
+  return rows.length > 0 ? rows : windows.slice(0, 2).map((w) => ({ title: w.label, window: w }));
+}
+
+function asOf(secs: number): string {
+  const d = new Date(secs * 1000);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+}
+
+function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Send }) {
+  const [draft, setDraft] = useState(account.name);
+  useEffect(() => setDraft(account.name), [account.name]);
+  const saved = account.capturedAt != null;
+  const commit = () => {
+    const next = draft.trim();
+    if (next !== account.name) send({ command: "renameClaudeAccount", id: account.id, name: next });
+    if (next === "") setDraft(account.name);
+  };
+  const rows = claudeWindows(account.windows);
+  return (
+    <div className="ck-claude-account" data-account={account.id}>
+      <div className="ck-account-name">
+        <input
+          className="ck-input ck-input-name"
+          value={draft}
+          disabled={!saved}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          aria-label={`Name for ${account.name}`}
+          title={saved ? "Rename this account (empty restores the default name)" : "Renaming works after the first reading"}
+        />
+        {account.active && <span className="ck-status ck-status-granted">Active</span>}
+        {account.plan && <span className="ck-sub">{account.plan}</span>}
+        {!account.active && (
+          <Button size="sm" variant="ghost" onClick={() => send({ command: "forgetClaudeAccount", id: account.id })}
+            title="Removes this account from the list. It returns if you sign in to it again.">Forget</Button>
+        )}
+      </div>
+      {rows.length === 0 && <div className="ck-sub">No reading yet.</div>}
+      {rows.map(({ title, window: w }) => {
+        const left = resetsIn(w.resetsAt);
+        const pct = Math.round(Math.min(Math.max(w.usedFraction, 0), 1) * 100);
+        return (
+          <div className="ck-claude-win" key={`${title}-${w.label}`} data-state={left ? "live" : "reset"}>
+            <span className="ck-sub">{title}</span>
+            {left ? <Bar fraction={w.usedFraction} color={tone(w.usedFraction)} /> : <span />}
+            <span className="ck-claude-value">{left ? `${pct}%` : "Reset"}</span>
+            <span className="ck-sub">{left ? `resets in ${left}` : "new value not known yet"}</span>
+          </div>
+        );
+      })}
+      {!account.active && account.capturedAt != null && (
+        <div className="ck-sub">as of {asOf(account.capturedAt)}</div>
+      )}
+    </div>
+  );
+}
+
 function Accounts({ state, send }: { state: NotchState; send: Send }) {
   const order = state.providerOrder;
   const rank = (id: string) => {
@@ -627,6 +733,11 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
             </span>
             <Toggle checked={a.connected} onChange={(v) => send({ command: "connect", provider: a.id, value: v })} label={`Show ${a.name}`} />
           </div>
+          {a.claudeAccounts && a.claudeAccounts.length > 0 && (
+            <div className="ck-claude-list" aria-label="Claude accounts">
+              {a.claudeAccounts.map((c) => <ClaudeAccountRow key={c.id} account={c} send={send} />)}
+            </div>
+          )}
         </div>
       ))}
     </Group>

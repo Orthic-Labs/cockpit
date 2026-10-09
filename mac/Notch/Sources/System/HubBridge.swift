@@ -79,6 +79,11 @@ final class HubBridge {
             .removeDuplicates()
             .sink { [weak self] _ in self?.scheduleWrite() }
             .store(in: &cancellables)
+        // A Claude account renamed, forgotten or newly read.
+        store.claudeAccountBook?.$revision
+            .dropFirst()
+            .sink { [weak self] _ in self?.scheduleWrite() }
+            .store(in: &cancellables)
         DarwinNotify.observe(Self.commandNotification) { [weak self] in self?.drainCommands() }
         // The hub remains running when its window closes. A visibility lease
         // also expires if it crashes, so hidden hubs do not keep probing TCC.
@@ -185,6 +190,13 @@ final class HubBridge {
                         return entry
                     }
                 }
+                // Every Claude account this Mac has seen, for the hub's list:
+                // the signed-in one live, the others as last saved.
+                if summary.id == ClaudeProfile.defaultID, let book = store.claudeAccountBook {
+                    let profile = ClaudeProfile.default()
+                    row["claudeAccounts"] = book.published(activeID: profile.accountID(),
+                                                           activeEmail: profile.signedInAddress())
+                }
                 if let title = summary.signIn.actionTitle { row["signInTitle"] = title }
                 return row
             }
@@ -257,6 +269,14 @@ final class HubBridge {
             if let provider { store.signOut(providerID: provider) }
         case "allowAccess":
             if let provider { store.reauthorize(providerID: provider) }
+        case "renameClaudeAccount":
+            if let id = command["id"] as? String, let name = command["name"] as? String {
+                store.claudeAccountBook?.rename(id: id, to: name)
+            }
+        case "forgetClaudeAccount":
+            if let id = command["id"] as? String {
+                store.claudeAccountBook?.forget(id: id, keepingActive: ClaudeProfile.default().accountID())
+            }
         case "refresh": actions.refresh()
         case "resetPosition": actions.resetPosition()
         case "previewResetAlert": actions.previewResetAlert()

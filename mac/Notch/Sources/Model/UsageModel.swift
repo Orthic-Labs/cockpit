@@ -316,6 +316,14 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// The account's named tier, when the provider publishes one. Shown under
     /// the tooltip title. Nil when there is nothing to name.
     var plan: String? = nil
+    /// Pulse fork: the signed-in Claude account's name (chosen in the hub, else
+    /// its address), shown after the plan in the card header. Not archived.
+    var accountName: String? = nil
+    /// The header's second line: the plan, then the account's name.
+    var subtitle: String? {
+        let parts = [plan, accountName].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     /// Unused rate-limit resets reported for this account.
     var resetCredits: UsageResetCredits? = nil

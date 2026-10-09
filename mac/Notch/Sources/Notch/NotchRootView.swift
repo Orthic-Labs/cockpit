@@ -612,7 +612,7 @@ struct NotchRootView: View {
             statusMessage: snapshot.statusMessage,
             blockMessage: snapshot.block?.summary(now: model.now),
             hasTokenUsage: snapshot.tokenUsage != nil,
-            hasPlan: snapshot.plan != nil,
+            hasPlan: snapshot.subtitle != nil,
             hasResetCredits: snapshot.hasAvailableResetCredits,
             compactRowCount: snapshot.compactRowCount)
     }

@@ -124,6 +124,10 @@ fn notch_fixture() -> Value {
         "peekDuration": ["short", "normal", "long"],
         "launcherHotkey": ["optionSpace", "commandSpace"],
     });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or_default();
     json!({
         "schema": 1,
         "product": "Pulse",
@@ -145,6 +149,26 @@ fn notch_fixture() -> Value {
                 "summary": "claude@example.test", "label": "claude@example.test", "plan": "Pro",
                 "signInExplanation": "Pulse reads the Claude login on this Mac.",
                 "limits": [{"label": "Session", "usedFraction": 0.5, "seconds": 18000}],
+                // Two Claude accounts: the signed-in one, and an older one saved with a
+                // session window whose reset has passed (shown as "Reset", no percentage).
+                "claudeAccounts": [
+                    {
+                        "id": "qa-active", "name": "Work", "email": "claude@example.test",
+                        "plan": "Max 5x", "active": true, "capturedAt": now - 60.0,
+                        "windows": [
+                            {"label": "Current session", "usedFraction": 0.42, "resetsAt": now + 7200.0, "seconds": 18000},
+                            {"label": "All models", "usedFraction": 0.3, "resetsAt": now + 3.0 * 86400.0, "seconds": 604800},
+                        ],
+                    },
+                    {
+                        "id": "qa-cached", "name": "old@example.test", "email": "old@example.test",
+                        "plan": "Pro", "active": false, "capturedAt": now - 2.0 * 86400.0,
+                        "windows": [
+                            {"label": "Current session", "usedFraction": 0.9, "resetsAt": now - 40.0 * 3600.0, "seconds": 18000},
+                            {"label": "All models", "usedFraction": 0.55, "resetsAt": now + 86400.0, "seconds": 604800},
+                        ],
+                    },
+                ],
             },
         ],
         "providerOrder": ["codex", "claude"],
@@ -210,6 +234,87 @@ fn check_switches(ctl: &Control, sec: &Section, shots: &Path) -> usize {
         panic!("{} has {} malformed switch(es) of {count}:\n{}", sec.title, problems.len(), problems.join("\n"));
     }
     count
+}
+
+/// Accounts: both Claude accounts are listed by name, the signed-in one carries the Active
+/// badge, the cached one's past session reset reads "Reset" (no percentage) while its
+/// future weekly reset keeps its percentage, and renaming leaves a command for the notch.
+fn claude_accounts_fail(ctl: &Control, shots: &Path, rows: &[Value], why: &str) -> ! {
+    let _ = ctl.screenshot_to(&shots.join("FAIL-accounts-claude.png"));
+    panic!("Claude accounts list: {why}; rows: {rows:?}");
+}
+
+fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
+    let js = r#"
+        const rows = [...document.querySelectorAll('.ck-claude-account')].map((r) => ({
+            name: r.querySelector('input')?.value ?? '',
+            active: /\bActive\b/.test(r.querySelector('.ck-account-name')?.innerText ?? ''),
+            forget: !!r.querySelector('.ck-account-name button'),
+            wins: [...r.querySelectorAll('.ck-claude-win')].map((w) => ({
+                state: w.dataset.state, value: w.querySelector('.ck-claude-value')?.textContent.trim(),
+                text: w.innerText.replace(/\s+/g, ' '),
+            })),
+            asOf: /as of /.test(r.innerText),
+        }));
+        return rows;
+    "#;
+    let rows = ctl.eval(js).expect("eval claude accounts");
+    let rows = rows.as_array().cloned().unwrap_or_default();
+    let fail = |why: String| claude_accounts_fail(ctl, shots, &rows, &why);
+    if rows.len() != 2 {
+        fail(format!("expected 2 accounts, found {}", rows.len()));
+    }
+    let (active, cached) = (&rows[0], &rows[1]);
+    if active["name"] != "Work" || active["active"] != true || active["forget"] != false || active["asOf"] != false {
+        fail("the signed-in account should be \"Work\", Active, not forgettable and without an \"as of\" line".into());
+    }
+    if active["wins"][0]["value"] != "42%" || active["wins"][1]["value"] != "30%" {
+        fail("the active account should show 42% and 30%".into());
+    }
+    if cached["name"] != "old@example.test" || cached["active"] != false || cached["forget"] != true || cached["asOf"] != true {
+        fail("the cached account should be named by its address, not Active, forgettable, with an \"as of\" line".into());
+    }
+    if cached["wins"][0]["state"] != "reset" || cached["wins"][0]["value"] != "Reset" {
+        fail("the cached session window is past its reset and should read \"Reset\"".into());
+    }
+    if cached["wins"][1]["value"] != "55%" || cached["wins"][1]["state"] != "live" {
+        fail("the cached weekly window has not reset and should still show 55%".into());
+    }
+    if cached["wins"][0]["text"].as_str().unwrap_or("").contains('%') {
+        fail("a window past its reset must show no percentage".into());
+    }
+
+    // Rename the cached account in the field, as a person would; the hub must leave the
+    // notch a command (nothing runs a notch here, so it stays in hub-commands).
+    let rename = r#"
+        const input = document.querySelector('.ck-claude-account[data-account="qa-cached"] input');
+        if (!input) return false;
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Old Pro');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.blur();
+        return true;
+    "#;
+    ctl.wait_eval(rename, Duration::from_secs(10)).expect("rename field");
+    let commands = bridge.join("hub-commands");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let found = std::fs::read_dir(&commands)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|t| serde_json::from_str::<Value>(&t).ok())
+            .any(|c| c["command"] == "renameClaudeAccount" && c["id"] == "qa-cached" && c["name"] == "Old Pro");
+        if found {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = ctl.screenshot_to(&shots.join("FAIL-accounts-rename.png"));
+            panic!("renaming a Claude account left no renameClaudeAccount command in {}", commands.display());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 #[test]
@@ -324,6 +429,9 @@ fn hub_sections_render_without_errors() {
 
             // Geometry, on every section: a switch that is not 36x22 with a centred knob fails.
             check_switches(&ctl, sec, &shots);
+            if sec.id == "accounts" {
+                check_claude_accounts(&ctl, &bridge, &shots);
+            }
 
             let shot = shots.join(format!("{:02}-{}.png", index + 1, sec.id));
             ctl.screenshot_to(&shot).expect("screenshot");

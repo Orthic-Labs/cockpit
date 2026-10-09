@@ -169,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // order for a frame and then visibly shuffles.
                 order: preferences.providerOrder
             )
+            if !isRunningTests { store.claudeAccountBook = ClaudeAccountBook() }
             let updater = Updater(preferences: preferences)
             self.updater = updater
             // An update is offered in the notch, and installed there — see

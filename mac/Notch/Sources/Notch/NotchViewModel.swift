@@ -1193,7 +1193,7 @@ final class NotchViewModel: ObservableObject {
     }
 
     private var hasPlan: Bool {
-        snapshots.contains { $0.plan != nil }
+        snapshots.contains { $0.subtitle != nil }
     }
 
     private var hasResetCredits: Bool {
@@ -1219,7 +1219,7 @@ final class NotchViewModel: ObservableObject {
                 statusMessage: snapshot.statusMessage,
                 blockMessage: snapshot.block?.summary(now: now),
                 hasTokenUsage: snapshot.tokenUsage != nil,
-                hasPlan: snapshot.plan != nil,
+                hasPlan: snapshot.subtitle != nil,
                 hasResetCredits: snapshot.hasAvailableResetCredits,
                 compactRowCount: snapshot.compactRowCount)
         }.max() ?? 0

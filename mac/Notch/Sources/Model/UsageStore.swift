@@ -32,6 +32,35 @@ final class UsageStore: ObservableObject {
 
     private var providers: [UsageProvider]
 
+    /// Pulse fork: every Claude account's last reading. Set by the app; nil in
+    /// tests, which then neither read nor write the user's file.
+    var claudeAccountBook: ClaudeAccountBook? {
+        didSet {
+            bookObserver = claudeAccountBook?.$revision.dropFirst().sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.reapplyNames() }
+            }
+        }
+    }
+    private var bookObserver: AnyCancellable?
+    /// The account id (from `~/.claude.json`) the default Claude snapshot was
+    /// last read for in this run. The card shows an account's name only while
+    /// this is still the signed-in account, so a reading carried over from
+    /// another account is never labelled with the new one's name.
+    private var fetchedClaudeAccount: [String: String] = [:]
+
+    private func reapplyNames() {
+        let renamed = snapshots.map(named)
+        if renamed != snapshots { snapshots = renamed }
+    }
+
+    private func claudeAccountName() -> String? {
+        guard let book = claudeAccountBook else { return nil }
+        let profile = ClaudeProfile.default()
+        guard let id = profile.accountID(),
+              fetchedClaudeAccount[ClaudeProfile.defaultID] == id else { return nil }
+        return book.activeName(id: id, email: profile.signedInAddress())
+    }
+
     /// Names chosen in Settings, by provider id. Applied to every snapshot the
     /// store publishes, so the notch, the menu bar, the cards and the
     /// notifications all call an account what its owner does.
@@ -51,6 +80,7 @@ final class UsageStore: ObservableObject {
         } else if let provider = providers.first(where: { $0.id == snapshot.id }) {
             snapshot.displayName = provider.displayName
         }
+        if snapshot.id == ClaudeProfile.defaultID { snapshot.accountName = claudeAccountName() }
         return snapshot
     }
 
@@ -642,6 +672,7 @@ final class UsageStore: ObservableObject {
         refusedAccess.remove(providerID)
         snapshots.removeAll { $0.id == providerID }
         lastGood.removeValue(forKey: providerID)
+        fetchedClaudeAccount.removeValue(forKey: providerID)
         archive.forget(providerID)
 
         Task { await provider.signOut() }
@@ -656,6 +687,7 @@ final class UsageStore: ObservableObject {
         cancelRefresh(providerID: providerID)
         snapshots.removeAll { $0.id == providerID }
         lastGood.removeValue(forKey: providerID)
+        fetchedClaudeAccount.removeValue(forKey: providerID)
         archive.save(lastGood)
         refresh(providerID: providerID, freshness: .fromSource)
     }
@@ -758,9 +790,28 @@ final class UsageStore: ObservableObject {
         // A scheduled task can be disconnected before it begins; avoid reading
         // its credential at all, as well as rejecting an obsolete response.
         guard acceptsResult(from: provider, generation: generation) else { return nil }
+        // Pulse fork: which Claude account this read is for, taken before the
+        // read so an account switched mid-flight is never saved under the other.
+        var claudeProfile: ClaudeProfile?
+        if let claude = provider as? ClaudeOAuthProvider, claude.profile.slug == nil {
+            claudeProfile = claude.profile
+        }
+        let accountBefore = claudeProfile?.accountID()
         do {
             let fresh = try await provider.fetchSnapshot(freshness: freshness)
             guard acceptsResult(from: provider, generation: generation) else { return nil }
+            if let claudeProfile, let accountBefore, let book = claudeAccountBook,
+               case .ok = fresh.status, claudeProfile.accountID() == accountBefore {
+                // Claude Desktop signed into a different account than Claude
+                // Code's file says: the cache could be that account's, so the
+                // reading is not saved under either.
+                let desktop = ClaudeAccountWatcher.desktopAccountUUID()
+                if desktop == nil || desktop == accountBefore {
+                    book.record(id: accountBefore, email: claudeProfile.signedInAddress(),
+                                plan: fresh.plan, windows: fresh.windows)
+                    fetchedClaudeAccount[provider.id] = accountBefore
+                }
+            }
             // Model residency becomes untrue as soon as a server stops. It must
             // never use quota's last-good cache or survive an app relaunch.
             if provider.kind == .usage {

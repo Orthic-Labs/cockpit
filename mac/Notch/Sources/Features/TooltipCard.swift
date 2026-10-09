@@ -665,7 +665,7 @@ private struct ProviderTooltip: View {
         VStack(alignment: .leading, spacing: 0) {
             TooltipHeader(title: snapshot.glyph == .send
                               ? snapshot.displayName : L10n.t("\(snapshot.displayName) Usage"),
-                          subtitle: snapshot.plan,
+                          subtitle: snapshot.subtitle,
                           note: snapshot.headerAccessory ?? activityNote ?? readingAge,
                           showsClaudeRestart: snapshot.glyph == .claude) {
                 ProviderGlyphView(glyph: snapshot.glyph)
@@ -991,7 +991,7 @@ struct TooltipCard: View {
             statusMessage: snapshot.statusMessage,
             blockMessage: snapshot.block?.summary(now: now),
             hasTokenUsage: snapshot.tokenUsage != nil,
-            hasPlan: snapshot.plan != nil,
+            hasPlan: snapshot.subtitle != nil,
             hasResetCredits: snapshot.availableResetCredits(at: now) != nil,
             compactRowCount: snapshot.compactRowCount
         )
