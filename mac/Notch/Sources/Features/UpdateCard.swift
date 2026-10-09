@@ -165,7 +165,7 @@ struct UpdateCard: View {
                     .background(Circle().fill(Palette.textPrimary.opacity(0.14)))
                     .contentShape(Circle())
             }
-            .buttonStyle(UpdateCardButtonStyle())
+            .buttonStyle(CardButtonStyle())
             .help(L10n.t("Close"))
         }
     }
@@ -184,7 +184,7 @@ struct UpdateCard: View {
             .background(Capsule().fill(Palette.textPrimary.opacity(0.14)))
             .contentShape(Capsule())
         }
-        .buttonStyle(UpdateCardButtonStyle())
+        .buttonStyle(CardButtonStyle())
     }
 
     private var progressBar: some View {
@@ -217,15 +217,5 @@ struct UpdateCard: View {
         case .down:     VStack(spacing: 0) { tail; card }
         case .up:       VStack(spacing: 0) { card; tail }
         }
-    }
-}
-
-/// A press that dips, for the card's buttons.
-private struct UpdateCardButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

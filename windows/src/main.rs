@@ -146,6 +146,8 @@ struct Interaction {
     card_hover: bool,
     /// Leave notification armed on the card window.
     card_tracking: bool,
+    /// The live control on the card under the pointer (drawn with a hover plate).
+    card_hit: Option<card::Hit>,
     /// `send::popup_hover(true)` was sent for the popup under the pointer.
     popup_hover_sent: bool,
     /// Consecutive fold polls with the pointer away from every open notch and card.
@@ -173,6 +175,7 @@ impl Interaction {
             card_shown: None,
             card_hover: false,
             card_tracking: false,
+            card_hit: None,
             popup_hover_sent: false,
             fold_outside: 0,
         }
@@ -1162,6 +1165,7 @@ fn hide_card() {
         let mut app = lock_state();
         app.ui.card_shown = None;
         app.ui.card_hover = false;
+        app.ui.card_hit = None;
         let release = std::mem::take(&mut app.ui.popup_hover_sent);
         (app.card.as_ref().map(OwnedWindow::key), release)
     };
@@ -1374,8 +1378,9 @@ fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notic
     };
     let live = panel.live();
     let phase = card_phase(&panel.content);
+    let hover = lock_state().ui.card_hit;
     let Some(canvas) =
-        with_text(|text| render::render_card(&panel.content, &live, dpi, text, phase))
+        with_text(|text| render::render_card_hover(&panel.content, &live, dpi, text, phase, hover))
     else {
         return;
     };
@@ -1446,14 +1451,50 @@ fn animate_card() {
         sync_card_animation(false);
         return;
     }
+    redraw_card(&panel, dpi, window);
+}
+
+/// Draws `panel` again in its window, with the hover plate on the control under the pointer.
+fn redraw_card(panel: &send::Panel, dpi: u32, window: isize) {
     let live = panel.live();
     let phase = card_phase(&panel.content);
+    let hover = lock_state().ui.card_hit;
     let Some(canvas) =
-        with_text(|text| render::render_card(&panel.content, &live, dpi, text, phase))
+        with_text(|text| render::render_card_hover(&panel.content, &live, dpi, text, phase, hover))
     else {
         return;
     };
     let _ = present(hwnd_from_key(window), &canvas, None);
+}
+
+/// The live control (one with an action) under `(x, y)` of the card window.
+fn card_hit_at(x: i32, y: i32) -> Option<card::Hit> {
+    let app = lock_state();
+    let shown = app.ui.card_shown.as_ref()?;
+    let dpi = app
+        .panels
+        .iter()
+        .find(|p| p.window.key() == shown.key)
+        .map(|p| p.slot.dpi)?;
+    let hit =
+        with_text(|text| render::hit_at(&shown.panel.content, dpi, text, (x, y))).flatten()?;
+    shown.panel.action(hit).map(|_| hit)
+}
+
+/// Moves the hover plate to the control under the pointer (or off every control).
+fn set_card_hit(hit: Option<card::Hit>) {
+    let (changed, shown) = {
+        let mut app = lock_state();
+        let changed = app.ui.card_hit != hit;
+        app.ui.card_hit = hit;
+        (changed, app.ui.card_shown.is_some())
+    };
+    if !changed || !shown {
+        return;
+    }
+    if let Some((panel, dpi, window)) = shown_card() {
+        redraw_card(&panel, dpi, window);
+    }
 }
 
 /// Starts or stops the one-second tick that expires alert cards.
@@ -1776,6 +1817,7 @@ fn on_card_click(x: i32, y: i32) {
         // The card is about to change or go; the pointer re-announces itself on the next one.
         let mut app = lock_state();
         app.ui.card_hover = false;
+        app.ui.card_hit = None;
         app.ui.popup_hover_sent = false;
     }
 }
@@ -1802,7 +1844,11 @@ fn on_notice_click(x: i32, y: i32) {
     } else {
         alerts::dismiss();
     }
-    lock_state().ui.card_hover = false;
+    {
+        let mut app = lock_state();
+        app.ui.card_hover = false;
+        app.ui.card_hit = None;
+    }
     sync_card();
 }
 
@@ -2276,10 +2322,26 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
             WM_MOUSEMOVE => {
                 if lock_state().ui.menu.is_none() {
                     on_card_mouse_move(hwnd);
+                    let (x, y) = lparam_point(lparam);
+                    set_card_hit(card_hit_at(x, y));
                 }
                 return LRESULT(0);
             }
+            WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
+                // A pointing hand over a control that acts, the arrow elsewhere.
+                let mut cursor = POINT::default();
+                let over = lock_state().ui.menu.is_none()
+                    && GetCursorPos(&mut cursor).is_ok()
+                    && ScreenToClient(hwnd, &mut cursor).as_bool()
+                    && card_hit_at(cursor.x, cursor.y).is_some();
+                let shape = if over { IDC_HAND } else { IDC_ARROW };
+                if let Ok(handle) = LoadCursorW(None, shape) {
+                    SetCursor(Some(handle));
+                }
+                return LRESULT(1);
+            }
             MSG_MOUSELEAVE => {
+                set_card_hit(None);
                 on_card_mouse_leave();
                 return LRESULT(0);
             }

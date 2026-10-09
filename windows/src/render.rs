@@ -1931,6 +1931,21 @@ pub fn render_card(
     text: &mut TextPainter,
     phase: Option<f32>,
 ) -> Canvas {
+    render_card_hover(content, live, dpi, text, phase, None)
+}
+
+/// Hover lift over a pressed-able control: white at 8%, as on the Mac.
+const HOVER_ALPHA: f32 = 0.08;
+
+/// `render_card` with a hover plate over `hover` (a live pill, round button or device row).
+pub fn render_card_hover(
+    content: &CardContent,
+    live: &Live,
+    dpi: u32,
+    text: &mut TextPainter,
+    phase: Option<f32>,
+    hover: Option<Hit>,
+) -> Canvas {
     let s = layout::scale(dpi);
     let rect = card_rect(content, text, s);
     let (width, height) = window_size(content, rect, s);
@@ -1949,7 +1964,46 @@ pub fn render_card(
     } else {
         pen.flow(content, &laid, live, origin);
     }
+    if let Some((x, y, w, h, radius)) = hover.and_then(|hit| hover_rect(content, &laid, hit)) {
+        canvas.fill_round_rect(
+            origin.0 + x * s,
+            origin.1 + y * s,
+            w * s,
+            h * s,
+            [radius * s; 4],
+            0xFFFFFF,
+            HOVER_ALPHA,
+        );
+    }
     canvas
+}
+
+/// The plate for `hit` in card DIPs `(x, y, width, height, radius)`: a header button, a pill
+/// or round button, or a whole device row.
+fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32, f32, f32, f32)> {
+    match hit {
+        Hit::Head(index) => {
+            let (x, y, w, h) = *laid.head.get(index)?;
+            Some((x, y, w, h, w.min(h) / 2.0))
+        }
+        Hit::Row(index, button) => {
+            let placed = laid.rows.get(index)?;
+            match content.rows.get(index)? {
+                Row::Buttons { .. } => {
+                    let (x, w) = *placed.spans.get(button)?;
+                    Some((x, placed.top, w, placed.height, w.min(placed.height) / 2.0))
+                }
+                Row::Device { .. } => Some((
+                    CARD_PAD,
+                    placed.top,
+                    laid.width - 2.0 * CARD_PAD,
+                    placed.height,
+                    DEVICE_RADIUS,
+                )),
+                _ => None,
+            }
+        }
+    }
 }
 
 fn menu_background(canvas: &mut Canvas, scale: f32) {
