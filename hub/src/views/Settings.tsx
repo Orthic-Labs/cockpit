@@ -26,13 +26,15 @@ export interface ClaudeWindow {
   seconds?: number;
 }
 
-/** A Claude account the notch has seen: the signed-in one live, the rest as last saved. */
+/** A Claude account on this Mac: each account folder Claude Desktop has, the signed-in one live, the rest as last saved or with no reading yet. */
 export interface ClaudeAccount {
   id: string;
   name: string;
   email?: string;
   plan?: string;
   active: boolean;
+  /** False only when the account's folder is gone; only such an account can be forgotten. */
+  onDisk?: boolean;
   /** Epoch seconds of the last reading; null before the first. */
   capturedAt: number | null;
   windows: ClaudeWindow[];
@@ -639,7 +641,6 @@ function asOf(secs: number): string {
 function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Send }) {
   const [draft, setDraft] = useState(account.name);
   useEffect(() => setDraft(account.name), [account.name]);
-  const saved = account.capturedAt != null;
   const commit = () => {
     const next = draft.trim();
     if (next !== account.name) send({ command: "renameClaudeAccount", id: account.id, name: next });
@@ -652,21 +653,20 @@ function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Sen
         <input
           className="ck-input ck-input-name"
           value={draft}
-          disabled={!saved}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           aria-label={`Name for ${account.name}`}
-          title={saved ? "Rename this account (empty restores the default name)" : "Renaming works after the first reading"}
+          title="Rename this account (empty restores the default name)"
         />
         {account.active && <span className="ck-status ck-status-granted">Active</span>}
         {account.plan && <span className="ck-sub">{account.plan}</span>}
-        {!account.active && (
+        {!account.active && account.onDisk === false && (
           <Button size="sm" variant="ghost" onClick={() => send({ command: "forgetClaudeAccount", id: account.id })}
-            title="Removes this account from the list. It returns if you sign in to it again.">Forget</Button>
+            title="Its folder is gone. Removes this account from the list; it returns if you sign in to it again.">Forget</Button>
         )}
       </div>
-      {rows.length === 0 && <div className="ck-sub">No reading yet.</div>}
+      {rows.length === 0 && <div className="ck-sub">No reading yet</div>}
       {rows.map(({ title, window: w }) => {
         const left = resetsIn(w.resetsAt);
         const pct = Math.round(Math.min(Math.max(w.usedFraction, 0), 1) * 100);

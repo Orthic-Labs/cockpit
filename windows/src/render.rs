@@ -3,11 +3,11 @@
 //! surface. Pure of window state: callers pass data and get pixels.
 
 use crate::canvas::{Canvas, Mask};
-use crate::card::{Button, CardContent, Dot, Head, Hit, Lead, Live, Mark, Row, Tone};
+use crate::card::{Button, CardContent, Head, Hit, Lead, Live, Mark, Row, Tone};
 use crate::fileicon;
 use crate::glyphs::{self, Glyph, Symbol, Tile};
 use crate::layout::{
-    self, Activity, Badges, CellView, Edge, INK_PRIMARY, INK_SECONDARY, PROGRESS_STROKE, RING,
+    self, Badges, CellView, Edge, INK_PRIMARY, INK_SECONDARY, PROGRESS_STROKE, RING,
     RING_TRACK_ALPHA, TRACK_STROKE, WEEKLY_RADIUS, WEEKLY_STROKE,
 };
 use crate::surface::TextPainter;
@@ -375,24 +375,6 @@ fn draw_cell(canvas: &mut Canvas, view: &CellView, (cx, cy): (f32, f32), s: f32)
             dim
         },
     );
-    // Waiting on a question / just completed: a full ring inside the track, at full strength
-    // even when the usage reading is stale (it is first-hand).
-    let activity = match view.activity {
-        Activity::None => None,
-        Activity::Waiting => Some(layout::BAND_WATCH),
-        Activity::Success => Some(layout::BAND_AMPLE),
-    };
-    if let Some(activity) = activity {
-        canvas.stroke_arc(
-            cx,
-            cy,
-            layout::ACTIVITY_RADIUS * s,
-            layout::ACTIVITY_STROKE * s,
-            1.0,
-            activity,
-            1.0,
-        );
-    }
 }
 
 /// A single cell on a transparent canvas (no notch body): what the view shots show for a ring.
@@ -452,10 +434,7 @@ const BLOCK_GAP: f32 = 7.5;
 const LABEL_TO_BAR: f32 = 6.3;
 const BAR_TO_USED: f32 = 6.7;
 const BAR_HEIGHT: f32 = 3.95;
-const SESSION_GAP: f32 = 3.8;
-const HAIRLINE: f32 = 0.94;
 const STATUS_DOT: f32 = 6.4;
-const STATUS_STROKE: f32 = 1.28;
 const STATUS_GAP: f32 = 4.1;
 const BUTTON_HEIGHT: f32 = 22.0;
 const BUTTON_RADIUS: f32 = 6.0;
@@ -470,9 +449,8 @@ const GROUP_RADIUS: f32 = 7.5;
 const GROUP_STROKE: f32 = 0.56;
 const GROUP_ALPHA: f32 = 0.25;
 const GROUP_GAP: f32 = 10.5;
-/// White over the black card: bar tracks and button plates (0.176), the rule (0.188).
+/// White over the black card: bar tracks and button plates (0.176).
 const TRACK_ALPHA: f32 = 0.176;
-const RULE_ALPHA: f32 = 0.188;
 
 /// The wide card of the disk image and update cards (820 design px).
 const WIDE_WIDTH: f32 = 308.3;
@@ -801,8 +779,6 @@ fn flow_row(
             paragraph(text, value, room)
         }
         Row::Alert(value) => paragraph(text, value, room - STATUS_DOT - STATUS_GAP),
-        Row::Rule => (HAIRLINE, Vec::new(), Vec::new()),
-        Row::Session { .. } => (2.0 * m.line + SESSION_GAP, Vec::new(), Vec::new()),
         Row::Buttons { buttons, close } => (
             PILL_HEIGHT,
             Vec::new(),
@@ -1314,20 +1290,6 @@ impl Pen<'_> {
         self.put(summary, left, base(next), body(INK_PRIMARY), false);
     }
 
-    /// The ring beside a session's status: turning (three quarters) while busy, half a ring
-    /// when blocked, whole otherwise.
-    fn status_ring(&mut self, (cx, cy): (f32, f32), dot: Dot) {
-        let (fraction, color) = match dot {
-            Dot::Busy => (0.75, INK_PRIMARY),
-            Dot::Waiting => (0.5, layout::BAND_WATCH),
-            Dot::Success => (1.0, layout::BAND_AMPLE),
-            Dot::Idle => (1.0, INK_SECONDARY),
-        };
-        let radius = (STATUS_DOT - STATUS_STROKE) / 2.0 * self.s;
-        self.canvas
-            .stroke_arc(cx, cy, radius, STATUS_STROKE * self.s, fraction, color, 1.0);
-    }
-
     /// The paused-circle mark in front of a limit line.
     fn pause_mark(&mut self, (cx, cy): (f32, f32)) {
         let s = self.s;
@@ -1751,41 +1713,6 @@ impl Pen<'_> {
                     );
                     let indent = left + (STATUS_DOT + STATUS_TEXT_GAP) * s;
                     self.put(text, indent, base(0.0), body(colour), false);
-                }
-                Row::Rule => self.canvas.fill_round_rect(
-                    left,
-                    y,
-                    right - left,
-                    (HAIRLINE * s).max(1.0),
-                    [0.0; 4],
-                    0xFFFFFF,
-                    RULE_ALPHA,
-                ),
-                Row::Session {
-                    name,
-                    dot,
-                    word,
-                    detail,
-                    age,
-                } => {
-                    let ink = match dot {
-                        Dot::Busy => INK_PRIMARY,
-                        Dot::Waiting => layout::BAND_WATCH,
-                        Dot::Success => layout::BAND_AMPLE,
-                        Dot::Idle => INK_SECONDARY,
-                    };
-                    let word_width = self.put(word, right, base(0.0), body(ink), true) as f32;
-                    let centre_x = right - word_width - (STATUS_GAP + STATUS_DOT / 2.0) * s;
-                    self.status_ring((centre_x, y + DRAWN.line / 2.0 * s), *dot);
-                    let room = centre_x - left - (STATUS_DOT / 2.0 + VALUE_GAP) * s;
-                    let name = self.fit(name, body(INK_PRIMARY), room as i32);
-                    self.put(&name, left, base(0.0), body(INK_PRIMARY), false);
-                    let second = DRAWN.line + SESSION_GAP;
-                    let age_width =
-                        self.put(age, right, base(second), body(INK_SECONDARY), true) as f32;
-                    let room = right - left - age_width - VALUE_GAP * s;
-                    let detail = self.fit(detail, body(INK_SECONDARY), room as i32);
-                    self.put(&detail, left, base(second), body(INK_SECONDARY), false);
                 }
                 Row::Buttons { buttons, .. } => {
                     self.button_row(buttons, placed, live, (index, ox, y));

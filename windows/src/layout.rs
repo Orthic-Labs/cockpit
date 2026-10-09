@@ -87,17 +87,6 @@ impl Edge {
     }
 }
 
-/// What the Claude ring's inner activity ring shows (Mac `ActivityArc`): amber while a
-/// session is blocked on a question, green for a session that just completed. Working
-/// sessions draw nothing, as on the Mac.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Activity {
-    #[default]
-    None,
-    Waiting,
-    Success,
-}
-
 /// Notch-wide badges: a newer version is waiting, or an approval is pending.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Badges {
@@ -138,9 +127,6 @@ pub const CARD_GAP: f32 = 6.0;
 /// Folded pill: depth (band included) and length along the edge.
 pub const PILL_DEPTH: f32 = 26.0 * DESIGN;
 pub const PILL_LONG: f32 = 210.0 * DESIGN;
-/// Inner activity ring (Mac `activityDiameter` 72 px of the 117 px ring, 5.5 px stroke).
-pub const ACTIVITY_RADIUS: f32 = 36.0 * DESIGN;
-pub const ACTIVITY_STROKE: f32 = 5.5 * DESIGN;
 pub const BADGE_PERMISSIONS: u32 = 0xFFB340;
 pub const BADGE_UPDATE: u32 = 0xA51D24;
 
@@ -211,8 +197,6 @@ pub struct CellView {
     /// Ring colour decided by the reading itself rather than by the used share (Memory).
     /// `None` colours by the share's band.
     pub band: Option<u32>,
-    /// Inner activity ring.
-    pub activity: Activity,
 }
 
 fn percent(fraction: f32) -> u8 {
@@ -247,16 +231,6 @@ pub fn memory_band(machine: Option<&Machine>) -> Option<u32> {
 /// Builds the five cell views (Claude, Codex, System, Disks, Send). Unknown readings are
 /// `None` and draw as a dimmed, empty ring.
 pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -> Vec<CellView> {
-    views_with(machine, usage, ring, Activity::None)
-}
-
-/// `views` with the Claude ring's session activity.
-pub fn views_with(
-    machine: Option<&Machine>,
-    usage: &[Usage; 2],
-    ring: &send::Ring,
-    claude: Activity,
-) -> Vec<CellView> {
     let system = |cell: Cell, main: Option<f32>, inner: Option<f32>| CellView {
         glyph: cell.glyph(),
         main: main.map(percent),
@@ -265,9 +239,8 @@ pub fn views_with(
         problem: false,
         blocked: false,
         band: None,
-        activity: Activity::None,
     };
-    let ai = |cell: Cell, usage: &Usage, activity: Activity| {
+    let ai = |cell: Cell, usage: &Usage| {
         let main = usage.headline().map(|w| percent(w.fraction));
         CellView {
             glyph: cell.glyph(),
@@ -277,7 +250,6 @@ pub fn views_with(
             problem: false,
             blocked: usage.block.is_some(),
             band: None,
-            activity,
         }
     };
     // System: memory leads, CPU is the thin inner ring (CPU alone when memory is unknown).
@@ -301,8 +273,8 @@ pub fn views_with(
         None => system(Cell::Disk, startup, None),
     };
     vec![
-        ai(Cell::Claude, &usage[0], claude),
-        ai(Cell::Codex, &usage[1], Activity::None),
+        ai(Cell::Claude, &usage[0]),
+        ai(Cell::Codex, &usage[1]),
         system_cell,
         disks,
         CellView {
@@ -313,8 +285,7 @@ pub fn views_with(
             problem: ring.problem,
             blocked: false,
             band: None,
-            activity: Activity::None,
-        },
+            },
     ]
 }
 

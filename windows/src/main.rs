@@ -32,7 +32,6 @@ mod render;
 mod runtime;
 mod send;
 mod sensors;
-mod sessions;
 mod settings;
 mod shot;
 mod surface;
@@ -907,7 +906,6 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
 /// changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     let ring = send::ring();
-    let activity = sessions::activity(&sessions::snapshot());
     let (views, slot, badges) = {
         let app = lock_state();
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
@@ -917,7 +915,7 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
         let views = if panel.slot.folded {
             Vec::new()
         } else {
-            layout::views_with(app.machine.as_ref(), usage, &ring, activity)
+            layout::views(app.machine.as_ref(), usage, &ring)
         };
         let drawn = (
             &views,
@@ -1300,12 +1298,6 @@ fn sync_card() {
             card::panel_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now, popup)
         }
     };
-    // Claude Code sessions on this PC, listed under the Claude ring's limits.
-    if Cell::ALL[cell] == Cell::Claude && !is_popup && !show_notice {
-        for row in sessions::card_rows(&sessions::snapshot(), sessions::now_ms()) {
-            panel.row(row, None);
-        }
-    }
     // The shown card carries the tail `show_card` gave it; compare the content without it.
     panel.content.tail = lock_state()
         .ui

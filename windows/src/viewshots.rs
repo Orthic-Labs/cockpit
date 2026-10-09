@@ -22,7 +22,6 @@ use crate::layout::{self, Badges, Cell, CellView, Edge};
 use crate::render;
 use crate::send::{self, Action, Panel};
 use crate::sensors::{Drive, Machine, MemInfo, NetRate, Reading};
-use crate::sessions::{self, Session, State};
 use crate::surface::TextPainter;
 use crate::update;
 use crate::usage::{Block, LimitWindow, Status, Usage};
@@ -845,13 +844,6 @@ fn card_canvas_at(panel: &Panel, edge: Edge, text: &mut TextPainter) -> Canvas {
     render::render_card(&content, &live, DPI, text, None)
 }
 
-/// The Claude card's session list (what the live notch appends under the limit windows).
-fn add_sessions(panel: &mut Panel, listed: &[Session]) {
-    for row in sessions::card_rows(listed, NOW * 1000) {
-        panel.row(row, None);
-    }
-}
-
 /// One ring, by its place in the notch (the System ring carries memory and CPU).
 fn ring(fixture: &Value, text: &mut TextPainter) -> Outcome {
     let cell = fixture.get("cell").ok_or("Fixture has no cell")?;
@@ -886,10 +878,7 @@ fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
             } else {
                 Cell::Codex
             };
-            let mut panel = scene.panel(which);
-            if which == Cell::Claude {
-                add_sessions(&mut panel, &fixture_sessions(cell));
-            }
+            let panel = scene.panel(which);
             Ok(vec![(card_canvas(&panel, text), 0, 0)])
         }
         // One System card: CPU, memory pressure, GPU, network, fans (and temperature).
@@ -901,17 +890,11 @@ fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
 }
 
 /// What the fixture states that the Windows readers do not derive on their own: the Memory
-/// ring's colour band (`band`, or none when the pressure is unknown, so the share decides) and
-/// the Claude ring's session activity ring. A spent limit (`block`) already arrives through
-/// the cell's `Usage`.
+/// ring's colour band (`band`, or none when the pressure is unknown, so the share decides).
+/// A spent limit (`block`) already arrives through the cell's `Usage`.
 fn overlay(views: &mut [CellView], cells: &[&Value]) {
     for cell in cells {
         match str_of(cell, "id") {
-            Some("claude") => {
-                if let Some(view) = views.get_mut(0) {
-                    view.activity = sessions::activity(&fixture_sessions(cell));
-                }
-            }
             Some("system-cpu") => {
                 let band = arr(cell, "windows")
                     .iter()
@@ -931,30 +914,6 @@ fn overlay(views: &mut [CellView], cells: &[&Value]) {
             _ => {}
         }
     }
-}
-
-/// The agent sessions a Claude cell lists, as the session reader would hand them over.
-fn fixture_sessions(cell: &Value) -> Vec<Session> {
-    arr(cell, "sessions")
-        .iter()
-        .map(|session| {
-            let state = match str_of(session, "state") {
-                Some("waiting") => State::Waiting,
-                Some("busy") => State::Busy,
-                Some("success") => State::Success,
-                _ => State::Idle,
-            };
-            let minutes = num_of(session, "sinceMinutes").unwrap_or(0.0) as u64;
-            Session {
-                id: str_of(session, "name").unwrap_or("").to_string(),
-                name: str_of(session, "name").unwrap_or("").to_string(),
-                detail: str_of(session, "detail").unwrap_or("").to_string(),
-                state,
-                waiting_for: str_of(session, "waitingFor").map(str::to_string),
-                since_ms: (NOW - minutes * 60) * 1000,
-            }
-        })
-        .collect()
 }
 
 /// The notch on its fixture's edge, folded or open, with its badges and the hover card beside
@@ -987,15 +946,7 @@ fn notch(_id: &str, fixture: &Value, text: &mut TextPainter) -> Outcome {
             .iter()
             .position(|c| *c == cell)
             .ok_or("Unknown hover cell")?;
-        let mut panel = scene.panel(cell);
-        if cell == Cell::Claude {
-            let listed = cells
-                .iter()
-                .find(|c| str_of(c, "id") == Some("claude"))
-                .map(|c| fixture_sessions(c))
-                .unwrap_or_default();
-            add_sessions(&mut panel, &listed);
-        }
+        let panel = scene.panel(cell);
         let card = card_canvas_at(&panel, edge, text);
         let (ring_x, ring_y) = layout::ring_center(edge, index, DPI);
         let centre = if edge.is_vertical() {

@@ -190,12 +190,15 @@ final class HubBridge {
                         return entry
                     }
                 }
-                // Every Claude account this Mac has seen, for the hub's list:
-                // the signed-in one live, the others as last saved.
+                // Every Claude account on this Mac, for the hub's list: each
+                // account folder Claude Desktop has, the signed-in one marked,
+                // the others as last saved or with no reading yet.
                 if summary.id == ClaudeProfile.defaultID, let book = store.claudeAccountBook {
                     let profile = ClaudeProfile.default()
-                    row["claudeAccounts"] = book.published(activeID: profile.accountID(),
-                                                           activeEmail: profile.signedInAddress())
+                    let code = profile.accountID()
+                    row["claudeAccounts"] = book.published(
+                        activeID: ClaudeAccountWatcher.desktopAccountUUID() ?? code,
+                        codeID: code, codeEmail: profile.signedInAddress())
                 }
                 if let title = summary.signIn.actionTitle { row["signInTitle"] = title }
                 return row
@@ -275,7 +278,9 @@ final class HubBridge {
             }
         case "forgetClaudeAccount":
             if let id = command["id"] as? String {
-                store.claudeAccountBook?.forget(id: id, keepingActive: ClaudeProfile.default().accountID())
+                store.claudeAccountBook?.forget(
+                    id: id,
+                    keepingActive: ClaudeAccountWatcher.desktopAccountUUID() ?? ClaudeProfile.default().accountID())
             }
         case "refresh": actions.refresh()
         case "resetPosition": actions.resetPosition()

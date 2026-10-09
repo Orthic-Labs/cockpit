@@ -21,15 +21,6 @@ pub enum Mark {
     Send,
 }
 
-/// What a session is doing: the ring and colour beside its status word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dot {
-    Busy,
-    Waiting,
-    Success,
-    Idle,
-}
-
 /// The speech-bubble tail: the notch's `edge` (the tail leaves the card on the side facing
 /// it) and how far, in device pixels along the card's own axis, it sits from the card's
 /// middle so its point stays on the hovered ring.
@@ -137,8 +128,6 @@ pub enum Row {
     Text(String),
     /// Critical-ink line that says the account is stopped (a spent limit).
     Alert(String),
-    /// Hairline that sets the session list apart from the limit windows.
-    Rule,
     /// A line in a tone (the amber caveat under a disk image's detail).
     Tinted { text: String, tone: Tone },
     /// A filled dot and a line in its tone (an alert's status).
@@ -155,14 +144,6 @@ pub enum Row {
     },
     /// A spinner with a line beside it.
     Waiting(String),
-    /// A live session: name and status word with its ring, then detail and age.
-    Session {
-        name: String,
-        dot: Dot,
-        word: String,
-        detail: String,
-        age: String,
-    },
 }
 
 impl Row {

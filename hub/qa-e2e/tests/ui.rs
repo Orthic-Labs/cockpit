@@ -149,12 +149,14 @@ fn notch_fixture() -> Value {
                 "summary": "claude@example.test", "label": "claude@example.test", "plan": "Pro",
                 "signInExplanation": "Pulse reads the Claude login on this Mac.",
                 "limits": [{"label": "Session", "usedFraction": 0.5, "seconds": 18000}],
-                // Two Claude accounts: the signed-in one, and an older one saved with a
-                // session window whose reset has passed (shown as "Reset", no percentage).
+                // Three Claude accounts: the signed-in one, an older one saved with a
+                // session window whose reset has passed (shown as "Reset", no percentage;
+                // its folder is gone, so it can be forgotten), and one that exists only as a
+                // folder on disk, never read ("No reading yet", nameable, not forgettable).
                 "claudeAccounts": [
                     {
                         "id": "qa-active", "name": "Work", "email": "claude@example.test",
-                        "plan": "Max 5x", "active": true, "capturedAt": now - 60.0,
+                        "plan": "Max 5x", "active": true, "onDisk": true, "capturedAt": now - 60.0,
                         "windows": [
                             {"label": "Current session", "usedFraction": 0.42, "resetsAt": now + 7200.0, "seconds": 18000},
                             {"label": "All models", "usedFraction": 0.3, "resetsAt": now + 3.0 * 86400.0, "seconds": 604800},
@@ -162,11 +164,15 @@ fn notch_fixture() -> Value {
                     },
                     {
                         "id": "qa-cached", "name": "old@example.test", "email": "old@example.test",
-                        "plan": "Pro", "active": false, "capturedAt": now - 2.0 * 86400.0,
+                        "plan": "Pro", "active": false, "onDisk": false, "capturedAt": now - 2.0 * 86400.0,
                         "windows": [
                             {"label": "Current session", "usedFraction": 0.9, "resetsAt": now - 40.0 * 3600.0, "seconds": 18000},
                             {"label": "All models", "usedFraction": 0.55, "resetsAt": now + 86400.0, "seconds": 604800},
                         ],
+                    },
+                    {
+                        "id": "5e6f7a8b-0000-4000-8000-000000000001", "name": "Claude 5e6f7a8b",
+                        "active": false, "onDisk": true, "capturedAt": null, "windows": [],
                     },
                 ],
             },
@@ -236,8 +242,8 @@ fn check_switches(ctl: &Control, sec: &Section, shots: &Path) -> usize {
     count
 }
 
-/// Accounts: both Claude accounts are listed by name, the signed-in one carries the Active
-/// badge, the cached one's past session reset reads "Reset" (no percentage) while its
+/// Accounts: all three Claude accounts are listed by name, the signed-in one carries the Active
+/// badge, a folder-only account reads "No reading yet" with its rename enabled and no Forget, the cached one's past session reset reads "Reset" (no percentage) while its
 /// future weekly reset keeps its percentage, and renaming leaves a command for the notch.
 fn claude_accounts_fail(ctl: &Control, shots: &Path, rows: &[Value], why: &str) -> ! {
     let _ = ctl.screenshot_to(&shots.join("FAIL-accounts-claude.png"));
@@ -255,16 +261,18 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
                 text: w.innerText.replace(/\s+/g, ' '),
             })),
             asOf: /as of /.test(r.innerText),
+            noReading: /No reading yet/.test(r.innerText),
+            renamable: !!r.querySelector('input') && !r.querySelector('input').disabled,
         }));
         return rows;
     "#;
     let rows = ctl.eval(js).expect("eval claude accounts");
     let rows = rows.as_array().cloned().unwrap_or_default();
     let fail = |why: String| claude_accounts_fail(ctl, shots, &rows, &why);
-    if rows.len() != 2 {
-        fail(format!("expected 2 accounts, found {}", rows.len()));
+    if rows.len() != 3 {
+        fail(format!("expected 3 accounts, found {}", rows.len()));
     }
-    let (active, cached) = (&rows[0], &rows[1]);
+    let (active, cached, folder) = (&rows[0], &rows[1], &rows[2]);
     if active["name"] != "Work" || active["active"] != true || active["forget"] != false || active["asOf"] != false {
         fail("the signed-in account should be \"Work\", Active, not forgettable and without an \"as of\" line".into());
     }
@@ -283,37 +291,52 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
     if cached["wins"][0]["text"].as_str().unwrap_or("").contains('%') {
         fail("a window past its reset must show no percentage".into());
     }
+    if folder["name"] != "Claude 5e6f7a8b"
+        || folder["active"] != false
+        || folder["forget"] != false
+        || folder["asOf"] != false
+        || folder["noReading"] != true
+        || folder["renamable"] != true
+        || folder["wins"].as_array().is_some_and(|w| !w.is_empty())
+    {
+        fail("the folder-only account should read \"Claude 5e6f7a8b\", \"No reading yet\", have its rename enabled, no windows, no \"as of\" line and no Forget".into());
+    }
 
-    // Rename the cached account in the field, as a person would; the hub must leave the
-    // notch a command (nothing runs a notch here, so it stays in hub-commands).
-    let rename = r#"
-        const input = document.querySelector('.ck-claude-account[data-account="qa-cached"] input');
-        if (!input) return false;
-        input.focus();
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Old Pro');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.blur();
-        return true;
-    "#;
-    ctl.wait_eval(rename, Duration::from_secs(10)).expect("rename field");
+    // Rename an account in its field, as a person would; the hub must leave the notch a
+    // command (nothing runs a notch here, so it stays in hub-commands). The folder-only
+    // account is named before it was ever read.
     let commands = bridge.join("hub-commands");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let found = std::fs::read_dir(&commands)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-            .filter_map(|t| serde_json::from_str::<Value>(&t).ok())
-            .any(|c| c["command"] == "renameClaudeAccount" && c["id"] == "qa-cached" && c["name"] == "Old Pro");
-        if found {
-            break;
+    for (id, name) in [("qa-cached", "Old Pro"), ("5e6f7a8b-0000-4000-8000-000000000001", "Spare")] {
+        let rename = format!(
+            r#"
+            const input = document.querySelector('.ck-claude-account[data-account="{id}"] input');
+            if (!input) return false;
+            input.focus();
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '{name}');
+            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            input.blur();
+            return true;
+        "#
+        );
+        ctl.wait_eval(&rename, Duration::from_secs(10)).expect("rename field");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let found = std::fs::read_dir(&commands)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .filter_map(|t| serde_json::from_str::<Value>(&t).ok())
+                .any(|c| c["command"] == "renameClaudeAccount" && c["id"] == id && c["name"] == name);
+            if found {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = ctl.screenshot_to(&shots.join("FAIL-accounts-rename.png"));
+                panic!("renaming Claude account {id} left no renameClaudeAccount command in {}", commands.display());
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
-        if std::time::Instant::now() > deadline {
-            let _ = ctl.screenshot_to(&shots.join("FAIL-accounts-rename.png"));
-            panic!("renaming a Claude account left no renameClaudeAccount command in {}", commands.display());
-        }
-        std::thread::sleep(Duration::from_millis(200));
     }
 }
 

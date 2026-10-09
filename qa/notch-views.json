@@ -2113,22 +2113,7 @@
           ],
           "headline": "session",
           "weekly": "weekly_all",
-          "plan": "Max 5x",
-          "sessions": [
-            {
-              "name": "demo-app",
-              "detail": "~/work/demo-app · main",
-              "state": "busy",
-              "sinceMinutes": 6
-            },
-            {
-              "name": "api-server",
-              "detail": "~/work/api-server",
-              "state": "waiting",
-              "waitingFor": "Run the test suite?",
-              "sinceMinutes": 2
-            }
-          ]
+          "plan": "Max 5x"
         },
         {
           "id": "codex",
@@ -2317,22 +2302,7 @@
           ],
           "headline": "session",
           "weekly": "weekly_all",
-          "plan": "Max 5x",
-          "sessions": [
-            {
-              "name": "demo-app",
-              "detail": "~/work/demo-app · main",
-              "state": "busy",
-              "sinceMinutes": 6
-            },
-            {
-              "name": "api-server",
-              "detail": "~/work/api-server",
-              "state": "waiting",
-              "waitingFor": "Run the test suite?",
-              "sinceMinutes": 2
-            }
-          ]
+          "plan": "Max 5x"
         },
         {
           "id": "codex",
@@ -2702,103 +2672,6 @@
         "glyph": "claude",
         "status": "needs-auth",
         "windows": []
-      }
-    }
-  },
-  {
-    "id": "ring-claude-waiting",
-    "title": "Claude ring, session waiting on you",
-    "area": "ring",
-    "description": "Claude: normal reading with the inner amber ring pulsing because a session is blocked on a question.",
-    "backdrop": "#000000",
-    "fixture": {
-      "kind": "ring",
-      "weeklyRing": "inside",
-      "cell": {
-        "id": "claude",
-        "name": "Claude",
-        "glyph": "claude",
-        "status": "ok",
-        "windows": [
-          {
-            "id": "session",
-            "label": "Current session",
-            "used": 0.21,
-            "resetsInMinutes": 51
-          },
-          {
-            "id": "weekly_all",
-            "label": "All models",
-            "used": 0.12,
-            "resetsInMinutes": 3192
-          },
-          {
-            "id": "weekly_sonnet",
-            "label": "Sonnet",
-            "used": 0.08,
-            "resetsInMinutes": 3192
-          }
-        ],
-        "headline": "session",
-        "weekly": "weekly_all",
-        "plan": "Max 5x",
-        "sessions": [
-          {
-            "name": "api-server",
-            "detail": "~/work/api-server",
-            "state": "waiting",
-            "waitingFor": "Run the test suite?",
-            "sinceMinutes": 2
-          }
-        ]
-      }
-    }
-  },
-  {
-    "id": "ring-claude-complete",
-    "title": "Claude ring, session complete",
-    "area": "ring",
-    "description": "Claude: normal reading with the inner green ring shown when an agent session has just completed.",
-    "backdrop": "#000000",
-    "fixture": {
-      "kind": "ring",
-      "weeklyRing": "inside",
-      "cell": {
-        "id": "claude",
-        "name": "Claude",
-        "glyph": "claude",
-        "status": "ok",
-        "windows": [
-          {
-            "id": "session",
-            "label": "Current session",
-            "used": 0.21,
-            "resetsInMinutes": 51
-          },
-          {
-            "id": "weekly_all",
-            "label": "All models",
-            "used": 0.12,
-            "resetsInMinutes": 3192
-          },
-          {
-            "id": "weekly_sonnet",
-            "label": "Sonnet",
-            "used": 0.08,
-            "resetsInMinutes": 3192
-          }
-        ],
-        "headline": "session",
-        "weekly": "weekly_all",
-        "plan": "Max 5x",
-        "sessions": [
-          {
-            "name": "demo-app",
-            "detail": "~/work/demo-app",
-            "state": "success",
-            "sinceMinutes": 0
-          }
-        ]
       }
     }
   },
@@ -3918,7 +3791,7 @@
     "id": "tooltip-claude-normal",
     "title": "Claude card, normal",
     "area": "hover-card",
-    "description": "Claude hover card: plan, session and weekly windows with reset times, and the live session list.",
+    "description": "Claude hover card: plan, session and weekly windows with reset times.",
     "backdrop": "#2B2B2F",
     "fixture": {
       "kind": "tooltip",
@@ -3949,28 +3822,7 @@
         ],
         "headline": "session",
         "weekly": "weekly_all",
-        "plan": "Max 5x",
-        "sessions": [
-          {
-            "name": "demo-app",
-            "detail": "~/work/demo-app · main",
-            "state": "busy",
-            "sinceMinutes": 6
-          },
-          {
-            "name": "api-server",
-            "detail": "~/work/api-server",
-            "state": "waiting",
-            "waitingFor": "Run the test suite?",
-            "sinceMinutes": 2
-          },
-          {
-            "name": "docs-site",
-            "detail": "~/work/docs-site",
-            "state": "idle",
-            "sinceMinutes": 41
-          }
-        ]
+        "plan": "Max 5x"
       }
     }
   },
@@ -4434,7 +4286,7 @@
           {
             "id": "hint-paste",
             "label": "",
-            "detail": "\u2318V sends the clipboard \u00b7 drop files here"
+            "detail": "⌘V sends the clipboard · drop files here"
           }
         ],
         "headline": "transfer"

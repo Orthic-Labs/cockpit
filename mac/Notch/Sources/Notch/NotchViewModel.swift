@@ -1127,7 +1127,11 @@ final class NotchViewModel: ObservableObject {
     }
 
     func activity(for providerID: String) -> ActivitySummary? {
-        ActivitySummary(sessions: sessions[providerID] ?? [])
+        // Pulse fork (owner decision): Claude Code sessions are neither listed
+        // on the Claude card nor drawn as an arc on its ring; both follow
+        // usage limits only.
+        if ClaudeProfile.isClaude(providerID: providerID) { return nil }
+        return ActivitySummary(sessions: sessions[providerID] ?? [])
     }
 
     var hoveredSnapshot: ProviderSnapshot? {
