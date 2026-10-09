@@ -293,7 +293,7 @@ pub fn identify(
             });
         return hit
             .map(caller_of)
-            .ok_or_else(|| BridgeError::NotFound(wanted));
+            .ok_or(BridgeError::NotFound(wanted));
     }
     let claude_id = var("CLAUDE_SESSION_ID").or_else(|| var("CLAUDE_CODE_SESSION_ID"));
     if let Some(socket) = var("CLAUDE_CODE_MESSAGING_SOCKET") {
@@ -384,7 +384,8 @@ pub fn send_text(
             msg_id: env.id,
             to: peer,
             status: "queued".to_string(),
-            detail: "No Pulse relay is running (open Pulse); it is sent when one starts.".to_string(),
+            detail: "No Pulse relay is running (open Pulse); it is sent when one starts."
+                .to_string(),
         });
     }
     let started = Instant::now();

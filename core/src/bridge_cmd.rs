@@ -18,8 +18,7 @@ use std::time::Duration;
 pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     if args.is_empty() {
         return Err(
-            "bridge needs a command: peers, send, pair, status, install, uninstall, inbox"
-                .into(),
+            "bridge needs a command: peers, send, pair, status, install, uninstall, inbox".into(),
         );
     }
     let command = args.remove(0);

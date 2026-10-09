@@ -666,8 +666,7 @@ impl ReplyHub {
                     .unwrap_or_default()
             };
             let from_session_id = pick("from-session", "from_session_id");
-            if from_session_id.is_empty() || !(self.is_known)(&from_session_id) || text.is_empty()
-            {
+            if from_session_id.is_empty() || !(self.is_known)(&from_session_id) || text.is_empty() {
                 continue;
             }
             (self.on_reply)(ReplyMessage {
