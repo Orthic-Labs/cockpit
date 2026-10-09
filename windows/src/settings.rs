@@ -102,8 +102,11 @@ pub struct PillSettings {
     pub screenshot_to_desktop: bool,
     /// Per-monitor notch position along the top edge, per mille of the monitor width.
     pub positions: BTreeMap<String, u16>,
-    /// Per-monitor screen edge the notch is docked to (top when absent).
+    /// Per-monitor screen edge the notch is docked to (`edge_default` when absent).
     pub edges: BTreeMap<String, Edge>,
+    /// Edge for monitors without an entry in `edges`: what the hub's Edge control sets on a
+    /// fresh install, before any monitor is known by name. Top by default.
+    pub edge_default: Edge,
     /// The notch rests as a small pill and opens when the pointer reaches it (the Mac's "Show
     /// on hover", its default); false keeps it open ("Always show"). On by default.
     pub folds: bool,
@@ -143,6 +146,7 @@ impl PillSettings {
             visible: true,
             cadence_seconds: CADENCE_DEFAULT,
             monitors: BTreeMap::new(),
+            edge_default: Edge::Top,
             launch_at_login: false,
             mac_shortcuts: false,
             screenshot_shortcuts: true,
@@ -184,9 +188,9 @@ impl PillSettings {
         }
         self.positions.insert(key.to_string(), value) != Some(value)
     }
-    /// Edge a monitor's notch is docked to; unknown monitors use the top edge.
+    /// Edge a monitor's notch is docked to; unknown monitors use `edge_default`.
     pub fn edge(&self, key: &str) -> Edge {
-        self.edges.get(key).copied().unwrap_or_default()
+        self.edges.get(key).copied().unwrap_or(self.edge_default)
     }
     /// Remembers the docked edge. False when unchanged or the key is unusable or the table
     /// is full.
@@ -197,7 +201,7 @@ impl PillSettings {
         if !self.edges.contains_key(key) && self.edges.len() >= MAX_MONITORS {
             return false;
         }
-        if edge == Edge::default() && !self.edges.contains_key(key) {
+        if edge == self.edge_default && !self.edges.contains_key(key) {
             return false;
         }
         self.edges.insert(key.to_string(), edge) != Some(edge)
@@ -666,6 +670,13 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         }
         Some(_) => return Err(ParseError::Malformed),
     }
+    match member(&root, "edge") {
+        None | Some(Json::Null) => {}
+        Some(Json::Text(text)) => {
+            settings.edge_default = Edge::parse(text).ok_or(ParseError::Malformed)?;
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
     Ok(settings)
 }
 
@@ -790,6 +801,9 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
             out.push_str(&format!(":\"{}\"", edge.as_str()));
         }
         out.push('}');
+    }
+    if settings.edge_default != Edge::Top {
+        out.push_str(&format!(",\"edge\":\"{}\"", settings.edge_default.as_str()));
     }
     out.push_str("}\n");
     if out.len() > MAX_FILE_BYTES

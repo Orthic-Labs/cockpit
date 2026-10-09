@@ -31,6 +31,9 @@ const STATE_EVENT: &str = "Local\\dev.orthic.pulse.notch.state";
 const COMMAND_EVENT: &str = "Local\\dev.orthic.pulse.hub.command";
 const STATE_FILE: &str = "notch-state.json";
 const COMMANDS_DIR: &str = "hub-commands";
+/// Posted to the controller when a hub command changed where or how a notch is placed
+/// (edge, position, monitor set, fold, visibility): it re-plans the panels like a display change.
+pub const MSG_PLACEMENT_CHANGED: u32 = 0x8002;
 /// Command files handled per pass; the rest wait for the next one.
 const MAX_COMMANDS: usize = 64;
 const PROVIDERS: [(&str, &str); 2] = [("claude", "Claude"), ("codex", "Codex")];
@@ -443,7 +446,24 @@ fn commit(
     shot::set_save_to_desktop(next.screenshot_to_desktop);
     // `mac_shortcuts`, `screenshot_shortcuts` and `auto_update_check` are saved here and read
     // when the notch next starts (their workers take them as start arguments).
+    let placement_changed = next.edges != before.edges
+        || next.edge_default != before.edge_default
+        || next.positions != before.positions
+        || next.monitors != before.monitors
+        || next.folds != before.folds
+        || next.visible != before.visible;
     (hooks.commit)(next);
+    if placement_changed {
+        // SAFETY: posting to a window handle that may have gone is harmless.
+        let _ = unsafe {
+            PostMessageW(
+                Some(raii::hwnd_from_key(controller_key)),
+                MSG_PLACEMENT_CHANGED,
+                WPARAM(0),
+                LPARAM(0),
+            )
+        };
+    }
     repaint(controller_key);
 }
 
@@ -538,7 +558,8 @@ fn apply_set(s: &mut PillSettings, key: &str, value: &Arg) -> bool {
             let Some(edge) = crate::layout::Edge::parse(text) else {
                 return false;
             };
-            // One edge for every monitor the notch knows about.
+            // The default for monitors not yet known by name, and every one that is.
+            s.edge_default = edge;
             let keys: Vec<String> = s
                 .monitors
                 .keys()

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AppShell } from "@rightkit/app-shell/react";
 import { Storage } from "./views/Storage";
 import { Monitor } from "./views/Monitor";
@@ -9,6 +10,16 @@ import { Cleanup } from "./views/Cleanup";
 import { Overview } from "./views/Overview";
 import { Settings, useNotch } from "./views/Settings";
 import { Bell, CircleUser, Gauge, HardDrive, LayoutDashboard, LayoutGrid, Palette, Settings2, ShieldCheck, Sparkles } from "lucide-react";
+
+/** Caption buttons on Windows and Linux (macOS keeps its native traffic lights). The window
+ *  is frameless there (tauri.windows.conf.json), so the shell draws minimise/maximise/close. */
+const shellBridge = {
+  window: {
+    minimize: () => getCurrentWindow().minimize(),
+    toggleMaximize: () => getCurrentWindow().toggleMaximize(),
+    close: () => getCurrentWindow().close(),
+  },
+};
 
 const icon = (Icon: typeof HardDrive) => <Icon size={15} strokeWidth={1.75} />;
 
@@ -80,6 +91,7 @@ export function App() {
 
   return (
     <AppShell
+      bridge={shellBridge}
       groups={sidebarGroups}
       activeId={active}
       onNavigate={setActive}

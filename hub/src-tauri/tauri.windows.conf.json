@@ -1,0 +1,18 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "visible": false,
+        "title": "Pulse",
+        "width": 900,
+        "height": 600,
+        "minWidth": 820,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true,
+        "decorations": false
+      }
+    ]
+  }
+}

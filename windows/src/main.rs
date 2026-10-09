@@ -2217,6 +2217,10 @@ extern "system" fn controller_proc(
                 on_display_change();
                 return LRESULT(0);
             }
+            bridge::MSG_PLACEMENT_CHANGED => {
+                on_display_change();
+                return LRESULT(0);
+            }
             usage::MSG_USAGE_UPDATED => {
                 let prefs = alerts::Prefs::from_settings(&lock_state().settings);
                 let raised = alerts::observe(&usage::snapshot(), usage::now_secs(), prefs);

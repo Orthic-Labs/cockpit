@@ -244,6 +244,9 @@ export function Settings({ section, notch, onNavigate }: {
         <>
           <Group title="Placement">
             {choice("notchEdge", "Edge")}
+            <div className="ck-sub ck-foot">
+              {isWindows ? "Alt-drag the notch to slide it along its edge, or towards another edge to dock there." : "Option-drag the notch to slide it along its edge, or towards another edge to dock there."}
+            </div>
             {choice("notchScope", "Displays")}
             <Row label="Display">
               <select className="ck-select" aria-label="Display" value={String(s.displayPreference)}
