@@ -143,6 +143,7 @@ final class NearbySharing {
     func start() {
         guard !started else { return }
         started = true
+        last = Self.loadLast()
         DarwinNotify.observe(Self.stateNotification) { [weak self] in self?.readState() }
         readState()
         watchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -411,6 +412,7 @@ final class NearbySharing {
         }
 
         var windows = [headline]
+        if let last, let row = copyLastRow(last) { windows.insert(row, at: 0) }
         for device in devices {
             windows.append(LimitWindow(
                 id: "nearby:" + device.fingerprint, label: device.alias, detail: kind(of: device)))
@@ -431,6 +433,84 @@ final class NearbySharing {
         return ProviderSnapshot(id: Self.providerID, displayName: L10n.t("Send"), glyph: .send,
                                 fidelity: .official, status: .ok, windows: windows,
                                 headlineID: "transfer", kind: .system)
+    }
+
+    // MARK: - The last thing received
+
+    /// The one item the "Copy last" row puts on the clipboard, kept across launches.
+    struct Last: Codable, Equatable {
+        var kind: String        // "text" or "files"
+        var text: String?
+        var files: [String]?
+        var at: Double          // seconds since 1970
+    }
+
+    /// Text beyond this is cut, with a note, so the file stays small.
+    static let lastTextCap = 64 * 1024
+    static let copyLastRowID = "action:copylast"
+    private var last: Last?
+
+    private static var lastURL: URL {
+        HubBridge.directory.appendingPathComponent("nearby-last.json")
+    }
+
+    private static func loadLast() -> Last? {
+        guard let data = try? Data(contentsOf: lastURL) else { return nil }
+        return try? JSONDecoder().decode(Last.self, from: data)
+    }
+
+    private static func capped(_ text: String) -> String {
+        guard text.utf8.count > lastTextCap else { return text }
+        var kept = String.UnicodeScalarView()
+        var bytes = 0
+        for scalar in text.unicodeScalars {
+            bytes += String(scalar).utf8.count
+            if bytes > lastTextCap { break }
+            kept.append(scalar)
+        }
+        return String(kept) + "\n… (truncated)"
+    }
+
+    private func remember(_ item: Last) {
+        last = item
+        try? FileManager.default.createDirectory(at: HubBridge.directory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(item) {
+            try? data.write(to: Self.lastURL, options: .atomic)
+        }
+    }
+
+    /// The hover card's top row: what was received last, and how long ago.
+    private func copyLastRow(_ item: Last) -> LimitWindow? {
+        let what: String
+        if item.kind == "text" {
+            let line = (item.text ?? "").split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return nil }
+            what = trimmed.count > 28 ? String(trimmed.prefix(28)) + "…" : trimmed
+        } else {
+            guard let first = item.files?.first else { return nil }
+            let name = URL(fileURLWithPath: first).lastPathComponent
+            let more = (item.files?.count ?? 1) - 1
+            what = more > 0 ? name + " +\(more)" : name
+        }
+        return LimitWindow(id: Self.copyLastRowID, label: L10n.t("Copy last: \(what)"),
+                           detail: ElapsedCopy.ago(since: Date(timeIntervalSince1970: item.at)))
+    }
+
+    /// A click on "Copy last": the text, or the saved files, back on the clipboard.
+    func copyLast() {
+        guard let last else { return }
+        let board = NSPasteboard.general
+        if last.kind == "text", let text = last.text {
+            board.clearContents()
+            board.setString(text, forType: .string)
+        } else if let files = last.files {
+            let urls = files.map { URL(fileURLWithPath: $0) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard !urls.isEmpty else { return }
+            board.clearContents()
+            board.writeObjects(urls as [NSURL])
+        }
     }
 
     // MARK: - Notch cards
@@ -460,12 +540,6 @@ final class NearbySharing {
             if choice == .copyText {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
-                // A brief "Copied" in place of the card, then it goes.
-                show(DiskImagePrompt(iconPath: iconPath("/System/Applications/Messages.app"),
-                                     title: L10n.t("Copied"), detail: "", style: .done),
-                     as: .note)
-                scheduleExpiry(after: 1.2)
-                return
             }
             if choice == .openLink, let url = Self.link(in: text) {
                 NSWorkspace.shared.open(url)
@@ -537,8 +611,11 @@ final class NearbySharing {
     }
 
     private func show(_ prompt: DiskImagePrompt, as next: Card) {
+        // Every nearby sharing card hangs from the Send ring.
+        var anchored = prompt
+        anchored.sendAnchored = true
         card = next
-        _ = present?(prompt)
+        _ = present?(anchored)
     }
 
     private func process(_ new: ShareState) {
@@ -603,6 +680,7 @@ final class NearbySharing {
         switch (transfer.direction, transfer.state) {
         case ("receive", "done") where transfer.message != nil:
             let text = transfer.message ?? ""
+            remember(Last(kind: "text", text: Self.capped(text), files: nil, at: Date().timeIntervalSince1970))
             let link = Self.link(in: text)
             show(DiskImagePrompt(iconPath: iconPath("/System/Applications/Messages.app"),
                                  title: L10n.t("Message from \(transfer.peer)"), detail: text, style: .ask,
@@ -611,6 +689,9 @@ final class NearbySharing {
                  as: .message(text))
         case ("receive", "done"):
             let files = transfer.savedFiles ?? []
+            if !files.isEmpty {
+                remember(Last(kind: "files", text: nil, files: files, at: Date().timeIntervalSince1970))
+            }
             let place = URL(fileURLWithPath: transfer.savedTo ?? folder ?? defaultFolder).lastPathComponent
             let detail = files.count == 1
                 ? URL(fileURLWithPath: files[0]).lastPathComponent

@@ -481,7 +481,14 @@ private struct LimitWindowRow: View {
     }
 
     var body: some View {
-        if window.id == NearbySharing.pasteRowID {
+        if window.id == NearbySharing.copyLastRowID {
+            Button {
+                MainActor.assumeIsolated { NearbySharing.shared.copyLast() }
+            } label: {
+                rows.contentShape(Rectangle())
+            }
+            .buttonStyle(CardButtonStyle())
+        } else if window.id == NearbySharing.pasteRowID {
             Button {
                 MainActor.assumeIsolated { NearbySharing.shared.pasteClipboard() }
             } label: {
@@ -501,7 +508,21 @@ private struct LimitWindowRow: View {
     }
 
     @ViewBuilder private var rows: some View {
-        if window.id == NearbySharing.pasteRowID {
+        if window.id == NearbySharing.copyLastRowID {
+            // Pulse fork: the Send card's "Copy last" button.
+            HStack(spacing: 6) {
+                Image(systemName: "doc.on.clipboard")
+                Text(window.label).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(window.detail ?? "").foregroundStyle(secondaryInk).lineLimit(1)
+            }
+            .font(Typography.cardBody)
+            .foregroundStyle(Palette.textPrimary)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
+        } else if window.id == NearbySharing.pasteRowID {
             // Pulse fork: the Send card's paste button.
             HStack(spacing: 6) {
                 Image(systemName: "doc.on.clipboard")

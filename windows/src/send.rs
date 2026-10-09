@@ -218,6 +218,8 @@ pub enum Action {
     SendTo(String),
     /// Send the clipboard.
     Paste,
+    /// Put the last thing received (a message, or the saved files) back on the clipboard.
+    CopyLast,
     /// Announce again and sweep the subnet.
     Refresh,
     /// Accept the incoming request.
@@ -382,7 +384,7 @@ fn pill_symbol(action: &Action) -> Symbol {
         Action::Decline | Action::Cancel => Symbol::Stop,
         Action::Show => Symbol::Folder,
         Action::Close => Symbol::Clock,
-        Action::Copy | Action::Paste => Symbol::Copy,
+        Action::Copy | Action::Paste | Action::CopyLast => Symbol::Copy,
         Action::OpenLink => Symbol::Compass,
         Action::Refresh => Symbol::Refresh,
         Action::SendTo(_) => Symbol::Plane,
@@ -583,6 +585,122 @@ fn folder_name(path: &str) -> String {
 
 // ---- the model ----------------------------------------------------------------------------
 
+/// The one item "Copy last" puts on the clipboard, kept in `nearby-last.json`.
+#[derive(Clone, Debug, PartialEq)]
+struct Last {
+    /// The message, or `None` for saved files.
+    text: Option<String>,
+    files: Vec<String>,
+    /// Seconds since 1970.
+    at: u64,
+}
+
+/// Message text beyond this is cut (with a note) so the file stays small.
+const LAST_TEXT_CAP: usize = 64 * 1024;
+const MAX_LAST_BYTES: usize = 512 * 1024;
+
+fn capped(text: &str) -> String {
+    if text.len() <= LAST_TEXT_CAP {
+        return text.to_string();
+    }
+    let mut end = LAST_TEXT_CAP;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n\u{2026} (truncated)", &text[..end])
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+fn load_last() -> Option<Last> {
+    let bytes = std::fs::read(bridge_dir()?.join("nearby-last.json")).ok()?;
+    let root = json::parse(&bytes, MAX_LAST_BYTES)?;
+    let files: Vec<String> = items(&root, "files")
+        .iter()
+        .filter_map(|f| f.as_str().map(str::to_string))
+        .collect();
+    let text = (text(&root, "kind").as_deref() == Some("text"))
+        .then(|| text(&root, "text"))
+        .flatten();
+    if text.is_none() && files.is_empty() {
+        return None;
+    }
+    Some(Last {
+        text,
+        files,
+        at: number(&root, "at") as u64,
+    })
+}
+
+fn save_last(last: &Last) {
+    let Some(dir) = bridge_dir() else { return };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let files: Vec<String> = last.files.iter().map(|f| json_text(f)).collect();
+    let body = match &last.text {
+        Some(t) => format!(
+            "{{\"kind\":\"text\",\"text\":{},\"files\":[],\"at\":{}}}",
+            json_text(t),
+            last.at
+        ),
+        None => format!(
+            "{{\"kind\":\"files\",\"files\":[{}],\"at\":{}}}",
+            files.join(","),
+            last.at
+        ),
+    };
+    let temp = dir.join("nearby-last.tmp");
+    if std::fs::write(&temp, body).is_ok() {
+        let _ = std::fs::rename(&temp, dir.join("nearby-last.json"));
+    }
+}
+
+/// "just now", "3 min ago", "2 hr ago".
+fn ago(at: u64) -> String {
+    let seconds = now_secs().saturating_sub(at);
+    if seconds < 45 {
+        "just now".to_string()
+    } else if seconds < 3600 {
+        format!("{} min ago", ((seconds + 30) / 60).max(1))
+    } else if seconds < 86_400 {
+        format!("{} hr ago", seconds / 3600)
+    } else {
+        format!("{} d ago", seconds / 86_400)
+    }
+}
+
+impl Last {
+    /// The hover card's top row: "Copy last: <preview> · <age>".
+    fn row_label(&self) -> Option<String> {
+        let what = match &self.text {
+            Some(t) => {
+                let line = t.lines().next().unwrap_or("").trim();
+                if line.is_empty() {
+                    return None;
+                }
+                if line.chars().count() > 24 {
+                    format!("{}\u{2026}", line.chars().take(24).collect::<String>())
+                } else {
+                    line.to_string()
+                }
+            }
+            None => {
+                let name = folder_name(self.files.first()?);
+                match self.files.len() {
+                    1 => name,
+                    n => format!("{name} +{}", n - 1),
+                }
+            }
+        };
+        Some(format!("Copy last: {what} \u{b7} {}", ago(self.at)))
+    }
+}
+
 struct Pending {
     paths: Vec<PathBuf>,
     text: Option<String>,
@@ -612,6 +730,7 @@ struct Model {
     drop_targeting: bool,
     hub_launched: Option<Instant>,
     hub: Option<Child>,
+    last: Option<Last>,
 }
 
 impl Model {
@@ -640,6 +759,7 @@ impl Model {
             drop_targeting: false,
             hub_launched: None,
             hub: None,
+            last: None,
         }
     }
 
@@ -689,6 +809,11 @@ impl Model {
     }
 
     // -- cards
+
+    fn remember(&mut self, last: Last) {
+        save_last(&last);
+        self.last = Some(last);
+    }
 
     fn show(&mut self, prompt: Prompt, card: Card) {
         self.card = card;
@@ -893,6 +1018,11 @@ impl Model {
         match (transfer.direction.as_str(), transfer.state.as_str()) {
             ("receive", "done") if transfer.message.is_some() => {
                 let message = transfer.message.clone().unwrap_or_default();
+                self.remember(Last {
+                    text: Some(capped(&message)),
+                    files: Vec::new(),
+                    at: now_secs(),
+                });
                 let mut prompt = Prompt::plain(
                     format!("Message from {}", transfer.peer),
                     message.clone(),
@@ -908,6 +1038,13 @@ impl Model {
             }
             ("receive", "done") => {
                 let files = transfer.saved_files.clone();
+                if !files.is_empty() {
+                    self.remember(Last {
+                        text: None,
+                        files: files.clone(),
+                        at: now_secs(),
+                    });
+                }
                 let place = folder_name(
                     transfer
                         .saved_to
@@ -1239,6 +1376,7 @@ impl Model {
     fn perform(&mut self, action: Action) {
         match action {
             Action::SendTo(fingerprint) => self.send_to(&fingerprint),
+            Action::CopyLast => {} // handled by `copy_last`, outside the lock
             Action::Paste => {} // handled by `paste_clipboard`, which reads the clipboard first
             Action::Refresh => write_command("{\"command\":\"refresh\"}"),
             Action::Accept | Action::Decline => {
@@ -1286,12 +1424,8 @@ impl Model {
             Action::Copy => {
                 if let Card::Message(message) = self.card.clone() {
                     sys::write_text(&message);
-                    // A brief "Copied" in place of the card, then it goes.
-                    let mut prompt = Prompt::plain("Copied".into(), String::new(), false);
-                    prompt.lead = Lead::Tile(Tile::Message);
-                    self.show(prompt, Card::Note);
-                    self.schedule_expiry(1.2);
                 }
+                self.clear_card();
             }
             Action::OpenLink => {
                 if let Card::Message(message) = self.card.clone()
@@ -1373,6 +1507,15 @@ impl Model {
             rows.push(row);
             actions.push(action);
         };
+        if let Some(label) = self.last.as_ref().and_then(Last::row_label) {
+            add(
+                Row::Pair {
+                    label,
+                    value: String::new(),
+                },
+                Some(Action::CopyLast),
+            );
+        }
         if let Some(transfer) = live.and_then(|s| s.transfers.iter().rev().find(|t| t.is_open())) {
             let label = if transfer.direction == "send" {
                 format!("Sending to {}", transfer.peer)
@@ -1686,6 +1829,7 @@ pub fn start(window: isize, message: u32) {
     MESSAGE.store(message, Ordering::SeqCst);
     {
         let mut model = model();
+        model.last = load_last();
         model.read_state(true);
         model.tick();
     }
@@ -1826,6 +1970,10 @@ pub fn perform(action: Action) {
         paste_clipboard();
         return;
     }
+    if action == Action::CopyLast {
+        copy_last();
+        return;
+    }
     model().perform(action);
     notify();
 }
@@ -1842,6 +1990,30 @@ pub fn paste_clipboard() {
             "The clipboard has no files or text.",
             true,
         ),
+    }
+    notify();
+}
+
+/// The "Copy last" row: the last message, or the last saved files, back on the clipboard.
+pub fn copy_last() {
+    let last = model().last.clone();
+    if let Some(last) = last {
+        match last.text {
+            Some(text) => {
+                sys::write_text(&text);
+            }
+            None => {
+                let files: Vec<PathBuf> = last
+                    .files
+                    .iter()
+                    .map(PathBuf::from)
+                    .filter(|p| p.exists())
+                    .collect();
+                if !files.is_empty() {
+                    sys::write_files(&files);
+                }
+            }
+        }
     }
     notify();
 }

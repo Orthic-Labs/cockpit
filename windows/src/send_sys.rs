@@ -369,6 +369,50 @@ fn save_image(bytes: &[u8], extension: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Replaces the clipboard with `paths` as a file drop (`CF_HDROP`), so Explorer pastes them.
+pub fn write_files(paths: &[PathBuf]) -> bool {
+    let Some(_open) = Open::acquire() else {
+        return false;
+    };
+    let mut units: Vec<u16> = Vec::new();
+    for path in paths {
+        units.extend(path.as_os_str().encode_wide());
+        units.push(0);
+    }
+    units.push(0);
+    // DROPFILES: offset of the list, a point, two flags (the last: wide characters).
+    const HEADER: usize = 20;
+    let bytes = HEADER + units.len() * 2;
+    // SAFETY: the allocation is filled before it is handed over; ownership passes to the
+    // clipboard on success and is freed here only when SetClipboardData fails.
+    unsafe {
+        let memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if memory.is_null() {
+            return false;
+        }
+        let pointer = GlobalLock(memory) as *mut u8;
+        if pointer.is_null() {
+            GlobalFree(memory);
+            return false;
+        }
+        std::ptr::write_bytes(pointer, 0, HEADER);
+        pointer.cast::<u32>().write_unaligned(HEADER as u32);
+        pointer.add(16).cast::<u32>().write_unaligned(1);
+        std::ptr::copy_nonoverlapping(
+            units.as_ptr().cast::<u8>(),
+            pointer.add(HEADER),
+            units.len() * 2,
+        );
+        GlobalUnlock(memory);
+        EmptyClipboard();
+        if SetClipboardData(CF_HDROP, memory).is_null() {
+            GlobalFree(memory);
+            return false;
+        }
+    }
+    true
+}
+
 /// Replaces the clipboard with `text`. False when the clipboard could not be taken.
 pub fn write_text(text: &str) -> bool {
     let Some(_open) = Open::acquire() else {

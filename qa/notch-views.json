@@ -4392,6 +4392,56 @@
     }
   },
   {
+    "id": "tooltip-send-copy-last",
+    "title": "Send card, copy last",
+    "area": "hover-card",
+    "description": "Send hover card with the Copy last row on top (the last message received) above two nearby devices.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "action:copylast",
+            "label": "Copy last: https://example.com/notes",
+            "detail": "3 min ago"
+          },
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "2 nearby",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          },
+          {
+            "id": "nearby:aa11",
+            "label": "Maya's iPhone",
+            "detail": "Phone"
+          },
+          {
+            "id": "nearby:bb22",
+            "label": "Studio Mac",
+            "detail": "Computer"
+          },
+          {
+            "id": "action:paste",
+            "label": "Paste clipboard"
+          },
+          {
+            "id": "hint-paste",
+            "label": "",
+            "detail": "\u2318V sends the clipboard \u00b7 drop files here"
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
     "id": "tooltip-send-empty",
     "title": "Send card, no devices",
     "area": "hover-card",

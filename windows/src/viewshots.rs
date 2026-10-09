@@ -661,6 +661,14 @@ fn send_hover(cell: Option<&Value>) -> Panel {
         None if !detail.is_empty() => panel.add(pair("Nearby sharing", detail), None),
         None => {}
     }
+    if let Some(last) = windows
+        .iter()
+        .find(|w| str_of(w, "id") == Some("action:copylast"))
+    {
+        let label = str_of(last, "label").unwrap_or("");
+        let age = str_of(last, "detail").unwrap_or("");
+        panel.button(&format!("{label} \u{b7} {age}"), Some(Action::CopyLast));
+    }
     let devices: Vec<(&str, &str, &str)> = windows
         .iter()
         .filter_map(|w| {

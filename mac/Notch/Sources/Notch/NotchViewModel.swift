@@ -212,7 +212,7 @@ final class NotchViewModel: ObservableObject {
     func diskImageCardAlong(for prompt: DiskImagePrompt) -> CGFloat {
         let size = DiskImageCard.size(for: edge.tooltipDirection, prompt: prompt)
         let length = edge.isVertical ? size.height : size.width
-        if prompt.send != nil,
+        if prompt.hangsFromSend,
            let index = snapshots.firstIndex(where: { $0.providerID == SystemProviders.sendID }) {
             return tooltipAlong(index: index, length: length)
         }
@@ -221,7 +221,7 @@ final class NotchViewModel: ObservableObject {
 
     /// Where a disk image card's tail points: the Send ring for a Send card.
     func diskImageTailTarget(for prompt: DiskImagePrompt) -> CGFloat {
-        if prompt.send != nil,
+        if prompt.hangsFromSend,
            let index = snapshots.firstIndex(where: { $0.providerID == SystemProviders.sendID }) {
             return ringAlong(index: index, in: cellWing)
         }

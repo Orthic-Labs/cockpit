@@ -41,6 +41,10 @@ struct DiskImagePrompt: Equatable {
     /// Nearby sharing's device list or transfer, drawn in place of the icon layout
     /// and anchored to the Send ring — see `SendCardContent`.
     var send: SendCardContent?
+    /// Hangs from the Send ring, with its tail on it, whatever the card holds:
+    /// every nearby sharing card (received, saved, note) sets this.
+    var sendAnchored = false
+    var hangsFromSend: Bool { send != nil || sendAnchored }
 
     init(iconPath: String, title: String, detail: String, warning: String? = nil,
          style: Style, primary: Button? = nil, secondary: Button? = nil,

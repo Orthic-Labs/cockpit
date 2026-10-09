@@ -1247,11 +1247,27 @@ fn sync_card() {
         } else {
             None
         };
+        // A sharing popup always hangs from the Send ring, whichever ring was hovered last:
+        // on the notch the pointer is on, else the card already up, else the first visible.
         let popup_target = if popup.is_some() {
-            app.panels
-                .iter()
-                .find(|p| !p.visibility.applied())
-                .map(|p| (p.window.key(), SEND_CELL))
+            let key = app
+                .ui
+                .hover
+                .map(|h| h.0)
+                .or_else(|| {
+                    app.ui
+                        .card_shown
+                        .as_ref()
+                        .filter(|s| s.popup)
+                        .map(|s| s.key)
+                })
+                .or_else(|| {
+                    app.panels
+                        .iter()
+                        .find(|p| !p.visibility.applied())
+                        .map(|p| p.window.key())
+                });
+            key.map(|key| (key, SEND_CELL))
         } else {
             None
         };
@@ -1266,7 +1282,7 @@ fn sync_card() {
             None
         };
         (
-            notice_target.or(app.ui.hover).or(on_card).or(popup_target),
+            notice_target.or(popup_target).or(app.ui.hover).or(on_card),
             app.ui.card_shown.is_none(),
             show_notice,
         )
