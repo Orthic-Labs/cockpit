@@ -173,17 +173,20 @@ enum ViewShots {
             .environment(\.usageWatchLimit, 0.70)
             .environment(\.usageCriticalLimit, 0.90)
             .environment(\.colorTransitionStyle, .hardStep)
-            .padding(crop ? 0 : 24)
+            .padding(crop ? 16 : 24)
             .background(Color(nsColor: backdrop))
         let renderer = ImageRenderer(content: styled)
         renderer.scale = 2
         guard var image = renderer.cgImage else { return nil }
-        if crop { image = Self.cropped(image, backdrop: backdrop, margin: 48) }
+        if crop { image = Self.cropped(image, margin: 32) }
         return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
-    /// The smallest rectangle holding everything that is not the backdrop, plus a margin.
-    private static func cropped(_ image: CGImage, backdrop: NSColor, margin: Int) -> CGImage {
+    /// The smallest rectangle holding everything that is not the backdrop, plus a margin
+    /// (in pixels). The backdrop colour is read from the rendered bitmap itself (its
+    /// top-left pixel, inside the padding), so colour management cannot make the whole
+    /// image look like content.
+    private static func cropped(_ image: CGImage, margin: Int) -> CGImage {
         let width = image.width, height = image.height
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
@@ -193,10 +196,7 @@ enum ViewShots {
         else { return image }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         let pixels = raw.assumingMemoryBound(to: UInt8.self)
-        let reference = backdrop.usingColorSpace(.sRGB) ?? backdrop
-        let red = Int((reference.redComponent * 255).rounded())
-        let green = Int((reference.greenComponent * 255).rounded())
-        let blue = Int((reference.blueComponent * 255).rounded())
+        let red = Int(pixels[0]), green = Int(pixels[1]), blue = Int(pixels[2])
 
         var minX = width, minY = height, maxX = -1, maxY = -1
         for y in 0..<height {
