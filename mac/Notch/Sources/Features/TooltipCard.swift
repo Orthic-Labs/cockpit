@@ -481,7 +481,46 @@ private struct LimitWindowRow: View {
     }
 
     var body: some View {
-        if window.id == NearbySharing.copyLastRowID {
+        if window.id == NearbySharing.actionsRowID {
+            // Pulse fork: the Send card's bottom bar, "Copy last" left and "Paste" right.
+            HStack(spacing: 8) {
+                if !window.label.isEmpty {
+                    Button {
+                        MainActor.assumeIsolated { NearbySharing.shared.copyLast() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.on.clipboard")
+                            Text(window.label).lineLimit(1)
+                        }
+                        .font(Typography.cardBody)
+                        .foregroundStyle(Palette.textPrimary)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 8)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(CardButtonStyle())
+                }
+                Spacer(minLength: 4)
+                if let paste = window.detail {
+                    Button {
+                        MainActor.assumeIsolated { NearbySharing.shared.pasteClipboard() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.doc.on.clipboard")
+                            Text(paste)
+                        }
+                        .font(Typography.cardBody)
+                        .foregroundStyle(Palette.textPrimary)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 8)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(CardButtonStyle())
+                }
+            }
+        } else if window.id == NearbySharing.copyLastRowID {
             Button {
                 MainActor.assumeIsolated { NearbySharing.shared.copyLast() }
             } label: {

@@ -21,3 +21,6 @@ hub/qa-e2e/target/
 hub/src-tauri/gen/
 
 hub/.cache/
+
+# Local Swift build cache (never committed)
+mac/.build/

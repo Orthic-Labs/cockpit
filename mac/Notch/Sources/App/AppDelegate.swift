@@ -94,6 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Pulse fork: an accessory app from the first moment — no Dock tile,
         // no menu-bar item. The notch is the only surface.
         NSApp.setActivationPolicy(.accessory)
+        // An installer relaunches Pulse with `open -j` (hidden). A hidden accessory app
+        // has no menu to unhide it, so its notch would never appear: unhide at once.
+        if NSApp.isHidden { NSApp.unhide(nil) }
         // CI only: render the notch's views off-screen and exit (App/ViewShots.swift).
         if ViewShots.requested { MainActor.assumeIsolated { ViewShots.runAndExit() } }
         guard !isRunningTests else { return }

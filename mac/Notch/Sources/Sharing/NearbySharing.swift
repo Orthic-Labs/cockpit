@@ -84,6 +84,9 @@ final class NearbySharing {
     static let providerID = SystemProviders.sendID
     /// The paste button row in the Send cell's hover card.
     static let pasteRowID = "action:paste"
+    /// The Send card's bottom bar: `label` is the "Copy last" text (empty when there is
+    /// nothing to copy), `detail` the "Paste" text (nil when there is no device).
+    static let actionsRowID = "action:bar"
 
     /// The Send cell has something new to show.
     var onChange: (() -> Void)?
@@ -412,7 +415,6 @@ final class NearbySharing {
         }
 
         var windows = [headline]
-        if let last, let row = copyLastRow(last) { windows.insert(row, at: 0) }
         for device in devices {
             windows.append(LimitWindow(
                 id: "nearby:" + device.fingerprint, label: device.alias, detail: kind(of: device)))
@@ -421,7 +423,6 @@ final class NearbySharing {
             windows.append(LimitWindow(id: "hint-network", label: "",
                                        detail: L10n.t("Allow Local Network for Pulse in System Settings.")))
         } else if !devices.isEmpty {
-            windows.append(LimitWindow(id: Self.pasteRowID, label: L10n.t("Paste clipboard")))
             if !canPasteWithKeyboard {
                 windows.append(LimitWindow(id: "hint-keys", label: "",
                                            detail: L10n.t("Allow Accessibility to paste with ⌘V")))
@@ -429,6 +430,13 @@ final class NearbySharing {
                 windows.append(LimitWindow(id: "hint-paste", label: "",
                                            detail: L10n.t("⌘V sends the clipboard · drop files here")))
             }
+        }
+        // The bottom bar: "Copy last" on the left (when there is something to copy),
+        // "Paste" on the right (when there is somewhere to send). One row, two buttons.
+        let copy = last.flatMap(copyLastRow)
+        if copy != nil || !devices.isEmpty {
+            windows.append(LimitWindow(id: Self.actionsRowID, label: copy?.label ?? "",
+                                       detail: devices.isEmpty ? nil : L10n.t("Paste")))
         }
         return ProviderSnapshot(id: Self.providerID, displayName: L10n.t("Send"), glyph: .send,
                                 fidelity: .official, status: .ok, windows: windows,
@@ -852,8 +860,13 @@ final class NearbySharing {
             seenFinished.insert(transfer.id)
             sendFinished = true
             let problem = transfer.state != "done"
-            _ = present?(sendingPrompt(transfer, peer: peer))
-            if !cardHovered { scheduleExpiry(after: problem ? 6 : 2) }
+            if problem {
+                _ = present?(sendingPrompt(transfer, peer: peer))
+                if !cardHovered { scheduleExpiry(after: 6) }
+            } else {
+                // Sent: the card has nothing more to say; it goes at once.
+                clearCard()
+            }
         default:
             _ = present?(sendingPrompt(transfer, peer: peer))
         }
