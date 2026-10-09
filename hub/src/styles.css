@@ -143,7 +143,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
    in windows smaller than that. Rows share the spare height by weight and never shrink below their content. */
 .view.ov { overflow: auto; flex-wrap: nowrap; gap: 10px; padding: 12px 18px 14px; scroll-padding: 10px; }
 .ov > * { flex: none; }
-.ov > .ov-grid { flex: 1 0 auto; }
+/* The grid takes exactly the height left under the status strip (basis 0), so fr rows
+   share the window instead of inflating to the tallest card's content ratio. */
+.ov > .ov-grid { flex: 1 1 0; min-height: min-content; }
 .ov button:focus-visible { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 3px; }
 
 .ov-attention { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--rk-warn-soft); color: var(--rk-warn); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
@@ -162,7 +164,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .ov-action:hover { filter: brightness(1.08); }
 .ov-action.primary { background: var(--rk-accent); border-color: var(--rk-accent); color: var(--rk-accent-ink, #fff); }
 
-.ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(min-content, 1.15fr) minmax(min-content, 1.1fr) minmax(min-content, 0.85fr); gap: 10px; min-width: 0; }
+.ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(min-content, 1fr)); gap: 10px; min-width: 0; }
 .ov-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px 14px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); color: var(--rk-ink); }
 .ov-card-head { display: flex; align-items: center; gap: 7px; flex: none; width: 100%; height: 18px; padding: 0; border: 0; background: none; color: var(--rk-ink); font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer; }
 .ov-card-head:hover { filter: none; }
