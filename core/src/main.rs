@@ -1081,6 +1081,7 @@ fn worker(_arguments: Vec<String>, _machine: bool) -> Result<(), CliError> {
     Err("worker is unsupported on this platform".into())
 }
 
+#[cfg(unix)]
 fn resolve_app(target: &str) -> Result<String, String> {
     use pulse_core::app_manager::list_apps;
     if target.contains('/') || target.ends_with(".app") {
@@ -1103,6 +1104,12 @@ fn resolve_app(target: &str) -> Result<String, String> {
     }
 }
 
+#[cfg(not(unix))]
+fn apps(_arguments: Vec<String>, _machine: bool) -> Result<(), CliError> {
+    Err("apps is not available on this platform yet".into())
+}
+
+#[cfg(unix)]
 fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
     use pulse_core::app_manager;
     if arguments.is_empty() {

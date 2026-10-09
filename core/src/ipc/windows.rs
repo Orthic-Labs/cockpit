@@ -747,7 +747,6 @@ pub fn serve(
                 std::thread::sleep(Duration::from_millis(u64::from(TICK_MS)));
             }
             Accept::Connected => {
-                since = Instant::now();
                 serve_connection(&pipe, &own, limits, handler)?;
                 since = Instant::now();
             }

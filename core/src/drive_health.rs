@@ -366,6 +366,7 @@ pub fn sample_disk(tool: &Path, disk: &str, at: u64) -> Outcome {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn plist_string(text: &str, key: &str) -> Option<String> {
     let marker = format!("<key>{key}</key>");
     let rest = text[text.find(&marker)? + marker.len()..].trim_start();
@@ -374,6 +375,7 @@ fn plist_string(text: &str, key: &str) -> Option<String> {
 }
 
 /// "disk0s2" -> "disk0".
+#[cfg(target_os = "macos")]
 fn whole_disk(identifier: &str) -> Option<String> {
     let digits: String = identifier
         .strip_prefix("disk")?
