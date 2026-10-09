@@ -259,7 +259,9 @@ fn parse(json: &Value, at: u64) -> Option<Reading> {
     let mut reading = Reading {
         at,
         passed: Some(passed),
-        temperature_c: json.path(&["temperature", "current"]).and_then(Value::as_f64),
+        temperature_c: json
+            .path(&["temperature", "current"])
+            .and_then(Value::as_f64),
         wear_percent: None,
         written_bytes: None,
         media_errors: None,

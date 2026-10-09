@@ -128,6 +128,8 @@ pub(crate) mod winsec {
         pub fn GetAce(acl: *const ACL, index: u32, ace: *mut *mut c_void) -> BOOL;
     }
 
+    // installer.rs declares CreateFileW with raw pointer types; same ABI.
+    #[allow(clashing_extern_declarations)]
     #[link(name = "kernel32")]
     unsafe extern "system" {
         pub fn CreateMutexW(

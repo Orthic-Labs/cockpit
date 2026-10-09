@@ -552,7 +552,9 @@ fn download_and_launch(release: &Release, part: &Path, file: &Path) -> Result<()
     // A valid chain is not enough: the installer must be signed by the same publisher
     // as this running Pulse.exe (one Azure signing profile signs both). An unsigned
     // build of the notch never installs updates.
-    let ours = std::env::current_exe().ok().and_then(|exe| crate::installer::signer_name(&exe));
+    let ours = std::env::current_exe()
+        .ok()
+        .and_then(|exe| crate::installer::signer_name(&exe));
     match (ours, crate::installer::signer_name(file)) {
         (Some(ours), Some(theirs)) if ours == theirs => {}
         _ => return Err("signer_mismatch"),
@@ -610,7 +612,8 @@ struct WinTrustData {
     signature_settings: *mut c_void,
 }
 
-#[allow(non_snake_case)]
+// installer.rs declares WinVerifyTrust with its own GUID type; same ABI.
+#[allow(non_snake_case, clashing_extern_declarations)]
 #[link(name = "wintrust")]
 unsafe extern "system" {
     fn WinVerifyTrust(window: *mut c_void, action: *mut GUID, data: *mut c_void) -> i32;

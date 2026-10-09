@@ -1,9 +1,9 @@
 //! Hover card content: the key numbers behind each ring (same information as the Mac
 //! hover cards). Pure data; `render.rs` draws it. Unknown values read `--`.
 
+use crate::drive_health::{self, Report};
 use crate::layout::Cell;
 use crate::send::{self, Panel};
-use crate::drive_health::{self, Report};
 use crate::sensors::{Machine, size_text};
 use crate::usage::{Status, Usage, age_text, reset_in};
 
@@ -189,8 +189,12 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
     }
     if usage.status == Status::AccessDenied && usage.windows.is_empty() {
         // Says what happened and what fixes it, not "sign in" (the login is there).
-        rows.push(Row::Note(format!("Windows refused access to {name}'s saved login.")));
-        rows.push(Row::Note("Fix the file's permissions to read usage.".into()));
+        rows.push(Row::Note(format!(
+            "Windows refused access to {name}'s saved login."
+        )));
+        rows.push(Row::Note(
+            "Fix the file's permissions to read usage.".into(),
+        ));
         return CardContent {
             title: format!("{name} Usage"),
             accessory: usage.plan.clone(),
