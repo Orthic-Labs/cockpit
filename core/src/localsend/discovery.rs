@@ -17,6 +17,7 @@ pub fn local_ipv4s() -> Vec<Ipv4Addr> {
             if let IpAddr::V4(ip) = network.addr
                 && !ip.is_loopback()
                 && !ip.is_unspecified()
+                && !(cfg!(windows) && ip.is_link_local())
                 && !found.contains(&ip)
             {
                 found.push(ip);
@@ -73,7 +74,95 @@ fn bind_shared(port: u16) -> io::Result<UdpSocket> {
     }
 }
 
-#[cfg(not(unix))]
+/// Winsock calls the standard library does not expose. Winsock itself is
+/// already started by the first `std::net` socket (see `bind_shared`).
+#[cfg(windows)]
+mod winsock {
+    use std::ffi::{c_char, c_int, c_void};
+
+    pub type Socket = usize;
+    pub const INVALID_SOCKET: Socket = !0;
+    pub const AF_INET: c_int = 2;
+    pub const SOCK_DGRAM: c_int = 2;
+    pub const IPPROTO_UDP: c_int = 17;
+    pub const IPPROTO_IP: c_int = 0;
+    pub const SOL_SOCKET: c_int = 0xffff;
+    pub const SO_REUSEADDR: c_int = 4;
+    pub const IP_MULTICAST_IF: c_int = 9;
+
+    #[repr(C)]
+    pub struct SockAddrIn {
+        pub family: u16,
+        pub port: u16,
+        pub addr: [u8; 4],
+        pub zero: [u8; 8],
+    }
+
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        pub fn socket(af: c_int, kind: c_int, protocol: c_int) -> Socket;
+        pub fn setsockopt(
+            s: Socket,
+            level: c_int,
+            name: c_int,
+            value: *const c_char,
+            length: c_int,
+        ) -> c_int;
+        pub fn bind(s: Socket, name: *const c_void, length: c_int) -> c_int;
+        pub fn closesocket(s: Socket) -> c_int;
+    }
+}
+
+/// Windows lets several sockets share a UDP port only when each one asks with
+/// SO_REUSEADDR before binding, which `UdpSocket::bind` cannot do.
+#[cfg(windows)]
+fn bind_shared(port: u16) -> io::Result<UdpSocket> {
+    use std::os::windows::io::FromRawSocket;
+    use winsock::*;
+    // A throwaway socket makes the standard library start Winsock (WSAStartup),
+    // which the raw `socket` call below relies on.
+    drop(UdpSocket::bind(("127.0.0.1", 0))?);
+    // SAFETY: plain Winsock calls; the socket is closed on every error path and
+    // otherwise handed to UdpSocket, which owns it from then on.
+    unsafe {
+        let s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if s == INVALID_SOCKET {
+            return Err(io::Error::last_os_error());
+        }
+        let one: i32 = 1;
+        if setsockopt(
+            s,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            (&one as *const i32).cast(),
+            std::mem::size_of::<i32>() as i32,
+        ) != 0
+        {
+            let error = io::Error::last_os_error();
+            closesocket(s);
+            return Err(error);
+        }
+        let address = SockAddrIn {
+            family: AF_INET as u16,
+            port: port.to_be(),
+            addr: [0; 4],
+            zero: [0; 8],
+        };
+        if bind(
+            s,
+            (&address as *const SockAddrIn).cast(),
+            std::mem::size_of::<SockAddrIn>() as i32,
+        ) != 0
+        {
+            let error = io::Error::last_os_error();
+            closesocket(s);
+            return Err(error);
+        }
+        Ok(UdpSocket::from_raw_socket(s as u64))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn bind_shared(port: u16) -> io::Result<UdpSocket> {
     UdpSocket::bind(("0.0.0.0", port))
 }
@@ -97,19 +186,44 @@ fn use_interface(socket: &UdpSocket, ip: Ipv4Addr) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn use_interface(socket: &UdpSocket, ip: Ipv4Addr) {
+    use std::os::windows::io::AsRawSocket;
+    use winsock::*;
+    let octets = ip.octets();
+    // SAFETY: the option value is a live 4-byte in_addr (network byte order).
+    unsafe {
+        setsockopt(
+            socket.as_raw_socket() as Socket,
+            IPPROTO_IP,
+            IP_MULTICAST_IF,
+            octets.as_ptr().cast(),
+            4,
+        );
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn use_interface(_socket: &UdpSocket, _ip: Ipv4Addr) {}
 
-/// A socket joined to the group on every interface.
-pub fn listen(port: u16) -> io::Result<UdpSocket> {
-    let socket = bind_shared(port)?;
-    let interfaces = local_ipv4s();
+/// Join the group on every interface that has an address. An interface that is
+/// already joined answers with an error, which is ignored; returns whether any
+/// join worked. Called again from time to time, because Wi-Fi comes and goes
+/// (sleep, roaming) and a membership does not survive its interface.
+pub fn rejoin(socket: &UdpSocket) -> bool {
     let mut joined = false;
-    for ip in &interfaces {
+    for ip in &local_ipv4s() {
         joined |= socket
             .join_multicast_v4(&proto::MULTICAST_GROUP, ip)
             .is_ok();
     }
+    joined
+}
+
+/// A socket joined to the group on every interface.
+pub fn listen(port: u16) -> io::Result<UdpSocket> {
+    let socket = bind_shared(port)?;
+    let joined = rejoin(&socket);
     if !joined {
         socket.join_multicast_v4(&proto::MULTICAST_GROUP, &Ipv4Addr::UNSPECIFIED)?;
     }
@@ -199,6 +313,29 @@ pub fn scan(me: &DeviceInfo, window: Duration) -> io::Result<Vec<Heard>> {
 /// Interfaces that never carry a LAN: loopback, VPN and point-to-point tunnels,
 /// Apple's peer-to-peer links.
 fn skips_interface(name: &str) -> bool {
+    if cfg!(windows) {
+        // Windows names adapters for people ("Ethernet", "Wi-Fi", "vEthernet (WSL)").
+        // Virtual switches of WSL and Hyper-V's Default Switch, tunnels and VPN
+        // adapters are never the LAN.
+        let name = name.to_ascii_lowercase();
+        return [
+            "loopback",
+            "pseudo",
+            "isatap",
+            "teredo",
+            "6to4",
+            "wsl",
+            "default switch",
+            "bluetooth",
+            "wireguard",
+            "tailscale",
+            "tap-windows",
+            "openvpn",
+            "vpn",
+        ]
+        .iter()
+        .any(|word| name.contains(word));
+    }
     ["lo", "utun", "ppp", "ipsec", "gif", "stf", "awdl", "llw"]
         .iter()
         .any(|prefix| name.starts_with(prefix))

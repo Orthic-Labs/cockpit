@@ -1,7 +1,7 @@
 //! Nearby sharing over the open LocalSend protocol v2 (github.com/localsend/protocol).
 //!
 //! `Service` is a long-running object a host (the hub) owns: it announces this
-//! Mac on the network, keeps a list of nearby devices, receives files over
+//! computer on the network, keeps a list of nearby devices, receives files over
 //! HTTPS after the user accepts, and sends files to a chosen device. Hosts hear
 //! about changes through the `Event` callback and read `Service::snapshot`.
 
@@ -395,6 +395,15 @@ impl Inner {
     }
 }
 
+/// The words for a taken port. Hosts recognise it by `PORT_IN_USE`.
+pub const PORT_IN_USE: &str = "already in use";
+
+fn port_in_use(port: u16) -> String {
+    format!(
+        "Port {port} is {PORT_IN_USE}. Quit the LocalSend app (or anything else using it) and try again."
+    )
+}
+
 /// A running sharing service. Dropping it stops it.
 pub struct Service {
     inner: Arc<Inner>,
@@ -409,12 +418,21 @@ impl Service {
             .map_err(|e| format!("Couldn't create this Mac's sharing certificate: {e}"))?;
         let tls = net::server_config(&identity)
             .map_err(|e| format!("Couldn't set up secure sharing: {e}"))?;
+        // Windows lets a second program bind a port another one holds in some
+        // cases (a dual-stack listener); a connection that succeeds first says
+        // somebody is already listening, so say so instead of failing silently.
+        #[cfg(windows)]
+        {
+            let local = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, config.port));
+            if TcpStream::connect_timeout(&local, Duration::from_millis(300)).is_ok() {
+                return Err(port_in_use(config.port));
+            }
+        }
         let listener = TcpListener::bind(("0.0.0.0", config.port)).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AddrInUse {
-                format!(
-                    "Port {} is already in use. Quit the LocalSend app (or anything else using it) and try again.",
-                    config.port
-                )
+            if e.kind() == std::io::ErrorKind::AddrInUse
+                || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
+            {
+                port_in_use(config.port)
             } else {
                 format!("Couldn't listen on port {}: {e}", config.port)
             }
@@ -670,7 +688,12 @@ fn spawn_discovery(inner: Arc<Inner>, socket: UdpSocket) {
     thread::spawn(move || {
         let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
         let mut buffer = vec![0u8; 64 * 1024];
+        let mut rejoined = Instant::now();
         while !inner.stop.load(Ordering::Relaxed) {
+            if rejoined.elapsed() >= Duration::from_secs(30) {
+                rejoined = Instant::now();
+                discovery::rejoin(&socket);
+            }
             let Ok((n, from)) = socket.recv_from(&mut buffer) else {
                 continue;
             };

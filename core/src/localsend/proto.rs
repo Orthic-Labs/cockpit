@@ -101,11 +101,15 @@ pub fn sanitize_component(raw: &str) -> String {
             c => c,
         })
         .collect();
-    let trimmed = replaced
+    let mut trimmed = replaced
         .trim_matches(|c: char| c == '.' || c.is_whitespace())
         .to_string();
     if trimmed.is_empty() {
         return "file".to_string();
+    }
+    if cfg!(windows) && is_windows_device(&trimmed) {
+        // CON, NUL, COM1 … name devices on Windows, with or without an extension.
+        trimmed.insert(0, '_');
     }
     if trimmed.len() <= 200 {
         return trimmed;
@@ -122,6 +126,17 @@ pub fn sanitize_component(raw: &str) -> String {
     } else {
         format!("{cut}{ext}")
     }
+}
+
+/// A reserved Windows device name (`NUL`, `com1.txt`, …).
+fn is_windows_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end();
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.len() == 4
+            && upper.as_bytes()[3].is_ascii_digit()
+            && upper.as_bytes()[3] != b'0')
 }
 
 /// A sender's `fileName` as safe components below the save folder. `..`, `.`,
@@ -243,7 +258,18 @@ fn fill_random(buffer: &mut [u8]) -> bool {
         .is_ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn fill_random(buffer: &mut [u8]) -> bool {
+    // RtlGenRandom, which the standard library's own random keys also use.
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn SystemFunction036(buffer: *mut u8, length: u32) -> u8;
+    }
+    // SAFETY: `buffer` is a live, writable slice of the stated length.
+    buffer.is_empty() || unsafe { SystemFunction036(buffer.as_mut_ptr(), buffer.len() as u32) != 0 }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn fill_random(_buffer: &mut [u8]) -> bool {
     false
 }

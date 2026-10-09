@@ -14,6 +14,13 @@
 //!   whenever devices, requests or progress change, and every few seconds so the
 //!   notch can tell the hub is alive.
 //!
+//! On Windows the same files live in `%LOCALAPPDATA%\Pulse`, the Darwin
+//! notifications become named auto-reset events (`Local\dev.orthic.pulse.share.state`
+//! and `...share.command`, created by whichever side comes first), and the
+//! settings are read from the notch's `pill-settings.json` (`nearby_enabled`,
+//! `nearby_alias`, `nearby_save_folder`, `nearby_accept_known`), re-read when its
+//! modified time changes. The notch (windows/src/send.rs) is the other end.
+//!
 //! The page gets the same news as Tauri events: `share-devices`, `share-incoming`,
 //! `share-incoming-resolved`, `share-progress`, `share-state`.
 
@@ -25,15 +32,112 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-unsafe extern "C" {
-    fn notify_post(name: *const std::ffi::c_char) -> u32;
-    fn notify_register_check(name: *const std::ffi::c_char, token: *mut i32) -> u32;
-    fn notify_check(token: i32, changed: *mut i32) -> u32;
-}
-
 const STATE_NOTIFICATION: &str = "dev.orthic.pulse.share.state";
 const COMMAND_NOTIFICATION: &str = "dev.orthic.pulse.share.command";
+#[cfg(target_os = "macos")]
 const NOTCH_NOTIFICATION: &str = "dev.orthic.pulse.notch.state";
+
+/// Payload-free wake-ups between the notch and the hub: Darwin notifications on
+/// macOS, named auto-reset events on Windows, nothing elsewhere (the loop's own
+/// one-second polling still runs).
+#[cfg(target_os = "macos")]
+mod bridge {
+    unsafe extern "C" {
+        fn notify_post(name: *const std::ffi::c_char) -> u32;
+        fn notify_register_check(name: *const std::ffi::c_char, token: *mut i32) -> u32;
+        fn notify_check(token: i32, changed: *mut i32) -> u32;
+    }
+
+    pub struct Watch(Option<i32>);
+
+    pub fn post(name: &str) {
+        if let Ok(name) = std::ffi::CString::new(name) {
+            unsafe { notify_post(name.as_ptr()) };
+        }
+    }
+
+    pub fn watch(name: &str) -> Watch {
+        let Ok(name) = std::ffi::CString::new(name) else { return Watch(None) };
+        let mut token = 0i32;
+        if unsafe { notify_register_check(name.as_ptr(), &mut token) } != 0 {
+            return Watch(None);
+        }
+        // The first check after registering always reports a change.
+        let mut changed = 0i32;
+        unsafe { notify_check(token, &mut changed) };
+        Watch(Some(token))
+    }
+
+    impl Watch {
+        pub fn fired(&self) -> bool {
+            let Some(token) = self.0 else { return false };
+            let mut changed = 0i32;
+            unsafe { notify_check(token, &mut changed) == 0 && changed != 0 }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod bridge {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateEventW(attributes: *const c_void, manual_reset: i32, initial_state: i32, name: *const u16) -> Handle;
+        fn SetEvent(event: Handle) -> i32;
+        fn CloseHandle(object: Handle) -> i32;
+        fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
+    }
+
+    /// An event this process keeps open so it outlives a moment with no peer.
+    pub struct Watch(usize);
+
+    fn open(name: &str) -> Handle {
+        let wide: Vec<u16> = format!("Local\\{name}").encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: NUL-terminated name; auto-reset, initially not signaled. CreateEventW
+        // opens the event when the other side made it first.
+        unsafe { CreateEventW(std::ptr::null(), 0, 0, wide.as_ptr()) }
+    }
+
+    pub fn post(name: &str) {
+        let event = open(name);
+        if !event.is_null() {
+            // SAFETY: a live event handle, closed right after.
+            unsafe {
+                SetEvent(event);
+                CloseHandle(event);
+            }
+        }
+    }
+
+    pub fn watch(name: &str) -> Watch {
+        Watch(open(name) as usize)
+    }
+
+    impl Watch {
+        pub fn fired(&self) -> bool {
+            let handle = self.0 as Handle;
+            // SAFETY: the handle lives for the whole process; a zero timeout only polls.
+            !handle.is_null() && unsafe { WaitForSingleObject(handle, 0) } == 0
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod bridge {
+    pub struct Watch;
+    pub fn post(_name: &str) {}
+    pub fn watch(_name: &str) -> Watch {
+        Watch
+    }
+    impl Watch {
+        pub fn fired(&self) -> bool {
+            false
+        }
+    }
+}
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SERVICE: Mutex<Option<Arc<Service>>> = Mutex::new(None);
@@ -44,20 +148,35 @@ static DIRTY: AtomicBool = AtomicBool::new(true);
 static NOTICE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    #[cfg(windows)]
+    let variable = "USERPROFILE";
+    #[cfg(not(windows))]
+    let variable = "HOME";
+    std::env::var_os(variable).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Where the notch and the hub meet: `~/Library/Application Support/Pulse`, or
+/// `%LOCALAPPDATA%\Pulse` on Windows (the notch's settings directory).
 fn bridge_dir() -> PathBuf {
-    home().join("Library/Application Support/Pulse")
-}
-
-fn post(name: &str) {
-    if let Ok(name) = std::ffi::CString::new(name) {
-        unsafe { notify_post(name.as_ptr()) };
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join("AppData").join("Local"))
+            .join("Pulse")
+    }
+    #[cfg(not(windows))]
+    {
+        home().join("Library/Application Support/Pulse")
     }
 }
 
-fn mac_name() -> String {
+fn post(name: &str) {
+    bridge::post(name);
+}
+
+#[cfg(target_os = "macos")]
+fn computer_name() -> String {
     for (program, args) in [("/usr/sbin/scutil", vec!["--get", "ComputerName"]), ("/bin/hostname", vec![])] {
         if let Ok(out) = std::process::Command::new(program).args(args).output() {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -69,6 +188,26 @@ fn mac_name() -> String {
     "Mac".to_string()
 }
 
+#[cfg(not(target_os = "macos"))]
+fn computer_name() -> String {
+    ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| "PC".to_string())
+}
+
+fn device_model() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Mac"
+    } else if cfg!(windows) {
+        "Windows"
+    } else {
+        "Computer"
+    }
+}
+
 fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => home().join(rest),
@@ -77,13 +216,105 @@ fn expand_home(path: &str) -> PathBuf {
     }
 }
 
-/// What the preferences ask for, or None when sharing is switched off.
-fn wanted() -> Option<Config> {
+/// The user's Downloads folder: the Known Folder on Windows (it can be moved),
+/// `~/Downloads` elsewhere.
+fn downloads_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(path) = windows_downloads() {
+            return path;
+        }
+    }
+    home().join("Downloads")
+}
+
+#[cfg(windows)]
+fn windows_downloads() -> Option<PathBuf> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStringExt;
+
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+    // FOLDERID_Downloads {374DE290-123F-4565-9164-39C4925E467B}
+    static FOLDERID_DOWNLOADS: Guid = Guid {
+        data1: 0x374D_E290,
+        data2: 0x123F,
+        data3: 0x4565,
+        data4: [0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B],
+    };
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHGetKnownFolderPath(id: *const Guid, flags: u32, token: *mut c_void, path: *mut *mut u16) -> i32;
+    }
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoTaskMemFree(memory: *mut c_void);
+    }
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: KF_FLAG_DEFAULT with the current user's token (null); on success `raw` is a
+    // NUL-terminated string owned by the shell, copied out and freed with CoTaskMemFree.
+    unsafe {
+        let hr = SHGetKnownFolderPath(&FOLDERID_DOWNLOADS, 0, std::ptr::null_mut(), &mut raw);
+        let path = if hr >= 0 && !raw.is_null() {
+            let mut length = 0usize;
+            while *raw.add(length) != 0 {
+                length += 1;
+            }
+            let wide = std::slice::from_raw_parts(raw, length);
+            Some(PathBuf::from(std::ffi::OsString::from_wide(wide)))
+        } else {
+            None
+        };
+        if !raw.is_null() {
+            CoTaskMemFree(raw.cast());
+        }
+        path.filter(|p| !p.as_os_str().is_empty())
+    }
+}
+
+/// The notch's sharing preferences as one object with the keys the Mac writes.
+#[cfg(not(windows))]
+fn settings_object() -> Value {
     let state: Value = std::fs::read_to_string(bridge_dir().join("notch-state.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or(Value::Null);
-    let settings = &state["settings"];
+    state["settings"].clone()
+}
+
+/// The Windows notch keeps its preferences in `pill-settings.json` (snake_case
+/// keys, all optional); this maps the sharing ones onto the Mac's names.
+#[cfg(windows)]
+fn settings_object() -> Value {
+    let file: Value = std::fs::read_to_string(bridge_dir().join("pill-settings.json"))
+        .ok()
+        .map(|text| text.trim_start_matches('\u{feff}').to_string())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    json!({
+        "nearbyEnabled": file["nearby_enabled"],
+        "nearbyAlias": file["nearby_alias"],
+        "nearbySaveFolder": file["nearby_save_folder"],
+        "nearbyAcceptKnown": file["nearby_accept_known"],
+    })
+}
+
+/// Changes when the file the preferences come from does.
+#[cfg(windows)]
+fn settings_stamp() -> Option<std::time::SystemTime> {
+    std::fs::metadata(bridge_dir().join("pill-settings.json"))
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+/// What the preferences ask for, or None when sharing is switched off.
+fn wanted() -> Option<Config> {
+    let settings = settings_object();
     if settings["nearbyEnabled"].as_bool() == Some(false) {
         return None;
     }
@@ -92,20 +323,20 @@ fn wanted() -> Option<Config> {
         .map(str::trim)
         .filter(|a| !a.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| format!("{} (Pulse)", mac_name()));
+        .unwrap_or_else(|| format!("{} (Pulse)", computer_name()));
     let folder = settings["nearbySaveFolder"]
         .as_str()
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .map(expand_home)
-        .unwrap_or_else(|| home().join("Downloads"));
+        .unwrap_or_else(downloads_dir);
     Some(Config {
         alias,
         port: pulse_core::localsend::proto::PORT,
         save_dir: folder,
         accept_known: settings["nearbyAcceptKnown"].as_bool() == Some(true),
         state_dir: bridge_dir().join("localsend"),
-        device_model: "Mac".to_string(),
+        device_model: device_model().to_string(),
     })
 }
 
@@ -228,6 +459,23 @@ fn state_value() -> Value {
     if let Some(object) = value.as_object_mut() {
         object.insert("schema".into(), json!(1));
         object.insert("running".into(), json!(running));
+        // "port_in_use" when another program (the LocalSend app) holds the port; the notch and
+        // the page show it in words instead of a silent "Starting…".
+        let kind = error
+            .as_deref()
+            .map(|e| if e.contains(pulse_core::localsend::PORT_IN_USE) { "port_in_use" } else { "start_failed" });
+        object.insert("errorKind".into(), kind.map(Value::from).unwrap_or(Value::Null));
+        // The Windows notch reads this file with a reader that has no booleans, so the
+        // few it needs also come as 0/1 numbers (the Mac notch ignores them).
+        object.insert("runningN".into(), json!(running as u8));
+        let scanning = object.get("scanning").and_then(Value::as_bool).unwrap_or(false);
+        object.insert("scanningN".into(), json!(scanning as u8));
+        if let Some(Value::Array(list)) = object.get_mut("incoming") {
+            for item in list {
+                let message = item["isMessage"].as_bool().unwrap_or(false);
+                item["isMessageN"] = json!(message as u8);
+            }
+        }
         object.insert("error".into(), error.map(Value::from).unwrap_or(Value::Null));
         object.insert(
             "notice".into(),
@@ -329,42 +577,41 @@ fn send(service: &Service, to: &str, paths: Vec<String>, text: Option<String>) -
 
 // ---- the loop ------------------------------------------------------------------
 
-fn register(name: &str) -> Option<i32> {
-    let name = std::ffi::CString::new(name).ok()?;
-    let mut token = 0i32;
-    if unsafe { notify_register_check(name.as_ptr(), &mut token) } != 0 {
-        return None;
-    }
-    // The first check after registering always reports a change.
-    let mut changed = 0i32;
-    unsafe { notify_check(token, &mut changed) };
-    Some(token)
-}
-
-fn fired(token: Option<i32>) -> bool {
-    let Some(token) = token else { return false };
-    let mut changed = 0i32;
-    unsafe { notify_check(token, &mut changed) == 0 && changed != 0 }
-}
-
 /// Run sharing for as long as the hub lives.
 pub fn start_background(app: AppHandle) {
     let _ = APP.set(app);
     std::thread::spawn(|| {
-        let commands = register(COMMAND_NOTIFICATION);
-        let notch = register(NOTCH_NOTIFICATION);
+        let commands = bridge::watch(COMMAND_NOTIFICATION);
+        #[cfg(target_os = "macos")]
+        let notch = bridge::watch(NOTCH_NOTIFICATION);
+        #[cfg(windows)]
+        let mut settings_seen = settings_stamp();
+        #[cfg(windows)]
+        let mut settings_checked = Instant::now();
         let mut last_write = Instant::now() - Duration::from_secs(10);
         let mut last_reconcile = Instant::now() - Duration::from_secs(60);
         let mut last_drain = Instant::now();
         reconcile();
         loop {
             std::thread::sleep(Duration::from_millis(100));
-            if fired(commands) || last_drain.elapsed() >= Duration::from_secs(1) {
+            if commands.fired() || last_drain.elapsed() >= Duration::from_secs(1) {
                 last_drain = Instant::now();
                 drain_commands();
             }
             let failing = ERROR.lock().ok().is_some_and(|e| e.is_some());
-            if fired(notch) || (failing && last_reconcile.elapsed() >= Duration::from_secs(10)) {
+            #[cfg(target_os = "macos")]
+            let settings_changed = notch.fired();
+            #[cfg(windows)]
+            let settings_changed = settings_checked.elapsed() >= Duration::from_secs(2) && {
+                settings_checked = Instant::now();
+                let stamp = settings_stamp();
+                let changed = stamp != settings_seen;
+                settings_seen = stamp;
+                changed
+            };
+            #[cfg(not(any(target_os = "macos", windows)))]
+            let settings_changed = false;
+            if settings_changed || (failing && last_reconcile.elapsed() >= Duration::from_secs(10)) {
                 last_reconcile = Instant::now();
                 reconcile();
             }
@@ -421,12 +668,31 @@ pub fn share_dismiss(id: String) {
     }
 }
 
-/// Open System Settings at Local Network. Changes no permission.
+/// Open System Settings at Local Network (macOS) or the Windows Firewall's
+/// app list (Windows). Changes no permission.
 #[tauri::command]
 pub fn open_local_network_settings() -> Result<(), String> {
-    std::process::Command::new("/usr/bin/open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("control.exe")
+            .arg("firewall.cpl")
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Err("Not needed on this system.".to_string())
+    }
 }
