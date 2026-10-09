@@ -138,8 +138,8 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
                 .map(Ok)
                 .unwrap_or_else(sync::registry_path)
                 .map_err(fail)?;
-            let only = sync::load_registry(&registry)
-                .sync_set(&sync::accounts(&root).map_err(fail)?);
+            let only =
+                sync::load_registry(&registry).sync_set(&sync::accounts(&root).map_err(fail)?);
             if dry {
                 let plan = sync::plan_for(&root, Some(&only)).map_err(fail)?;
                 emit(&json!({"dry_run": true, "plan": plan}), machine);

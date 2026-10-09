@@ -230,7 +230,7 @@ fn account_sync_journey() {
             .contains("\"y\"")
     );
     // The index matches the merged records in every folder, byte for byte.
-    let mut archived = vec![format!("local_{a1}"), format!("local_{s2}")];
+    let mut archived = [format!("local_{a1}"), format!("local_{s2}")];
     archived.sort();
     let idx = format!(
         "{{\"v\":1,\"archived\":[{}]}}",
