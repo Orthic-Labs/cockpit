@@ -108,6 +108,8 @@ export interface NotchState {
 /** Pulse's updater, as the notch reports it (Sources/App/Updater.swift). */
 export interface UpdateState {
   current: string;
+  /** The build number (CFBundleVersion); absent from older notches. */
+  build?: string | null;
   /** The newer version waiting, if any. */
   available: string | null;
   lastChecked: string | null;
@@ -314,7 +316,7 @@ export function Settings({ section, notch, onNavigate }: {
           <Group title="Updates">
             {state.updates ? (
               <>
-                <Row label={`Version ${state.updates.current}`} note={updateLine(state.updates)}>
+                <Row label={`Version ${state.updates.current}${state.updates.build ? ` (build ${state.updates.build})` : ""}`} note={updateLine(state.updates)}>
                   <Button
                     size="sm"
                     variant="secondary"

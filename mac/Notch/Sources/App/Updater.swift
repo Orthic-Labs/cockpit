@@ -244,6 +244,7 @@ final class Updater: ObservableObject {
     var hubSnapshot: [String: Any] {
         var state: [String: Any] = [
             "current": currentVersion,
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? NSNull(),
             "available": pending ?? NSNull(),
             "lastChecked": lastChecked.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
         ]

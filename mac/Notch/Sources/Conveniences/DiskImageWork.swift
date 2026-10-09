@@ -19,6 +19,22 @@ struct DiskImageVersion: Sendable, Equatable {
     /// What to show: the marketing version, else the build.
     var display: String? { short ?? build }
 
+    /// Both the marketing version and the build are stated and equal.
+    func isSameBuild(as other: DiskImageVersion) -> Bool {
+        guard let a = short, let b = other.short, a == b,
+              let c = build, let d = other.build, c == d else { return false }
+        return true
+    }
+
+    /// The version for a "this one versus that one" line: "0.2.0", or
+    /// "0.2.0 (build 5)" when the marketing versions are equal and the builds
+    /// are what tell the two apart.
+    func labelled(comparedWith other: DiskImageVersion) -> String? {
+        guard let short else { return build }
+        if let build, other.short == short, other.build != nil { return "\(short) (build \(build))" }
+        return short
+    }
+
     /// Whether this version is strictly newer than `other`. The marketing
     /// version decides when both have one and they differ; the build decides
     /// otherwise. Numeric ordering, so 1.10 is newer than 1.9.

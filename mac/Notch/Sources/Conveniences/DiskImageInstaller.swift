@@ -200,14 +200,24 @@ final class DiskImageInstaller {
             advance()
             return
         }
+        if let mount = current?.mountURL { FinderWindowCloser.closeWindows(forVolume: mount) }
     }
 
     private func question(_ app: DiskImageApp, running: Bool) -> DiskImagePrompt {
         let installed = !app.copies.isEmpty
         var detail: String
         if installed {
-            let have = app.copies.compactMap(\.version.display).first
-            switch (have, app.version.display) {
+            let haveVersion = app.copies.first(where: { $0.version.short != nil })?.version ?? app.copies[0].version
+            // The same build is already installed: nothing to replace.
+            if let sameBuild = app.copies.first(where: { $0.version.isSameBuild(as: app.version) }),
+               let short = sameBuild.version.short, let build = sameBuild.version.build {
+                return DiskImagePrompt(iconPath: app.appURL.path, title: app.name,
+                                       detail: L10n.t("\(app.name) is already installed (\(short), build \(build))."),
+                                       style: .ask)
+            }
+            let old = haveVersion.labelled(comparedWith: app.version)
+            let new = app.version.labelled(comparedWith: haveVersion)
+            switch (old, new) {
             case let (old?, new?): detail = L10n.t("Installed \(old). This image has \(new).")
             default: detail = L10n.t("A copy is already in Applications.")
             }
@@ -310,6 +320,7 @@ final class DiskImageInstaller {
         cancelOffered = true
         ejectedWhileBusy = false
         showWorking(app)
+        FinderWindowCloser.closeWindows(forVolume: app.mountURL)
         let trashDownload = preferences.convDiskImageTrashDownload
 
         Task { [weak self] in

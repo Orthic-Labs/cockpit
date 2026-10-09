@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const releaseRoot = join(repoRoot, 'release');
@@ -121,6 +121,33 @@ async function placePrivilegedHelper(app, notchApp) {
   await cp(join(repoRoot, 'mac/Notch/Helper/dev.orthic.pulse.helper.plist'), plist, { force: true });
 }
 
+// Every build gets its own CFBundleVersion: the commit count of the source
+// revision, so builds of one release version stay distinguishable and ordered.
+// CFBundleShortVersionString stays the release version. This runs on the
+// unsigned candidate; signing happens afterwards (prepare, then right-release).
+function buildNumber() {
+  const git = args => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const revision = process.env.RIGHT_GIT_SOURCE_REVISION || 'HEAD';
+  if (git(['rev-parse', '--is-shallow-repository']) === 'true') git(['fetch', '--unshallow', '--quiet']);
+  const count = git(['rev-list', '--count', revision]);
+  if (!/^[1-9][0-9]*$/.test(count)) fail(`could not derive a build number from ${revision}: ${count}`);
+  return count;
+}
+
+async function setBuildNumber(bundle, build) {
+  const plist = join(bundle, 'Contents', 'Info.plist');
+  await requireFile(plist, `Info.plist of ${bundle}`);
+  const buddy = command => new Promise(resolvePromise => {
+    const child = spawn('/usr/libexec/PlistBuddy', ['-c', command, plist], { stdio: 'inherit' });
+    child.once('error', () => resolvePromise(false));
+    child.once('exit', code => resolvePromise(code === 0));
+  });
+  // Set when the key exists, Add when the bundle (a Tauri one, say) lacks it.
+  if (!(await buddy(`Set :CFBundleVersion ${build}`)) && !(await buddy(`Add :CFBundleVersion string ${build}`))) {
+    fail(`could not set CFBundleVersion in ${plist}`);
+  }
+}
+
 async function writeCandidateManifest(root) {
   const manifest = {
     schema_version: 1,
@@ -165,6 +192,11 @@ async function candidate() {
   await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Pulse.app'), 'hub app (Tauri)');
   await placePrivilegedHelper(app, source.notch);
   await placeSmartctl(app);
+  const build = buildNumber();
+  for (const bundle of [app, join(app, 'Contents', 'Helpers', 'Pulse.app'), join(app, 'Contents', 'PlugIns', 'PulseFinder.appex')]) {
+    await setBuildNumber(bundle, build);
+  }
+  console.log(`[pulse mac payload] CFBundleVersion ${build}`);
   await cp(join(repoRoot, 'mac/Notch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
   await copyExecutable(appExecutable, join(root, 'raw', 'Pulse'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'pulse'), 'Pulse CLI');

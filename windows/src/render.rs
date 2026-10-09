@@ -1932,7 +1932,7 @@ pub fn render_card(
 }
 
 /// Hover lift over a pressed-able control: white at 8%, as on the Mac.
-const HOVER_ALPHA: f32 = 0.08;
+const HOVER_ALPHA: f32 = 0.16;
 
 /// `render_card` with a hover plate over `hover` (a live pill, round button or device row).
 pub fn render_card_hover(

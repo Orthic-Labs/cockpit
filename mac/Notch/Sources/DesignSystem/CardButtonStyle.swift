@@ -19,7 +19,9 @@ private struct CardButtonBody: View {
     var body: some View {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
-            .brightness(configuration.isPressed ? 0.18 : hovering && isEnabled ? 0.08 : 0)
+            // Hover lifts the pill's dark fill to a clearly lighter grey; press goes further.
+            // Smaller values were invisible on the black notch.
+            .brightness(configuration.isPressed ? 0.32 : hovering && isEnabled ? 0.22 : 0)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
             .onHover { inside in
@@ -30,7 +32,7 @@ private struct CardButtonBody: View {
 }
 
 /// The hover lift for a clickable row that is not a Button (the Send ring's
-/// device rows): a +8% white plate behind the content, a pointing hand on enter.
+/// device rows): a 16% white plate behind the content, a pointing hand on enter.
 /// The notch controller owns the cursor stack, so this only sets, never pushes.
 struct CardRowHover: ViewModifier {
     var enabled = true
@@ -40,7 +42,7 @@ struct CardRowHover: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(hovering && enabled ? 0.08 : 0)))
+                .fill(Color.white.opacity(hovering && enabled ? 0.16 : 0)))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
             .onHover { inside in
                 hovering = inside
