@@ -11,12 +11,15 @@
 //! CreateWindowExW, EnumWindows, EnumDisplayMonitors) runs with no guard held, and panels
 //! are removed from `STATE` before they are dropped (destroyed).
 
+mod alerts;
 mod autostart;
 mod canvas;
 mod card;
 mod diag;
+mod drive_health;
 mod http;
 mod hub;
+mod installer;
 mod json;
 mod keys;
 mod layout;
@@ -26,14 +29,16 @@ mod render;
 mod runtime;
 mod send;
 mod sensors;
+mod sessions;
 mod settings;
 mod shot;
 mod surface;
+mod update;
 mod usage;
 mod viewshots;
 mod visibility;
 
-use layout::{Cell, CellView, SEND_CELL};
+use layout::{Badges, Cell, CellView, Edge, SEND_CELL};
 use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate};
 use raii::{ClassGuard, OwnedWindow, TimerGuard, hwnd_from_key, hwnd_key};
 use runtime::{
@@ -76,7 +81,15 @@ const MENU_TIMER_ID: usize = 8;
 const MENU_POLL_MS: u32 = 80;
 /// Grace period for the pointer to cross the gap from the Send cell to its card.
 const HOVER_TIMER_ID: usize = 9;
+/// Polls the pointer while the notch is open, to fold it again once the pointer has left.
+const FOLD_TIMER_ID: usize = 21;
+const FOLD_POLL_MS: u32 = 160;
+/// Polls the pointer must be outside before the notch folds (about half a second).
+const FOLD_GRACE_TICKS: u32 = 3;
 const HOVER_GRACE_MS: u32 = 220;
+/// One-second tick while an alert or update card is up (alerts put themselves away).
+const NOTICE_TIMER_ID: usize = 10;
+static NOTICE_TIMER_ARMED: AtomicBool = AtomicBool::new(false);
 /// Posted by `send` when the Send ring, its hover card or a popup changed.
 const WM_SEND: u32 = WM_APP + 0x5E;
 static COORDINATES_COMPARABLE: AtomicBool = AtomicBool::new(false);
@@ -89,20 +102,22 @@ struct Panel {
     // unchanged so the next refresh retries while the panel keeps owning its HWND.
     visibility: Retry<bool>,
     /// What the layered bitmap currently shows (cell views + DPI); `None` forces a redraw.
-    drawn: Option<(Vec<CellView>, u32)>,
+    drawn: Option<(Vec<CellView>, Edge, bool, u32, Badges)>,
     window: OwnedWindow,
 }
 
 struct Drag {
     panel: isize,
     id: String,
-    start_cursor_x: i32,
-    start_left: i32,
+    /// Pointer offset from the notch's top-left along the edge's axis.
+    grab: i32,
+    /// Edge the notch is docked to right now (the pointer can carry it to another).
+    edge: Edge,
+    folded: bool,
+    dpi: u32,
+    monitor: Bounds,
     left: i32,
     top: i32,
-    width: i32,
-    monitor_left: i32,
-    monitor_right: i32,
     moved: bool,
 }
 
@@ -124,6 +139,8 @@ struct Interaction {
     card_tracking: bool,
     /// `send::popup_hover(true)` was sent for the popup under the pointer.
     popup_hover_sent: bool,
+    /// Consecutive fold polls with the pointer away from every open notch and card.
+    fold_outside: u32,
 }
 
 /// The card on screen: owning panel, cell, content and whether it is a sharing popup.
@@ -132,6 +149,8 @@ struct Shown {
     cell: usize,
     panel: send::Panel,
     popup: bool,
+    /// A usage alert or the update card (`alerts.rs`, `update.rs`), not a hover card.
+    notice: bool,
 }
 
 impl Interaction {
@@ -146,6 +165,7 @@ impl Interaction {
             card_hover: false,
             card_tracking: false,
             popup_hover_sent: false,
+            fold_outside: 0,
         }
     }
 }
@@ -165,6 +185,8 @@ struct AppState {
     settings_baseline: PillSettings,
     /// False when the stored file was unusable: never overwrite it.
     settings_writable: bool,
+    /// Update-available and permission-needed dots on the notch.
+    badges: Badges,
 }
 
 impl AppState {
@@ -182,6 +204,10 @@ impl AppState {
             settings: PillSettings::new(),
             settings_baseline: PillSettings::new(),
             settings_writable: true,
+            badges: Badges {
+                update: false,
+                permissions: false,
+            },
         }
     }
 }
@@ -265,7 +291,9 @@ fn run() -> Result<(), Error> {
     let result = run_pill();
     // run_pill has returned: timer killed, panels destroyed, classes unregistered.
     usage::stop();
+    update::stop();
     send::stop();
+    installer::stop();
     hub::terminate();
     persist_settings();
     result
@@ -382,9 +410,13 @@ fn run_pill() -> Result<(), Error> {
     let _keys = keys::start(mac_shortcuts, shots.is_some());
 
     usage::start(controller.key());
+    update::start(controller.key(), lock_state().settings.auto_update_check);
+    drive_health::start();
     let nearby = lock_state().settings.nearby_enabled;
     send::set_enabled(nearby);
     send::start(controller.key(), WM_SEND);
+    let installer_auto = lock_state().settings.installer_auto;
+    installer::start(controller.key(), WM_SEND, installer_auto);
     reconcile_panels();
     let interval = refresh_panels(Some(sample_once()));
     arm_timer(controller.hwnd(), interval);
@@ -598,14 +630,26 @@ fn monitor_dpi(bounds: Bounds) -> u32 {
 
 /// Enabled monitors with their remembered position and DPI (defaults for unknown monitors).
 fn desired_placements(found: &[MonitorSpec]) -> Vec<Placed> {
-    let settings = lock_state().settings.clone();
+    let (settings, open) = {
+        let app = lock_state();
+        let open: Vec<String> = app
+            .panels
+            .iter()
+            .filter(|p| !p.slot.folded)
+            .map(|p| p.id.clone())
+            .collect();
+        (app.settings.clone(), open)
+    };
     found
         .iter()
         .filter(|spec| settings.monitor(&spec.id).enabled)
         .map(|spec| Placed {
             spec: spec.clone(),
             slot: Slot {
+                edge: settings.edge(&spec.id),
                 along: settings.position(&spec.id),
+                // A notch the pointer has opened stays open until the fold timer says so.
+                folded: settings.folds && !open.contains(&spec.id),
                 dpi: monitor_dpi(spec.bounds),
             },
         })
@@ -833,26 +877,41 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
     interval_ms(cadence, total, hidden_count)
 }
 
-/// Draws the panel's bitmap when the cells it shows (or its DPI) changed.
+/// Draws the panel's bitmap when what it shows (cells, edge, folded state, DPI, badges)
+/// changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     let ring = send::ring();
-    let (views, dpi) = {
+    let activity = sessions::activity(&sessions::snapshot());
+    let (views, slot, badges) = {
         let app = lock_state();
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
-        let views = layout::views(app.machine.as_ref(), usage, &ring);
-        let dpi = panel.slot.dpi;
+        // The folded pill shows no readings, so its identity is the empty list.
+        let views = if panel.slot.folded {
+            Vec::new()
+        } else {
+            layout::views_with(app.machine.as_ref(), usage, &ring, activity)
+        };
+        let drawn = (
+            &views,
+            panel.slot.edge,
+            panel.slot.folded,
+            panel.slot.dpi,
+            app.badges,
+        );
         if panel
             .drawn
             .as_ref()
-            .is_some_and(|(shown, shown_dpi)| *shown == views && *shown_dpi == dpi)
+            .is_some_and(|shown| (&shown.0, shown.1, shown.2, shown.3, shown.4) == drawn)
         {
             return;
         }
-        (views, dpi)
+        (views, panel.slot, app.badges)
     };
-    let Some(canvas) = with_text(|text| render::render_panel(&views, dpi, text)) else {
+    let Some(canvas) = with_text(|text| {
+        render::render_notch(&views, slot.edge, slot.folded, badges, slot.dpi, text)
+    }) else {
         return;
     };
     match present(hwnd_from_key(key), &canvas, None) {
@@ -862,7 +921,7 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
                 .iter_mut()
                 .find(|p| p.window.key() == key)
             {
-                panel.drawn = Some((views, dpi));
+                panel.drawn = Some((views, slot.edge, slot.folded, slot.dpi, badges));
             }
         }
         // `drawn` stays stale, so the next refresh retries.
@@ -1036,12 +1095,14 @@ fn alt_down() -> bool {
     state < 0
 }
 
-fn panel_dpi(key: isize) -> Option<u32> {
-    lock_state()
-        .panels
-        .iter()
-        .find(|p| p.window.key() == key)
-        .map(|p| p.slot.dpi)
+/// Cell under a point in a panel's own pixels; none on the folded pill.
+fn cell_under(key: isize, x: i32, y: i32) -> Option<usize> {
+    let app = lock_state();
+    let panel = app.panels.iter().find(|p| p.window.key() == key)?;
+    if panel.slot.folded {
+        return None;
+    }
+    layout::cell_at_for(panel.slot.edge, x, y, panel.slot.dpi)
 }
 
 /// Creates the shared card window on first use; returns its key.
@@ -1115,10 +1176,6 @@ fn stop_menu_timer() {
     }
 }
 
-fn clamp_x(x: i32, width: i32, monitor: Bounds) -> i32 {
-    x.clamp(monitor.left, (monitor.right - width).max(monitor.left))
-}
-
 /// Ctrl+V belongs to the Send cell while the pointer is on it or on its card.
 fn sync_send_hover() {
     let over = {
@@ -1141,14 +1198,24 @@ fn sync_card() {
     let usage = usage::snapshot();
     let now = usage::now_secs();
     let popup = send::popup_panel();
-    let (target, current_empty) = {
+    let notice = update::panel().or_else(|| alerts::panel(now));
+    sync_notice_timer(notice.is_some());
+    let notice_cell = Cell::ALL
+        .iter()
+        .position(|c| *c == Cell::Claude)
+        .unwrap_or(0);
+    let (target, current_empty, show_notice) = {
         let app = lock_state();
         if app.shutting_down || app.ui.menu.is_some() || app.ui.drag.is_some() {
             return;
         }
         // The pointer on the card itself keeps it; a popup needs no hover at all.
         let on_card = if app.ui.card_hover {
-            app.ui.card_shown.as_ref().map(|s| (s.key, s.cell))
+            app.ui
+                .card_shown
+                .as_ref()
+                .filter(|s| !s.notice)
+                .map(|s| (s.key, s.cell))
         } else {
             None
         };
@@ -1160,9 +1227,20 @@ fn sync_card() {
         } else {
             None
         };
+        // A usage alert or the update card waits while a ring is hovered.
+        let show_notice = notice.is_some() && app.ui.hover.is_none();
+        let notice_target = if show_notice {
+            app.panels
+                .iter()
+                .find(|p| !p.visibility.applied())
+                .map(|p| (p.window.key(), notice_cell))
+        } else {
+            None
+        };
         (
-            app.ui.hover.or(on_card).or(popup_target),
+            notice_target.or(app.ui.hover).or(on_card).or(popup_target),
             app.ui.card_shown.is_none(),
+            show_notice,
         )
     };
     let Some((key, cell)) = target else {
@@ -1171,15 +1249,29 @@ fn sync_card() {
         }
         return;
     };
-    let (panel, is_popup) = {
-        let app = lock_state();
-        card::panel_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now, popup)
+    let (mut panel, is_popup) = match notice {
+        Some(panel) if show_notice => (panel, false),
+        _ => {
+            let app = lock_state();
+            card::panel_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now, popup)
+        }
     };
+    // Claude Code sessions on this PC, listed under the Claude ring's limits.
+    if Cell::ALL[cell] == Cell::Claude && !is_popup && !show_notice {
+        for row in sessions::card_rows(&sessions::snapshot(), sessions::now_ms()) {
+            panel.content.rows.push(row);
+            panel.actions.push(None);
+        }
+    }
     let unchanged = lock_state().ui.card_shown.as_ref().is_some_and(|shown| {
-        shown.key == key && shown.cell == cell && shown.popup == is_popup && shown.panel == panel
+        shown.key == key
+            && shown.cell == cell
+            && shown.popup == is_popup
+            && shown.notice == show_notice
+            && shown.panel == panel
     });
     if !unchanged {
-        show_card(key, cell, panel, is_popup);
+        show_card(key, cell, panel, is_popup, show_notice);
     }
     // A popup that replaced the one under the pointer has not heard about the hover yet.
     let announce = {
@@ -1197,9 +1289,10 @@ fn sync_card() {
     sync_send_hover();
 }
 
-/// Shows (or updates) `panel` as the card of `cell` of the notch `key`, below the notch.
+/// Shows (or updates) `panel` as the card of `cell` of the notch `key`, beside the notch on
+/// the side away from its screen edge.
 fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool) {
-    let (dpi, monitor) = {
+    let (dpi, monitor, edge, folded) = {
         let app = lock_state();
         if app.shutting_down {
             return;
@@ -1207,17 +1300,35 @@ fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool) {
         let Some(notch) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
-        (notch.slot.dpi, notch.bounds)
+        (
+            notch.slot.dpi,
+            notch.bounds,
+            notch.slot.edge,
+            notch.slot.folded,
+        )
     };
     let mut rect = RECT::default();
     if unsafe { GetWindowRect(hwnd_from_key(key), &mut rect) }.is_err() {
         return;
     }
     let s = layout::scale(dpi);
-    let (card_width, _) = render::card_size(&panel.content, dpi);
-    let centre = rect.left + (layout::cell_left(cell, dpi) + layout::RING * s / 2.0) as i32;
-    let x = clamp_x(centre - card_width / 2, card_width, monitor);
-    let y = rect.bottom + (layout::CARD_GAP * s).round() as i32;
+    let card_size = render::card_size(&panel.content, dpi);
+    let (ring_x, ring_y) = layout::ring_center(edge, cell, dpi);
+    // A popup pinned to the folded pill hangs from the pill's middle.
+    let centre = match (edge.is_vertical(), folded) {
+        (true, true) => (rect.top + rect.bottom) / 2,
+        (true, false) => rect.top + ring_y as i32,
+        (false, true) => (rect.left + rect.right) / 2,
+        (false, false) => rect.left + ring_x as i32,
+    };
+    let (x, y) = layout::card_origin(
+        edge,
+        (rect.left, rect.top, rect.right, rect.bottom),
+        centre,
+        card_size,
+        (layout::CARD_GAP * s).round() as i32,
+        (monitor.left, monitor.top, monitor.right, monitor.bottom),
+    );
     let Some(card_key) = ensure_card() else {
         return;
     };
@@ -1240,7 +1351,22 @@ fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool) {
         cell,
         panel,
         popup,
+        notice,
     });
+}
+
+/// Starts or stops the one-second tick that expires alert cards.
+fn sync_notice_timer(active: bool) {
+    if NOTICE_TIMER_ARMED.swap(active, Ordering::Relaxed) == active {
+        return;
+    }
+    if let Some(controller) = controller_hwnd() {
+        if active {
+            let _ = unsafe { SetTimer(Some(controller), NOTICE_TIMER_ID, 1000, None) };
+        } else {
+            let _ = unsafe { KillTimer(Some(controller), NOTICE_TIMER_ID) };
+        }
+    }
 }
 
 fn arm_leave(hwnd: HWND) {
@@ -1302,6 +1428,119 @@ fn hover_grace_tick() {
     clear_hover(key);
 }
 
+/// Opens or folds one notch in place: it keeps its edge and centre, only its size changes.
+/// Opening starts the fold timer that closes it again once the pointer has left.
+fn set_folded(key: isize, folded: bool) {
+    let (target, slot) = {
+        let app = lock_state();
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
+        };
+        if panel.slot.folded == folded {
+            return;
+        }
+        let slot = Slot {
+            folded,
+            ..panel.slot
+        };
+        (notch_bounds(panel.bounds, slot), slot)
+    };
+    let moved = unsafe {
+        SetWindowPos(
+            hwnd_from_key(key),
+            None,
+            target.left,
+            target.top,
+            target.width(),
+            target.height(),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    if let Err(error) = moved {
+        diag::win32_error("SetWindowPos", &error, "fold");
+        return;
+    }
+    {
+        let mut app = lock_state();
+        if let Some(panel) = app.panels.iter_mut().find(|p| p.window.key() == key) {
+            panel.slot = slot;
+            panel.drawn = None;
+        }
+        app.ui.fold_outside = 0;
+        if folded {
+            app.ui.hover = None;
+        }
+    }
+    redraw_panel(key, &usage::snapshot());
+    if let Some(controller) = controller_hwnd() {
+        if folded {
+            sync_card();
+        } else {
+            let _ = unsafe { SetTimer(Some(controller), FOLD_TIMER_ID, FOLD_POLL_MS, None) };
+        }
+    }
+}
+
+/// While any notch is open: folds it once the pointer has been away from it (and from its
+/// card) for a few polls. A menu, a drag, a pointer on the card or a sharing popup keep it
+/// open. Stops itself when every notch is folded.
+fn fold_tick() {
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return;
+    }
+    let (open, keep, card) = {
+        let app = lock_state();
+        let open: Vec<isize> = app
+            .panels
+            .iter()
+            .filter(|p| !p.slot.folded)
+            .map(|p| p.window.key())
+            .collect();
+        let keep = app.ui.menu.is_some()
+            || app.ui.drag.is_some()
+            || app.ui.card_hover
+            || app
+                .ui
+                .card_shown
+                .as_ref()
+                .is_some_and(|c| c.popup || c.notice);
+        (open, keep, app.card.as_ref().map(OwnedWindow::key))
+    };
+    if open.is_empty() || !lock_state().settings.folds {
+        if let Some(controller) = controller_hwnd() {
+            let _ = unsafe { KillTimer(Some(controller), FOLD_TIMER_ID) };
+        }
+        return;
+    }
+    let over = |key: isize| {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(hwnd_from_key(key), &mut rect) }.is_ok()
+            && cursor.x >= rect.left
+            && cursor.x < rect.right
+            && cursor.y >= rect.top
+            && cursor.y < rect.bottom
+    };
+    let inside = keep
+        || open.iter().any(|key| over(*key))
+        || (lock_state().ui.card_shown.is_some() && card.is_some_and(over));
+    let fold = {
+        let mut app = lock_state();
+        if inside {
+            app.ui.fold_outside = 0;
+            false
+        } else {
+            app.ui.fold_outside += 1;
+            app.ui.fold_outside >= FOLD_GRACE_TICKS
+        }
+    };
+    if fold {
+        for key in open {
+            set_folded(key, true);
+        }
+    }
+}
+
 fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
     if lock_state()
@@ -1314,10 +1553,16 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
     arm_leave(hwnd);
-    let Some(dpi) = panel_dpi(key) else {
+    // The pointer reached the resting pill: open the notch under it.
+    if lock_state()
+        .panels
+        .iter()
+        .any(|p| p.window.key() == key && p.slot.folded)
+    {
+        set_folded(key, false);
         return;
-    };
-    match layout::cell_at(x, y, dpi) {
+    }
+    match cell_under(key, x, y) {
         Some(cell) => {
             let changed = {
                 let mut app = lock_state();
@@ -1399,6 +1644,15 @@ fn on_card_mouse_leave() {
 
 /// A click on the Send card: runs the action of the row under the pointer.
 fn on_card_click(y: i32) {
+    let notice = lock_state()
+        .ui
+        .card_shown
+        .as_ref()
+        .is_some_and(|shown| shown.notice);
+    if notice {
+        on_notice_click(y);
+        return;
+    }
     let action = {
         let app = lock_state();
         let Some(shown) = app.ui.card_shown.as_ref() else {
@@ -1424,16 +1678,39 @@ fn on_card_click(y: i32) {
     }
 }
 
+/// A click on an alert card puts it away; on the update card it presses the row under it.
+fn on_notice_click(y: i32) {
+    let row = {
+        let app = lock_state();
+        let shown = app.ui.card_shown.as_ref();
+        let dpi = shown.and_then(|s| {
+            app.panels
+                .iter()
+                .find(|p| p.window.key() == s.key)
+                .map(|p| p.slot.dpi)
+        });
+        shown
+            .zip(dpi)
+            .and_then(|(shown, dpi)| render::row_at(&shown.panel.content, dpi, y))
+    };
+    if update::panel().is_some() {
+        if let Some(row) = row {
+            update::click(row);
+        }
+    } else {
+        alerts::dismiss();
+    }
+    lock_state().ui.card_hover = false;
+    sync_card();
+}
+
 fn on_lbutton_down(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
     if alt_down() {
         begin_drag(hwnd);
         return;
     }
-    let Some(dpi) = panel_dpi(key) else {
-        return;
-    };
-    if let Some(cell) = layout::cell_at(x, y, dpi) {
+    if let Some(cell) = cell_under(key, x, y) {
         lock_state().ui.press = Some((key, cell));
     }
 }
@@ -1452,10 +1729,7 @@ fn on_lbutton_up(hwnd: HWND, x: i32, y: i32) {
     let Some((press_key, press_cell)) = press else {
         return;
     };
-    let Some(dpi) = panel_dpi(key) else {
-        return;
-    };
-    if press_key == key && layout::cell_at(x, y, dpi) == Some(press_cell) {
+    if press_key == key && cell_under(key, x, y) == Some(press_cell) {
         let section = Cell::ALL[press_cell].section();
         if !hub::open(section) {
             diag::info("hub_unavailable", &[("section", section)]);
@@ -1470,8 +1744,8 @@ fn on_capture_lost() {
     }
 }
 
-/// Alt-drag along the top edge: captures the pointer and moves the notch horizontally,
-/// clamped to its own monitor.
+/// Alt-drag: captures the pointer and carries the notch along its edge; moved near another
+/// edge of the same monitor, it docks there (and turns its rings on their side).
 fn begin_drag(hwnd: HWND) {
     let key = hwnd_key(hwnd);
     let mut cursor = POINT::default();
@@ -1486,16 +1760,21 @@ fn begin_drag(hwnd: HWND) {
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
+        let edge = panel.slot.edge;
         Drag {
             panel: key,
             id: panel.id.clone(),
-            start_cursor_x: cursor.x,
-            start_left: rect.left,
+            grab: if edge.is_vertical() {
+                cursor.y - rect.top
+            } else {
+                cursor.x - rect.left
+            },
+            edge,
+            folded: panel.slot.folded,
+            dpi: panel.slot.dpi,
+            monitor: panel.bounds,
             left: rect.left,
             top: rect.top,
-            width: rect.right - rect.left,
-            monitor_left: panel.bounds.left,
-            monitor_right: panel.bounds.right,
             moved: false,
         }
     };
@@ -1514,53 +1793,95 @@ fn drag_to(hwnd: HWND) {
     if unsafe { GetCursorPos(&mut cursor) }.is_err() {
         return;
     }
-    let target = {
+    let (left, top, width, height, turned) = {
         let mut app = lock_state();
         let Some(drag) = app.ui.drag.as_mut() else {
             return;
         };
-        let wanted = drag.start_left + (cursor.x - drag.start_cursor_x);
-        let max_left = (drag.monitor_right - drag.width).max(drag.monitor_left);
-        let left = wanted.clamp(drag.monitor_left, max_left);
-        if left == drag.left {
+        let m = drag.monitor;
+        let monitor = (m.left, m.top, m.right, m.bottom);
+        let edge = layout::edge_for_cursor(drag.edge, monitor, (cursor.x, cursor.y), drag.dpi);
+        let (width, height) = layout::panel_size(edge, drag.folded, drag.dpi);
+        let (pointer, length, low, high) = if edge.is_vertical() {
+            (cursor.y, height, m.top, m.bottom)
+        } else {
+            (cursor.x, width, m.left, m.right)
+        };
+        // Same edge: keep the grab point under the pointer. New edge: centre on the pointer.
+        let wanted = if edge == drag.edge {
+            pointer - drag.grab
+        } else {
+            pointer - length / 2
+        };
+        let along = wanted.clamp(low, (high - length).max(low));
+        let (left, top) = match edge {
+            Edge::Top => (along, m.top),
+            Edge::Bottom => (along, (m.bottom - height).max(m.top)),
+            Edge::Left => (m.left, along),
+            Edge::Right => ((m.right - width).max(m.left), along),
+        };
+        let turned = edge != drag.edge;
+        if !turned && left == drag.left && top == drag.top {
             return;
         }
+        drag.edge = edge;
         drag.left = left;
+        drag.top = top;
         drag.moved = true;
-        (left, drag.top)
+        (left, top, width, height, turned)
     };
     let moved = unsafe {
         SetWindowPos(
             hwnd,
             None,
-            target.0,
-            target.1,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            left,
+            top,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
         )
     };
     if let Err(error) = moved {
         diag::win32_error("SetWindowPos", &error, "drag");
+        return;
+    }
+    if turned {
+        // The rings turn with the edge: redraw at the new orientation.
+        let key = hwnd_key(hwnd);
+        let edge = lock_state().ui.drag.as_ref().map(|d| d.edge);
+        if let (Some(edge), Some(panel)) = (
+            edge,
+            lock_state()
+                .panels
+                .iter_mut()
+                .find(|p| p.window.key() == key),
+        ) {
+            panel.slot.edge = edge;
+            panel.drawn = None;
+        }
+        redraw_panel(key, &usage::snapshot());
     }
 }
 
-/// Remembers the dropped position for the monitor and writes it atomically.
+/// Remembers the dropped edge and position for the monitor and writes them atomically.
 fn finish_drag(drag: Drag) {
     if !drag.moved {
         return;
     }
-    let along = layout::along_for_left(
-        drag.monitor_left,
-        drag.monitor_right - drag.monitor_left,
-        drag.width,
-        drag.left,
+    let m = drag.monitor;
+    let along = layout::along_for_origin(
+        drag.edge,
+        (m.left, m.top, m.right, m.bottom),
+        layout::panel_size(drag.edge, drag.folded, drag.dpi),
+        (drag.left, drag.top),
     );
     {
         let mut app = lock_state();
         app.settings.set_position(&drag.id, along);
+        app.settings.set_edge(&drag.id, drag.edge);
         if let Some(panel) = app.panels.iter_mut().find(|p| p.id == drag.id) {
             panel.slot.along = along;
+            panel.slot.edge = drag.edge;
         }
     }
     persist_settings();
@@ -1569,12 +1890,12 @@ fn finish_drag(drag: Drag) {
 /// Right-click: a single "Quit" item, drawn as a non-activating card so focus never moves.
 fn open_menu(hwnd: HWND) {
     let key = hwnd_key(hwnd);
-    let (dpi, monitor) = {
+    let (dpi, monitor, edge) = {
         let app = lock_state();
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
-        (panel.slot.dpi, panel.bounds)
+        (panel.slot.dpi, panel.bounds, panel.slot.edge)
     };
     let mut cursor = POINT::default();
     let mut rect = RECT::default();
@@ -1584,8 +1905,18 @@ fn open_menu(hwnd: HWND) {
         return;
     }
     let (menu_width, menu_height) = render::menu_size(dpi);
-    let x = clamp_x(cursor.x - menu_width / 2, menu_width, monitor);
-    let y = rect.bottom + (layout::CARD_GAP * layout::scale(dpi)).round() as i32;
+    let (x, y) = layout::card_origin(
+        edge,
+        (rect.left, rect.top, rect.right, rect.bottom),
+        if edge.is_vertical() {
+            cursor.y
+        } else {
+            cursor.x
+        },
+        (menu_width, menu_height),
+        (layout::CARD_GAP * layout::scale(dpi)).round() as i32,
+        (monitor.left, monitor.top, monitor.right, monitor.bottom),
+    );
     let Some(card_key) = ensure_card() else {
         return;
     };
@@ -1669,10 +2000,7 @@ fn on_send_changed() {
 /// ignored. The drop is always released.
 fn on_drop(hwnd: HWND, hdrop: WPARAM) {
     let dropped = send::take_drop(hdrop.0 as isize);
-    let Some(dpi) = panel_dpi(hwnd_key(hwnd)) else {
-        return;
-    };
-    if layout::cell_at(dropped.x, dropped.y, dpi) == Some(SEND_CELL) {
+    if cell_under(hwnd_key(hwnd), dropped.x, dropped.y) == Some(SEND_CELL) {
         send::drop_files(dropped.paths);
     }
 }
@@ -1695,6 +2023,18 @@ extern "system" fn controller_proc(
                 menu_tick();
                 return LRESULT(0);
             }
+            WM_TIMER if wparam.0 == NOTICE_TIMER_ID => {
+                sync_card();
+                return LRESULT(0);
+            }
+            update::MSG_UPDATE => {
+                sync_card();
+                return LRESULT(0);
+            }
+            WM_TIMER if wparam.0 == FOLD_TIMER_ID => {
+                fold_tick();
+                return LRESULT(0);
+            }
             WM_TIMER if wparam.0 == HOVER_TIMER_ID => {
                 hover_grace_tick();
                 return LRESULT(0);
@@ -1712,8 +2052,13 @@ extern "system" fn controller_proc(
                 return LRESULT(0);
             }
             usage::MSG_USAGE_UPDATED => {
+                let prefs = alerts::Prefs::from_settings(&lock_state().settings);
+                let raised = alerts::observe(&usage::snapshot(), usage::now_secs(), prefs);
                 let interval = refresh_panels(None);
                 arm_timer(hwnd, interval);
+                if raised {
+                    sync_card();
+                }
                 return LRESULT(0);
             }
             WM_CLOSE => {
@@ -1728,6 +2073,8 @@ extern "system" fn controller_proc(
                 let _ = KillTimer(Some(hwnd), TIMER_ID);
                 let _ = KillTimer(Some(hwnd), MENU_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), HOVER_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), FOLD_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), NOTICE_TIMER_ID);
                 teardown_panels();
                 PostQuitMessage(0);
                 return LRESULT(0);
@@ -1806,7 +2153,7 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                             .ui
                             .card_shown
                             .as_ref()
-                            .is_some_and(|c| c.cell == SEND_CELL)
+                            .is_some_and(|c| c.cell == SEND_CELL || c.notice)
                 };
                 return if takes_pointer {
                     LRESULT(HTCLIENT as isize)

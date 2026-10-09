@@ -9,6 +9,7 @@ use windows::core::{BOOL, PCWSTR};
 const ACCESS_TYPE_AUTOMATIC_PROXY: u32 = 4;
 const FLAG_SECURE: u32 = 0x0080_0000;
 const QUERY_STATUS_CODE: u32 = 19;
+const QUERY_CONTENT_LENGTH: u32 = 5;
 const QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
 /// `dwHeadersLength` value meaning "the header string is NUL-terminated".
 const HEADERS_NUL_TERMINATED: u32 = u32::MAX;
@@ -90,6 +91,10 @@ pub enum HttpError {
     Receive,
     Read,
     TooLarge,
+    /// A download got a status other than 200.
+    BadStatus,
+    /// The destination could not be written.
+    Write,
 }
 
 /// Closes a WinHTTP handle on drop.
@@ -112,14 +117,21 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// HTTPS GET `https://{host}{path}` with the given request headers. Blocking; bounded by
-/// `timeout_ms` per network stage and by a body size cap.
-pub fn get(
+/// An open, answered request. Fields drop in declaration order: request, connection, session.
+struct Exchange {
+    request: Handle,
+    _connection: Handle,
+    _session: Handle,
+    status: u32,
+}
+
+/// Sends the request and reads the status line; the body is left to the caller.
+fn begin(
     host: &str,
     path: &str,
     headers: &[(&str, &str)],
     timeout_ms: i32,
-) -> Result<Response, HttpError> {
+) -> Result<Exchange, HttpError> {
     let agent = wide("PulseNotch/1");
     let host_w = wide(host);
     let path_w = wide(path);
@@ -135,7 +147,7 @@ pub fn get(
 
     // SAFETY: every pointer passed below is either null, a NUL-terminated UTF-16 buffer that
     // outlives the call, or a handle owned by a `Handle` guard that outlives its children
-    // (guards drop in reverse declaration order: request, connection, session).
+    // (the returned `Exchange` keeps them in child-first drop order).
     unsafe {
         let session = Handle::new(WinHttpOpen(
             PCWSTR(agent.as_ptr()),
@@ -188,36 +200,110 @@ pub fn get(
         {
             return Err(HttpError::Receive);
         }
-        let mut body = Vec::new();
-        loop {
-            let mut available = 0u32;
-            if !WinHttpQueryDataAvailable(request.0, &mut available).as_bool() {
-                return Err(HttpError::Read);
-            }
-            if available == 0 {
-                break;
-            }
-            if body.len() + available as usize > MAX_BODY_BYTES {
-                return Err(HttpError::TooLarge);
-            }
-            let start = body.len();
-            body.resize(start + available as usize, 0);
-            let mut read = 0u32;
-            if !WinHttpReadData(
-                request.0,
-                body[start..].as_mut_ptr().cast(),
-                available,
-                &mut read,
-            )
-            .as_bool()
-            {
-                return Err(HttpError::Read);
-            }
-            body.truncate(start + read as usize);
-            if read == 0 {
-                break;
-            }
-        }
-        Ok(Response { status, body })
+        Ok(Exchange {
+            request,
+            _connection: connection,
+            _session: session,
+            status,
+        })
     }
+}
+
+/// Reads the next chunk of the body into `buffer`; `Ok(0)` is the end.
+fn read_chunk(request: &Handle, buffer: &mut [u8]) -> Result<usize, HttpError> {
+    // SAFETY: `buffer` is valid for `to_read` bytes and the handle is live.
+    unsafe {
+        let mut available = 0u32;
+        if !WinHttpQueryDataAvailable(request.0, &mut available).as_bool() {
+            return Err(HttpError::Read);
+        }
+        let to_read = available.min(buffer.len() as u32);
+        if to_read == 0 {
+            return Ok(0);
+        }
+        let mut read = 0u32;
+        if !WinHttpReadData(request.0, buffer.as_mut_ptr().cast(), to_read, &mut read).as_bool() {
+            return Err(HttpError::Read);
+        }
+        Ok(read as usize)
+    }
+}
+
+/// HTTPS GET `https://{host}{path}` with the given request headers. Blocking; bounded by
+/// `timeout_ms` per network stage and by a body size cap.
+pub fn get(
+    host: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    timeout_ms: i32,
+) -> Result<Response, HttpError> {
+    let exchange = begin(host, path, headers, timeout_ms)?;
+    let mut body = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let read = read_chunk(&exchange.request, &mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        if body.len() + read > MAX_BODY_BYTES {
+            return Err(HttpError::TooLarge);
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+    Ok(Response {
+        status: exchange.status,
+        body,
+    })
+}
+
+/// HTTPS GET streamed into `out` (redirects are followed by WinHTTP). Only a 200 answer is
+/// written. `progress(received, total)` runs per chunk; `total` is the Content-Length when
+/// the server gave one. Returns the bytes written; fails with `TooLarge` past `max_bytes`.
+pub fn download(
+    host: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    timeout_ms: i32,
+    max_bytes: u64,
+    out: &mut impl std::io::Write,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<u64, HttpError> {
+    let exchange = begin(host, path, headers, timeout_ms)?;
+    if exchange.status != 200 {
+        return Err(HttpError::BadStatus);
+    }
+    let mut length = 0u32;
+    let mut length_len = std::mem::size_of::<u32>() as u32;
+    // SAFETY: the out buffer is a live u32 of the declared size; the handle is live.
+    let total = unsafe {
+        WinHttpQueryHeaders(
+            exchange.request.0,
+            QUERY_CONTENT_LENGTH | QUERY_FLAG_NUMBER,
+            PCWSTR::null(),
+            (&mut length as *mut u32).cast(),
+            &mut length_len,
+            std::ptr::null_mut(),
+        )
+        .as_bool()
+    }
+    .then_some(u64::from(length));
+    if total.is_some_and(|t| t > max_bytes) {
+        return Err(HttpError::TooLarge);
+    }
+    let mut received = 0u64;
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        let read = read_chunk(&exchange.request, &mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        received += read as u64;
+        if received > max_bytes {
+            return Err(HttpError::TooLarge);
+        }
+        out.write_all(&chunk[..read])
+            .map_err(|_| HttpError::Write)?;
+        progress(received, total);
+    }
+    Ok(received)
 }

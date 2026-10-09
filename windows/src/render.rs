@@ -5,12 +5,17 @@
 use crate::canvas::{Canvas, Mask};
 use crate::card::{CardContent, Row};
 use crate::layout::{
-    self, BODY_CORNER, CellView, INK_PRIMARY, INK_SECONDARY, LABEL_GAP, PAD_TOP, PROGRESS_STROKE,
-    RING, RING_TRACK_ALPHA, TRACK_STROKE, WEEKLY_RADIUS, WEEKLY_STROKE,
+    self, Activity, BODY_CORNER, Badges, CellView, Edge, INK_PRIMARY, INK_SECONDARY, LABEL_GAP,
+    PAD_TOP, PROGRESS_STROKE, RING, RING_TRACK_ALPHA, TRACK_STROKE, WEEKLY_RADIUS, WEEKLY_STROKE,
 };
 use crate::surface::TextPainter;
 
 const STALE_DIM: f32 = 0.45;
+/// Glyph opacity while a limit is spent (the Mac dims it to 0.35).
+const BLOCKED_GLYPH: f32 = 0.35;
+/// Permission dot (the Mac's four-point amber dot) and update dot, in DIPs.
+const PILL_DOT: f32 = 4.0;
+const BADGE_DOT: f32 = 6.0;
 const BORDER: u32 = 0x2A2A2A;
 /// Side margin around a lone ring in `render_cell`.
 const CELL_MARGIN: f32 = 8.0;
@@ -82,33 +87,130 @@ fn draw_centered(
     canvas.draw_mask(&mask, x, top.round() as i32, color, alpha);
 }
 
-/// The notch body with its six cells.
-pub fn render_panel(views: &[CellView], dpi: u32, text: &mut TextPainter) -> Canvas {
+/// Corner radii `[top-left, top-right, bottom-right, bottom-left]` for a body welded to
+/// `edge`: the corners on the screen-edge side stay square, the others are rounded.
+fn corner_radii(edge: Edge, corner: f32) -> [f32; 4] {
+    match edge {
+        Edge::Top => [0.0, 0.0, corner, corner],
+        Edge::Bottom => [corner, corner, 0.0, 0.0],
+        Edge::Left => [0.0, corner, corner, 0.0],
+        Edge::Right => [corner, 0.0, 0.0, corner],
+    }
+}
+
+/// The notch on `edge`: the open body with its six rings (stacked down a side edge), or the
+/// folded pill. Badges draw as dots: amber alone on the folded pill, and at the far end of the
+/// open body (update red, permissions amber).
+pub fn render_notch(
+    views: &[CellView],
+    edge: Edge,
+    folded: bool,
+    badges: Badges,
+    dpi: u32,
+    text: &mut TextPainter,
+) -> Canvas {
     let s = layout::scale(dpi);
-    let (width, height) = layout::body_size(dpi);
+    let (width, height) = layout::panel_size(edge, folded, dpi);
     let mut canvas = Canvas::new(width as usize, height as usize);
-    // Flush with the screen's top edge: only the bottom corners are rounded.
-    let corner = BODY_CORNER * s;
+    if folded {
+        let radius = (layout::PILL_THICK * s).min(BODY_CORNER * s);
+        canvas.fill_round_rect(
+            0.0,
+            0.0,
+            width as f32,
+            height as f32,
+            corner_radii(edge, radius),
+            0x000000,
+            1.0,
+        );
+        if badges.permissions {
+            dot(
+                &mut canvas,
+                (width as f32 / 2.0, height as f32 / 2.0),
+                PILL_DOT / 2.0 * s,
+                layout::BADGE_PERMISSIONS,
+            );
+        }
+        return canvas;
+    }
     canvas.fill_round_rect(
         0.0,
         0.0,
         width as f32,
         height as f32,
-        [0.0, 0.0, corner, corner],
+        corner_radii(edge, BODY_CORNER * s),
         0x000000,
         1.0,
     );
     for (index, view) in views.iter().enumerate() {
-        let cx = layout::cell_left(index, dpi) + RING * s / 2.0;
-        draw_cell(&mut canvas, view, cx, s, text);
+        draw_cell(
+            &mut canvas,
+            view,
+            layout::ring_center(edge, index, dpi),
+            s,
+            text,
+        );
+    }
+    // Badges sit in the margin past the last cell, clear of every ring.
+    let (w, h) = (width as f32, height as f32);
+    let (end_x, end_y, step_x, step_y) = if edge.is_vertical() {
+        (w / 2.0, h - 4.2 * s, 5.0 * s, 0.0)
+    } else {
+        (w - 8.0 * s, h / 2.0, 0.0, 5.0 * s)
+    };
+    let shown: Vec<u32> = [
+        badges.update.then_some(layout::BADGE_UPDATE),
+        badges.permissions.then_some(layout::BADGE_PERMISSIONS),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let count = shown.len() as f32;
+    for (index, colour) in shown.into_iter().enumerate() {
+        let offset = index as f32 - (count - 1.0) / 2.0;
+        let centre = (end_x + step_x * 2.0 * offset, end_y + step_y * 2.0 * offset);
+        let radius = if colour == layout::BADGE_UPDATE {
+            BADGE_DOT / 2.0 * s
+        } else {
+            PILL_DOT / 2.0 * s
+        };
+        canvas.fill_round_rect(
+            centre.0 - radius - s,
+            centre.1 - radius - s,
+            2.0 * (radius + s),
+            2.0 * (radius + s),
+            [radius + s; 4],
+            0x000000,
+            1.0,
+        );
+        dot(&mut canvas, centre, radius, colour);
     }
     canvas
 }
 
-/// One cell: track ring, arcs, glyph mark and the label under it, the ring centred on `cx`.
-fn draw_cell(canvas: &mut Canvas, view: &CellView, cx: f32, s: f32, text: &mut TextPainter) {
+/// A filled dot centred on `(x, y)`.
+fn dot(canvas: &mut Canvas, (x, y): (f32, f32), radius: f32, colour: u32) {
+    canvas.fill_round_rect(
+        x - radius,
+        y - radius,
+        2.0 * radius,
+        2.0 * radius,
+        [radius; 4],
+        colour,
+        1.0,
+    );
+}
+
+/// One cell: track ring, arcs, glyph mark and the label under it, the ring centred on
+/// `(cx, cy)`.
+fn draw_cell(
+    canvas: &mut Canvas,
+    view: &CellView,
+    (cx, cy): (f32, f32),
+    s: f32,
+    text: &mut TextPainter,
+) {
     let dim = if view.stale { STALE_DIM } else { 1.0 };
-    let cy = (PAD_TOP + RING / 2.0) * s;
     let radius = (RING / 2.0 - TRACK_STROKE / 2.0) * s;
     canvas.stroke_arc(
         cx,
@@ -119,17 +221,22 @@ fn draw_cell(canvas: &mut Canvas, view: &CellView, cx: f32, s: f32, text: &mut T
         0xFFFFFF,
         RING_TRACK_ALPHA * dim,
     );
+    // A spent limit reads as exhausted whatever the arc says; otherwise the reading's own
+    // band (Memory) or the share's band decides.
+    let colour = |fraction: f32| {
+        if view.blocked {
+            layout::BAND_CRITICAL
+        } else {
+            layout::band_color(fraction)
+        }
+    };
     if let Some(main) = view.main {
         let fraction = f32::from(main) / 100.0;
-        canvas.stroke_arc(
-            cx,
-            cy,
-            radius,
-            PROGRESS_STROKE * s,
-            fraction,
-            layout::band_color(fraction),
-            dim,
-        );
+        let ring = match view.band {
+            Some(band) if !view.blocked => band,
+            _ => colour(fraction),
+        };
+        canvas.stroke_arc(cx, cy, radius, PROGRESS_STROKE * s, fraction, ring, dim);
     }
     if let Some(inner) = view.inner {
         let fraction = f32::from(inner) / 100.0;
@@ -148,8 +255,26 @@ fn draw_cell(canvas: &mut Canvas, view: &CellView, cx: f32, s: f32, text: &mut T
             WEEKLY_RADIUS * s,
             WEEKLY_STROKE * s,
             fraction,
-            layout::band_color(fraction),
+            colour(fraction),
             0.8 * dim,
+        );
+    }
+    // Waiting on a question / just completed: a full ring inside the track, at full strength
+    // even when the usage reading is stale (it is first-hand).
+    let activity = match view.activity {
+        Activity::None => None,
+        Activity::Waiting => Some(layout::BAND_WATCH),
+        Activity::Success => Some(layout::BAND_AMPLE),
+    };
+    if let Some(activity) = activity {
+        canvas.stroke_arc(
+            cx,
+            cy,
+            layout::ACTIVITY_RADIUS * s,
+            layout::ACTIVITY_STROKE * s,
+            1.0,
+            activity,
+            1.0,
         );
     }
     // Glyph mark centred in the ring (font cells are taller than their capitals, so
@@ -167,14 +292,18 @@ fn draw_cell(canvas: &mut Canvas, view: &CellView, cx: f32, s: f32, text: &mut T
         } else {
             INK_PRIMARY
         },
-        dim,
+        if view.blocked {
+            dim * BLOCKED_GLYPH
+        } else {
+            dim
+        },
     );
     let known = view.main.is_some();
     draw_centered(
         canvas,
         text,
         &view.label,
-        (cx, (PAD_TOP + RING + LABEL_GAP) * s),
+        (cx, cy + (RING / 2.0 + LABEL_GAP) * s),
         (11.0, false),
         s,
         if known { INK_PRIMARY } else { INK_SECONDARY },
@@ -188,7 +317,13 @@ pub fn render_cell(view: &CellView, dpi: u32, text: &mut TextPainter) -> Canvas 
     let (_, height) = layout::body_size(dpi);
     let width = ((RING + 2.0 * CELL_MARGIN) * s).round() as usize;
     let mut canvas = Canvas::new(width, height as usize);
-    draw_cell(&mut canvas, view, width as f32 / 2.0, s, text);
+    draw_cell(
+        &mut canvas,
+        view,
+        (width as f32 / 2.0, (PAD_TOP + RING / 2.0) * s),
+        s,
+        text,
+    );
     canvas
 }
 

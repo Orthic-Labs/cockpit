@@ -60,6 +60,8 @@ pub enum Status {
     Expired,
     RateLimited,
     Unavailable,
+    /// The saved login exists but Windows refused Pulse access to read it.
+    AccessDenied,
 }
 
 impl Status {
@@ -71,6 +73,7 @@ impl Status {
             Status::Expired => "Sign-in expired; use the app once to refresh",
             Status::RateLimited => "Rate limited; retrying later",
             Status::Unavailable => "Unavailable",
+            Status::AccessDenied => "Windows refused access to the saved login",
         }
     }
 }
@@ -93,6 +96,28 @@ pub struct Usage {
     pub windows: Vec<LimitWindow>,
     /// Unix seconds of the last successful reading shown in `windows`.
     pub updated: Option<u64>,
+    /// Set while a limit is spent: the account is paused until `resets_at`.
+    pub block: Option<Block>,
+}
+
+/// A spent limit that pauses the account.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Block {
+    pub reason: String,
+    /// Unix seconds.
+    pub resets_at: Option<u64>,
+}
+
+/// The pause a set of fresh windows implies: the first window that is fully used.
+fn block_of(windows: &[LimitWindow]) -> Option<Block> {
+    windows.iter().find(|w| w.fraction >= 1.0).map(|w| Block {
+        reason: if w.key == "session" || w.key == "primary" {
+            "Session limit reached".to_string()
+        } else {
+            format!("{} limit reached", w.label)
+        },
+        resets_at: w.resets_at,
+    })
 }
 
 impl Usage {
@@ -102,6 +127,7 @@ impl Usage {
             plan: None,
             windows: Vec::new(),
             updated: None,
+            block: None,
         }
     }
 
@@ -236,11 +262,13 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
         Outcome::Fresh { windows, plan } => {
             tracker.consecutive_rate_limits = 0;
             tracker.backoff_until = 0;
+            let block = block_of(&windows);
             Usage {
                 status: Status::Ok,
                 plan,
                 windows,
                 updated: Some(now),
+                block,
             }
         }
         Outcome::Failed(status) => {
@@ -257,6 +285,7 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
                     .filter(|w| w.resets_at.is_none_or(|reset| reset > now))
                     .collect(),
                 updated: previous.updated,
+                block: None,
             }
         }
     }
@@ -276,13 +305,22 @@ fn home() -> Option<PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
-fn read_small_json(path: &Path) -> Option<Value> {
-    let meta = std::fs::metadata(path).ok()?;
+/// The saved login file as JSON. A file Windows will not let Pulse read is `AccessDenied`
+/// (never "signed out"); a missing or malformed one is `SignIn`.
+fn read_small_json(path: &Path) -> Result<Value, Status> {
+    let denied = |error: std::io::Error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Status::AccessDenied
+        } else {
+            Status::SignIn
+        }
+    };
+    let meta = std::fs::metadata(path).map_err(denied)?;
     if !meta.is_file() || meta.len() > CREDENTIAL_MAX_BYTES as u64 {
-        return None;
+        return Err(Status::SignIn);
     }
-    let bytes = std::fs::read(path).ok()?;
-    json::parse(&bytes, CREDENTIAL_MAX_BYTES)
+    let bytes = std::fs::read(path).map_err(denied)?;
+    json::parse(&bytes, CREDENTIAL_MAX_BYTES).ok_or(Status::SignIn)
 }
 
 struct ClaudeLogin {
@@ -296,7 +334,7 @@ fn claude_login(now: u64) -> Result<ClaudeLogin, Status> {
         .filter(|p| p.is_absolute())
         .or_else(|| home().map(|h| h.join(".claude")))
         .ok_or(Status::SignIn)?;
-    let root = read_small_json(&dir.join(".credentials.json")).ok_or(Status::SignIn)?;
+    let root = read_small_json(&dir.join(".credentials.json"))?;
     let oauth = root.get("claudeAiOauth").ok_or(Status::SignIn)?;
     let token = oauth
         .get("accessToken")
@@ -331,7 +369,7 @@ fn codex_login(now: u64) -> Result<CodexLogin, Status> {
         .filter(|p| p.is_absolute())
         .or_else(|| home().map(|h| h.join(".codex")))
         .ok_or(Status::SignIn)?;
-    let root = read_small_json(&dir.join("auth.json")).ok_or(Status::SignIn)?;
+    let root = read_small_json(&dir.join("auth.json"))?;
     let text = |key: &str| {
         root.path(&["tokens", key])
             .and_then(Value::as_str)

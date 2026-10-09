@@ -2,7 +2,7 @@
 //! planning (monitor set + slots), the retry state machine for show/hide, cadence, and the
 //! single-instance mutex. Production code in main.rs and the tests call the same functions.
 
-use crate::layout;
+use crate::layout::{self, Edge};
 use crate::lifecycle::{
     Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, PanelAction, plan_panels, sampling_interval_ms,
 };
@@ -151,33 +151,43 @@ pub(crate) mod winsec {
 
 // ------------------------------------------------------------------ placement
 
-/// Where one monitor's notch sits: `along` is the per-mille position of the notch's centre
-/// across the monitor's top edge (Alt-drag remembers it); `dpi` sizes the notch.
+/// Where one monitor's notch sits: `edge` is the screen edge it is welded to, `along` the
+/// per-mille position of its centre along that edge (Alt-drag remembers both), `folded`
+/// whether it is the resting pill rather than the open body, and `dpi` sizes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Slot {
+    pub edge: Edge,
     pub along: u16,
+    pub folded: bool,
     pub dpi: u32,
 }
 
 impl Slot {
     pub const DEFAULT: Self = Self {
+        edge: Edge::Top,
         along: POSITION_DEFAULT,
+        folded: false,
         dpi: 96,
     };
 }
 
-/// Notch rectangle for `monitor`: flush with the top edge, centred on `slot.along` and
+/// Notch rectangle for `monitor`: flush with the slot's edge, centred on `slot.along` and
 /// clamped to stay fully inside the monitor whenever it fits. Plain comparisons keep this
-/// correct for negative virtual-screen origins; on a monitor narrower than the notch the
-/// notch hugs the monitor's left edge.
+/// correct for negative virtual-screen origins; on a monitor smaller than the notch the
+/// notch hugs the monitor's top-left.
 pub fn notch_bounds(monitor: Bounds, slot: Slot) -> Bounds {
-    let (width, height) = layout::body_size(slot.dpi);
-    let left = layout::left_for_along(monitor.left, monitor.width(), width, slot.along);
+    let (width, height) = layout::panel_size(slot.edge, slot.folded, slot.dpi);
+    let (left, top) = layout::origin_for(
+        slot.edge,
+        (monitor.left, monitor.top, monitor.right, monitor.bottom),
+        (width, height),
+        slot.along,
+    );
     Bounds {
         left,
-        top: monitor.top,
+        top,
         right: left + width,
-        bottom: monitor.top + height,
+        bottom: top + height,
     }
 }
 
@@ -757,7 +767,10 @@ mod tests {
     };
 
     fn slot(along: u16) -> Slot {
-        Slot { along, dpi: 96 }
+        Slot {
+            along,
+            ..Slot::DEFAULT
+        }
     }
 
     fn placed(id: &str, bounds: Bounds, along: u16) -> Placed {
@@ -829,6 +842,7 @@ mod tests {
             slot: Slot {
                 along: 500,
                 dpi: 144,
+                ..Slot::DEFAULT
             },
             ..placed("A", M1, 500)
         }];

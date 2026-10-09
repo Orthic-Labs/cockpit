@@ -12,11 +12,14 @@
 //! Nearby sharing (written by the hub's settings, kept here so a save never drops them):
 //! `"nearby_enabled":false`, `"nearby_alias":"<name>"`, `"nearby_save_folder":"<path>"` and
 //! `"nearby_accept_known":true`.
+//! Installer cards: `"installer_auto":false` (ask about every installer in Downloads instead of
+//! installing signed MSIX/MSI packages on its own).
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
 //! No serde: the JSON reader below is a small bounded recursive-descent parser.
 
+use crate::layout::Edge;
 use crate::runtime::UserSecurity;
 use std::collections::BTreeMap;
 use std::fs;
@@ -99,6 +102,11 @@ pub struct PillSettings {
     pub screenshot_to_desktop: bool,
     /// Per-monitor notch position along the top edge, per mille of the monitor width.
     pub positions: BTreeMap<String, u16>,
+    /// Per-monitor screen edge the notch is docked to (top when absent).
+    pub edges: BTreeMap<String, Edge>,
+    /// The notch rests as a small pill and opens when the pointer reaches it (the Mac's "Show
+    /// on hover", its default); false keeps it open ("Always show"). On by default.
+    pub folds: bool,
     /// Nearby sharing is on. On by default.
     pub nearby_enabled: bool,
     /// Name other devices see; `None` lets the hub choose.
@@ -107,6 +115,21 @@ pub struct PillSettings {
     pub nearby_save_folder: Option<String>,
     /// Accept requests from known devices without asking. Off by default.
     pub nearby_accept_known: bool,
+    /// Notch cards for a usage reset, a session limit reached and a weekly limit reached
+    /// (the Mac's `announceUsageReset`, `announceSessionLimitReached`,
+    /// `announceWeeklyLimitReached`). On by default.
+    pub announce_usage_reset: bool,
+    pub announce_session_limit: bool,
+    pub announce_weekly_limit: bool,
+    /// Providers (Claude, Codex) whose usage alerts are muted (the Mac's `mutedAlertProviders`).
+    pub mute_claude_alerts: bool,
+    pub mute_codex_alerts: bool,
+    /// Ask the release feed for a newer version every six hours (the Mac's `autoUpdateCheck`).
+    /// On by default.
+    pub auto_update_check: bool,
+    /// Watch Downloads and install signed installers on its own, with Undo (the Mac's disk
+    /// image installer). On by default; an unsigned installer is always asked about.
+    pub installer_auto: bool,
 }
 
 impl PillSettings {
@@ -120,10 +143,19 @@ impl PillSettings {
             screenshot_shortcuts: true,
             screenshot_to_desktop: true,
             positions: BTreeMap::new(),
+            edges: BTreeMap::new(),
+            folds: true,
             nearby_enabled: true,
             nearby_alias: None,
             nearby_save_folder: None,
             nearby_accept_known: false,
+            announce_usage_reset: true,
+            announce_session_limit: true,
+            announce_weekly_limit: true,
+            mute_claude_alerts: false,
+            mute_codex_alerts: false,
+            auto_update_check: true,
+            installer_auto: true,
         }
     }
     /// Remembered position for a monitor; unknown monitors are centred.
@@ -144,6 +176,24 @@ impl PillSettings {
             return false;
         }
         self.positions.insert(key.to_string(), value) != Some(value)
+    }
+    /// Edge a monitor's notch is docked to; unknown monitors use the top edge.
+    pub fn edge(&self, key: &str) -> Edge {
+        self.edges.get(key).copied().unwrap_or_default()
+    }
+    /// Remembers the docked edge. False when unchanged or the key is unusable or the table
+    /// is full.
+    pub fn set_edge(&mut self, key: &str, edge: Edge) -> bool {
+        if key.is_empty() || key.len() > MAX_KEY_BYTES {
+            return false;
+        }
+        if !self.edges.contains_key(key) && self.edges.len() >= MAX_MONITORS {
+            return false;
+        }
+        if edge == Edge::default() && !self.edges.contains_key(key) {
+            return false;
+        }
+        self.edges.insert(key.to_string(), edge) != Some(edge)
     }
     /// Setting for a monitor; unknown monitors get the defaults (enabled, top-right).
     pub fn monitor(&self, key: &str) -> MonitorSetting {
@@ -507,11 +557,22 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         Some(_) => return Err(ParseError::Malformed),
     }
     for (name, slot) in [
+        ("folds", &mut settings.folds),
         ("mac_shortcuts", &mut settings.mac_shortcuts),
         ("screenshot_shortcuts", &mut settings.screenshot_shortcuts),
         ("screenshot_to_desktop", &mut settings.screenshot_to_desktop),
         ("nearby_enabled", &mut settings.nearby_enabled),
         ("nearby_accept_known", &mut settings.nearby_accept_known),
+        ("announce_usage_reset", &mut settings.announce_usage_reset),
+        (
+            "announce_session_limit",
+            &mut settings.announce_session_limit,
+        ),
+        ("announce_weekly_limit", &mut settings.announce_weekly_limit),
+        ("mute_claude_alerts", &mut settings.mute_claude_alerts),
+        ("mute_codex_alerts", &mut settings.mute_codex_alerts),
+        ("auto_update_check", &mut settings.auto_update_check),
+        ("installer_auto", &mut settings.installer_auto),
     ] {
         match member(&root, name) {
             None | Some(Json::Null) => {}
@@ -544,6 +605,25 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
                     return Err(ParseError::Malformed);
                 }
                 settings.positions.insert(key.clone(), value as u16);
+            }
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
+    match member(&root, "edges") {
+        None | Some(Json::Null) => {}
+        Some(Json::Object(entries)) => {
+            if entries.len() > MAX_MONITORS {
+                return Err(ParseError::Malformed);
+            }
+            for (key, entry) in entries {
+                let Json::Text(text) = entry else {
+                    return Err(ParseError::Malformed);
+                };
+                if key.is_empty() || key.len() > MAX_KEY_BYTES {
+                    return Err(ParseError::Malformed);
+                }
+                let edge = Edge::parse(text).ok_or(ParseError::Malformed)?;
+                settings.edges.insert(key.clone(), edge);
             }
         }
         Some(_) => return Err(ParseError::Malformed),
@@ -589,6 +669,9 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
     if !settings.launch_at_login {
         out.push_str(",\"launch_at_login\":false");
     }
+    if !settings.folds {
+        out.push_str(",\"folds\":false");
+    }
     if !settings.mac_shortcuts {
         out.push_str(",\"mac_shortcuts\":false");
     }
@@ -612,6 +695,27 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
     if settings.nearby_accept_known {
         out.push_str(",\"nearby_accept_known\":true");
     }
+    for (name, value, default) in [
+        ("announce_usage_reset", settings.announce_usage_reset, true),
+        (
+            "announce_session_limit",
+            settings.announce_session_limit,
+            true,
+        ),
+        (
+            "announce_weekly_limit",
+            settings.announce_weekly_limit,
+            true,
+        ),
+        ("mute_claude_alerts", settings.mute_claude_alerts, false),
+        ("mute_codex_alerts", settings.mute_codex_alerts, false),
+        ("auto_update_check", settings.auto_update_check, true),
+        ("installer_auto", settings.installer_auto, true),
+    ] {
+        if value != default {
+            out.push_str(&format!(",\"{name}\":{value}"));
+        }
+    }
     if !settings.positions.is_empty() {
         out.push_str(",\"positions\":{");
         for (index, (key, value)) in settings.positions.iter().enumerate() {
@@ -623,10 +727,22 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
         }
         out.push('}');
     }
+    if !settings.edges.is_empty() {
+        out.push_str(",\"edges\":{");
+        for (index, (key, edge)) in settings.edges.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            push_json_string(&mut out, key);
+            out.push_str(&format!(":\"{}\"", edge.as_str()));
+        }
+        out.push('}');
+    }
     out.push_str("}\n");
     if out.len() > MAX_FILE_BYTES
         || settings.monitors.len() > MAX_MONITORS
         || settings.positions.len() > MAX_MONITORS
+        || settings.edges.len() > MAX_MONITORS
     {
         return Err(ParseError::Oversized);
     }

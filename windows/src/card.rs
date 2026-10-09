@@ -3,6 +3,7 @@
 
 use crate::layout::Cell;
 use crate::send::{self, Panel};
+use crate::drive_health::{self, Report};
 use crate::sensors::{Machine, size_text};
 use crate::usage::{Status, Usage, age_text, reset_in};
 
@@ -18,6 +19,8 @@ pub enum Row {
     },
     /// Secondary-ink line.
     Note(String),
+    /// Critical-ink line that says the account is stopped (a spent limit).
+    Alert(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,73 +68,61 @@ pub fn panel_for(
 
 fn content_for(cell: Cell, machine: Option<&Machine>, usage: &[Usage; 2], now: u64) -> CardContent {
     match cell {
-        Cell::Cpu => cpu(machine),
-        Cell::Memory => memory(machine),
-        Cell::Disk => disks(machine),
+        // One System card whichever of its two rings is hovered (the Mac has one cell).
+        Cell::Cpu | Cell::Memory => system(machine),
+        Cell::Disk => disks(machine, &drive_health::current()),
         Cell::Claude => provider("Claude", &usage[0], now),
         Cell::Codex => provider("Codex", &usage[1], now),
         Cell::Send => send::hover_panel().content,
     }
 }
 
-fn cpu(machine: Option<&Machine>) -> CardContent {
+/// The System card: CPU, then memory, each a bar with its detail line.
+pub fn system(machine: Option<&Machine>) -> CardContent {
     let mut rows = Vec::new();
     match machine {
         Some(m) => {
-            rows.push(bar("Busy", percent_text(m.cpu), m.cpu));
-            rows.push(Row::Pair {
-                label: "Logical processors".into(),
-                value: if m.cores > 0 {
-                    m.cores.to_string()
-                } else {
-                    "--".into()
-                },
-            });
+            rows.push(bar("CPU", percent_text(m.cpu), m.cpu));
+            let busy = if m.cpu.is_some() {
+                format!("{} busy", percent_text(m.cpu))
+            } else {
+                "Usage unavailable".to_string()
+            };
+            rows.push(Row::Note(if m.cores > 0 {
+                format!("{busy} \u{b7} {} cores", m.cores)
+            } else {
+                busy
+            }));
+            match m.memory {
+                Some(mem) => {
+                    rows.push(bar(
+                        "Memory",
+                        percent_text(Some(mem.used_fraction())),
+                        Some(mem.used_fraction()),
+                    ));
+                    rows.push(Row::Note(format!(
+                        "{} of {} used",
+                        size_text(mem.used()),
+                        size_text(mem.total)
+                    )));
+                }
+                None => {
+                    rows.push(bar("Memory", "--".into(), None));
+                    rows.push(Row::Note("Memory readings unavailable".into()));
+                }
+            }
         }
         None => rows.push(Row::Note("Waiting for the first sample".into())),
     }
     CardContent {
-        title: "CPU".into(),
+        title: "System".into(),
         accessory: None,
         rows,
     }
 }
 
-fn memory(machine: Option<&Machine>) -> CardContent {
-    let mut rows = Vec::new();
-    match machine.and_then(|m| m.memory) {
-        Some(m) => {
-            rows.push(bar(
-                "In use",
-                format!("{} of {}", size_text(m.used()), size_text(m.total)),
-                Some(m.used_fraction()),
-            ));
-            rows.push(Row::Pair {
-                label: "Available".into(),
-                value: size_text(m.available),
-            });
-            let commit = (m.commit_limit > 0)
-                .then(|| (m.commit_used as f64 / m.commit_limit as f64).clamp(0.0, 1.0) as f32);
-            rows.push(bar(
-                "Commit",
-                format!(
-                    "{} of {}",
-                    size_text(m.commit_used),
-                    size_text(m.commit_limit)
-                ),
-                commit,
-            ));
-        }
-        None => rows.push(Row::Note("Memory readings unavailable".into())),
-    }
-    CardContent {
-        title: "Memory".into(),
-        accessory: None,
-        rows,
-    }
-}
-
-fn disks(machine: Option<&Machine>) -> CardContent {
+/// The Disks card: each volume's free space, then the drive-health lines.
+pub fn disks(machine: Option<&Machine>, health: &Report) -> CardContent {
     let mut rows = Vec::new();
     match machine {
         Some(m) if !m.drives.is_empty() => {
@@ -159,6 +150,16 @@ fn disks(machine: Option<&Machine>) -> CardContent {
         Some(_) => rows.push(Row::Note("No drive readings".into())),
         None => rows.push(Row::Note("Waiting for the first sample".into())),
     }
+    match health {
+        Report::Pending => {}
+        Report::Missing => rows.push(Row::Pair {
+            label: "Drive health".into(),
+            value: "Install smartmontools".into(),
+        }),
+        Report::Drives(drives) => {
+            rows.extend(drive_health::lines(drives).into_iter().map(Row::Note));
+        }
+    }
     CardContent {
         title: "Disks".into(),
         accessory: None,
@@ -168,6 +169,14 @@ fn disks(machine: Option<&Machine>) -> CardContent {
 
 fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
     let mut rows = Vec::new();
+    if let Some(block) = &usage.block {
+        rows.push(Row::Alert(match block.resets_at {
+            Some(reset) if reset > now => {
+                format!("{} \u{b7} resets in {}", block.reason, reset_in(reset, now))
+            }
+            _ => block.reason.clone(),
+        }));
+    }
     for window in &usage.windows {
         rows.push(Row::Bar {
             label: window.label.clone(),
@@ -177,6 +186,16 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
         if let Some(reset) = window.resets_at {
             rows.push(Row::Note(format!("Resets in {}", reset_in(reset, now))));
         }
+    }
+    if usage.status == Status::AccessDenied && usage.windows.is_empty() {
+        // Says what happened and what fixes it, not "sign in" (the login is there).
+        rows.push(Row::Note(format!("Windows refused access to {name}'s saved login.")));
+        rows.push(Row::Note("Fix the file's permissions to read usage.".into()));
+        return CardContent {
+            title: format!("{name} Usage"),
+            accessory: usage.plan.clone(),
+            rows,
+        };
     }
     let status = match (usage.status, usage.updated) {
         (Status::Ok, Some(updated)) => format!("Updated {}", age_text(updated, now)),

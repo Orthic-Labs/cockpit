@@ -12,15 +12,19 @@
 //! the desktop. The PNG encoder is hand-written (stored deflate blocks), so no codec, COM or
 //! extra crate is involved.
 
+use crate::alerts;
 use crate::canvas::Canvas;
 use crate::card::{self, CardContent, Row};
+use crate::drive_health::{self, Report};
 use crate::json::{self, Value};
-use crate::layout::{self, Cell, CellView};
+use crate::layout::{self, Badges, Cell, CellView, Edge};
 use crate::render;
 use crate::send::{self, Action, Panel};
 use crate::sensors::{Drive, Machine, MemInfo};
+use crate::sessions::{self, Session, State};
 use crate::surface::TextPainter;
-use crate::usage::{LimitWindow, Status, Usage};
+use crate::update;
+use crate::usage::{Block, LimitWindow, Status, Usage};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -28,8 +32,6 @@ use std::process::ExitCode;
 const DPI: u32 = 192;
 /// Backdrop margin around every view, in pixels.
 const MARGIN: usize = 48;
-/// Gap between cards shown side by side, in pixels.
-const GAP: i32 = 32;
 /// The instant every fixture's "minutes from now" is measured from (Unix seconds).
 const NOW: u64 = 1_800_000_000;
 const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
@@ -38,19 +40,7 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 const DEFAULT_MEMORY: u64 = 16 << 30;
 const DEFAULT_DISK: u64 = 1024 << 30;
 
-const GAP_FOLDED: &str =
-    "No folded resting state: the Windows notch always draws its six rings (parity C7)";
-const GAP_EDGE: &str = "The Windows notch sits on the top edge only (parity C6)";
-const GAP_BADGES: &str = "No update or permission badges on the Windows notch (parity C5)";
-const GAP_BLOCKED: &str = "No blocked (limit reached) state on the Windows rings or cards";
-const GAP_SESSIONS: &str = "No agent-session activity arc on the Windows rings (parity A9)";
-const GAP_PRESSURE: &str = "Windows has no memory-pressure band, so no unknown-pressure state";
-const GAP_DENIED: &str = "Windows reads plain credential files: there is no access-denied state";
-const GAP_HEALTH: &str = "No drive-health rows on the Windows disks card (parity B6)";
-const GAP_NETWORK: &str = "No Local Network permission gate on Windows";
-const GAP_DISK_IMAGE: &str = "No disk-image install card on Windows (a macOS .dmg flow)";
-const GAP_UPDATE: &str = "No update card on the Windows notch yet (parity D8)";
-const GAP_ALERT: &str = "No usage alert cards on the Windows notch yet (parity D1-D3)";
+const GAP_DISK_IMAGE: &str = "No Windows installer card for this disk image state";
 
 type Parts = Vec<(Canvas, i32, i32)>;
 type Outcome = Result<Parts, &'static str>;
@@ -271,6 +261,7 @@ fn usage_from(cell: &Value) -> Usage {
             (Status::Unavailable, Some(NOW - (minutes * 60.0) as u64))
         }
         Some("needs-auth") => (Status::SignIn, None),
+        Some("access-denied") => (Status::AccessDenied, None),
         Some("ok") | None => (Status::Ok, Some(NOW - 20)),
         Some(_) => (Status::Unavailable, None),
     };
@@ -279,6 +270,104 @@ fn usage_from(cell: &Value) -> Usage {
         plan: str_of(cell, "plan").map(str::to_string),
         windows,
         updated,
+        block: cell.get("block").map(|block| Block {
+            reason: str_of(block, "reason")
+                .unwrap_or("Limit reached")
+                .to_string(),
+            resets_at: num_of(block, "resetsInMinutes").map(|m| NOW + (m * 60.0) as u64),
+        }),
+    }
+}
+
+// ---- drive health fixture rows -> the notch's Report ------------------------------------------
+
+/// Days from 1970-01-01 to a civil date (the inverse of `drive_health::date_text`).
+fn date_secs(text: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut words = text.split_whitespace();
+    let month = MONTHS.iter().position(|m| Some(*m) == words.next())? as i64 + 1;
+    let day: i64 = words.next()?.trim_end_matches(',').parse().ok()?;
+    let year: i64 = words.next()?.parse().ok()?;
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    u64::try_from((era * 146_097 + doe - 719_468) * 86_400).ok()
+}
+
+/// A reading from a health line's state part ("OK · 3% worn · 21.4 TB written").
+fn reading_from(state: &str, at: u64) -> drive_health::Reading {
+    let mut reading = drive_health::Reading {
+        at,
+        passed: Some(!state.starts_with("Warning")),
+        temperature_c: None,
+        wear_percent: None,
+        written_bytes: None,
+        media_errors: None,
+        critical_warning: None,
+    };
+    for part in state.split(" \u{b7} ") {
+        let number = part.split_whitespace().next().unwrap_or("");
+        if let Some(percent) = part.strip_suffix("% worn") {
+            reading.wear_percent = percent.parse().ok();
+        } else if let Some(celsius) = part.strip_suffix(" \u{b0}C") {
+            reading.temperature_c = celsius.parse().ok();
+        } else if part.ends_with(" TB written") {
+            reading.written_bytes = number.parse::<f64>().ok().map(|v| (v * 1e12) as u64);
+        } else if part.ends_with(" GB written") {
+            reading.written_bytes = number.parse::<f64>().ok().map(|v| (v * 1e9) as u64);
+        }
+    }
+    reading
+}
+
+fn health_from(windows: &[Value]) -> Report {
+    if windows
+        .iter()
+        .any(|w| str_of(w, "id") == Some("health:install"))
+    {
+        return Report::Missing;
+    }
+    let detail_of = |id: &str| {
+        windows
+            .iter()
+            .find(|w| str_of(w, "id") == Some(id))
+            .and_then(|w| str_of(w, "detail"))
+    };
+    let mut drives = Vec::new();
+    for window in windows {
+        let Some(device) = str_of(window, "id")
+            .and_then(|id| id.strip_prefix("health:"))
+            .and_then(|id| id.strip_suffix(":a"))
+        else {
+            continue;
+        };
+        let detail = str_of(window, "detail").unwrap_or("");
+        let Some((name, state)) = detail.split_once(": ") else {
+            continue;
+        };
+        let reachable = !state.starts_with("Health n/a");
+        let last = if reachable {
+            Some(reading_from(state, NOW))
+        } else {
+            detail_of(&format!("health:{device}:last"))
+                .and_then(|d| d.strip_prefix("Last reading "))
+                .and_then(|d| d.split_once(": "))
+                .map(|(date, state)| reading_from(state, date_secs(date).unwrap_or(NOW)))
+        };
+        drives.push(drive_health::Drive {
+            name: name.to_string(),
+            last,
+            reachable,
+        });
+    }
+    if drives.is_empty() {
+        Report::Pending
+    } else {
+        Report::Drives(drives)
     }
 }
 
@@ -348,6 +437,7 @@ fn percent_text(fraction: f32) -> String {
 struct Scene<'a> {
     machine: Machine,
     usage: [Usage; 2],
+    health: Report,
     send_cell: Option<&'a Value>,
 }
 
@@ -361,11 +451,13 @@ impl<'a> Scene<'a> {
         };
         let mut usage = [Usage::waiting(), Usage::waiting()];
         let mut send_cell = None;
+        let mut health = Report::Pending;
         for cell in cells {
             match str_of(cell, "id") {
                 Some("claude") => usage[0] = usage_from(cell),
                 Some("codex") => usage[1] = usage_from(cell),
                 Some("system-send") => send_cell = Some(*cell),
+                Some("system-disks") => health = health_from(arr(cell, "windows")),
                 _ => {}
             }
             for window in arr(cell, "windows") {
@@ -385,6 +477,7 @@ impl<'a> Scene<'a> {
         Self {
             machine,
             usage,
+            health,
             send_cell,
         }
     }
@@ -396,6 +489,11 @@ impl<'a> Scene<'a> {
     fn panel(&self, cell: Cell) -> Panel {
         match cell {
             Cell::Send => send_hover(self.send_cell),
+            Cell::Disk => {
+                let content = card::disks(Some(&self.machine), &self.health);
+                let actions = vec![None; content.rows.len()];
+                Panel { content, actions }
+            }
             _ => card::panel_for(cell, Some(&self.machine), &self.usage, NOW, None).0,
         }
     }
@@ -489,6 +587,12 @@ fn send_hover(cell: Option<&Value>) -> Panel {
             ))
         })
         .collect();
+    if windows
+        .iter()
+        .any(|w| str_of(w, "id") == Some("hint-network"))
+    {
+        panel.note(send::FIREWALL_HINT);
+    }
     for (fingerprint, alias, kind) in &devices {
         panel.add(
             pair(alias, kind),
@@ -602,14 +706,57 @@ fn build(id: &str, area: &str, fixture: &Value, text: &mut TextPainter) -> Outco
     match str_of(fixture, "kind") {
         Some("ring") => ring(fixture, text),
         Some("tooltip") => tooltip(fixture, text),
-        Some("card") if area == "disk-image-card" => Err(GAP_DISK_IMAGE),
+        Some("card") if area == "disk-image-card" => crate::installer::sample(id)
+            .map(|panel| vec![(card_canvas(&panel, text), 0, 0)])
+            .ok_or(GAP_DISK_IMAGE),
         Some("card") => Ok(vec![(card_canvas(&prompt_panel(fixture), text), 0, 0)]),
-        Some("update") => Err(GAP_UPDATE),
-        Some("alert") => Err(GAP_ALERT),
+        Some("update") => Ok(vec![(card_canvas(&update_panel(fixture), text), 0, 0)]),
+        Some("alert") => Ok(vec![(card_canvas(&alert_panel(fixture), text), 0, 0)]),
         Some("menu") => Ok(vec![(render::render_menu(DPI, text), 0, 0)]),
         Some("notch") => notch(id, fixture, text),
         _ => Err("Unknown fixture kind"),
     }
+}
+
+/// The update card (`update::card`) for an update fixture.
+fn update_panel(fixture: &Value) -> Panel {
+    let phase = match str_of(fixture, "phase") {
+        Some("downloading") => {
+            update::Phase::Downloading(num_of(fixture, "progress").map(|p| p as f32))
+        }
+        Some("extracting") => update::Phase::Preparing,
+        Some("installing") => update::Phase::Installing,
+        _ => update::Phase::Available,
+    };
+    update::card(
+        str_of(fixture, "version").unwrap_or(""),
+        str_of(fixture, "notes").unwrap_or(""),
+        phase,
+    )
+}
+
+/// The usage alert card (`alerts::card_content`) for an alert fixture; clock times are UTC.
+fn alert_panel(fixture: &Value) -> Panel {
+    let kind = match str_of(fixture, "alertKind") {
+        Some("sessionLimitReached") => alerts::Kind::SessionLimitReached,
+        Some("weeklyLimitReached") => alerts::Kind::WeeklyLimitReached,
+        _ => alerts::Kind::Reset,
+    };
+    let notice = str_of(fixture, "noticeTitle").map(|title| alerts::Notice {
+        title: title.to_string(),
+        subtitle: str_of(fixture, "noticeSubtitle").unwrap_or("").to_string(),
+        status: str_of(fixture, "noticeStatus").unwrap_or("").to_string(),
+    });
+    let alert = alerts::Alert {
+        kind,
+        provider: str_of(fixture, "provider").unwrap_or("").to_string(),
+        window: str_of(fixture, "window").unwrap_or("").to_string(),
+        resets_at: num_of(fixture, "resetsInMinutes").map(|m| NOW + (m * 60.0) as u64),
+        notice,
+    };
+    let content = alerts::card_content(&alert, 0);
+    let actions = vec![None; content.rows.len()];
+    Panel { content, actions }
 }
 
 fn card_canvas(panel: &Panel, text: &mut TextPainter) -> Canvas {
@@ -621,12 +768,6 @@ fn card_canvas(panel: &Panel, text: &mut TextPainter) -> Canvas {
 /// Memory ring.
 fn ring(fixture: &Value, text: &mut TextPainter) -> Outcome {
     let cell = fixture.get("cell").ok_or("Fixture has no cell")?;
-    if cell.get("block").is_some() {
-        return Err(GAP_BLOCKED);
-    }
-    if !arr(cell, "sessions").is_empty() {
-        return Err(GAP_SESSIONS);
-    }
     let index = match str_of(cell, "id") {
         Some("system-cpu") => 1,
         Some("system-disks") => 2,
@@ -635,10 +776,8 @@ fn ring(fixture: &Value, text: &mut TextPainter) -> Outcome {
         Some("system-send") => 5,
         _ => return Err("Unknown ring cell"),
     };
-    if index == 1 && pressure_unknown(cell) {
-        return Err(GAP_PRESSURE);
-    }
-    let views = Scene::from_cells(&[cell]).views();
+    let mut views = Scene::from_cells(&[cell]).views();
+    overlay(&mut views, &[cell]);
     let view = views.get(index).ok_or("No such ring")?;
     Ok(vec![(render::render_cell(view, DPI, text), 0, 0)])
 }
@@ -652,16 +791,9 @@ fn pressure_unknown(cell: &Value) -> bool {
 fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
     let cell = fixture.get("cell").ok_or("Fixture has no cell")?;
     let id = str_of(cell, "id").unwrap_or("");
-    let windows = arr(cell, "windows");
     let scene = Scene::from_cells(&[cell]);
     match id {
         "claude" | "codex" => {
-            if str_of(cell, "status") == Some("access-denied") {
-                return Err(GAP_DENIED);
-            }
-            if cell.get("block").is_some() {
-                return Err(GAP_BLOCKED);
-            }
             let which = if id == "claude" {
                 Cell::Claude
             } else {
@@ -669,71 +801,131 @@ fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
             };
             Ok(vec![(card_canvas(&scene.panel(which), text), 0, 0)])
         }
-        "system-cpu" => {
-            if pressure_unknown(cell) {
-                return Err(GAP_PRESSURE);
-            }
-            // The Mac System card is two cards on Windows: CPU and Memory.
-            let cpu = card_canvas(&scene.panel(Cell::Cpu), text);
-            let memory = card_canvas(&scene.panel(Cell::Memory), text);
-            let left = cpu.width as i32 + GAP;
-            Ok(vec![(cpu, 0, 0), (memory, left, 0)])
-        }
-        "system-disks" => {
-            let health_gap = windows.iter().any(|w| {
-                let id = str_of(w, "id").unwrap_or("");
-                id == "health:install"
-                    || id.ends_with(":last")
-                    || str_of(w, "detail").is_some_and(|d| d.contains("n/a"))
-            });
-            if health_gap {
-                return Err(GAP_HEALTH);
-            }
-            Ok(vec![(card_canvas(&scene.panel(Cell::Disk), text), 0, 0)])
-        }
-        "system-send" => {
-            if windows
-                .iter()
-                .any(|w| str_of(w, "id") == Some("hint-network"))
-            {
-                return Err(GAP_NETWORK);
-            }
-            Ok(vec![(card_canvas(&scene.panel(Cell::Send), text), 0, 0)])
-        }
+        // One System card; Windows draws memory as a used share, with no pressure word.
+        "system-cpu" => Ok(vec![(card_canvas(&scene.panel(Cell::Cpu), text), 0, 0)]),
+        "system-disks" => Ok(vec![(card_canvas(&scene.panel(Cell::Disk), text), 0, 0)]),
+        "system-send" => Ok(vec![(card_canvas(&scene.panel(Cell::Send), text), 0, 0)]),
         _ => Err("Unknown card cell"),
     }
 }
 
-/// The notch body, with the hover card hung below the hovered cell. The Windows notch is
-/// always unfolded and sits on the top edge; the mixed-band view is drawn although its Mac
-/// edge is right, because its point is the band colours.
-fn notch(id: &str, fixture: &Value, text: &mut TextPainter) -> Outcome {
-    if !flag(fixture, "expanded") {
-        return Err(GAP_FOLDED);
+/// What the fixture states that the Windows readers do not derive on their own: the Memory
+/// ring's colour band (`band`, or none when the pressure is unknown, so the share decides) and
+/// the Claude ring's session activity ring. A spent limit (`block`) already arrives through
+/// the cell's `Usage`.
+fn overlay(views: &mut [CellView], cells: &[&Value]) {
+    for cell in cells {
+        match str_of(cell, "id") {
+            Some("claude") => {
+                if let Some(view) = views.get_mut(3) {
+                    view.activity = sessions::activity(&fixture_sessions(cell));
+                }
+            }
+            Some("system-cpu") => {
+                let band = arr(cell, "windows")
+                    .iter()
+                    .find(|w| str_of(w, "id") == Some("pressure"))
+                    .map(|w| match str_of(w, "band") {
+                        Some("ample") => Some(layout::BAND_AMPLE),
+                        Some("watch") => Some(layout::BAND_WATCH),
+                        Some("critical") => Some(layout::BAND_CRITICAL),
+                        _ => None,
+                    });
+                match (views.get_mut(1), band) {
+                    (Some(view), Some(Some(colour))) => view.band = Some(colour),
+                    (Some(view), Some(None)) if pressure_unknown(cell) => view.band = None,
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
     }
-    if str_of(fixture, "edge") != Some("top") && id != "notch-expanded-warning-mix" {
-        return Err(GAP_EDGE);
-    }
-    if fixture.get("badges").is_some() {
-        return Err(GAP_BADGES);
-    }
+}
+
+/// The agent sessions a Claude cell lists, as the session reader would hand them over.
+fn fixture_sessions(cell: &Value) -> Vec<Session> {
+    arr(cell, "sessions")
+        .iter()
+        .map(|session| {
+            let state = match str_of(session, "state") {
+                Some("waiting") => State::Waiting,
+                Some("busy") => State::Busy,
+                Some("success") => State::Success,
+                _ => State::Idle,
+            };
+            let minutes = num_of(session, "sinceMinutes").unwrap_or(0.0) as u64;
+            Session {
+                id: str_of(session, "name").unwrap_or("").to_string(),
+                name: str_of(session, "name").unwrap_or("").to_string(),
+                detail: str_of(session, "detail").unwrap_or("").to_string(),
+                state,
+                waiting_for: str_of(session, "waitingFor").map(str::to_string),
+                since_ms: (NOW - minutes * 60) * 1000,
+            }
+        })
+        .collect()
+}
+
+/// The notch on its fixture's edge, folded or open, with its badges and the hover card beside
+/// the hovered ring on the side away from the edge.
+fn notch(_id: &str, fixture: &Value, text: &mut TextPainter) -> Outcome {
+    let edge = Edge::parse(str_of(fixture, "edge").unwrap_or("top")).ok_or("Unknown notch edge")?;
+    let folded = !flag(fixture, "expanded");
+    let badges = fixture.get("badges").map_or(Badges::default(), |b| Badges {
+        update: flag(b, "update"),
+        permissions: flag(b, "permissions"),
+    });
     let cells: Vec<&Value> = arr(fixture, "cells").iter().collect();
     let scene = Scene::from_cells(&cells);
-    let body = render::render_panel(&scene.views(), DPI, text);
-    let body_height = body.height as i32;
+    let mut views = scene.views();
+    overlay(&mut views, &cells);
+    let body = render::render_notch(&views, edge, folded, badges, DPI, text);
+    let notch_rect = (0, 0, body.width as i32, body.height as i32);
     let mut parts = vec![(body, 0, 0)];
-    if let Some(hover) = str_of(fixture, "hover") {
+    if let Some(hover) = str_of(fixture, "hover").filter(|_| !folded) {
         let cell = windows_cell(hover).ok_or("Unknown hover cell")?;
         let index = Cell::ALL
             .iter()
             .position(|c| *c == cell)
             .ok_or("Unknown hover cell")?;
-        let card = card_canvas(&scene.panel(cell), text);
-        let s = layout::scale(DPI);
-        let centre = layout::cell_left(index, DPI) + layout::RING * s / 2.0;
-        let x = ((centre - card.width as f32 / 2.0).round() as i32).max(0);
-        let y = body_height + (layout::CARD_GAP * s).round() as i32;
+        let mut panel = scene.panel(cell);
+        if cell == Cell::Claude {
+            let listed = cells
+                .iter()
+                .find(|c| str_of(c, "id") == Some("claude"))
+                .map(|c| fixture_sessions(c))
+                .unwrap_or_default();
+            for row in sessions::card_rows(&listed, NOW * 1000) {
+                panel.content.rows.push(row);
+                panel.actions.push(None);
+            }
+        }
+        let card = card_canvas(&panel, text);
+        let (ring_x, ring_y) = layout::ring_center(edge, index, DPI);
+        let centre = if edge.is_vertical() {
+            ring_y as i32
+        } else {
+            ring_x as i32
+        };
+        let gap = (layout::CARD_GAP * layout::scale(DPI)).round() as i32;
+        // The card may start left of or above the notch: the open monitor lets it, and the
+        // parts are shifted back into the image below.
+        let (x, y) = layout::card_origin(
+            edge,
+            notch_rect,
+            centre,
+            (card.width as i32, card.height as i32),
+            gap,
+            (i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2),
+        );
         parts.push((card, x, y));
+    }
+    let (shift_x, shift_y) = parts
+        .iter()
+        .fold((0, 0), |(sx, sy), (_, x, y)| (sx.min(*x), sy.min(*y)));
+    for (_, x, y) in &mut parts {
+        *x -= shift_x;
+        *y -= shift_y;
     }
     Ok(parts)
 }

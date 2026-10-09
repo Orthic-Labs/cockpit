@@ -101,12 +101,17 @@ impl Transfer {
     }
 }
 
+/// Shown on the Send card while Windows Firewall blocks Pulse (the Mac says Local Network).
+pub const FIREWALL_HINT: &str = "Allow Pulse through Windows Firewall.";
+
 #[derive(Clone, Debug, PartialEq)]
 struct State {
     running: bool,
     error: Option<String>,
     /// "port_in_use" when another program (the LocalSend app) holds port 53317.
     error_kind: Option<String>,
+    /// "blocked" when Windows Firewall refuses Pulse's local network traffic (hub `localNetwork`).
+    local_network: Option<String>,
     save_dir: Option<String>,
     devices: Vec<Device>,
     incoming: Vec<Incoming>,
@@ -188,6 +193,7 @@ fn parse_state(bytes: &[u8]) -> Option<State> {
         running: number(&root, "runningN") >= 1.0,
         error: text(&root, "error"),
         error_kind: text(&root, "errorKind"),
+        local_network: text(&root, "localNetwork"),
         save_dir: text(&root, "saveDir"),
         devices,
         incoming,
@@ -227,6 +233,8 @@ pub enum Action {
     Copy,
     /// Open the received message as a web address.
     OpenLink,
+    /// A row of an installer card (`installer.rs`), run by that module.
+    Installer(crate::installer::Choice),
 }
 
 /// Content of the hover card or of a notch card. `actions[i]` belongs to `content.rows[i]`
@@ -1205,6 +1213,7 @@ impl Model {
                 }
                 self.clear_card();
             }
+            Action::Installer(_) => {}
         }
     }
 
@@ -1368,6 +1377,10 @@ impl Model {
                 },
                 Some(Action::SendTo(device.fingerprint.clone())),
             );
+        }
+        let blocked = live.is_some_and(|s| s.local_network.as_deref() == Some("blocked"));
+        if blocked {
+            add(Row::Note(FIREWALL_HINT.into()), None);
         }
         if live.is_some_and(|s| s.running) {
             if !devices.is_empty() {
@@ -1656,7 +1669,8 @@ pub fn hover_panel() -> Panel {
 /// Downloads", a received message (Copy, Open), or an error such as the LocalSend app holding
 /// the port. `None` when no card is up. It takes precedence over the hover card.
 pub fn popup_panel() -> Option<Panel> {
-    model().prompt.as_ref().map(Prompt::panel)
+    let sharing = model().prompt.as_ref().map(Prompt::panel);
+    sharing.or_else(crate::installer::popup_panel)
 }
 
 /// The pointer is over or left the Send cell or its hover card. While it is over, Ctrl+V is
@@ -1690,6 +1704,7 @@ fn release_hotkey() {
 /// The pointer is over or left the notch card (`popup_panel`): hovering keeps it up.
 pub fn popup_hover(on: bool) {
     model().popup_hover(on);
+    crate::installer::popup_hover(on);
     notify();
 }
 
@@ -1709,6 +1724,10 @@ pub fn set_drop_targeting(on: bool) {
 
 /// A click on a row of `hover_panel()` or `popup_panel()` (its `Action`).
 pub fn perform(action: Action) {
+    if let Action::Installer(choice) = action {
+        crate::installer::perform(choice);
+        return;
+    }
     if action == Action::Paste {
         paste_clipboard();
         return;
