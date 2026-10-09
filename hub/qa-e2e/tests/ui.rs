@@ -1042,6 +1042,10 @@ const DESTRUCTIVE_WORDS: &[&str] = &[
 ];
 #[cfg(target_os = "macos")]
 const DESTRUCTIVE_PHRASES: &[&str] = &["sign out", "log out", "move to"];
+/// Controls that change the look of the whole page (the theme toggle): a click leaves every
+/// later hover read unreliable while the theme crossfades, so they are hovered, never clicked.
+#[cfg(target_os = "macos")]
+const WHOLE_PAGE_WORDS: &[&str] = &["appearance", "theme"];
 #[cfg(target_os = "macos")]
 const EXTERNAL_WORDS: &[&str] = &["reveal", "grant", "allow", "download", "install", "feedback", "report"];
 #[cfg(target_os = "macos")]
@@ -1072,6 +1076,9 @@ fn skip_reason(sec: &Section, f: &Found) -> Option<&'static str> {
     }
     if has_word(DESTRUCTIVE_WORDS) || has_phrase(DESTRUCTIVE_PHRASES) {
         return Some("not clicked: destructive");
+    }
+    if has_word(WHOLE_PAGE_WORDS) {
+        return Some("not clicked: changes the whole page's look");
     }
     if matches!(f.role.as_str(), "slider" | "select" | "combobox") {
         return Some("not clicked: native value control (popup or drag)");
@@ -1272,14 +1279,20 @@ fn crawl_section(ctl: &Control, sec: &Section, surface: &str, shots: &Path, comm
             continue;
         }
 
+        // Page health at this point (RightKit asked for these alongside every control).
+        entry["page"] = ctl
+            .eval("return new Promise((r) => { let n = 0; const t0 = performance.now(); const tick = () => { n++; if (performance.now() - t0 < 100) requestAnimationFrame(tick); else r({ visibility: document.visibilityState, focus: document.hasFocus(), raf100: n }); }; requestAnimationFrame(tick); setTimeout(() => r({ visibility: document.visibilityState, focus: document.hasFocus(), raf100: n, timedOut: true }), 400); })")
+            .unwrap_or(Value::Null);
+
         // Pressed: mouse down and look; mouse up completes the click.
         let before = page_state(ctl);
         let commands_before = commands_seen(commands);
         let _ = ctl.pointer("down", x, y, "left", &[]);
         std::thread::sleep(Duration::from_millis(100));
         let pressed_png = shots.join(name("pressed"));
-        if ctl.screenshot_to(&pressed_png).is_ok() {
-            entry["pressed"] = json!(name("pressed"));
+        match ctl.screenshot_to(&pressed_png) {
+            Ok(()) => entry["pressed"] = json!(name("pressed")),
+            Err(e) => entry["pressed_error"] = json!(e.to_string()),
         }
         let _ = ctl.pointer("up", x, y, "left", &[]);
         std::thread::sleep(Duration::from_millis(400));
