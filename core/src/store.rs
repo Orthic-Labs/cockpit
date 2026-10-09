@@ -814,6 +814,11 @@ mod pinned {
         // and a post-open attribute check, so reparse points are refused even
         // where the kernel rejects OBJ_DONT_REPARSE (STATUS_INVALID_PARAMETER);
         // that one flag is then dropped and the open retried once.
+        // FILE_OPEN_NO_RECALL keeps a cloud placeholder's data from being
+        // fetched; the kernel rejects it on directory opens
+        // (STATUS_INVALID_PARAMETER, seen on windows-2025), where it has no
+        // data to protect, so it is passed for files only.
+        let no_recall = if options & FILE_DIRECTORY_FILE != 0 { 0 } else { FILE_OPEN_NO_RECALL };
         let mut last = NTSTATUS(0);
         for attribute_flags in [
             OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
@@ -839,7 +844,7 @@ mod pinned {
                     FILE_ATTRIBUTE_NORMAL,
                     (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0,
                     disposition,
-                    options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_NO_RECALL,
+                    options | FILE_SYNCHRONOUS_IO_NONALERT | no_recall,
                     std::ptr::null(),
                     0,
                 )
@@ -854,59 +859,12 @@ mod pinned {
         }
         let error = nt_error(last);
         if last == STATUS_INVALID_PARAMETER {
-            // Diagnosis only: find which single flag the kernel rejects. Each
-            // probe's handle is closed at once and never used.
-            let probe = |access: u32, attrs: u32, options: u32| -> i32 {
-                let attributes = NtObjectAttributes {
-                    length: std::mem::size_of::<NtObjectAttributes>() as u32,
-                    root_directory: root,
-                    object_name: &unicode,
-                    attributes: attrs,
-                    security_descriptor: std::ptr::null(),
-                    security_quality_of_service: std::ptr::null(),
-                };
-                let mut opened = HANDLE(std::ptr::null_mut());
-                let mut io_status = IO_STATUS_BLOCK::default();
-                let status = unsafe {
-                    NtCreateFile(
-                        &mut opened,
-                        access,
-                        &attributes,
-                        &mut io_status,
-                        std::ptr::null(),
-                        0,
-                        (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0,
-                        disposition,
-                        options,
-                        std::ptr::null(),
-                        0,
-                    )
-                };
-                if status.0 >= 0 {
-                    drop(Handle(opened));
-                }
-                status.0
-            };
-            let full = options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_NO_RECALL;
-            let sync = access | SYNCHRONIZE_ACCESS;
-            let probes = [
-                ("attr 0", probe(sync, OBJ_CASE_INSENSITIVE, full)),
-                ("no NO_RECALL", probe(sync, OBJ_CASE_INSENSITIVE, full & !FILE_OPEN_NO_RECALL)),
-                ("no OPEN_REPARSE_POINT", probe(sync, OBJ_CASE_INSENSITIVE, full & !FILE_OPEN_REPARSE_POINT)),
-                ("no SYNCHRONOUS", probe(access, OBJ_CASE_INSENSITIVE, full & !FILE_SYNCHRONOUS_IO_NONALERT)),
-                ("no OBJ flags", probe(sync, 0, full)),
-                ("bare", probe(sync, 0, options & FILE_DIRECTORY_FILE)),
-            ];
-            let report: Vec<String> =
-                probes.iter().map(|(name, st)| format!("{name}={:#010x}", *st as u32)).collect();
             // Keep the failing request visible; every other status keeps its
             // raw OS code for callers that match it.
             return Err(invalid_input(format!(
                 "NtCreateFile rejected the request (status {:#010x}, access {access:#x}, \
-                 disposition {disposition}, options {options:#x}, name_len {}; probes {}): {error}",
-                last.0 as u32,
-                unicode.Length,
-                report.join(" ")
+                 disposition {disposition}, options {options:#x}): {error}",
+                last.0 as u32
             )));
         }
         Err(error)
