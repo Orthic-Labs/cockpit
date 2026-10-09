@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is never run by hand. See `ClaudeTokenRefresher`.
     private var tokenRefresher: ClaudeTokenRefresher?
     private var cancellables = Set<AnyCancellable>()
+    private var termSource: DispatchSourceSignal?
     /// Turns the monitors' running commentary into the one event worth
     /// interrupting for: an agent that has just stopped working.
     private var completions = SessionCompletionWatcher()
@@ -109,6 +110,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Self.retireOlderInstances()
         // A hub left by an earlier Pulse is retired before this one uses a hub.
         MainActor.assumeIsolated { HubLauncher.retireHubsFromEarlierLaunches() }
+        // An installer's quit may be a plain SIGTERM, which skips
+        // applicationWillTerminate and would orphan the hub. Route it through
+        // a normal terminate so the hub goes down with Pulse.
+        signal(SIGTERM, SIG_IGN)
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        term.setEventHandler { NSApp.terminate(nil) }
+        term.resume()
+        termSource = term
         ChannelNotifications.installPresenter()
 
         // Before Preferences reads anything, or the first launch flag and

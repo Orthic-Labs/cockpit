@@ -1,6 +1,6 @@
 //! Which chats can be messaged: live Claude chats read from
-//! `~/.claude/sessions/*.json`, chats that registered through the MCP server
-//! (and Claude without a session file), the most recent Codex threads from
+//! `~/.claude/sessions/*.json`, registered chats (and Claude without a session
+//! file), the most recent Codex threads from
 //! `~/.codex/session_index.jsonl`, and the rosters paired
 //! computers publish. A peer is shown as "<chat title> on <device alias>".
 
@@ -61,7 +61,7 @@ impl LocalSession {
 /// A chat that can be messaged, here or on a paired computer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Peer {
-    /// What `bridge_send` accepts: the session id here, `<device>:<session>` elsewhere.
+    /// What `pulse bridge send` accepts: the session id here, `<device>:<session>` elsewhere.
     pub id: String,
     pub session: String,
     pub name: String,
@@ -151,7 +151,7 @@ pub fn claude_sessions_in(dir: &Path, alive: &dyn Fn(u32) -> bool) -> Vec<LocalS
 }
 
 /// Every chat on this computer: live Claude chats from disk, plus live chats
-/// registered through the MCP server that disk discovery did not already list.
+/// registered that disk discovery did not already list.
 pub fn local_sessions_in(
     store: &Store,
     claude_dir: Option<&Path>,

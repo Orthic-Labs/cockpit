@@ -20,20 +20,16 @@ export interface ShareState {
     active?: boolean;
     localChats?: number;
     remoteChats?: number;
-    peers?: number;
+    peers?: { device: string; alias: string; chats: number }[];
     lastError?: string | null;
     device?: string;
   };
 }
 
-interface BridgeChange { target: string; path: string; action: string; note: string }
-interface BridgeReport { dryRun: boolean; command: string; changes: BridgeChange[] }
 
-const TARGET_NAMES: Record<string, string> = {
-  "claude-code": "Claude Code",
-  "claude-desktop": "Claude Desktop",
-  codex: "Codex",
-};
+interface BridgeChange { target: string; path: string; action: string; note: string }
+interface BridgeReport { dryRun: boolean; changes: BridgeChange[] }
+const TARGET_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
 
 /** Polls the sharing service; also refreshes when the service says something changed. */
 export function useShareState(): ShareState | null {
@@ -82,17 +78,17 @@ function Row({ label, note, children }: { label: string; note?: string; children
 function AgentBridge({ share }: { share: ShareState | null }) {
   const bridge = share?.bridge;
   const enabled = bridge?.enabled !== false;
-  const [report, setReport] = useState<BridgeReport | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [report, setReport] = useState<BridgeReport | null>(null);
   const [busy, setBusy] = useState(false);
 
   const toggle = (on: boolean) => {
     invoke<void>("bridge_set_enabled", { on }).catch((e) => setMessage(String(e)));
   };
-  const register = (command: "bridge_register" | "bridge_unregister") => {
+  const install = () => {
     setBusy(true);
     setMessage(null);
-    invoke<BridgeReport>(command)
+    invoke<BridgeReport>("bridge_install_skill")
       .then((r) => setReport(r))
       .catch((e) => { setReport(null); setMessage(String(e)); })
       .finally(() => setBusy(false));
@@ -104,8 +100,9 @@ function AgentBridge({ share }: { share: ShareState | null }) {
   else {
     const local = bridge?.localChats ?? 0;
     const remote = bridge?.remoteChats ?? 0;
-    const device = remote === 1 ? "another computer" : "other computers";
-    status = `${local} ${local === 1 ? "chat" : "chats"} on this ${isWindows ? "PC" : "Mac"}, ${remote} on ${device}.`;
+    const peers = bridge?.peers ?? [];
+    const device = peers.length === 1 ? peers[0].alias : "other computers";
+    status = `${local} ${local === 1 ? "chat" : "chats"} here, ${remote} on ${device}.`;
   }
 
   return (
@@ -118,17 +115,12 @@ function AgentBridge({ share }: { share: ShareState | null }) {
       </Row>
       {enabled && (
         <Row
-          label="Register with Claude and Codex"
-          note="Adds the Pulse tools to Claude Code, Claude Desktop and Codex. Restart a chat to see them."
+          label="Pulse skill"
+          note="Teaches Claude and Codex chats how to message chats on other computers. Restart a chat to see it."
         >
-          <span className="ck-ctls">
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => register("bridge_register")}>
-              Register with Claude and Codex
-            </Button>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => register("bridge_unregister")}>
-              Unregister
-            </Button>
-          </span>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={install}>
+            Install the Pulse skill for Claude and Codex
+          </Button>
         </Row>
       )}
       {report && report.changes.map((c) => (

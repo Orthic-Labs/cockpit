@@ -11,48 +11,88 @@ import AppKit
 enum HubLauncher {
     static let bundleID = "dev.orthic.pulse.hub"
     private static var child: Process?
-    private static let processStart = Date()
     private static var reaped = false
+    private static let hubTail = "Helpers/Pulse.app/Contents/MacOS/pulse-hub"
+
+    private struct ProcInfo { let pid: pid_t; let path: String; let start: Date; let parent: pid_t }
+
+    /// Every process whose executable ends in the hub's bundle path, read
+    /// straight from the kernel (no Launch Services: a child started with
+    /// `Process` is not reliably listed there, and has no `launchDate`).
+    private static func hubProcesses() -> [ProcInfo] {
+        let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard bytes > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(bytes) / MemoryLayout<pid_t>.size + 64)
+        let got = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids,
+                                Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard got > 0 else { return [] }
+        var found: [ProcInfo] = []
+        for pid in pids.prefix(Int(got) / MemoryLayout<pid_t>.size) where pid > 0 {
+            var buffer = [CChar](repeating: 0, count: 4096)
+            guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { continue }
+            let path = String(cString: buffer)
+            guard path.hasSuffix(hubTail) else { continue }
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { continue }
+            let start = Date(timeIntervalSince1970: TimeInterval(info.pbi_start_tvsec)
+                + TimeInterval(info.pbi_start_tvusec) / 1_000_000)
+            found.append(ProcInfo(pid: pid, path: path, start: start, parent: pid_t(info.pbi_ppid)))
+        }
+        return found
+    }
+
+    private static func alive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// SIGTERM, up to `grace` seconds, then SIGKILL. Returns how many needed SIGKILL.
+    @discardableResult
+    private static func stop(_ pids: [pid_t], grace: TimeInterval = 3) -> Int {
+        for pid in pids { kill(pid, SIGTERM) }
+        let deadline = Date().addingTimeInterval(grace)
+        while Date() < deadline, pids.contains(where: alive) {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let remaining = pids.filter(alive)
+        for pid in remaining { kill(pid, SIGKILL) }
+        return remaining.count
+    }
 
     /// A hub that was already running when this notch started belongs to an
     /// earlier Pulse (the hub is only ever the notch's child). It would keep
     /// the old code after an update, so it is stopped once, before this notch
     /// starts or addresses a hub of its own.
-    private static func reapStaleHubs() {
+    private static func reapStaleHubs() { retireHubsFromEarlierLaunches() }
+
+    /// A hub left behind by an earlier Pulse outlives that notch. Called once
+    /// at launch, before this notch starts or addresses a hub. Found by
+    /// executable path in the process table, at any install location, so it
+    /// does not depend on Launch Services. A hub that started before this
+    /// process, and is not our own child, gets SIGTERM, three seconds, then SIGKILL.
+    static func retireHubsFromEarlierLaunches() {
         guard !reaped else { return }
         reaped = true
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        where !app.isTerminated && (app.launchDate ?? .distantPast) < processStart
-            && app.processIdentifier != child?.processIdentifier {
-            app.forceTerminate()
+        let me = getpid()
+        let launched = ownStart(me) ?? Date()
+        let mine = child?.processIdentifier
+        let stale = hubProcesses().filter {
+            $0.pid != me && $0.pid != mine && $0.start < launched
         }
+        guard !stale.isEmpty else {
+            Log.usage.info("retired 0 hub(s) from an earlier launch")
+            return
+        }
+        let forced = stop(stale.map(\.pid))
+        Log.usage.info("retired \(stale.count, privacy: .public) hub(s) from an earlier launch, \(forced, privacy: .public) forced")
     }
 
-    /// A hub left behind by an earlier Pulse outlives that notch, because it is
-    /// a child that is never told to quit when the app is replaced. Called once
-    /// at launch, before this notch starts or addresses a hub. Found by bundle
-    /// id, and by its executable for a hub Launch Services does not list under
-    /// one. Asked to quit, given three seconds, then forced.
-    static func retireHubsFromEarlierLaunches() {
-        let launched = NSRunningApplication.current.launchDate ?? Date()
-        var seen = Set<pid_t>()
-        let candidates = (NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            + NSWorkspace.shared.runningApplications.filter {
-                $0.executableURL?.path.hasSuffix("Helpers/Pulse.app/Contents/MacOS/pulse-hub") == true
-            })
-        .filter {
-            !$0.isTerminated && seen.insert($0.processIdentifier).inserted
-                && ($0.launchDate ?? .distantFuture) < launched
-        }
-        guard !candidates.isEmpty else { return }
-        for app in candidates { app.terminate() }
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline, candidates.contains(where: { !$0.isTerminated }) {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        let remaining = candidates.filter { !$0.isTerminated }
-        for app in remaining { app.forceTerminate() }
-        Log.usage.info("retired \(candidates.count, privacy: .public) hub(s) from an earlier launch, \(remaining.count, privacy: .public) forced")
+    private static func ownStart(_ pid: pid_t) -> Date? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(info.pbi_start_tvsec)
+            + TimeInterval(info.pbi_start_tvusec) / 1_000_000)
     }
 
     static var location: URL? {
@@ -128,13 +168,18 @@ enum HubLauncher {
         }
     }
 
-    /// Asks the hub child to quit (SIGTERM). Called when the notch quits.
+    /// Stops every hub this process started (SIGTERM, then SIGKILL after 3 s).
+    /// Called when the notch quits, including on SIGTERM from an installer.
     static func terminate() {
-        if let process = child, process.isRunning { process.terminate() }
+        let me = getpid()
+        var pids = hubProcesses().filter { $0.parent == me }.map(\.pid)
+        if let process = child, process.isRunning,
+           !pids.contains(process.processIdentifier) { pids.append(process.processIdentifier) }
+        if !pids.isEmpty { stop(pids) }
         // A hub started another way (Launch Services fallback) must not outlive
         // the notch either.
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        where !app.isTerminated && app.processIdentifier != child?.processIdentifier {
+        where !app.isTerminated && !pids.contains(app.processIdentifier) {
             app.terminate()
         }
     }

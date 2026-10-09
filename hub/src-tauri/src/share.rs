@@ -538,17 +538,6 @@ mod agent_bridge {
         object.insert("device".into(), json!(computer_name()));
         value
     }
-
-    pub fn register(uninstall: bool) -> Result<Value, String> {
-        let options = pulse_core::bridge::install::Options {
-            claude: true,
-            codex: true,
-            dry_run: false,
-            command: None,
-        };
-        let report = pulse_core::bridge::install::apply(uninstall, &options)?;
-        serde_json::to_value(report).map_err(|e| e.to_string())
-    }
 }
 
 // ---- state out ---------------------------------------------------------------
@@ -790,15 +779,11 @@ pub fn bridge_set_enabled(on: bool) {
     agent_bridge::set_enabled(on);
 }
 
-/// Register the Pulse MCP server with Claude (Code and Desktop) and Codex; returns what was written.
+/// Install the Pulse bridge skill for Claude and Codex; returns what was written.
 #[tauri::command]
-pub fn bridge_register() -> Result<Value, String> {
-    agent_bridge::register(false)
-}
-
-#[tauri::command]
-pub fn bridge_unregister() -> Result<Value, String> {
-    agent_bridge::register(true)
+pub fn bridge_install_skill() -> Result<Value, String> {
+    let report = pulse_core::bridge::install::apply(false, &Default::default())?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
 /// Open System Settings at Local Network (macOS) or the Windows Firewall's

@@ -1,21 +1,20 @@
 //! One journey through the Pulse bridge with two devices: pairing over a real
 //! TLS connection, signed messages accepted or refused by the receiving
-//! service, inbox trimming, rosters from disk and from a paired device, and an
-//! MCP session over in-memory pipes. Delivery into Claude and Codex themselves
-//! is not exercised here.
+//! service, inbox trimming, rosters from disk and from a paired device, and the
+//! CLI's `peers` / `send` path (caller identification, local hold, remote
+//! queue) through the library. Delivery into Claude and Codex themselves is not
+//! exercised here.
 #![cfg(feature = "localsend")]
 
 use pulse_core::bridge::envelope::{
     self, Envelope, EnvelopeError, Kind, MAX_BODY_BYTES, ReplayGuard, Sender, Target,
 };
-use pulse_core::bridge::mcp::{CallerSession, Server};
 use pulse_core::bridge::roster::{self, RosterEntry};
 use pulse_core::bridge::store::{RegisteredSession, RemoteRoster, Store};
-use pulse_core::bridge::{Identity, all_peers};
+use pulse_core::bridge::{Caller, Identity, all_peers, identify, send_text};
 use pulse_core::localsend::proto;
 use pulse_core::localsend::{Config, Event, Service, net};
-use serde_json::{Value, json};
-use std::io::Cursor;
+use serde_json::json;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -67,16 +66,8 @@ fn post(file_type: &str, preview: &str, fingerprint: &str) -> net::Reply {
     .expect("prepare-upload answers")
 }
 
-fn call(server: &Server, id: u32, name: &str, arguments: Value) -> Value {
-    let line = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-                      "params": {"name": name, "arguments": arguments}})
-    .to_string();
-    let reply: Value = serde_json::from_str(&server.handle(&line).expect("reply")).unwrap();
-    serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
-}
-
 #[test]
-fn two_devices_pair_exchange_signed_messages_and_chats_talk_over_mcp() {
+fn two_devices_pair_exchange_signed_messages_and_the_cli_sends() {
     let now = envelope::now_ms();
 
     // ---- signing -----------------------------------------------------------
@@ -378,7 +369,7 @@ fn two_devices_pair_exchange_signed_messages_and_chats_talk_over_mcp() {
     );
     assert_eq!(roster::resolve(&peers, "builder").unwrap().id, "chat-b");
 
-    // ---- MCP over pipes ----------------------------------------------------
+    // ---- the CLI's peers / send path -----------------------------------------
     store
         .save_remote_roster(&remote(envelope::now_ms()))
         .unwrap();
@@ -386,121 +377,66 @@ fn two_devices_pair_exchange_signed_messages_and_chats_talk_over_mcp() {
         device: "dev-a".into(),
         alias: "Mac A".into(),
     };
-    let caller = |id: &str, name: &str| CallerSession {
-        id: id.into(),
-        kind: "test".into(),
-        name: name.into(),
-        cwd: "/work/api".into(),
-    };
     register("chat-a", "Planner", me_pid);
-    let a = Server {
-        store: store.clone(),
-        me: me.clone(),
-        caller: caller("chat-a", "Planner"),
-    };
-    let b = Server {
-        store: store.clone(),
-        me: me.clone(),
-        caller: caller("chat-b", "Builder"),
-    };
-    let requests = [
-        json!({"jsonrpc":"2.0","id":1,"method":"initialize",
-               "params":{"protocolVersion":"2025-06-18","capabilities":{},
-                         "clientInfo":{"name":"test","version":"1"}}}),
-        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-        json!({"jsonrpc":"2.0","id":3,"method":"nope"}),
-    ]
-    .map(|v| v.to_string())
-    .join("\n");
-    let mut out = Vec::new();
-    a.serve(Cursor::new(format!("{requests}\nnot json\n")), &mut out)
-        .unwrap();
-    let replies: Vec<Value> = String::from_utf8(out)
-        .unwrap()
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect();
-    assert_eq!(replies.len(), 4, "the notification gets no reply");
-    assert_eq!(replies[0]["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "pulse-bridge");
-    let tools: Vec<&str> = replies[1]["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
+    let local = roster::local_sessions_in(&store, Some(sessions_dir.as_path()), &alive);
+    let no_env = |_: &str| None::<String>;
+    let planner = identify(&local, &no_env, Some("Planner")).unwrap();
+    assert_eq!(planner.id, "chat-a");
+    assert!(identify(&local, &no_env, Some("nobody")).is_err());
     assert_eq!(
-        tools,
-        [
-            "bridge_list",
-            "bridge_send",
-            "bridge_inbox",
-            "bridge_whoami"
-        ]
+        identify(&local, &no_env, None).unwrap(),
+        Caller {
+            id: "cli".into(),
+            name: "Pulse CLI".into(),
+            reply_socket: None
+        }
     );
-    assert_eq!(replies[2]["error"]["code"], -32601);
-    assert_eq!(replies[3]["error"]["code"], -32700);
+    // Inside a Claude chat its own socket names it and is the reply address.
+    let in_claude =
+        |name: &str| (name == "CLAUDE_CODE_MESSAGING_SOCKET").then(|| "/tmp/s.sock".to_string());
+    let claude = identify(&local, &in_claude, None).unwrap();
+    assert_eq!(claude.id, "claude-1");
+    assert_eq!(claude.reply_socket.as_deref(), Some("/tmp/s.sock"));
+    // Inside Codex the thread id names it; no socket.
+    let in_codex = |name: &str| (name == "CODEX_THREAD_ID").then(|| "codex-7".to_string());
+    let codex = identify(&local, &in_codex, None).unwrap();
+    assert_eq!(codex.id, "codex-7");
+    assert!(codex.reply_socket.is_none());
 
-    register("chat-a", "Planner", me_pid);
-    let listed = call(&a, 10, "bridge_list", json!({}));
-    let ids: Vec<&str> = listed["peers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|p| p["id"].as_str())
-        .collect();
+    let listed = all_peers(&store, &me);
+    let ids: Vec<&str> = listed.iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"chat-b") && ids.contains(&"dev-b:codex-9"));
-    assert_eq!(call(&a, 11, "bridge_whoami", json!({}))["name"], "Planner");
+    let remote_peer = listed.iter().find(|p| !p.local).unwrap();
+    assert_eq!(remote_peer.display, "Fix build on Mac B");
+    assert_eq!(remote_peer.kind, "codex");
 
     // A local chat that can't be pushed to keeps the message in its inbox.
-    let sent = call(
-        &a,
-        12,
-        "bridge_send",
-        json!({"to": "chat-b", "text": "build is green"}),
-    );
-    assert_eq!(sent["status"], "held");
-    let inbox = call(&b, 13, "bridge_inbox", json!({}));
-    let messages = inbox["messages"].as_array().unwrap();
+    let wait = Duration::from_millis(200);
+    let sent = send_text(&store, &me, &planner, "chat-b", "build is green", wait).unwrap();
+    assert_eq!(sent.status, "held");
+    let messages = store.take_unread("chat-b", None).unwrap();
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["body"], "build is green");
-    assert_eq!(messages[0]["from"]["name"], "Planner on Mac A");
-    assert!(
-        call(&b, 14, "bridge_inbox", json!({}))["messages"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(messages[0].env.body, "build is green");
+    assert_eq!(messages[0].env.from.name, "Planner on Mac A");
+    assert_eq!(messages[0].env.from.session, "chat-a");
+    assert!(store.take_unread("chat-b", None).unwrap().is_empty());
+    assert!(send_text(&store, &me, &planner, "Planner", "me", wait).is_err());
 
     // A chat on a paired device is queued for the relay, unsigned until sent.
-    let queued = call(
-        &a,
-        15,
-        "bridge_send",
-        json!({"to": "Fix build on Mac B", "text": "ping"}),
-    );
-    assert_eq!(queued["status"], "queued");
+    let queued = send_text(&store, &me, &planner, "Fix build on Mac B", "ping", wait).unwrap();
+    assert_eq!(queued.status, "queued");
     let outbox = store.outbox_queued();
     assert_eq!(outbox.len(), 1);
     assert_eq!(outbox[0].target_device, "dev-b");
     assert_eq!(outbox[0].envelope.to.session, "codex-9");
+    assert_eq!(outbox[0].envelope.from.session, "chat-a");
     assert!(!outbox[0].envelope.is_signed());
     let mut relayed = outbox[0].envelope.clone();
     relayed.sign(&key);
     assert_eq!(relayed.verify(&key, envelope::now_ms()), Ok(()));
 
-    let bad = call(
-        &a,
-        16,
-        "bridge_send",
-        json!({"to": "nobody at all", "text": "hi"}),
-    );
-    assert!(bad["error"].as_str().unwrap().contains("nobody at all"));
-    assert_eq!(
-        all_peers(&store, &me).iter().filter(|p| !p.local).count(),
-        1
-    );
+    let bad = send_text(&store, &me, &planner, "nobody at all", "hi", wait).unwrap_err();
+    assert!(bad.to_string().contains("nobody at all"));
 
     for path in [save, state, dir] {
         let _ = std::fs::remove_dir_all(path);

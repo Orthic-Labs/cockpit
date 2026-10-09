@@ -11,3 +11,7 @@ Add only substantial end-to-end user journeys; do not add new small tests or pad
 Prefer quality over quantity: add no unit, component or helper tests; extend complete E2E journeys instead. Retain existing tests until replacement journeys prove their behavior.
 
 Every test migration must inventory exact deleted test names/files, replacement E2E journeys, retained tests & before/after totals. Map removed behavior to observed replacement coverage; never claim replacement from a renamed unit test or an unexecuted journey.
+
+## Bridge
+
+To message a chat on another machine: `pulse bridge peers`, then `pulse bridge send "<chat> on <device>" "<text>"`. The installed CLI is `Pulse.app/Contents/Helpers/pulse` on Mac and `Pulse\Helpers\pulse.exe` on Windows.

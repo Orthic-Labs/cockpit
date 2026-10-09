@@ -1,47 +1,36 @@
-//! Pulse bridge: AI chats (Claude Desktop's Code tab, Codex) on this computer
-//! and on paired computers message each other through Pulse.
+//! Pulse bridge: the cross-machine part of AI chats messaging each other.
+//! Chats on one computer already talk natively (Claude to Claude over their
+//! sockets, Claude to Codex with `codex queue`). Pulse pairs computers, relays
+//! signed messages between them and delivers natively on the receiving side.
 //!
 //! Pieces
 //! * `envelope`: the signed JSON message (`HMAC-SHA256` with a per-pair key).
-//! * `store`: inboxes, outbox, roster cache, registered chats, relay heartbeat.
+//! * `store`: inboxes, outbox, roster cache, relay heartbeat.
 //! * `roster`: which chats exist (`LocalSession`, `Peer`).
 //! * `relay`: what a host with a running `localsend::Service` calls (the hub,
 //!   or `pulse bridge daemon`): `tick` sends the outbox and publishes the
 //!   roster, `on_inbound` handles `Event::Bridge`, `on_local_reply` relays a
 //!   chat's reply, `is_known_local_session`, `status`.
-//! * `mcp`: `pulse bridge mcp`, the stdio MCP server chats talk to.
-//! * `deliver_claude`, `deliver_codex`, `install`: owned by another agent.
+//! * `deliver_claude`, `deliver_codex`: native delivery into a chat here.
+//! * `install`: puts the Pulse bridge skill where Claude and Codex load it.
 //!
-//! API for the delivery and install code (all re-exported here)
-//! * `Envelope`, `Sender`, `Target`, `Kind`: `body` is the plain text to show;
-//!   `from.name` is "<chat title> on <device alias>"; `sig` is empty for an
-//!   envelope that never left this computer.
-//! * `LocalSession { id, kind, name, cwd, status, pid, messaging_socket,
-//!   peer_protocol, entrypoint, raw }`: the receiving chat.
-//! * `BridgeError`: use `Unsupported` for "not on this platform" (Windows).
-//! * `Receipt { msg_id, session, state, detail }` with
-//!   `ReceiptState::{Delivered, Held, Refused}`, the names Claude's
-//!   cross-session messaging uses. `Held` and `Refused` leave the message in
-//!   the chat's bridge inbox (read with the `bridge_inbox` tool).
-//! * `deliver_claude::deliver(session: &LocalSession, env: &Envelope) ->
-//!   Result<Receipt, BridgeError>` is called for every message to a local
-//!   Claude chat (directly, or relayed from another computer). An `Err` is
-//!   treated as `Held` with the error text.
-//! * `local_identity(&Store)`, `all_peers(&Store, &Identity)`,
-//!   `send_text(...)`, `deliver_local(...)` for hosts that send.
-//! * Hub wiring: `bridge::on_inbound(&service, env)` for `Event::Bridge(env)`
-//!   (off the service thread), `bridge::tick(&service)` every ~2 s,
-//!   `bridge::on_local_reply(&service, reply)` and
-//!   `bridge::is_known_local_session(id)` for `deliver_claude::ReplyHub`,
-//!   `bridge::status()` for the page. Pair with
-//!   `Service::bridge_pair(<alias or fingerprint>)` (a prompt appears on the
-//!   other computer); `Service::is_paired` tells who is paired.
+//! The agent-facing surface is the CLI (`pulse bridge peers|send|pair|status`),
+//! built on `all_peers`, `identify` and `send_text`. `Receipt` carries
+//! `ReceiptState::{Delivered, Held, Refused}`; `Held` and `Refused` leave the
+//! message in the chat's bridge inbox (`pulse bridge inbox`).
+//!
+//! Hub wiring: `bridge::on_inbound(&service, env)` for `Event::Bridge(env)`
+//! (off the service thread), `bridge::tick(&service)` every ~2 s,
+//! `bridge::on_local_reply(&service, reply)` and
+//! `bridge::is_known_local_session(id)` for `deliver_claude::ReplyHub`,
+//! `bridge::status()` for the page. Pair with
+//! `Service::bridge_pair(<alias or fingerprint>)` (a prompt appears on the
+//! other computer); `Service::is_paired` tells who is paired.
 
 pub mod deliver_claude;
 pub mod deliver_codex;
 pub mod envelope;
 pub mod install;
-pub mod mcp;
 pub mod relay;
 pub mod roster;
 pub mod store;
@@ -59,7 +48,7 @@ pub enum BridgeError {
     /// Not possible here (for example delivery into Claude on Windows).
     #[error("{0}")]
     Unsupported(String),
-    #[error("no chat matches \"{0}\"; see bridge_list")]
+    #[error("no chat matches \"{0}\"; see `pulse bridge peers`")]
     NotFound(String),
     #[error("{0}")]
     Invalid(String),
@@ -203,8 +192,19 @@ pub fn all_peers(store: &Store, me: &Identity) -> Vec<Peer> {
 /// Put `env` into a chat on this computer. Claude and Codex chats are tried
 /// directly first (`deliver_claude::deliver`, `deliver_codex::deliver`);
 /// anything not `Delivered` keeps the message in the chat's inbox for
-/// `bridge_inbox`.
+/// `pulse bridge inbox`.
 pub fn deliver_local(store: &Store, session: &LocalSession, env: &Envelope) -> Receipt {
+    deliver_local_via(store, session, env, None)
+}
+
+/// `deliver_local`, with `reply_socket` (the sending Claude chat's own
+/// messaging socket) as the address a Claude target replies to.
+pub fn deliver_local_via(
+    store: &Store,
+    session: &LocalSession,
+    env: &Envelope,
+    reply_socket: Option<&str>,
+) -> Receipt {
     let receipt = |state: ReceiptState, detail: String| Receipt {
         msg_id: env.id.clone(),
         session: session.id.clone(),
@@ -212,7 +212,7 @@ pub fn deliver_local(store: &Store, session: &LocalSession, env: &Envelope) -> R
         detail,
     };
     let pushed = match session.kind.as_str() {
-        "claude" => deliver_claude::deliver(session, env),
+        "claude" => deliver_claude::deliver_via(session, env, reply_socket),
         "codex" => deliver_codex::deliver(session, env),
         other => Err(BridgeError::Unsupported(format!(
             "can't push into a {other} chat; it reads its bridge inbox"
@@ -245,25 +245,116 @@ pub struct SendOutcome {
     pub detail: String,
 }
 
-/// Send `text` from chat `from_session` (shown as `from_title`) to the chat
-/// `to` names. Local chats get it at once; a chat on a paired computer goes
-/// through the outbox, and this waits up to `wait` for the relay to send it.
+/// The chat a bridge command runs in: who a message is from and where a
+/// native reply should land.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caller {
+    pub id: String,
+    pub name: String,
+    /// The calling Claude chat's own messaging socket.
+    pub reply_socket: Option<String>,
+}
+
+/// The chat id and name used outside any chat (a plain terminal).
+pub const CLI_CALLER_ID: &str = "cli";
+
+/// Work out the calling chat. `from` (`--from`, a chat id or title on this
+/// computer) wins; then the Claude chat owning `CLAUDE_CODE_MESSAGING_SOCKET`;
+/// then `CODEX_THREAD_ID`; then `CLAUDE_SESSION_ID`; else a plain terminal.
+pub fn identify(
+    sessions: &[LocalSession],
+    env: &dyn Fn(&str) -> Option<String>,
+    from: Option<&str>,
+) -> Result<Caller, BridgeError> {
+    let var = |name: &str| env(name).filter(|v| !v.trim().is_empty());
+    let caller_of = |s: &LocalSession| Caller {
+        id: s.id.clone(),
+        name: s.name.clone(),
+        reply_socket: if s.kind == "claude" {
+            s.messaging_socket.clone()
+        } else {
+            None
+        },
+    };
+    if let Some(wanted) = from {
+        let wanted = wanted.trim().to_lowercase();
+        let named: Vec<&LocalSession> = sessions
+            .iter()
+            .filter(|s| s.name.to_lowercase() == wanted)
+            .collect();
+        let hit = sessions
+            .iter()
+            .find(|s| s.id.to_lowercase() == wanted)
+            .or(if named.len() == 1 {
+                Some(named[0])
+            } else {
+                None
+            });
+        return hit
+            .map(caller_of)
+            .ok_or_else(|| BridgeError::NotFound(wanted));
+    }
+    let claude_id = var("CLAUDE_SESSION_ID").or_else(|| var("CLAUDE_CODE_SESSION_ID"));
+    if let Some(socket) = var("CLAUDE_CODE_MESSAGING_SOCKET") {
+        if let Some(s) = sessions
+            .iter()
+            .find(|s| s.messaging_socket.as_deref() == Some(socket.as_str()))
+        {
+            return Ok(caller_of(s));
+        }
+        if let Some(id) = claude_id.clone() {
+            return Ok(Caller {
+                id,
+                name: "Claude chat".to_string(),
+                reply_socket: Some(socket),
+            });
+        }
+    }
+    if let Some(id) = var("CODEX_THREAD_ID") {
+        return Ok(match sessions.iter().find(|s| s.id == id) {
+            Some(s) => caller_of(s),
+            None => Caller {
+                id,
+                name: "Codex chat".to_string(),
+                reply_socket: None,
+            },
+        });
+    }
+    if let Some(id) = claude_id
+        && let Some(s) = sessions.iter().find(|s| s.id == id)
+    {
+        return Ok(caller_of(s));
+    }
+    Ok(Caller {
+        id: CLI_CALLER_ID.to_string(),
+        name: "Pulse CLI".to_string(),
+        reply_socket: None,
+    })
+}
+
+/// Send `text` from `from` to the chat `to` names. A chat on this computer
+/// gets it at once, natively; a chat on a paired computer goes through the
+/// outbox, and this waits up to `wait` for the relay to send it.
 pub fn send_text(
     store: &Store,
     me: &Identity,
-    from_session: &str,
-    from_title: &str,
+    from: &Caller,
     to: &str,
     text: &str,
     wait: Duration,
 ) -> Result<SendOutcome, BridgeError> {
     let peers = all_peers(store, me);
     let peer = roster::resolve(&peers, to)?;
+    if peer.local && peer.session == from.id {
+        return Err(BridgeError::Invalid(
+            "that is this chat; pick another one".to_string(),
+        ));
+    }
     let env = Envelope::new(
         Sender {
             device: me.device.clone(),
-            session: from_session.to_string(),
-            name: format!("{from_title} on {}", me.alias),
+            session: from.id.clone(),
+            name: format!("{} on {}", from.name, me.alias),
         },
         Target {
             device: peer.device.clone(),
@@ -278,7 +369,7 @@ pub fn send_text(
             .iter()
             .find(|s| s.id == peer.session)
             .ok_or_else(|| BridgeError::NotFound(to.to_string()))?;
-        let receipt = deliver_local(store, session, &env);
+        let receipt = deliver_local_via(store, session, &env, from.reply_socket.as_deref());
         return Ok(SendOutcome {
             msg_id: env.id,
             to: peer,

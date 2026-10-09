@@ -29,8 +29,8 @@
 //! Replies: the chat answers to `from`, a socket this process listens on
 //! (`ReplyHub`). One socket per remote peer, so a reply knows who it is for.
 //! Empty connections (a liveness probe) are tolerated. On Windows the reply
-//! listener is not implemented: no `from` is sent, so chats use the bridge MCP
-//! tools to reply.
+//! listener is not implemented: no `from` is sent, so a chat replies with
+//! `pulse bridge send`.
 
 use super::{BridgeError, Envelope, LocalSession, Receipt};
 use serde_json::{Value, json};
@@ -374,6 +374,16 @@ fn parse_wrapper(content: &str) -> Option<(HashMap<String, String>, String)> {
 /// did with it. `Ok(Receipt::unsupported)` when the chat speaks another
 /// protocol version; `Err` when it is gone or turned Pulse away.
 pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, BridgeError> {
+    deliver_via(session, env, None)
+}
+
+/// `deliver`, with `reply_socket` (the sending chat's own messaging socket)
+/// as the address the chat replies to instead of a reply-hub socket.
+pub fn deliver_via(
+    session: &LocalSession,
+    env: &Envelope,
+    reply_socket: Option<&str>,
+) -> Result<Receipt, BridgeError> {
     let pid = shim::session_pid(session);
     let files = match open_session(pid)? {
         Ok(files) => files,
@@ -381,7 +391,9 @@ pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, Bridge
     };
     let peer_key = shim::env_peer_key(env);
     let peer_key = peer_key.as_str();
-    let from = current_hub().and_then(|hub| hub.address_for(peer_key));
+    let from = reply_socket
+        .map(str::to_string)
+        .or_else(|| current_hub().and_then(|hub| hub.address_for(peer_key)));
     let short: String = peer_key
         .chars()
         .filter(char::is_ascii_alphanumeric)

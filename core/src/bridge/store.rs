@@ -1,6 +1,6 @@
 //! Files the bridge keeps under `<Pulse state dir>/bridge`: per-chat inboxes
 //! (JSON lines with a read cursor), the outbox the relay drains, the cache of
-//! remote rosters, chats that registered through the MCP server, and the
+//! remote rosters, registered chats, and the
 //! relay's heartbeat. Every replacement is a temporary file renamed into place;
 //! inbox appends happen under a lock file.
 
@@ -64,7 +64,7 @@ pub struct RemoteRoster {
 }
 
 /// A chat that is not discovered from disk (Codex, or Claude without a
-/// session file) and announced itself through `pulse bridge mcp`.
+/// session file) and registered here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredSession {
     pub id: String,
@@ -72,7 +72,7 @@ pub struct RegisteredSession {
     pub kind: String,
     pub name: String,
     pub cwd: String,
-    /// The MCP server's process; the chat is gone when it is.
+    /// The registering process; the chat is gone when it is.
     pub pid: u32,
     pub updated: u64,
 }
@@ -419,7 +419,7 @@ impl Store {
             .collect()
     }
 
-    // ---- chats registered through the MCP server ---------------------------
+    // ---- registered chats ---------------------------
 
     pub fn register_session(&self, session: &RegisteredSession) -> io::Result<()> {
         write_json(

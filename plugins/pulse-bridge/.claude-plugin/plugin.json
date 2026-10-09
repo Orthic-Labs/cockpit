@@ -1,0 +1,6 @@
+{
+  "name": "pulse-bridge",
+  "description": "Message AI chats on paired machines through Pulse.",
+  "version": "0.1.0",
+  "author": { "name": "Orthic Labs" }
+}

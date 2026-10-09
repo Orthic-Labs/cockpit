@@ -531,7 +531,7 @@ pub fn run() {
             permissions::windows_permissions, permissions::windows_permission_open,
             share::share_state, share::share_devices, share::share_send, share::share_accept, share::share_decline,
             share::share_cancel, share::share_dismiss, share::open_local_network_settings,
-            share::bridge_set_enabled, share::bridge_register, share::bridge_unregister
+            share::bridge_set_enabled, share::bridge_install_skill
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulse hub");

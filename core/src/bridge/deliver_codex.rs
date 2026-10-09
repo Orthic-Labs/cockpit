@@ -7,8 +7,8 @@
 //! reply. It runs with a 5 s limit and no terminal or console window. Exit 0
 //! (stdout "Queued message <id> for thread <id>.") is a `delivered` receipt
 //! carrying that message id. If the CLI can't be found, fails or times out the
-//! receipt is `held` with the reason, and the message stays in the MCP inbox
-//! (`bridge_inbox`).
+//! receipt is `held` with the reason, and the message stays in the bridge
+//! inbox (`pulse bridge inbox`).
 //!
 //! Where the CLI is looked for:
 //! * macOS: `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`
@@ -21,8 +21,7 @@
 //!
 //! Thread discovery: `~/.codex/session_index.jsonl` (one `{id, thread_name,
 //! updated_at}` per line, read-only). The roster lists the most recent threads
-//! as reachable peers (`roster::local_sessions`), whether or not they have
-//! called the Pulse MCP.
+//! as reachable peers (`roster::local_sessions`).
 
 use super::deliver_claude::shim;
 use super::{BridgeError, Envelope, LocalSession, Receipt};
@@ -221,9 +220,9 @@ pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, Bridge
         ));
     }
     let text = format!(
-        "[Message from {} via Pulse]\n{}",
-        shim::env_from_name(env),
-        shim::env_text(env)
+        "[Message from {name} via Pulse. Reply with: pulse bridge send \"{name}\" \"<text>\"]\n{body}",
+        name = shim::env_from_name(env),
+        body = shim::env_text(env)
     );
     Ok(match run_queue(&binary, thread, &text) {
         Ok(out) => match queued_id(&out) {

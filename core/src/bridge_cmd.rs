@@ -1,54 +1,53 @@
-//! `pulse bridge …`: let AI chats message each other through Pulse.
+//! `pulse bridge …`: message AI chats on other computers through Pulse. The
+//! only agent-facing surface; same-computer chats already talk natively and
+//! `send` reaches them natively too.
 //!
-//! mcp                         stdio MCP server a chat runs (registered by `bridge install`)
-//! peers [--json]              chats that can be messaged, here and on paired computers
-//! send <to> <text…> [--session ID]
-//! inbox [--json] [--session ID]
-//! daemon [--pair <device>]    sharing service plus the bridge relay, without the hub
-//! install | uninstall         register the MCP server with Claude and Codex
+//! peers [--json]                      every chat that can be messaged, here and on paired computers
+//! send <chat on device> <text…> [--from CHAT] [--json]
+//! pair <device>                       pair with a nearby computer (a prompt appears there)
+//! status [--json]                     relay, chats here, chats on paired computers
+//! install|uninstall [--claude] [--codex] [--dry-run]   the Pulse skill for Claude and Codex
+//! inbox [--from CHAT] [--json]        messages that could not be delivered natively
+//! daemon                              sharing service plus the relay, without the hub
 
+use pulse_core::bridge::install;
+use pulse_core::bridge::roster::{self, REMOTE_MAX_AGE_MS};
 use pulse_core::bridge::store::Store;
-use pulse_core::bridge::{self, deliver_claude, install, local_identity, mcp};
+use pulse_core::bridge::{self, Caller, deliver_claude, identify, local_identity};
 use pulse_core::localsend::{Config, Event, Service, proto};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-/// The chat id `send` and `inbox` use when `--session` is not given.
-const CLI_SESSION: &str = "cli";
+use std::time::{Duration, Instant};
 
 pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     if args.is_empty() {
         return Err(
-            "bridge needs a command: mcp, peers, send, inbox, daemon, install, uninstall".into(),
+            "bridge needs a command: peers, send, pair, status, install, uninstall, inbox, daemon"
+                .into(),
         );
     }
     let command = args.remove(0);
     match command.as_str() {
-        "mcp" => {
-            let session = crate::take_option(&mut args, "--session")?;
-            let kind = crate::take_option(&mut args, "--kind")?;
-            let name = crate::take_option(&mut args, "--name")?;
-            mcp::run(session, kind, name).map_err(|e| e.to_string())
-        }
         "peers" => peers(machine),
         "send" => {
-            let session = crate::take_option(&mut args, "--session")?;
+            let from = crate::take_option(&mut args, "--from")?;
             if args.len() < 2 {
-                return Err("send needs <to> and <text>".into());
+                return Err("send needs \"<chat> on <device>\" and \"<text>\"".into());
             }
             let to = args.remove(0);
-            send(&to, &args.join(" "), session.as_deref(), machine)
+            send(&to, &args.join(" "), from.as_deref(), machine)
         }
+        "pair" => match args.as_slice() {
+            [device] => pair(device),
+            _ => Err("pair needs one <device> (a nearby computer's name)".into()),
+        },
+        "status" => status(machine),
         "inbox" => {
-            let session = crate::take_option(&mut args, "--session")?;
-            inbox(session.as_deref().unwrap_or(CLI_SESSION), machine)
-        }
-        "daemon" => {
-            let pair = crate::take_option(&mut args, "--pair")?;
-            daemon(pair)
+            let from = crate::take_option(&mut args, "--from")?;
+            inbox(from.as_deref(), machine)
         }
         "install" | "uninstall" => install::run(&command, args, machine),
+        "daemon" => daemon(),
         other => Err(format!("unknown bridge command: {other}")),
     }
 }
@@ -59,13 +58,26 @@ fn open() -> Result<(Store, bridge::Identity), String> {
     Ok((store, me))
 }
 
+/// The chat this command runs in (from `--from` or the environment).
+fn caller(store: &Store, from: Option<&str>) -> Result<Caller, String> {
+    let env = |name: &str| std::env::var(name).ok();
+    identify(&roster::local_sessions(store), &env, from).map_err(|e| e.to_string())
+}
+
 fn peers(machine: bool) -> Result<(), String> {
     let (store, me) = open()?;
     let list = bridge::all_peers(&store, &me);
     if machine {
+        let rows: Vec<Value> = list
+            .iter()
+            .map(|p| {
+                json!({"chat": p.display, "name": p.name, "device": p.device_alias,
+                       "kind": p.kind, "status": p.status, "local": p.local, "id": p.id})
+            })
+            .collect();
         println!(
             "{}",
-            json!({"peers": list, "relayRunning": store.relay_alive()})
+            json!({"peers": rows, "relayRunning": store.relay_alive()})
         );
         return Ok(());
     }
@@ -73,17 +85,7 @@ fn peers(machine: bool) -> Result<(), String> {
         println!("No chats found.");
     }
     for peer in &list {
-        println!(
-            "{}\t{}\t{}\t{}",
-            peer.id,
-            peer.display,
-            peer.status,
-            if peer.local {
-                "this computer"
-            } else {
-                "paired"
-            }
-        );
+        println!("{}\t{}\t{}", peer.display, peer.kind, peer.status);
     }
     if !store.relay_alive() {
         eprintln!("The Pulse relay is not running: chats on other computers are not reachable.");
@@ -91,18 +93,11 @@ fn peers(machine: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn send(to: &str, text: &str, session: Option<&str>, machine: bool) -> Result<(), String> {
+fn send(to: &str, text: &str, from: Option<&str>, machine: bool) -> Result<(), String> {
     let (store, me) = open()?;
-    let outcome = bridge::send_text(
-        &store,
-        &me,
-        session.unwrap_or(CLI_SESSION),
-        "Pulse CLI",
-        to,
-        text,
-        Duration::from_secs(10),
-    )
-    .map_err(|e| e.to_string())?;
+    let from = caller(&store, from)?;
+    let outcome = bridge::send_text(&store, &me, &from, to, text, Duration::from_secs(10))
+        .map_err(|e| e.to_string())?;
     if machine {
         println!(
             "{}",
@@ -118,31 +113,69 @@ fn send(to: &str, text: &str, session: Option<&str>, machine: bool) -> Result<()
     Ok(())
 }
 
-fn inbox(session: &str, machine: bool) -> Result<(), String> {
+fn status(machine: bool) -> Result<(), String> {
+    let (store, me) = open()?;
+    let here = roster::local_sessions(&store).len();
+    let now = bridge::envelope::now_ms();
+    let remotes: Vec<_> = store
+        .remote_rosters()
+        .into_iter()
+        .filter(|r| now.saturating_sub(r.received) <= REMOTE_MAX_AGE_MS)
+        .collect();
+    let relay = store.relay_alive();
+    if machine {
+        let rows: Vec<Value> = remotes
+            .iter()
+            .map(|r| {
+                json!({"device": r.alias, "chats": r.entries.len(),
+                       "ageSeconds": now.saturating_sub(r.received) / 1000})
+            })
+            .collect();
+        println!(
+            "{}",
+            json!({"relayRunning": relay, "device": me.alias, "chatsHere": here, "paired": rows})
+        );
+        return Ok(());
+    }
+    println!(
+        "Relay: {}",
+        if relay {
+            "running"
+        } else {
+            "not running (open the Pulse hub or run `pulse bridge daemon`)"
+        }
+    );
+    println!("{here} chats on {}", me.alias);
+    if remotes.is_empty() {
+        println!(
+            "No paired computer has shared its chats lately (pair one with `pulse bridge pair <device>`)."
+        );
+    }
+    for r in &remotes {
+        println!("{} chats on {}", r.entries.len(), r.alias);
+    }
+    Ok(())
+}
+
+fn inbox(from: Option<&str>, machine: bool) -> Result<(), String> {
     let store = Store::open_default().map_err(|e| e.to_string())?;
+    let session = caller(&store, from)?.id;
     let entries = store
-        .take_unread(session, None)
+        .take_unread(&session, None)
         .map_err(|e| e.to_string())?;
     if machine {
         let rows: Vec<Value> = entries
             .iter()
-            .map(|e| {
-                json!({"seq": e.seq, "id": e.env.id, "received": e.received,
-                       "from": e.env.from.name, "fromSession": e.env.from.session,
-                       "body": e.env.body})
-            })
+            .map(|e| json!({"id": e.env.id, "from": e.env.from.name, "body": e.env.body}))
             .collect();
-        println!("{}", json!({"session": session, "messages": rows}));
+        println!("{}", json!({"messages": rows}));
         return Ok(());
     }
     if entries.is_empty() {
         println!("No unread messages.");
     }
     for entry in &entries {
-        println!(
-            "[{}] {}\n{}\n",
-            entry.seq, entry.env.from.name, entry.env.body
-        );
+        println!("{}\n{}\n", entry.env.from.name, entry.env.body);
     }
     Ok(())
 }
@@ -158,9 +191,9 @@ fn home_downloads() -> std::path::PathBuf {
         .join("Downloads")
 }
 
-/// The sharing service and the bridge relay in this process. The hub does the
-/// same inside itself; run only one of them.
-fn daemon(pair: Option<String>) -> Result<(), String> {
+/// The sharing service with the bridge wired in, for `pair` and `daemon`. The
+/// hub does the same inside itself; only one process can hold the port.
+fn start_service() -> Result<Arc<Service>, String> {
     let store = Store::open_default().map_err(|e| e.to_string())?;
     let host = sysinfo::System::host_name().unwrap_or_else(|| "Computer".to_string());
     let config = Config {
@@ -186,7 +219,7 @@ fn daemon(pair: Option<String>) -> Result<(), String> {
             }),
         )
         .map_err(|e| {
-            format!("{e} (If the Pulse hub is running, the bridge already runs inside it.)")
+            format!("{e} (If the Pulse hub is running, quit it first; the bridge runs inside it.)")
         })?,
     );
     if let Ok(mut current) = slot.lock() {
@@ -199,16 +232,35 @@ fn daemon(pair: Option<String>) -> Result<(), String> {
     });
     let is_known = Arc::new(bridge::is_known_local_session);
     deliver_claude::set_reply_hub(Some(deliver_claude::ReplyHub::new(on_reply, is_known)));
-    eprintln!("Pulse bridge relay running. Press Ctrl-C to stop.");
-    if let Some(target) = pair {
-        // Give discovery a moment, then ask; the other computer shows a prompt.
-        std::thread::sleep(Duration::from_secs(4));
-        eprintln!("Asking {target} to pair; accept on that computer…");
-        match service.bridge_pair(&target) {
-            Ok(()) => eprintln!("Paired with {target}."),
-            Err(e) => eprintln!("Pairing failed: {e}"),
+    Ok(service)
+}
+
+/// Ask a nearby computer to pair; accept on that computer. A running hub reads
+/// the new key when it next starts.
+fn pair(device: &str) -> Result<(), String> {
+    let service = start_service()?;
+    let started = Instant::now();
+    while !service
+        .devices()
+        .iter()
+        .any(|d| d.fingerprint == device || d.alias.eq_ignore_ascii_case(device))
+    {
+        if started.elapsed() > Duration::from_secs(15) {
+            return Err(format!("{device} is not nearby (is Pulse running there?)"));
         }
+        std::thread::sleep(Duration::from_millis(500));
     }
+    eprintln!("Asking {device} to pair; accept on that computer...");
+    service.bridge_pair(device)?;
+    println!("Paired with {device}. Restart the Pulse hub if it is running.");
+    Ok(())
+}
+
+/// The relay without the hub: run it while chats here and on paired computers
+/// should reach each other.
+fn daemon() -> Result<(), String> {
+    let service = start_service()?;
+    eprintln!("Pulse bridge relay running. Press Ctrl-C to stop.");
     loop {
         bridge::tick(&service);
         std::thread::sleep(Duration::from_secs(2));

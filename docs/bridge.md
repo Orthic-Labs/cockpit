@@ -1,37 +1,34 @@
 # Pulse bridge
 
-AI chats on paired computers (and on the same computer) message each other through Pulse. A Claude or Codex chat lists who it can reach, sends text, and reads what was sent to it.
+Pulse's only job is cross-machine messaging between AI chats (Claude Desktop's Code tab, Codex). On one computer chats already talk natively: Claude to Claude over their messaging sockets (SendMessage), Claude to Codex with `codex queue`. Pulse pairs computers, relays signed messages and delivers natively on the receiving machine.
 
-## How messages travel
+## Two commands
 
-1. A chat calls `bridge_send` (MCP tool) or the CLI sends. The text becomes a signed envelope addressed to a chat on a device.
-2. A chat on this computer is delivered to directly. A chat on a paired computer goes into an outbox; the Pulse relay (hub, or `pulse bridge daemon`) sends it to the other computer, whose relay delivers it locally.
-3. Each computer publishes its chat roster to its paired computers about every 30 seconds; rosters older than 2 minutes are not shown. A peer reads as "<chat title> on <device alias>".
-4. The sender gets a receipt: `delivered`, `held` (kept in the chat's bridge inbox), `refused`, or `queued` (waiting for a relay or the other computer).
+The installed CLI is `Pulse.app/Contents/Helpers/pulse` on Mac and `Pulse\Helpers\pulse.exe` on Windows.
 
-## Delivery per app
+- `pulse bridge peers [--json]`: every chat that can be messaged, here and on paired computers, as "<chat> on <device>" with kind (`claude` or `codex`) and status.
+- `pulse bridge send "<chat> on <device>" "<text>" [--json]`: a chat on another computer goes through the relay and is delivered natively there; a chat on this computer is delivered natively here, so one command works everywhere. The result is `delivered`, `held`, `refused` or `queued` (no relay running yet).
 
-- Claude: the chat's own messaging socket from `~/.claude/sessions/*.json`. Only chats whose process is running are listed. Pulse sends one JSON line in the shape a Claude Code 2.1.293 session itself sends: `msgV:1`, `msg_id`, `type:"user"`, `message{role,content}`, `priority:"next"`, `from` (`uds:<reply socket>`). The sender identity is inside the content, in a `<cross-session-message from=".." from-session=".." from-name="<peer> via Pulse" from-mode="bypass">` wrapper; wrapper tags inside the text are escaped. No auth line on macOS/Linux; native Windows sends the auth line (key file token) first. Real chats are silent on accept, so no control frame within 3 seconds is `delivered`; an explicit hold or refusal is reported as such. Replies arrive on the reply socket in the same wrapper shape (older top-level `from_name`/`from_session_id` fields are still accepted), and empty probe connections are ignored.
-- Codex: `codex queue --thread <thread id> --message <text>` using the Codex CLI bundled with the ChatGPT app (or one on PATH). Exit 0 prints "Queued message <id> for thread <id>." and the message is `delivered` with that id in the receipt detail. The Codex desktop app owns the thread, processes the message and can reply. A failure, or a missing CLI, is `held` with the error text and the message stays readable through `bridge_inbox`.
-- Codex threads come from `~/.codex/session_index.jsonl` (read only): the 50 most recently updated, listed as kind `codex` with status `idle` (whether a thread is open is unknown). They are reachable whether or not they ever called `bridge_whoami`.
+Also: `pulse bridge status` (relay, chat counts, paired computers seen), `pulse bridge inbox [--from CHAT]` (only for messages that could not be delivered natively: held or refused), `pulse bridge daemon` (relay without the hub).
 
-## Setup
+## Pairing
 
-`pulse bridge install` registers the Pulse MCP server (`pulse bridge mcp`) with Claude Code, Claude Desktop and Codex (`--claude`, `--codex`, `--dry-run`, `--json`). Other config keys are left alone and a one-time `.pulse-bak` copy is kept. Running chats need a restart to see the server. `pulse bridge uninstall` removes it. Pair computers from the hub; a prompt appears on the other one.
+`pulse bridge pair <device>` asks a nearby computer to pair; accept the prompt there. Both sides keep one random 32-byte key. Pair once per pair of computers; a running hub reads the new key when it restarts (the sharing port is held by one process, so quit the hub to pair from the CLI).
 
-## MCP tools
+## Skill
 
-- `bridge_list`: reachable chats with `kind` (`claude` or `codex`), device, name, folder, status, and for Codex the `threadId`.
-- `bridge_send`: `to` (id or name from `bridge_list`) and `text` (up to 64 KiB); returns message id, status, detail.
-- `bridge_inbox`: unread messages for this chat, marked read; use it when a message was held or refused.
-- `bridge_whoami`: this chat's id, name, device and whether the relay is running.
+`pulse bridge install [--claude] [--codex] [--dry-run]` installs the Pulse skill (`plugins/pulse-bridge`) into `~/.claude/skills/pulse-bridge/` and `$CODEX_HOME/skills/pulse-bridge/` so the harness knows these commands. It is idempotent, writes atomically, keeps a differing existing file once as `SKILL.md.pulse-bak`, and `pulse bridge uninstall` reverses it. The hub's Agent bridge block has a button that runs it. Open chats need a restart.
+
+## How replies route
+
+Each chat sending a message is identified from its environment: `--from`, else the Claude chat owning `CLAUDE_CODE_MESSAGING_SOCKET`, else `CODEX_THREAD_ID`, else "Pulse CLI". The message arrives as "<chat> on <device> via Pulse".
+
+- Claude target: pushed to the chat's own socket in the shape Claude uses. Its SendMessage reply goes to a Pulse reply socket on that machine, is signed and relayed back, and lands in the calling chat natively (a Claude caller via its socket, a Codex caller via `codex queue` to its thread).
+- Codex target: `codex queue --thread <id> --message <text>`. The message tells the thread to answer with `pulse bridge send "<chat> on <device>" "<text>"`.
+- A local Claude target of a local Claude caller replies straight to the caller's own socket.
+
+Rosters publish every ~30 s; ones older than 2 minutes are hidden. Codex threads (the 50 most recent from `~/.codex/session_index.jsonl`) show as `idle`; their liveness is unknown. On Windows the Claude reply socket is not implemented, so Claude chats there reply with `pulse bridge send`.
 
 ## Security
 
-Messages between computers are signed with HMAC-SHA256 using a 32-byte pair key exchanged when the user accepted the pairing. Only known (paired) devices are accepted; unsigned or wrongly signed envelopes, replays and unknown senders are dropped. Only text is carried, never files or commands.
-
-## Limitations
-
-- Windows: the Claude reply socket is not implemented, so Claude chats there cannot reply over it and use the MCP tools. Codex CLI locations on Windows are best guesses.
-- Codex replies come back only through MCP (the reply lands in the sender's `bridge_inbox`) or by the Codex thread calling `bridge_send` itself; Pulse does not read Codex thread output.
-- Codex thread liveness is unknown, so every listed thread shows as `idle`.
+Messages between computers are signed with HMAC-SHA256 under the pair key from the accepted pairing. Unsigned, wrongly signed, replayed, stale (clock skew over 5 minutes) envelopes and unknown senders are dropped. Only text (up to 64 KiB) is carried, never files or commands. Nothing leaves the local network.
