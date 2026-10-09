@@ -63,17 +63,17 @@ function sources() {
   };
 }
 
-async function candidate() {
-  const artifactRoot = process.env.RIGHT_GIT_ARTIFACT_ROOT;
-  if (!artifactRoot) fail('RIGHT_GIT_ARTIFACT_ROOT is required for candidate mode');
-  // The ci lane's gate already ran the Windows tests on this runner; this only compiles the release payload.
+// Release builds of the three binaries (the real hub frontend is built by tauri's beforeBuildCommand).
+function buildSources() {
   run('cargo', ['build', '--locked', '--release', '--bin', 'pulse'], { cwd: repoRoot });
   run('cargo', ['build', '--locked', '--release', '--manifest-path', 'windows/Cargo.toml'], { cwd: repoRoot });
   run('pnpm', ['--dir', 'hub', 'install', '--frozen-lockfile'], { cwd: repoRoot, shell: true });
   run('pnpm', ['--dir', 'hub', 'exec', 'tauri', 'build', '--no-bundle', '--no-sign', '--target', triple], { cwd: repoRoot, shell: true });
-  const source = sources();
-  const root = join(resolve(artifactRoot), 'pulse', 'windows');
-  const payload = join(root, 'Pulse');
+  return sources();
+}
+
+// Shared by the release candidate and the dev artifact: lay the payload out and require it complete.
+async function stagePayload(payload, source) {
   await rm(payload, { recursive: true, force: true });
   await copyFile(source.notch, join(payload, 'Pulse.exe'), 'notch exe');
   await copyFile(source.hub, join(payload, 'pulse-hub.exe'), 'hub exe');
@@ -81,8 +81,26 @@ async function candidate() {
   await cp(join(repoRoot, 'third_party'), join(payload, 'ThirdParty'), { recursive: true, force: true });
   await copyFile(join(repoRoot, 'NOTICE'), join(payload, 'NOTICE.txt'), 'NOTICE');
   await copyFile(join(repoRoot, 'LICENSE'), join(payload, 'LICENSE.txt'), 'LICENSE');
+  for (const file of [...payloadFiles, join('ThirdParty', 'smartmontools', 'GPL-2.0.txt')]) await requireFile(join(payload, file), `staged ${file}`);
+}
+
+async function candidate() {
+  const artifactRoot = process.env.RIGHT_GIT_ARTIFACT_ROOT;
+  if (!artifactRoot) fail('RIGHT_GIT_ARTIFACT_ROOT is required for candidate mode');
+  // The ci lane's gate already ran the Windows tests on this runner; this only compiles the release payload.
+  const source = buildSources();
+  const root = join(resolve(artifactRoot), 'pulse', 'windows');
+  const payload = join(root, 'Pulse');
+  await stagePayload(payload, source);
   await writeFile(join(root, 'candidate-manifest.json'), `${JSON.stringify({ schema_version: 1, product: 'pulse', platform: 'windows', architecture: 'x86_64', version, payload }, null, 2)}\n`, 'utf8');
   console.log(`[pulse windows payload] candidate: ${root}`);
+}
+
+// Dev artifact (ci lane, push to main): unsigned payload at dist/dev/windows for RightKit's upload step.
+async function dev() {
+  const payload = resolve(process.env.PULSE_DEV_OUT || join(repoRoot, 'dist', 'dev', 'windows'));
+  await stagePayload(payload, buildSources());
+  console.log(`[pulse windows payload] dev payload: ${payload}`);
 }
 
 async function check() {
@@ -142,10 +160,11 @@ try {
   if (process.platform !== 'win32') fail('Native Windows host is required');
   if (process.env.GITHUB_ACTIONS !== 'true') fail('Generated native Windows CI is required');
   if (mode === 'candidate') await candidate();
+  else if (mode === 'dev') await dev();
   else if (mode === 'check') await check();
   else if (mode === 'prepare') await prepare();
   else if (mode === 'package') await packageWindows();
-  else fail('usage: windows-payload.mjs <candidate|check|prepare|package>');
+  else fail('usage: windows-payload.mjs <candidate|dev|check|prepare|package>');
 } catch (error) {
   console.error(error?.stack || error);
   process.exitCode = 1;

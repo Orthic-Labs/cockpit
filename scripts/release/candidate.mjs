@@ -35,7 +35,7 @@ if (action === 'admit') {
   writeFileSync(path.join(root,'stage-summary.json'),JSON.stringify({schema_version:1,stage:env.RIGHT_GIT_STAGE,producer:env.RIGHT_GIT_STAGE_PRODUCER,status:env.RIGHT_GIT_STAGE_STATUS||'STARTED',version:env.RIGHT_GIT_RELEASE_VERSION,source_revision:revision,platform:env.RIGHT_GIT_RELEASE_PLATFORM,architecture:env.RIGHT_GIT_RELEASE_ARCHITECTURE,run_id:env.RIGHT_GIT_RUN_ID,run_attempt:env.RIGHT_GIT_RUN_ATTEMPT,artifacts:hashes},null,2)+'\n');
 } else if(action==='build') {
   if(process.platform!=='darwin') throw new Error('Mac native host required');
-  run('bash',['scripts/gate.sh'],{env:{...env,PULSE_SKIP_HUB_QA:'1'}}); // also builds the notch (xcodebuild) into $RUNNER_TEMP
+  run('bash',['scripts/gate.sh'],{env:{...env,PULSE_SKIP_HUB_QA:'1',PULSE_DEV_ARTIFACT:'0'}}); // also builds the notch (xcodebuild) into $RUNNER_TEMP
   run('cargo',['build','--locked','--release','--bin','pulse']);
   run('pnpm',['--dir','hub','install','--frozen-lockfile']);
   run('pnpm',['--dir','hub','tauri','build','--bundles','app','--no-sign']);

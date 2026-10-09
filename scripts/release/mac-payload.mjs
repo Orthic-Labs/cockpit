@@ -174,21 +174,30 @@ async function dittoZip(source, target) {
   });
 }
 
-async function candidate() {
-  const artifactRoot = process.env.RIGHT_GIT_ARTIFACT_ROOT;
-  if (!artifactRoot) fail('RIGHT_GIT_ARTIFACT_ROOT is required for candidate mode');
-  const root = join(resolve(artifactRoot), 'pulse', 'mac');
-  const source = sourcePaths();
-  const app = join(root, appName);
-  const appExecutable = join(app, 'Contents', 'MacOS', 'Pulse');
-  const helper = join(app, 'Contents', 'Helpers', 'pulse');
+// Files a complete unsigned bundle must hold (what candidate.mjs check also demands).
+const completeBundleFiles = [
+  'Contents/MacOS/Pulse',
+  'Contents/Helpers/pulse',
+  'Contents/Helpers/Pulse.app/Contents/MacOS/pulse-hub',
+  'Contents/Helpers/Pulse.app/Contents/Info.plist',
+  'Contents/Helpers/PulseHelper',
+  'Contents/Helpers/pulse-elevate',
+  'Contents/Helpers/smartctl',
+  'Contents/Resources/ThirdParty/smartmontools/GPL-2.0.txt',
+  'Contents/PlugIns/PulseFinder.appex/Contents/MacOS/PulseFinder',
+  'Contents/PlugIns/PulseFinder.appex/Contents/Info.plist',
+  'Contents/Library/LaunchDaemons/dev.orthic.pulse.helper.plist'
+];
 
-  await mkdir(root, { recursive: true });
+// Shared assembly: the unsigned Pulse.app from the already-built notch, CLI and
+// hub products. Used by the release candidate and by the dev artifact.
+async function assembleApp(app, source) {
+  const appExecutable = join(app, 'Contents', 'MacOS', 'Pulse');
   await rm(app, { recursive: true, force: true });
   await copyTree(source.notch, app, 'notch app (xcodebuild)');
   await requireFile(appExecutable, 'notch executable');
   await requireFile(join(app, 'Contents', 'PlugIns', 'PulseFinder.appex', 'Contents', 'MacOS', 'PulseFinder'), 'Finder extension (Contents/PlugIns)');
-  await copyExecutable(source.helper, helper, 'Pulse CLI');
+  await copyExecutable(source.helper, join(app, 'Contents', 'Helpers', 'pulse'), 'Pulse CLI');
   await copyTree(source.hub, join(app, 'Contents', 'Helpers', 'Pulse.app'), 'hub app (Tauri)');
   await placePrivilegedHelper(app, source.notch);
   await placeSmartctl(app);
@@ -198,11 +207,32 @@ async function candidate() {
   }
   console.log(`[pulse mac payload] CFBundleVersion ${build}`);
   await cp(join(repoRoot, 'mac/Notch/LICENSE'), join(app, 'Contents/Resources/codeNOTCH-LICENSE.txt'));
+  for (const file of completeBundleFiles) await requireFile(join(app, file), `assembled ${file}`);
+  return appExecutable;
+}
+
+async function candidate() {
+  const artifactRoot = process.env.RIGHT_GIT_ARTIFACT_ROOT;
+  if (!artifactRoot) fail('RIGHT_GIT_ARTIFACT_ROOT is required for candidate mode');
+  const root = join(resolve(artifactRoot), 'pulse', 'mac');
+  const source = sourcePaths();
+  const app = join(root, appName);
+
+  await mkdir(root, { recursive: true });
+  const appExecutable = await assembleApp(app, source);
   await copyExecutable(appExecutable, join(root, 'raw', 'Pulse'), 'Mac app executable');
   await copyExecutable(source.helper, join(root, 'raw', 'pulse'), 'Pulse CLI');
   await dittoZip(app, join(root, `${appName}.zip`));
   await writeCandidateManifest(root);
   console.log(`[pulse mac payload] candidate: ${root}`);
+}
+
+// Dev artifact (ci lane, push to main): the same bundle from the products the gate
+// already built, left unsigned at dist/dev/Pulse.app for RightKit's dev-mac-sign job.
+async function dev() {
+  const app = join(resolve(process.env.PULSE_DEV_OUT || join(repoRoot, 'dist', 'dev')), appName);
+  await assembleApp(app, sourcePaths());
+  console.log(`[pulse mac payload] dev app: ${app}`);
 }
 
 async function findCandidateApp(root) {
@@ -324,9 +354,10 @@ try {
   if (mode === 'package-local') await packageMac({ local: true });
   else if (process.env.GITHUB_ACTIONS !== 'true') fail('Generated native macOS CI is required');
   else if (mode === 'candidate') await candidate();
+  else if (mode === 'dev') await dev();
   else if (mode === 'prepare') await prepare();
   else if (mode === 'package') await packageMac();
-  else fail('usage: mac-payload.mjs <candidate|prepare|package|package-local>');
+  else fail('usage: mac-payload.mjs <candidate|dev|prepare|package|package-local>');
 } catch (error) {
   console.error(error?.stack || error);
   process.exitCode = 1;

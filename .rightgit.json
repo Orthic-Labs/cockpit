@@ -20,7 +20,8 @@
   "rustCache": {
     "workspaces": [
       ".",
-      "windows"
+      "windows",
+      "hub/src-tauri"
     ],
     "requiredForGate": true
   },
@@ -54,5 +55,13 @@
   },
   "qaEvidencePath": "pulse-hub-qa",
   "qaEvidenceRetentionDays": 7,
-  "ciAllOs": true
+  "ciAllOs": true,
+  "ciIncremental": true,
+  "devArtifact": {
+    "mac": "sign",
+    "windows": "unsigned",
+    "retentionDays": 7,
+    "macAppPath": "dist/dev/Pulse.app",
+    "windowsGlob": "dist/dev/windows/**"
+  }
 }

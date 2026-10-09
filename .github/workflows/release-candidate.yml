@@ -138,6 +138,7 @@ jobs:
           workspaces: |
             . -> target
             windows -> target
+            hub/src-tauri -> target
           shared-key: pulse-rust
           add-job-id-key: false
           cache-workspace-crates: false

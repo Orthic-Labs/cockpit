@@ -38,6 +38,12 @@ gate_exit() {
   exit "$result"
 }
 trap gate_exit EXIT
+# Dev artifact (RightKit devArtifact lane): on push to main, or PULSE_DEV_ARTIFACT=1.
+# PULSE_DEV_ARTIFACT=0 forces it off (the release candidate build runs this gate too).
+dev_artifact() {
+  [[ "${PULSE_DEV_ARTIFACT:-}" == "1" ]] && return 0
+  [[ -z "${PULSE_DEV_ARTIFACT:-}" && "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF:-}" == "refs/heads/main" ]]
+}
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
 cargo fmt --all
 # A manifest change without a matching lock: resolve it here (CI is the only
@@ -78,6 +84,12 @@ if [[ "$RUNNER_OS" == "Windows" ]]; then
   mkdir -p hub/dist
   [[ -f hub/dist/index.html ]] || echo '<!doctype html><title>Pulse</title>' > hub/dist/index.html
   (cd hub/src-tauri && cargo check --all-targets)
+  # Dev artifact: release builds with the real hub frontend, staged unsigned at
+  # dist/dev/windows (Pulse.exe, pulse-hub.exe, Helpers/pulse.exe, ThirdParty); an incomplete payload fails.
+  if dev_artifact; then
+    rm -rf dist/dev/windows
+    node scripts/release/windows-payload.mjs dev
+  fi
 fi
 if [[ "$RUNNER_OS" == "macOS" ]]; then
   export PULSE_APFS_FIXTURE=1
@@ -162,5 +174,15 @@ PY
     [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
   else
     echo "Hub QA skipped (PULSE_SKIP_HUB_QA set: signed-build gate)"
+  fi
+  # Dev artifact: the complete unsigned Pulse.app at dist/dev/Pulse.app (the same bundle the release
+  # candidate assembles, via mac-payload.mjs). Reuses the notch built above; builds only the release CLI
+  # and the release hub (real frontend). RightKit's dev-mac-sign job signs and uploads it.
+  if dev_artifact; then
+    rm -rf dist/dev/Pulse.app
+    cargo build --locked --release --bin pulse
+    pnpm --dir hub exec tauri build --bundles app --no-sign
+    node scripts/release/mac-payload.mjs dev
+    test -x dist/dev/Pulse.app/Contents/MacOS/Pulse
   fi
 fi
