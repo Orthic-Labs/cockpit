@@ -743,7 +743,11 @@ fn spawn_announcer(inner: Arc<Inner>) {
                 match &sent {
                     Ok(()) => 1,
                     // EHOSTUNREACH: what a denied Local Network permission looks like.
+                    #[cfg(target_os = "macos")]
                     Err(e) if e.raw_os_error() == Some(65) => 2,
+                    // WSAEACCES: Windows Firewall (or policy) refusing the multicast send.
+                    #[cfg(windows)]
+                    Err(e) if e.raw_os_error() == Some(10013) => 2,
                     Err(_) => 0,
                 },
                 Ordering::Relaxed,
