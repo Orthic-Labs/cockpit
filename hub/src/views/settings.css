@@ -25,9 +25,11 @@
 .ck-settings .ck-text > strong { font-weight: 500; color: var(--rk-ink); }
 .ck-settings .ck-ctl { flex: 0 1 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; }
 .ck-settings .ck-ctl .error { flex-basis: 100%; text-align: right; }
-.ck-settings .ck-ctl button,
-.ck-settings .ck-line button,
-.ck-settings .ck-savebar button { min-height: 32px; }
+/* Not the RightKit toggle: it is a <button> with a fixed 22px track, and a taller
+   min-height stretches the track while the knob stays pinned 2px from the top. */
+.ck-settings .ck-ctl button:not(.rk-toggle),
+.ck-settings .ck-line button:not(.rk-toggle),
+.ck-settings .ck-savebar button:not(.rk-toggle) { min-height: 32px; }
 .ck-settings .ck-ctls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .ck-settings .ck-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .ck-settings .ck-line.ck-inline { justify-content: flex-end; }
