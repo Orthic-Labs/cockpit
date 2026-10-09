@@ -30,6 +30,7 @@ mod settings;
 mod shot;
 mod surface;
 mod usage;
+mod viewshots;
 mod visibility;
 
 use layout::{Cell, CellView, SEND_CELL};
@@ -223,6 +224,10 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 fn main() -> ExitCode {
+    // CI only: render every notch view to PNG and exit before any window, hook or lock.
+    if let Some(code) = viewshots::run_if_requested() {
+        return code;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

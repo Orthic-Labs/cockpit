@@ -54,6 +54,24 @@ if [[ "$RUNNER_OS" == "Windows" ]]; then
   cargo fmt --manifest-path windows/Cargo.toml
   cargo test --locked --manifest-path windows/Cargo.toml
   cargo clippy --locked --manifest-path windows/Cargo.toml --all-targets --keep-going -- -D warnings
+  # Every notch view the Windows notch has an equivalent for, drawn off-screen by the notch
+  # binary itself (software rasteriser, hand-written PNG; no window, hook or desktop access)
+  # from qa/notch-views.json for the Mac-vs-Windows side-by-side. The rest get placeholder
+  # PNGs and are listed in windows-gaps.txt. Lands beside the Mac set; a missing id fails.
+  win_views="$RUNNER_TEMP/pulse-hub-qa/views/windows"
+  rm -rf "$win_views"; mkdir -p "$win_views"
+  cargo run --locked --manifest-path windows/Cargo.toml -- --render-views "$win_views"
+  win_expected=0
+  win_missing=""
+  while IFS= read -r view_id; do
+    win_expected=$((win_expected + 1))
+    [[ -s "$win_views/$view_id.png" ]] || win_missing="$win_missing $view_id"
+  done < <(grep -oE '^    "id": "[^"]+"' qa/notch-views.json | sed -E 's/^    "id": "([^"]+)"$/\1/')
+  echo "Windows view shots: $(find "$win_views" -name '*.png' | wc -l | tr -d ' ') PNGs for $win_expected view ids"
+  if [[ $win_expected -eq 0 || -n "$win_missing" ]]; then
+    echo "Missing Windows view shots:$win_missing" >&2
+    exit 1
+  fi
   # Pulse hub (Tauri) backend: compile check only. tauri::generate_context! needs the
   # frontend dist folder to exist; the page itself is type-checked and bundled on the
   # macOS leg, so a placeholder page is enough here. The hub is its own workspace.

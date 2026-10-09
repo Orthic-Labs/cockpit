@@ -12,6 +12,8 @@ use crate::surface::TextPainter;
 
 const STALE_DIM: f32 = 0.45;
 const BORDER: u32 = 0x2A2A2A;
+/// Side margin around a lone ring in `render_cell`.
+const CELL_MARGIN: f32 = 8.0;
 
 const CARD_WIDTH: f32 = 260.0;
 const CARD_PAD: f32 = 14.0;
@@ -97,81 +99,96 @@ pub fn render_panel(views: &[CellView], dpi: u32, text: &mut TextPainter) -> Can
         1.0,
     );
     for (index, view) in views.iter().enumerate() {
-        let dim = if view.stale { STALE_DIM } else { 1.0 };
         let cx = layout::cell_left(index, dpi) + RING * s / 2.0;
-        let cy = (PAD_TOP + RING / 2.0) * s;
-        let radius = (RING / 2.0 - TRACK_STROKE / 2.0) * s;
+        draw_cell(&mut canvas, view, cx, s, text);
+    }
+    canvas
+}
+
+/// One cell: track ring, arcs, glyph mark and the label under it, the ring centred on `cx`.
+fn draw_cell(canvas: &mut Canvas, view: &CellView, cx: f32, s: f32, text: &mut TextPainter) {
+    let dim = if view.stale { STALE_DIM } else { 1.0 };
+    let cy = (PAD_TOP + RING / 2.0) * s;
+    let radius = (RING / 2.0 - TRACK_STROKE / 2.0) * s;
+    canvas.stroke_arc(
+        cx,
+        cy,
+        radius,
+        TRACK_STROKE * s,
+        1.0,
+        0xFFFFFF,
+        RING_TRACK_ALPHA * dim,
+    );
+    if let Some(main) = view.main {
+        let fraction = f32::from(main) / 100.0;
         canvas.stroke_arc(
             cx,
             cy,
             radius,
-            TRACK_STROKE * s,
-            1.0,
-            0xFFFFFF,
-            RING_TRACK_ALPHA * dim,
-        );
-        if let Some(main) = view.main {
-            let fraction = f32::from(main) / 100.0;
-            canvas.stroke_arc(
-                cx,
-                cy,
-                radius,
-                PROGRESS_STROKE * s,
-                fraction,
-                layout::band_color(fraction),
-                dim,
-            );
-        }
-        if let Some(inner) = view.inner {
-            let fraction = f32::from(inner) / 100.0;
-            canvas.stroke_arc(
-                cx,
-                cy,
-                WEEKLY_RADIUS * s,
-                WEEKLY_STROKE * s,
-                1.0,
-                0xFFFFFF,
-                RING_TRACK_ALPHA * 0.7 * dim,
-            );
-            canvas.stroke_arc(
-                cx,
-                cy,
-                WEEKLY_RADIUS * s,
-                WEEKLY_STROKE * s,
-                fraction,
-                layout::band_color(fraction),
-                0.8 * dim,
-            );
-        }
-        // Glyph mark centred in the ring (font cells are taller than their capitals, so
-        // nudge up by a tenth of the cell).
-        let glyph_size = 8.5;
-        draw_centered(
-            &mut canvas,
-            text,
-            view.glyph,
-            (cx, cy - glyph_size * s * 0.6),
-            (glyph_size, true),
-            s,
-            if view.problem {
-                layout::BAND_WATCH
-            } else {
-                INK_PRIMARY
-            },
+            PROGRESS_STROKE * s,
+            fraction,
+            layout::band_color(fraction),
             dim,
         );
-        let known = view.main.is_some();
-        draw_centered(
-            &mut canvas,
-            text,
-            &view.label,
-            (cx, (PAD_TOP + RING + LABEL_GAP) * s),
-            (11.0, false),
-            s,
-            if known { INK_PRIMARY } else { INK_SECONDARY },
+    }
+    if let Some(inner) = view.inner {
+        let fraction = f32::from(inner) / 100.0;
+        canvas.stroke_arc(
+            cx,
+            cy,
+            WEEKLY_RADIUS * s,
+            WEEKLY_STROKE * s,
             1.0,
+            0xFFFFFF,
+            RING_TRACK_ALPHA * 0.7 * dim,
+        );
+        canvas.stroke_arc(
+            cx,
+            cy,
+            WEEKLY_RADIUS * s,
+            WEEKLY_STROKE * s,
+            fraction,
+            layout::band_color(fraction),
+            0.8 * dim,
         );
     }
+    // Glyph mark centred in the ring (font cells are taller than their capitals, so
+    // nudge up by a tenth of the cell).
+    let glyph_size = 8.5;
+    draw_centered(
+        canvas,
+        text,
+        view.glyph,
+        (cx, cy - glyph_size * s * 0.6),
+        (glyph_size, true),
+        s,
+        if view.problem {
+            layout::BAND_WATCH
+        } else {
+            INK_PRIMARY
+        },
+        dim,
+    );
+    let known = view.main.is_some();
+    draw_centered(
+        canvas,
+        text,
+        &view.label,
+        (cx, (PAD_TOP + RING + LABEL_GAP) * s),
+        (11.0, false),
+        s,
+        if known { INK_PRIMARY } else { INK_SECONDARY },
+        1.0,
+    );
+}
+
+/// A single cell on a transparent canvas (no notch body): what the view shots show for a ring.
+pub fn render_cell(view: &CellView, dpi: u32, text: &mut TextPainter) -> Canvas {
+    let s = layout::scale(dpi);
+    let (_, height) = layout::body_size(dpi);
+    let width = ((RING + 2.0 * CELL_MARGIN) * s).round() as usize;
+    let mut canvas = Canvas::new(width, height as usize);
+    draw_cell(&mut canvas, view, width as f32 / 2.0, s, text);
     canvas
 }
 
