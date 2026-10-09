@@ -210,15 +210,41 @@ pub fn find(store: &Store, device: &str) -> Option<Link> {
         .find(|l| l.device.to_lowercase() == wanted)
 }
 
-/// Add or replace a link, then check it by listing that computer's chats.
-pub fn add(store: &Store, link: Link) -> Result<RemoteListing, String> {
+/// Where `pulse` lives when the link does not say: PATH, then the installed app on a Mac,
+/// then the installed app on Windows (PowerShell expands `$env:`; ssh to Windows lands in
+/// PowerShell by default).
+const PULSE_CANDIDATES: [&str; 3] = [
+    "pulse",
+    "/Applications/Pulse.app/Contents/Helpers/pulse",
+    "$env:LOCALAPPDATA\\Programs\\Pulse\\Helpers\\pulse.exe",
+];
+
+/// Add or replace a link, then check it by listing that computer's chats. With no
+/// explicit `pulse` path, the first candidate that answers is stored.
+pub fn add(store: &Store, mut link: Link) -> Result<RemoteListing, String> {
     if link.device.trim().is_empty() || link.ssh.trim().is_empty() {
         return Err("a link needs a device name and an ssh host".to_string());
     }
     if link.device.contains(':') {
         return Err("the device name can't contain ':'".to_string());
     }
-    let listing = list_chats(&link)?;
+    let listing = if link.pulse == "pulse" {
+        let mut found = None;
+        let mut last = String::new();
+        for candidate in PULSE_CANDIDATES {
+            link.pulse = candidate.to_string();
+            match list_chats(&link) {
+                Ok(listing) => {
+                    found = Some(listing);
+                    break;
+                }
+                Err(e) => last = e,
+            }
+        }
+        found.ok_or_else(|| format!("{last} (pass --pulse <path of pulse on {}>)", link.device))?
+    } else {
+        list_chats(&link)?
+    };
     let mut links: Vec<Link> = store
         .links()
         .into_iter()

@@ -134,7 +134,9 @@ fn process_matches(pid: u32, recorded_start: Option<&str>, domain: Option<&str>)
         if domain.is_none_or(|d| d == "darwin")
             && let Some(recorded) = recorded_start.filter(|r| !r.is_empty())
         {
+            // Claude writes `procStart` in UTC (ctime shape); ps prints local time unless told.
             let out = std::process::Command::new("/bin/ps")
+                .env("TZ", "UTC")
                 .args(["-o", "lstart=", "-p", &pid.to_string()])
                 .output();
             return match out {
