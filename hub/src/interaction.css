@@ -104,7 +104,7 @@
 
 /* Disclosure summaries (Cleanup "About these numbers", Apps): colour on hover, dim when pressed. */
 :root .ck-about > summary, :root .ck-detail > summary { cursor: pointer; transition: color .12s, opacity .12s; }
-:root .ck-about > summary:hover, :root .ck-detail > summary:hover { color: var(--rk-ink); }
+:root .ck-about > summary:hover, :root .ck-detail > summary:hover { color: var(--rk-ink); background: var(--rk-fill-2); border-radius: 6px; }
 :root .ck-about > summary:active, :root .ck-detail > summary:active { opacity: .6; transition-duration: 0s; }
 /* The active sidebar row changes its own look on hover and press, not only its label. */
 :root .rk-item.is-active:hover { filter: brightness(1.06); }
