@@ -45,6 +45,63 @@ dev_artifact() {
   [[ -z "${PULSE_DEV_ARTIFACT:-}" && "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF:-}" == "refs/heads/main" ]]
 }
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
+# A path in the form a native (non-MSYS) process wants: C:\... under the Windows runner's Git Bash, unchanged elsewhere.
+native_path() {
+  if [[ "${RUNNER_OS:-}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+# Headless dogfood of the hub on rightkit-qa, on the macOS and the Windows leg: the debug-only
+# qa-native build (compile-time barred from release) is launched hidden and driven through its
+# in-app control server (rightkit-control). The test makes its own fixture HOME so Storage scans a
+# tiny folder and writes the notch's published state where the hub reads it (~/Library/Application
+# Support/Pulse on the Mac, %LOCALAPPDATA%\Pulse on Windows, which rightkit-qa points at its own
+# data dir). macOS UI tests must run from the user's login session (`open` needs a GUI session),
+# the same reason tools/rightkit/scripts/run-ui-tests.sh builds through the broker and then runs the
+# binary itself. That script needs the `rightkit` CLI, which this runner does not have, so we do the
+# equivalent directly: plain `cargo build` of the qa-native bin, then `cargo test` of hub/qa-e2e
+# here (not in a wrapper). hub/qa-e2e is its own cargo workspace: rightkit-qa's exact pins clash
+# with pulse-core's. On Windows the same test then starts the real notch (windows/ crate, debug
+# build, PULSE_QA_NOTCH_BIN) beside a second hub to prove the hub's Edge control reaches the notch.
+# Evidence lands in $RUNNER_TEMP/pulse-hub-qa (screenshots/ + managed/.../evidence); .rightgit.json's
+# qaEvidencePath uploads that folder as qa-evidence-<os>-<attempt> (ci.yml has the artifact step).
+run_hub_qa() {
+  if [[ -n "${PULSE_SKIP_HUB_QA:-}" ]]; then
+    echo "Hub QA skipped (PULSE_SKIP_HUB_QA set: signed-build gate)"
+    return 0
+  fi
+  local qa_out="$RUNNER_TEMP/pulse-hub-qa" qa_rc=0 notch_bin=""
+  rm -rf "$qa_out/screenshots" "$qa_out/evidence" "$qa_out/managed"; mkdir -p "$qa_out/screenshots" "$qa_out/evidence"
+  (cd hub/src-tauri && cargo build --features qa-native,custom-protocol) || qa_rc=$?
+  if [[ $qa_rc -eq 0 && "${RUNNER_OS:-}" == "Windows" ]]; then
+    (cargo build --locked --manifest-path windows/Cargo.toml) || qa_rc=$?
+    notch_bin="$PWD/windows/target/debug/pulse-windows-prototype.exe"
+    if [[ $qa_rc -eq 0 && ! -f "$notch_bin" ]]; then
+      echo "Notch binary missing after build: $notch_bin" >&2
+      qa_rc=1
+    fi
+  fi
+  if [[ $qa_rc -eq 0 ]]; then
+    # rightkit-qa >= 0.2.10 keeps managed runs under RIGHTKIT_MANAGED_ROOT
+    # (default is a workstation path the runner cannot create).
+    (cd hub/qa-e2e && RIGHTKIT_MANAGED_ROOT="$(native_path "$qa_out/managed")" \
+      PULSE_QA_SHOTS="$(native_path "$qa_out/screenshots")" RIGHTKIT_QA_EVIDENCE="$(native_path "$qa_out/evidence")" \
+      PULSE_QA_NOTCH_BIN="${notch_bin:+$(native_path "$notch_bin")}" \
+      cargo test --test ui -- --nocapture) || qa_rc=$?
+  fi
+  echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
+  [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
+  # A silent no-op (skipped scenario) must not pass: demand the receipt and one screenshot per section.
+  # 0.2.10+ writes evidence inside the managed run (managed/runs/<app>/<id>/evidence).
+  grep -rq '"passed"' "$qa_out" --include=evidence.json || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
+  [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    # The notch step skips (and still writes a receipt) without PULSE_QA_NOTCH_BIN; its last screenshot proves it ran.
+    [[ -s "$qa_out/screenshots/12-notch-edge-after.png" ]] || { echo "Hub native QA did not run the notch edge step" >&2; exit 1; }
+  fi
+}
 cargo fmt --all
 # A manifest change without a matching lock: resolve it here (CI is the only
 # place Pulse may resolve), print the lock patch for a verbatim commit, fail.
@@ -85,12 +142,14 @@ if [[ "$RUNNER_OS" == "Windows" ]]; then
     echo "Missing Windows view shots:$win_missing" >&2
     exit 1
   fi
-  # Pulse hub (Tauri) backend: compile check only. tauri::generate_context! needs the
-  # frontend dist folder to exist; the page itself is type-checked and bundled on the
-  # macOS leg, so a placeholder page is enough here. The hub is its own workspace.
-  mkdir -p hub/dist
-  [[ -f hub/dist/index.html ]] || echo '<!doctype html><title>Pulse</title>' > hub/dist/index.html
+  # Pulse hub (Tauri): the real frontend is bundled here too (the qa-native custom-protocol
+  # build embeds it, and tauri::generate_context! needs the dist folder); the page is
+  # type-checked on the macOS leg. Then the Rust backend compile check. The hub is its own workspace.
+  pnpm --dir hub install --frozen-lockfile
+  pnpm --dir hub run build
   (cd hub/src-tauri && cargo check --all-targets)
+  # Headless dogfood of the hub and the real notch on Windows (see run_hub_qa).
+  run_hub_qa
   # Dev artifact: release builds with the real hub frontend, staged unsigned at
   # dist/dev/windows (Pulse.exe, pulse-hub.exe, Helpers/pulse.exe, ThirdParty); an incomplete payload fails.
   if dev_artifact; then
@@ -150,38 +209,8 @@ if missing or len(pngs) < len(ids):
     sys.exit(1)
 PY
   [[ $views_rc -eq 0 ]] || { echo "Notch view rendering failed ($views_rc)" >&2; exit "$views_rc"; }
-  # Headless dogfood of the hub on rightkit-qa: the debug-only qa-native build
-  # (compile-time barred from release) is launched hidden and driven through its
-  # in-app control server (rightkit-control). The test makes its own fixture HOME so
-  # Storage scans a tiny folder. UI tests must run from the user's login session
-  # (macOS `open` needs a GUI session), the same reason tools/rightkit/scripts/run-ui-tests.sh
-  # builds through the broker and then runs the binary itself. That script needs the
-  # `rightkit` CLI, which this runner does not have, so we do the equivalent directly:
-  # plain `cargo build` of the qa-native bin, then `cargo test` of hub/qa-e2e here (not in a wrapper).
-  # hub/qa-e2e is its own cargo workspace: rightkit-qa's exact pins clash with pulse-core's.
-  # Evidence lands in $RUNNER_TEMP/pulse-hub-qa (screenshots/ + evidence/); the
-  # generated ci workflow has no artifact upload.
-  if [[ -z "${PULSE_SKIP_HUB_QA:-}" ]]; then
-    qa_out="$RUNNER_TEMP/pulse-hub-qa"
-    rm -rf "$qa_out/screenshots" "$qa_out/evidence" "$qa_out/managed"; mkdir -p "$qa_out/screenshots" "$qa_out/evidence"
-    qa_rc=0
-    (cd hub/src-tauri && cargo build --features qa-native,custom-protocol) || qa_rc=$?
-    if [[ $qa_rc -eq 0 ]]; then
-      # rightkit-qa >= 0.2.10 keeps managed runs under RIGHTKIT_MANAGED_ROOT
-      # (default is a workstation path the runner cannot create).
-      (cd hub/qa-e2e && RIGHTKIT_MANAGED_ROOT="$qa_out/managed" \
-        PULSE_QA_SHOTS="$qa_out/screenshots" RIGHTKIT_QA_EVIDENCE="$qa_out/evidence" \
-        cargo test --test ui -- --nocapture) || qa_rc=$?
-    fi
-    echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
-    [[ $qa_rc -eq 0 ]] || { echo "Hub native QA failed ($qa_rc)" >&2; exit "$qa_rc"; }
-    # A silent no-op (skipped scenario) must not pass: demand the receipt and one screenshot per section.
-    # 0.2.10+ writes evidence inside the managed run (managed/runs/<app>/<id>/evidence).
-    grep -rq '"passed"' "$qa_out" --include=evidence.json || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
-    [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
-  else
-    echo "Hub QA skipped (PULSE_SKIP_HUB_QA set: signed-build gate)"
-  fi
+  # Headless dogfood of the hub on rightkit-qa (see run_hub_qa).
+  run_hub_qa
   # Dev artifact: the complete unsigned Pulse.app at dist/dev/Pulse.app (the same bundle the release
   # candidate assembles, via mac-payload.mjs). Reuses the notch built above; builds only the release CLI
   # and the release hub (real frontend). RightKit's dev-mac-sign job signs and uploads it.
