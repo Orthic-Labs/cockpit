@@ -606,6 +606,13 @@ pub(crate) fn verify_restricted_handle(
     verify_restricted_parts(owner, dacl, ctx)
 }
 
+/// Access-mask bits that let a grantee change the file or folder, its contents, its
+/// children, or its security: FILE_WRITE_DATA, FILE_APPEND_DATA, FILE_WRITE_EA,
+/// FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES, DELETE, WRITE_DAC, WRITE_OWNER,
+/// GENERIC_WRITE, GENERIC_ALL.
+const WRITE_BITS: u32 =
+    0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x4000_0000 | 0x1000_0000;
+
 fn verify_restricted_parts(
     owner: winsec::PSID,
     dacl: *mut winsec::ACL,
@@ -643,7 +650,10 @@ fn verify_restricted_parts(
         let allowed = unsafe { winsec::EqualSid(sid, ctx.sid()) }.as_bool()
             || unsafe { winsec::EqualSid(sid, system_sid()) }.as_bool()
             || unsafe { winsec::EqualSid(sid, administrators_sid()) }.as_bool();
-        if !allowed {
+        // Anyone else may read (inherited read-only ACEs are common: sandbox groups,
+        // backup agents); what must not happen is someone else writing.
+        let mask = unsafe { (*ace.cast::<winsec::ACCESS_ALLOWED_ACE>()).Mask };
+        if !allowed && mask & WRITE_BITS != 0 {
             return Err(TrustError::tag("broad_dacl"));
         }
     }

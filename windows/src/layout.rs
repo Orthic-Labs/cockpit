@@ -124,9 +124,11 @@ pub const ORB_STROKE: f32 = 18.0 * DESIGN;
 pub const ORB_OVERHANG: f32 = ORB_STROKE / 2.0;
 /// Gap between the notch and a hover card.
 pub const CARD_GAP: f32 = 6.0;
-/// Folded pill: depth (band included) and length along the edge.
-pub const PILL_DEPTH: f32 = 26.0 * DESIGN;
-pub const PILL_LONG: f32 = 210.0 * DESIGN;
+/// Folded pill: depth (band included) and length along the edge, in logical pixels. It
+/// stands in for the Mac's hardware notch, so it keeps that notch's size (about 200 by 32
+/// points) instead of the design's scaled-down pill, which was an 8-pixel line on screen.
+pub const PILL_DEPTH: f32 = 32.0;
+pub const PILL_LONG: f32 = 200.0;
 pub const BADGE_PERMISSIONS: u32 = 0xFFB340;
 pub const BADGE_UPDATE: u32 = 0xA51D24;
 
