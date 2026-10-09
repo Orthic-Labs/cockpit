@@ -890,6 +890,8 @@ type Endpoint = String;
 #[cfg(any(unix, windows))]
 fn endpoint_from(option: Option<String>) -> Result<Endpoint, CliError> {
     match option {
+        // Endpoint is PathBuf on unix and String on Windows, where this is a no-op.
+        #[allow(clippy::useless_conversion)]
         Some(e) => Ok(e.into()),
         None => {
             #[cfg(unix)]
