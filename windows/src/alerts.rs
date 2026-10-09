@@ -8,8 +8,8 @@
 //! switched on. An archived (stale) reading is never a baseline and the first live reading of
 //! a window only records, so nothing rings at start-up.
 
-use crate::card::{CardContent, Mark, Row};
-use crate::send::{Action, Panel};
+use crate::card::{CardContent, Head, Mark, Row, Tone};
+use crate::send::Panel;
 use crate::settings::PillSettings;
 use crate::usage::{LimitWindow, Usage};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -359,13 +359,11 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
     };
     let mut rows = Vec::new();
     if !status.is_empty() {
-        // A spent limit reads red with the critical dot, as the Mac's red status line does;
-        // the rest keep the bullet (the shared renderer has no green status line).
+        // The Mac's coloured dot: green once the limit refreshed, red while it is spent.
         let spent = alert.notice.is_none() && alert.kind != Kind::Reset;
-        rows.push(if spent {
-            Row::Alert(status)
-        } else {
-            Row::Text(format!("\u{25CF} {status}"))
+        rows.push(Row::Status {
+            text: status,
+            tone: if spent { Tone::Critical } else { Tone::Good },
         });
     }
     if let Some(resets_at) = alert.resets_at {
@@ -375,17 +373,22 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
         )));
     }
     CardContent {
-        // The Mac's close button; a click anywhere on the card puts it away.
-        accessory: Some("\u{d7}".to_string()),
+        // The Mac's bare close at the title's right; a click anywhere on the card puts it
+        // away as well.
+        head: vec![Head::Dismiss],
+        height: Some(ALERT_HEIGHT),
         subtitle: (!subtitle.is_empty()).then_some(subtitle),
-        mark: match (alert.notice.is_some(), provider.as_str()) {
-            (true, _) => Mark::None,
-            (false, "Codex") => Mark::Codex,
-            (false, _) => Mark::Claude,
+        mark: if provider == "Codex" {
+            Mark::Codex
+        } else {
+            Mark::Claude
         },
         ..CardContent::plain(title, rows)
     }
 }
+
+/// The Mac's `UsageResetCard.cardHeight` (210 design px).
+const ALERT_HEIGHT: f32 = 79.0;
 
 // ---- the live model ---------------------------------------------------------------------------
 
@@ -440,11 +443,7 @@ pub fn panel(now: u64) -> Option<Panel> {
             model.current = None;
             None
         }
-        Some((alert, _)) => {
-            let content = card_content(alert, local_offset_secs());
-            let actions = vec![None::<Action>; content.rows.len()];
-            Some(Panel { content, actions })
-        }
+        Some((alert, _)) => Some(Panel::new(card_content(alert, local_offset_secs()))),
         None => None,
     }
 }

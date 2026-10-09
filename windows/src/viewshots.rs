@@ -14,8 +14,9 @@
 
 use crate::alerts;
 use crate::canvas::Canvas;
-use crate::card::{self, CardContent, Mark, Row, Tail};
+use crate::card::{self, CardContent, Lead, Mark, Row, Tail};
 use crate::drive_health::{self, Report};
+use crate::glyphs::{Symbol, Tile};
 use crate::json::{self, Value};
 use crate::layout::{self, Badges, Cell, CellView, Edge};
 use crate::render;
@@ -489,11 +490,7 @@ impl<'a> Scene<'a> {
     fn panel(&self, cell: Cell) -> Panel {
         match cell {
             Cell::Send => send_hover(self.send_cell),
-            Cell::Disk => {
-                let content = card::disks(Some(&self.machine), &self.health);
-                let actions = vec![None; content.rows.len()];
-                Panel { content, actions }
-            }
+            Cell::Disk => Panel::new(card::disks(Some(&self.machine), &self.health)),
             _ => card::panel_for(cell, Some(&self.machine), &self.usage, NOW, None).0,
         }
     }
@@ -524,12 +521,6 @@ impl Rows {
         self.actions.push(action);
     }
 
-    fn note(&mut self, text: &str) {
-        if !text.is_empty() {
-            self.add(Row::Note(text.to_string()), None);
-        }
-    }
-
     fn button(&mut self, label: &str, action: Option<Action>) {
         self.add(pair(label, ""), action);
     }
@@ -542,7 +533,12 @@ impl Rows {
                 rows: self.rows,
                 ..CardContent::default()
             },
-            actions: self.actions,
+            actions: self
+                .actions
+                .into_iter()
+                .map(|action| vec![action])
+                .collect(),
+            head: Vec::new(),
         }
     }
 }
@@ -616,21 +612,52 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     panel
 }
 
-/// A notch card of the send flow (`send::Prompt::panel`): the device list, a transfer, or a
-/// plain note with buttons.
+/// A notch card of the send flow: the fixture's words and buttons as a `send::Prompt`, laid
+/// out by the same `Prompt::panel` the live card uses.
 fn prompt_panel(fixture: &Value) -> Panel {
-    let title = str_of(fixture, "title").unwrap_or("");
-    let detail = str_of(fixture, "detail").unwrap_or("");
-    let (title, subtitle, lead) = send::headline(title, detail);
-    let mut panel = Rows::default();
-    if let Some(row) = lead {
-        panel.add(row, None);
-    }
+    let mut prompt = send::Prompt {
+        title: str_of(fixture, "title").unwrap_or("").to_string(),
+        detail: str_of(fixture, "detail").unwrap_or("").to_string(),
+        problem: str_of(fixture, "style") == Some("problem"),
+        buttons: Vec::new(),
+        view: send::View::Plain,
+        lead: Lead::Tile(match str_of(fixture, "icon") {
+            Some("messages") => Tile::Message,
+            Some("app" | "installer") => Tile::Package,
+            _ => Tile::Folder,
+        }),
+    };
     match fixture.get("send") {
-        Some(send) => match send.get("transfer") {
-            Some(transfer) => transfer_rows(&mut panel, transfer),
-            None => list_rows(&mut panel, send),
-        },
+        Some(send) => {
+            prompt.view = match send.get("transfer") {
+                Some(transfer) => send::View::Transfer {
+                    stage: match str_of(transfer, "state") {
+                        Some("active") => send::Stage::Active,
+                        Some("done") => send::Stage::Done,
+                        Some("problem") => send::Stage::Problem,
+                        _ => send::Stage::Waiting,
+                    },
+                    fraction: num_of(transfer, "fraction").map(|f| f as f32),
+                    can_cancel: flag(transfer, "canCancel"),
+                    symbol: Symbol::from_name(str_of(transfer, "symbol").unwrap_or("")),
+                },
+                None => send::View::List {
+                    rows: arr(send, "rows")
+                        .iter()
+                        .map(|device| {
+                            let alias = str_of(device, "alias").unwrap_or("").to_string();
+                            (
+                                alias.clone(),
+                                alias,
+                                str_of(device, "model").unwrap_or("").to_string(),
+                                Symbol::from_name(str_of(device, "symbol").unwrap_or("")),
+                            )
+                        })
+                        .collect(),
+                    scanning: flag(send, "scanning"),
+                },
+            };
+        }
         None => {
             for key in ["primary", "secondary"] {
                 let Some(button) = fixture.get(key) else {
@@ -644,61 +671,13 @@ fn prompt_panel(fixture: &Value) -> Panel {
                     Some("openLink") => Action::OpenLink,
                     _ => Action::Close,
                 };
-                panel.button(str_of(button, "label").unwrap_or(""), Some(action));
-            }
-            // Live cards: a request has only Accept and Decline; received results add Close.
-            let first = fixture.get("primary").and_then(|b| str_of(b, "choice"));
-            if first.is_some_and(|choice| choice != "install") {
-                panel.button("Close", Some(Action::Close));
+                prompt
+                    .buttons
+                    .push((str_of(button, "label").unwrap_or("").to_string(), action));
             }
         }
     }
-    let mut panel = panel.finish(&title);
-    panel.content.subtitle = subtitle;
-    panel.content.mark = Mark::Send;
-    panel
-}
-
-fn list_rows(panel: &mut Rows, send: &Value) {
-    let devices = arr(send, "rows");
-    if devices.is_empty() {
-        panel.note("Waiting for a device to appear\u{2026}");
-    }
-    for device in devices {
-        let alias = str_of(device, "alias").unwrap_or("");
-        panel.add(
-            pair(alias, str_of(device, "model").unwrap_or("")),
-            Some(Action::SendTo(alias.to_string())),
-        );
-    }
-    let scanning = flag(send, "scanning");
-    panel.button(
-        if scanning {
-            "Looking\u{2026}"
-        } else {
-            "Look again"
-        },
-        (!scanning).then_some(Action::Refresh),
-    );
-    panel.button("Cancel", Some(Action::Close));
-}
-
-fn transfer_rows(panel: &mut Rows, transfer: &Value) {
-    let state = str_of(transfer, "state").unwrap_or("waiting");
-    if matches!(state, "waiting" | "active") {
-        panel.add(
-            Row::Bar {
-                label: String::new(),
-                value: String::new(),
-                fraction: num_of(transfer, "fraction").map(|f| f as f32),
-            },
-            None,
-        );
-    }
-    if flag(transfer, "canCancel") {
-        panel.button("Cancel", Some(Action::Cancel));
-    }
-    panel.button("Close", Some(Action::Close));
+    prompt.panel()
 }
 
 // ---- building a view --------------------------------------------------------------------------
@@ -755,9 +734,7 @@ fn alert_panel(fixture: &Value) -> Panel {
         resets_at: num_of(fixture, "resetsInMinutes").map(|m| NOW + (m * 60.0) as u64),
         notice,
     };
-    let content = alerts::card_content(&alert, 0);
-    let actions = vec![None; content.rows.len()];
-    Panel { content, actions }
+    Panel::new(alerts::card_content(&alert, 0))
 }
 
 /// A card with its tail pointing back at a notch on the right, like the Mac's card shots.
@@ -767,17 +744,16 @@ fn card_canvas(panel: &Panel, text: &mut TextPainter) -> Canvas {
 
 /// A card with its tail toward a notch on `edge`.
 fn card_canvas_at(panel: &Panel, edge: Edge, text: &mut TextPainter) -> Canvas {
-    let clickable: Vec<bool> = panel.actions.iter().map(Option::is_some).collect();
+    let live = panel.live();
     let mut content = panel.content.clone();
     content.tail = Some(Tail { edge, offset: 0 });
-    render::render_card(&content, &clickable, DPI, text)
+    render::render_card(&content, &live, DPI, text, None)
 }
 
 /// The Claude card's session list (what the live notch appends under the limit windows).
 fn add_sessions(panel: &mut Panel, listed: &[Session]) {
     for row in sessions::card_rows(listed, NOW * 1000) {
-        panel.content.rows.push(row);
-        panel.actions.push(None);
+        panel.row(row, None);
     }
 }
 

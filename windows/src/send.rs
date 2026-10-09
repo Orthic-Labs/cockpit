@@ -19,8 +19,9 @@
 
 #![allow(dead_code)]
 
-use crate::card::{CardContent, Mark, Row};
+use crate::card::{Button, CardContent, Head, Hit, Lead, Live, Mark, Row};
 use crate::diag;
+use crate::glyphs::{Symbol, Tile};
 use crate::json::{self, Value};
 use std::collections::HashSet;
 use std::os::windows::process::CommandExt;
@@ -238,11 +239,71 @@ pub enum Action {
 }
 
 /// Content of the hover card or of a notch card. `actions[i]` belongs to `content.rows[i]`
-/// (same length); a row with an action is clickable and should look it, the others are text.
-#[derive(Clone, Debug, PartialEq)]
+/// (one entry per thing on the row that can be pressed: a button row has one per pill, then
+/// one for its close; any other row has one); `head[i]` to `content.head[i]`. A button with
+/// an action is clickable and should look it, the others are text.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Panel {
     pub content: CardContent,
-    pub actions: Vec<Option<Action>>,
+    pub actions: Vec<Vec<Option<Action>>>,
+    pub head: Vec<Option<Action>>,
+}
+
+impl Panel {
+    /// A panel for `content` whose every button is dead; rows and header already in
+    /// `content` are taken as they stand.
+    pub fn new(content: CardContent) -> Self {
+        let actions = content.rows.iter().map(|r| vec![None; r.slots()]).collect();
+        let head = vec![None; content.head.len()];
+        Self {
+            content,
+            actions,
+            head,
+        }
+    }
+
+    /// Appends a row that is one thing to press (or text, with no action).
+    pub fn row(&mut self, row: Row, action: Option<Action>) {
+        self.content.rows.push(row);
+        self.actions.push(vec![action]);
+    }
+
+    /// Appends a button row with the action of each pill, then of its close.
+    pub fn buttons(&mut self, row: Row, actions: Vec<Option<Action>>) {
+        self.content.rows.push(row);
+        self.actions.push(actions);
+    }
+
+    /// Sets the header's round buttons and their actions.
+    pub fn heads(&mut self, heads: Vec<(Head, Option<Action>)>) {
+        self.content.head = heads.iter().map(|(head, _)| *head).collect();
+        self.head = heads.into_iter().map(|(_, action)| action).collect();
+    }
+
+    /// Which buttons have an action, for the renderer.
+    pub fn live(&self) -> Live {
+        Live {
+            head: self.head.iter().map(Option::is_some).collect(),
+            rows: self
+                .actions
+                .iter()
+                .map(|row| row.iter().map(Option::is_some).collect())
+                .collect(),
+        }
+    }
+
+    /// The action of the button under `hit`.
+    pub fn action(&self, hit: Hit) -> Option<Action> {
+        match hit {
+            Hit::Head(index) => self.head.get(index).cloned().flatten(),
+            Hit::Row(row, button) => self
+                .actions
+                .get(row)
+                .and_then(|buttons| buttons.get(button))
+                .cloned()
+                .flatten(),
+        }
+    }
 }
 
 /// The Send ring: an empty track while idle, an arc while bytes move.
@@ -277,7 +338,7 @@ enum Card {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Stage {
+pub enum Stage {
     Waiting,
     Active,
     Done,
@@ -285,28 +346,48 @@ enum Stage {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum View {
+pub enum View {
     /// Detail text and the prompt's own buttons.
     Plain,
-    /// "Send to…": fingerprint, alias and model of each device.
+    /// "Send to…": fingerprint, alias, model and symbol of each device.
     List {
-        rows: Vec<(String, String, String)>,
+        rows: Vec<(String, String, String, Symbol)>,
         scanning: bool,
     },
     Transfer {
         stage: Stage,
         fraction: Option<f32>,
         can_cancel: bool,
+        /// The peer's device symbol, or the outcome's.
+        symbol: Symbol,
     },
 }
 
+/// A card of the send flow, before it is laid out as a `Panel`.
 #[derive(Clone, Debug, PartialEq)]
-struct Prompt {
-    title: String,
-    detail: String,
-    problem: bool,
-    buttons: Vec<(String, Action)>,
-    view: View,
+pub struct Prompt {
+    pub title: String,
+    pub detail: String,
+    pub problem: bool,
+    pub buttons: Vec<(String, Action)>,
+    pub view: View,
+    /// The large icon of a plain card.
+    pub lead: Lead,
+}
+
+/// The symbol on a pill, as the Mac's `DiskImageCard.symbol(for:)` picks it.
+fn pill_symbol(action: &Action) -> Symbol {
+    match action {
+        Action::Accept => Symbol::DownApp,
+        Action::Decline | Action::Cancel => Symbol::Stop,
+        Action::Show => Symbol::Folder,
+        Action::Close => Symbol::Clock,
+        Action::Copy | Action::Paste => Symbol::Copy,
+        Action::OpenLink => Symbol::Compass,
+        Action::Refresh => Symbol::Refresh,
+        Action::SendTo(_) => Symbol::Plane,
+        Action::Installer(choice) => crate::installer::symbol(*choice),
+    }
 }
 
 impl Prompt {
@@ -317,122 +398,113 @@ impl Prompt {
             problem,
             buttons: Vec::new(),
             view: View::Plain,
+            lead: Lead::Tile(Tile::Folder),
         }
     }
 
-    fn panel(&self) -> Panel {
-        let mut rows = Vec::new();
-        let mut actions = Vec::new();
-        let (title, subtitle, lead) = headline(&self.title, &self.detail);
-        if let Some(row) = lead {
-            rows.push(row);
-            actions.push(None);
-        }
-        let mut push = |row: Row, action: Option<Action>| {
-            rows.push(row);
-            actions.push(action);
-        };
-        let button = |label: &str| Row::Pair {
-            label: label.to_string(),
-            value: String::new(),
+    pub fn panel(&self) -> Panel {
+        let mut content = CardContent {
+            title: self.title.clone(),
+            subtitle: (!self.detail.is_empty()).then(|| self.detail.clone()),
+            problem: self.problem,
+            ..CardContent::default()
         };
         match &self.view {
             View::Plain => {
-                for (label, action) in &self.buttons {
-                    push(button(label), Some(action.clone()));
-                }
+                // The Mac's pills, then a round close; on a request the close declines.
+                content.lead = Some(self.lead.clone());
+                content.wide = true;
+                let mut panel = Panel::new(content);
+                let close = if self.buttons.iter().any(|(_, a)| *a == Action::Decline) {
+                    Action::Decline
+                } else {
+                    Action::Close
+                };
+                let pills: Vec<&(String, Action)> = self
+                    .buttons
+                    .iter()
+                    .filter(|(_, action)| *action != Action::Close)
+                    .collect();
+                let mut actions: Vec<Option<Action>> =
+                    pills.iter().map(|(_, a)| Some(a.clone())).collect();
+                actions.push(Some(close));
+                let buttons = pills
+                    .iter()
+                    .map(|(label, action)| Button::new(label.clone(), pill_symbol(action)))
+                    .collect();
+                panel.buttons(
+                    Row::Buttons {
+                        buttons,
+                        close: true,
+                    },
+                    actions,
+                );
+                panel
             }
             View::List {
                 rows: devices,
                 scanning,
             } => {
+                let mut panel = Panel::new(content);
                 if devices.is_empty() {
-                    push(Row::Note("Waiting for a device to appear\u{2026}".into()), None);
+                    panel.row(
+                        Row::Waiting("Waiting for a device to appear\u{2026}".into()),
+                        None,
+                    );
                 }
-                for (fingerprint, alias, model) in devices {
-                    push(
-                        Row::Pair {
-                            label: alias.clone(),
-                            value: model.clone(),
+                for (fingerprint, alias, model, symbol) in devices {
+                    panel.row(
+                        Row::Device {
+                            symbol: *symbol,
+                            alias: alias.clone(),
+                            model: model.clone(),
                         },
                         Some(Action::SendTo(fingerprint.clone())),
                     );
                 }
-                let again = if *scanning {
-                    "Looking\u{2026}"
-                } else {
-                    "Look again"
-                };
-                push(button(again), (!*scanning).then_some(Action::Refresh));
-                push(button("Cancel"), Some(Action::Close));
+                panel.heads(vec![
+                    if *scanning {
+                        (Head::Scanning, None)
+                    } else {
+                        (Head::Refresh, Some(Action::Refresh))
+                    },
+                    (Head::Close, Some(Action::Close)),
+                ]);
+                panel
             }
             View::Transfer {
                 stage,
                 fraction,
                 can_cancel,
+                symbol,
             } => {
-                // The Mac shows a bare bar (indeterminate until the receiver answers) while a
-                // transfer runs, and nothing but the words once it has ended.
+                content.lead = Some(Lead::Disc {
+                    symbol: *symbol,
+                    problem: *stage == Stage::Problem,
+                });
+                let mut panel = Panel::new(content);
+                // A bare bar (indeterminate until the receiver answers) while a transfer
+                // runs, and nothing but the words once it has ended.
                 if matches!(stage, Stage::Waiting | Stage::Active) {
-                    push(
-                        Row::Bar {
-                            label: String::new(),
-                            value: String::new(),
-                            fraction: *fraction,
-                        },
-                        None,
-                    );
+                    panel.row(Row::Progress(*fraction), None);
                 }
+                let mut buttons = Vec::new();
+                let mut actions = Vec::new();
                 if *can_cancel {
-                    push(button("Cancel"), Some(Action::Cancel));
+                    buttons.push(Button::new("Cancel", Symbol::Stop));
+                    actions.push(Some(Action::Cancel));
                 }
-                push(button("Close"), Some(Action::Close));
+                actions.push(Some(Action::Close));
+                panel.buttons(
+                    Row::Buttons {
+                        buttons,
+                        close: true,
+                    },
+                    actions,
+                );
+                panel
             }
         }
-        Panel {
-            content: CardContent {
-                title,
-                subtitle,
-                mark: Mark::Send,
-                rows,
-                ..CardContent::default()
-            },
-            actions,
-        }
-    }
-}
-
-/// Longest title the card's title line holds (the Mac cuts a long one in the middle, so the
-/// name's start and the count at its end both stay readable).
-const TITLE_CHARS: usize = 26;
-/// Longest detail the quiet line under the title holds; a longer one wraps as a paragraph.
-const SUBTITLE_CHARS: usize = 34;
-
-/// `text` cut in the middle with an ellipsis to at most `max` characters.
-pub fn middle_cut(text: &str, max: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max {
-        return text.to_string();
-    }
-    let keep = max.saturating_sub(1);
-    let head = keep.div_ceil(2);
-    let tail = keep - head;
-    let mut out: String = chars[..head].iter().collect();
-    out.push('\u{2026}');
-    out.extend(&chars[chars.len() - tail..]);
-    out
-}
-
-/// A send card's title, the quiet line under it, and the paragraph row that carries a detail
-/// too long for that line.
-pub fn headline(title: &str, detail: &str) -> (String, Option<String>, Option<Row>) {
-    let title = middle_cut(title, TITLE_CHARS);
-    if detail.is_empty() {
-        (title, None, None)
-    } else if detail.chars().count() <= SUBTITLE_CHARS && !detail.contains('\n') {
-        (title, Some(detail.to_string()), None)
-    } else {
-        (title, None, Some(Row::Note(detail.to_string())))
     }
 }
 
@@ -467,6 +539,18 @@ fn kind_of(device: &Device) -> &'static str {
         Some("headless") => "Terminal",
         Some("server") => "Server",
         _ => "Device",
+    }
+}
+
+/// The symbol of a device's type, as the Mac's `NearbySharing.symbol(of:)` picks it.
+fn device_symbol(device: &Device) -> Symbol {
+    match device.device_type.as_deref() {
+        Some("mobile") => Symbol::Phone,
+        Some("desktop") => Symbol::Laptop,
+        Some("web") => Symbol::Globe,
+        Some("headless") => Symbol::Terminal,
+        Some("server") => Symbol::Server,
+        _ => Symbol::Desktop,
     }
 }
 
@@ -795,6 +879,9 @@ impl Model {
         detail.push_str(&format!("Saves to {place}"));
         self.expiry = None;
         let mut prompt = Prompt::plain(title, detail, false);
+        if request.is_message {
+            prompt.lead = Lead::Tile(Tile::Message);
+        }
         prompt.buttons = vec![
             ("Accept".into(), Action::Accept),
             ("Decline".into(), Action::Decline),
@@ -811,6 +898,7 @@ impl Model {
                     message.clone(),
                     false,
                 );
+                prompt.lead = Lead::Tile(Tile::Message);
                 prompt.buttons = vec![("Copy".into(), Action::Copy)];
                 if link_in(&message).is_some() {
                     prompt.buttons.push(("Open".into(), Action::OpenLink));
@@ -833,6 +921,9 @@ impl Model {
                     format!("{} from {}", files_text(files.len()), transfer.peer)
                 };
                 let mut prompt = Prompt::plain(format!("Saved to {place}"), detail, false);
+                if let Some(first) = files.first() {
+                    prompt.lead = Lead::File(first.clone());
+                }
                 prompt.buttons = vec![
                     ("Show".into(), Action::Show),
                     ("Close".into(), Action::Close),
@@ -946,23 +1037,37 @@ impl Model {
 
     fn sending_prompt(&self, transfer: Option<&Transfer>, peer: &Device) -> Prompt {
         let summary = &self.send_summary;
-        let make =
-            |title: String, detail: String, stage: Stage, fraction: Option<f32>, cancel: bool| {
-                Prompt {
-                    title,
-                    detail,
-                    problem: stage == Stage::Problem,
-                    buttons: Vec::new(),
-                    view: View::Transfer {
-                        stage,
-                        fraction,
-                        can_cancel: cancel,
-                    },
-                }
-            };
+        let device = device_symbol(peer);
+        let make = |title: String,
+                    detail: String,
+                    stage: Stage,
+                    fraction: Option<f32>,
+                    cancel: bool,
+                    symbol: Symbol| {
+            Prompt {
+                title,
+                detail,
+                problem: stage == Stage::Problem,
+                buttons: Vec::new(),
+                view: View::Transfer {
+                    stage,
+                    fraction,
+                    can_cancel: cancel,
+                    symbol,
+                },
+                lead: Lead::Tile(Tile::Folder),
+            }
+        };
         let waiting = format!("Waiting for {} to accept…", peer.alias);
         let Some(transfer) = transfer else {
-            return make(waiting, summary.clone(), Stage::Waiting, None, false);
+            return make(
+                waiting,
+                summary.clone(),
+                Stage::Waiting,
+                None,
+                false,
+                device,
+            );
         };
         match transfer.state.as_str() {
             "active" => {
@@ -987,6 +1092,7 @@ impl Model {
                     Stage::Active,
                     Some(transfer.fraction()),
                     true,
+                    device,
                 )
             }
             "done" => {
@@ -1002,6 +1108,7 @@ impl Model {
                     Stage::Done,
                     Some(1.0),
                     false,
+                    Symbol::Check,
                 )
             }
             "declined" => make(
@@ -1010,6 +1117,7 @@ impl Model {
                 Stage::Problem,
                 None,
                 false,
+                Symbol::Hand,
             ),
             "failed" => make(
                 "Couldn't send".into(),
@@ -1017,8 +1125,9 @@ impl Model {
                 Stage::Problem,
                 None,
                 false,
+                Symbol::Warning,
             ),
-            _ => make(waiting, summary.clone(), Stage::Waiting, None, true),
+            _ => make(waiting, summary.clone(), Stage::Waiting, None, true, device),
         }
     }
 
@@ -1075,6 +1184,7 @@ impl Model {
                     d.device_model
                         .clone()
                         .unwrap_or_else(|| kind_of(d).to_string()),
+                    device_symbol(d),
                 )
             })
             .collect();
@@ -1101,6 +1211,7 @@ impl Model {
                 rows,
                 scanning: live.is_some_and(|s| s.scanning),
             },
+            lead: Lead::Tile(Tile::Folder),
         }
     }
 
@@ -1176,10 +1287,9 @@ impl Model {
                 if let Card::Message(message) = self.card.clone() {
                     sys::write_text(&message);
                     // A brief "Copied" in place of the card, then it goes.
-                    self.show(
-                        Prompt::plain("Copied".into(), String::new(), false),
-                        Card::Note,
-                    );
+                    let mut prompt = Prompt::plain("Copied".into(), String::new(), false);
+                    prompt.lead = Lead::Tile(Tile::Message);
+                    self.show(prompt, Card::Note);
                     self.schedule_expiry(1.2);
                 }
             }
@@ -1395,7 +1505,8 @@ impl Model {
                 mark: Mark::Send,
                 ..CardContent::default()
             },
-            actions,
+            actions: actions.into_iter().map(|action| vec![action]).collect(),
+            head: Vec::new(),
         }
     }
 

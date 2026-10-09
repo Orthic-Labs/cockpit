@@ -791,7 +791,11 @@ mod tests {
         let b = notch_bounds(M1, slot(POSITION_DEFAULT));
         assert_eq!((b.top, b.width(), b.height()), (0, w, h));
         // Centred to within a pixel: an odd width rounds the half-pixel either way.
-        assert!((b.left - (1920 - w) / 2).abs() <= 1, "left {} for width {w}", b.left);
+        assert!(
+            (b.left - (1920 - w) / 2).abs() <= 1,
+            "left {} for width {w}",
+            b.left
+        );
     }
 
     #[test]

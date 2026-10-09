@@ -22,8 +22,9 @@
 
 #![allow(dead_code)]
 
-use crate::card::{CardContent, Row};
+use crate::card::{Button, CardContent, Lead, Row, Tone};
 use crate::diag;
+use crate::glyphs::{Symbol, Tile};
 use crate::send::{Action, Panel};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
@@ -75,6 +76,19 @@ pub enum Choice {
     Dismiss,
 }
 
+/// The symbol on a choice's pill, as the Mac's `DiskImageCard.symbol(for:)` picks it.
+pub fn symbol(choice: Choice) -> Symbol {
+    match choice {
+        Choice::Install => Symbol::DownApp,
+        Choice::Replace | Choice::QuitAndUpdate => Symbol::Cycle,
+        Choice::Undo => Symbol::Undo,
+        Choice::OpenInstaller => Symbol::Box,
+        Choice::ShowFile => Symbol::Folder,
+        Choice::Cancel => Symbol::Stop,
+        Choice::Dismiss => Symbol::Clock,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Style {
     Ask,
@@ -90,6 +104,8 @@ struct Card {
     warning: Option<String>,
     style: Style,
     buttons: Vec<(&'static str, Choice)>,
+    /// The file whose icon leads the card (the package tile when there is none).
+    icon: Option<String>,
     /// How long the card stays; `None` keeps it until answered or replaced.
     hold: Option<Duration>,
     expires: Option<Instant>,
@@ -103,9 +119,17 @@ impl Card {
             warning: None,
             style,
             buttons: Vec::new(),
+            icon: None,
             hold: None,
             expires: None,
         }
+    }
+
+    fn icon(mut self, path: &Path) -> Card {
+        if !path.as_os_str().is_empty() {
+            self.icon = Some(path.to_string_lossy().into_owned());
+        }
+        self
     }
 
     fn with(mut self, label: &'static str, choice: Choice) -> Card {
@@ -123,53 +147,52 @@ impl Card {
         self
     }
 
-    /// The card's rows: detail (or the indeterminate bar while working), the warning line,
-    /// then one clickable row per button and a Close on every card that is not working.
+    /// The card as the Mac's `DiskImageCard` builds it: the file's icon, the title, the detail
+    /// (amber on a problem) and the warning under it, then the indeterminate bar while
+    /// working, then one pill per button and a round close. A working card has its buttons
+    /// only while it can be cancelled.
     fn panel(&self) -> Panel {
-        let mut rows = Vec::new();
-        let mut actions = Vec::new();
-        let mut add = |row: Row, choice: Option<Choice>| {
-            rows.push(row);
-            actions.push(choice.map(Action::Installer));
+        let content = CardContent {
+            title: self.title.clone(),
+            subtitle: (!self.detail.is_empty()).then(|| self.detail.clone()),
+            lead: Some(match &self.icon {
+                Some(path) => Lead::File(path.clone()),
+                None => Lead::Tile(Tile::Package),
+            }),
+            wide: true,
+            problem: self.style == Style::Problem,
+            ..CardContent::default()
         };
-        if self.style == Style::Working {
-            add(
-                Row::Bar {
-                    label: self.detail.clone(),
-                    value: String::new(),
-                    fraction: None,
-                },
-                None,
-            );
-        } else if !self.detail.is_empty() {
-            add(Row::Note(self.detail.clone()), None);
-        }
+        let mut panel = Panel::new(content);
         if let Some(warning) = &self.warning {
-            add(Row::Note(warning.clone()), None);
-        }
-        for (label, choice) in &self.buttons {
-            let row = Row::Pair {
-                label: (*label).to_string(),
-                value: String::new(),
+            let tinted = Row::Tinted {
+                text: warning.clone(),
+                tone: Tone::Warning,
             };
-            add(row, Some(*choice));
+            panel.row(tinted, None);
         }
-        if self.style != Style::Working {
-            let close = Row::Pair {
-                label: "Close".to_string(),
-                value: String::new(),
+        if self.style == Style::Working {
+            panel.row(Row::Progress(None), None);
+        }
+        if self.style != Style::Working || !self.buttons.is_empty() {
+            let pills = self
+                .buttons
+                .iter()
+                .map(|(label, choice)| Button::new(*label, symbol(*choice)))
+                .collect();
+            let mut actions: Vec<Option<Action>> = self
+                .buttons
+                .iter()
+                .map(|(_, choice)| Some(Action::Installer(*choice)))
+                .collect();
+            actions.push(Some(Action::Installer(Choice::Dismiss)));
+            let row = Row::Buttons {
+                buttons: pills,
+                close: true,
             };
-            add(close, Some(Choice::Dismiss));
+            panel.buttons(row, actions);
         }
-        Panel {
-            content: CardContent {
-                title: self.title.clone(),
-                accessory: None,
-                rows,
-                ..CardContent::default()
-            },
-            actions,
-        }
+        panel
     }
 }
 
@@ -236,6 +259,7 @@ fn card_ask(item: &Item) -> Card {
         format!("{} Windows may ask for permission.", version_from(item)),
     )
     .with("Install", Choice::Install)
+    .icon(&item.path)
     .held(ASK_HOLD)
 }
 
@@ -247,6 +271,7 @@ fn card_untrusted(item: &Item) -> Card {
     )
     .warned("Its signature could not be verified.")
     .with("Install anyway", Choice::Install)
+    .icon(&item.path)
     .held(ASK_HOLD)
 }
 
@@ -262,6 +287,7 @@ fn card_replace(item: &Item) -> Card {
     };
     Card::new(Style::Ask, item.name.clone(), detail)
         .with("Replace", Choice::Replace)
+        .icon(&item.path)
         .held(ASK_HOLD)
 }
 
@@ -272,6 +298,7 @@ fn card_quit_update(item: &Item) -> Card {
         format!("{} is open. It will be closed, then updated.", item.name),
     )
     .with("Quit & update", Choice::QuitAndUpdate)
+    .icon(&item.path)
     .held(ASK_HOLD)
 }
 
@@ -365,6 +392,7 @@ fn card_installer(item: &Item) -> Card {
     };
     Card::new(Style::Ask, format!("{} Installer", item.name), detail)
         .with("Open installer", Choice::OpenInstaller)
+        .icon(&item.path)
         .held(ASK_HOLD)
 }
 
@@ -486,7 +514,15 @@ fn notify() {
 
 fn show(mut card: Card) {
     card.expires = card.hold.map(|hold| Instant::now() + hold);
-    model().card = Some(card);
+    let mut model = model();
+    // A card that does not name a file leads with the icon of the download in hand.
+    if card.icon.is_none()
+        && let Some(item) = &model.ctx.item
+    {
+        card = card.icon(&item.path);
+    }
+    model.card = Some(card);
+    drop(model);
     notify();
 }
 

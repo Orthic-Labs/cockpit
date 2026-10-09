@@ -260,6 +260,69 @@ impl Canvas {
         }
     }
 
+    /// Composites a premultiplied `0xAARRGGBB` image (`source_width` x `source_height`),
+    /// scaled bilinearly to the rectangle `(x, y, w, h)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_image(
+        &mut self,
+        source: &[u32],
+        (source_width, source_height): (usize, usize),
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) {
+        if source_width == 0 || source_height == 0 || source.len() < source_width * source_height {
+            return;
+        }
+        let x0 = x.floor().max(0.0) as usize;
+        let y0 = y.floor().max(0.0) as usize;
+        let x1 = ((x + w).ceil().max(0.0) as usize).min(self.width);
+        let y1 = ((y + h).ceil().max(0.0) as usize).min(self.height);
+        let at = |column: usize, row: usize| -> [f32; 4] {
+            let pixel = source[row * source_width + column];
+            [
+                ((pixel >> 24) & 0xFF) as f32,
+                ((pixel >> 16) & 0xFF) as f32,
+                ((pixel >> 8) & 0xFF) as f32,
+                (pixel & 0xFF) as f32,
+            ]
+        };
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let u = ((px as f32 + 0.5 - x) / w * source_width as f32 - 0.5)
+                    .clamp(0.0, (source_width - 1) as f32);
+                let v = ((py as f32 + 0.5 - y) / h * source_height as f32 - 0.5)
+                    .clamp(0.0, (source_height - 1) as f32);
+                let (cu, cv) = (u.floor() as usize, v.floor() as usize);
+                let (nu, nv) = (
+                    (cu + 1).min(source_width - 1),
+                    (cv + 1).min(source_height - 1),
+                );
+                let (fu, fv) = (u - cu as f32, v - cv as f32);
+                let (a, b, c, d) = (at(cu, cv), at(nu, cv), at(cu, nv), at(nu, nv));
+                let mut out = [0.0f32; 4];
+                for (i, slot) in out.iter_mut().enumerate() {
+                    let top = a[i] + (b[i] - a[i]) * fu;
+                    let bottom = c[i] + (d[i] - c[i]) * fu;
+                    *slot = top + (bottom - top) * fv;
+                }
+                // Source-over of a premultiplied pixel.
+                let index = py * self.width + px;
+                let dst = self.pixels[index];
+                let inv = 1.0 - out[0] / 255.0;
+                let mix = |source: f32, shift: u32| -> u32 {
+                    let d = ((dst >> shift) & 0xFF) as f32;
+                    (source + d * inv).round().clamp(0.0, 255.0) as u32
+                };
+                self.pixels[index] = (mix(out[0], 24) << 24)
+                    | (mix(out[1], 16) << 16)
+                    | (mix(out[2], 8) << 8)
+                    | mix(out[3], 0);
+            }
+        }
+    }
+
     /// Composites a text mask with its top-left corner at `(x, y)`.
     pub fn draw_mask(&mut self, mask: &Mask, x: i32, y: i32, color: Rgb, alpha: f32) {
         for row in 0..mask.height {

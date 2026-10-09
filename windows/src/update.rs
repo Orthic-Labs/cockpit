@@ -14,8 +14,9 @@
 //! State is a global model like `send.rs`: the worker threads change it and post
 //! `MSG_UPDATE` to the controller window, which redraws the card on the UI thread.
 
-use crate::card::{CardContent, Row};
+use crate::card::{Button, CardContent, Hit, Lead, Row};
 use crate::diag;
+use crate::glyphs::{Symbol, Tile};
 use crate::http;
 use crate::json::{self, Value};
 use crate::raii::hwnd_from_key;
@@ -45,8 +46,6 @@ const TIMEOUT_MS: i32 = 20_000;
 const DOWNLOAD_TIMEOUT_MS: i32 = 60_000;
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
 const NOTES_CHARS: usize = 200;
-const NOTES_LINE: usize = 38;
-const NOTES_LINES: usize = 3;
 const DEFAULT_NOTES: &str = "A new version of Pulse is ready to install.";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -135,35 +134,9 @@ pub fn summary(notes: &str) -> String {
     joined.chars().take(NOTES_CHARS).collect()
 }
 
-/// `text` broken at spaces into at most `NOTES_LINES` lines, the last ending in an ellipsis
-/// when the rest does not fit.
-fn wrap(text: &str) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut cut = false;
-    for word in text.split_whitespace() {
-        let fits = lines
-            .last()
-            .is_some_and(|line| line.chars().count() + 1 + word.chars().count() <= NOTES_LINE);
-        if fits {
-            if let Some(line) = lines.last_mut() {
-                line.push(' ');
-                line.push_str(word);
-            }
-        } else if lines.len() == NOTES_LINES {
-            cut = true;
-            break;
-        } else {
-            lines.push(word.to_string());
-        }
-    }
-    if cut && let Some(last) = lines.last_mut() {
-        last.push('\u{2026}');
-    }
-    lines
-}
-
-/// The card for `version` in `phase`. In `Available` the buttons are rows with an action:
-/// `Accept` is Update and `Close` is Later.
+/// The card for `version` in `phase`, as the Mac's `UpdateCard` builds it: the app's icon,
+/// the title and a line, then Update, Later and a round close, or the progress bar once the
+/// install is under way. `Accept` is Update; `Close` is Later and the close.
 pub fn card(version: &str, notes: &str, phase: Phase) -> Panel {
     let installing = phase != Phase::Available;
     let title = if installing {
@@ -171,16 +144,14 @@ pub fn card(version: &str, notes: &str, phase: Phase) -> Panel {
     } else {
         format!("Pulse {version} is available")
     };
-    let mut rows = Vec::new();
-    let mut actions: Vec<Option<Action>> = Vec::new();
-    let mut push = |row: Row, action: Option<Action>| {
-        rows.push(row);
-        actions.push(action);
+    let mut content = CardContent {
+        title,
+        lead: Some(Lead::Tile(Tile::App)),
+        wide: true,
+        ..CardContent::default()
     };
-    let button = |label: &str| Row::Pair {
-        label: label.to_string(),
-        value: String::new(),
-    };
+    // The bar fills with the download (85%), then preparing, then installing.
+    let mut share = None;
     match phase {
         Phase::Available => {
             let text = if notes.trim().is_empty() {
@@ -188,58 +159,73 @@ pub fn card(version: &str, notes: &str, phase: Phase) -> Panel {
             } else {
                 summary(notes)
             };
-            for line in wrap(&text) {
-                push(Row::Note(line), None);
-            }
-            push(button("Update"), Some(Action::Accept));
-            push(button("Later"), Some(Action::Close));
+            content.subtitle = Some(text);
         }
-        _ => {
-            // The bar fills with the download (85%), then preparing, then installing.
-            let (label, fraction) = match phase {
-                Phase::Downloading(None) => ("Downloading\u{2026}".to_string(), 0.0),
-                Phase::Downloading(Some(share)) => (
-                    format!(
-                        "Downloading\u{2026} {}%",
-                        (share.clamp(0.0, 1.0) * 100.0).round() as u32
-                    ),
-                    share.clamp(0.0, 1.0) * 0.85,
-                ),
-                Phase::Preparing => ("Preparing\u{2026}".to_string(), 0.9),
-                _ => ("Installing\u{2026}".to_string(), 1.0),
+        Phase::Downloading(None) => {
+            content.subtitle = Some("Downloading\u{2026}".to_string());
+            share = Some(0.0);
+        }
+        Phase::Downloading(Some(done)) => {
+            let done = done.clamp(0.0, 1.0);
+            content.subtitle = Some(format!(
+                "Downloading\u{2026} {}%",
+                (done * 100.0).round() as u32
+            ));
+            share = Some(done * 0.85);
+        }
+        Phase::Preparing => {
+            content.subtitle = Some("Preparing\u{2026}".to_string());
+            share = Some(0.9);
+        }
+        Phase::Installing => {
+            content.subtitle = Some("Installing\u{2026}".to_string());
+            share = Some(1.0);
+        }
+    }
+    let mut panel = Panel::new(content);
+    match share {
+        Some(fraction) => panel.row(Row::Progress(Some(fraction)), None),
+        None => {
+            let buttons = vec![
+                Button::new("Update", Symbol::DownCircle),
+                Button::new("Later", Symbol::Clock),
+            ];
+            let row = Row::Buttons {
+                buttons,
+                close: true,
             };
-            push(
-                Row::Bar {
-                    label,
-                    value: String::new(),
-                    fraction: Some(fraction),
-                },
-                None,
+            panel.buttons(
+                row,
+                vec![
+                    Some(Action::Accept),
+                    Some(Action::Close),
+                    Some(Action::Close),
+                ],
             );
         }
     }
-    Panel {
-        content: CardContent {
-            title,
-            accessory: None,
-            rows,
-            ..CardContent::default()
-        },
-        actions,
-    }
+    panel
 }
 
-/// The card to show now, if the user has an update offered or under way.
+/// The card to show now, if the user has an update offered or under way. Live, it leads with
+/// this program's own icon.
 pub fn panel() -> Option<Panel> {
     let st = state();
     let phase = st.prompt?;
     let release = st.release.as_ref()?;
-    Some(card(&release.version, &release.notes, phase))
+    let mut panel = card(&release.version, &release.notes, phase);
+    if let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.to_str().map(str::to_string))
+    {
+        panel.content.lead = Some(Lead::File(exe));
+    }
+    Some(panel)
 }
 
-/// A click on row `row` of `panel()`.
-pub fn click(row: usize) {
-    let action = panel().and_then(|p| p.actions.get(row).cloned().flatten());
+/// A click on `hit` of `panel()`.
+pub fn click(hit: Hit) {
+    let action = panel().and_then(|p| p.action(hit));
     match action {
         Some(Action::Accept) => install(),
         Some(Action::Close) => {

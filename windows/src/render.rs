@@ -3,8 +3,9 @@
 //! surface. Pure of window state: callers pass data and get pixels.
 
 use crate::canvas::{Canvas, Mask};
-use crate::card::{CardContent, Dot, Mark, Row};
-use crate::glyphs::{self, Glyph};
+use crate::card::{Button, CardContent, Dot, Head, Hit, Lead, Live, Mark, Row, Tone};
+use crate::fileicon;
+use crate::glyphs::{self, Glyph, Symbol, Tile};
 use crate::layout::{
     self, Activity, Badges, CellView, Edge, INK_PRIMARY, INK_SECONDARY, PROGRESS_STROKE, RING,
     RING_TRACK_ALPHA, TRACK_STROKE, WEEKLY_RADIUS, WEEKLY_STROKE,
@@ -465,29 +466,53 @@ const VALUE_GAP: f32 = 7.5;
 const TRACK_ALPHA: f32 = 0.176;
 const RULE_ALPHA: f32 = 0.188;
 
-/// Height in DIPs of `row` under `metrics`.
-fn row_height(row: &Row, m: Metrics) -> f32 {
-    let wrapped = |text: &str, width: usize| {
-        (wrap(text, width).len().max(1) - 1) as f32 * WRAP_PITCH + m.line
-    };
-    match row {
-        Row::Pair { value, .. } if value.is_empty() => BUTTON_HEIGHT,
-        Row::Pair { .. } => m.line,
-        Row::Bar { .. } => m.line + LABEL_TO_BAR + BAR_HEIGHT,
-        Row::Meter { fraction, .. } => {
-            let bar = if fraction.is_some() {
-                LABEL_TO_BAR + BAR_HEIGHT
-            } else {
-                0.0
-            };
-            m.line + bar + BAR_TO_USED + m.line
-        }
-        Row::Note(text) | Row::Text(text) => wrapped(text, WRAP_CHARS),
-        Row::Alert(text) => wrapped(text, WRAP_CHARS - 4),
-        Row::Rule => HAIRLINE,
-        Row::Session { .. } => 2.0 * m.line + SESSION_GAP,
-    }
-}
+/// The wide card of the disk image and update cards (820 design px).
+const WIDE_WIDTH: f32 = 308.3;
+/// The banner card's fixed height (262 design px).
+const BANNER_HEIGHT: f32 = 98.5;
+/// The banner icon's frame (136 design px) and the icon drawn in it.
+const LEAD_FRAME: f32 = 51.1;
+const LEAD_SIZE: f32 = 43.0;
+const LEAD_GAP: f32 = 11.3;
+/// Between a banner's title, detail and warning lines.
+const BANNER_GAP: f32 = 2.3;
+/// Least space between a banner's text and its bottom stack.
+const BANNER_SPACER: f32 = 5.3;
+const PROGRESS_HEIGHT: f32 = 4.0;
+const PROGRESS_ABOVE_BUTTONS: f32 = 5.3;
+const PROGRESS_ALONE: f32 = 7.5;
+const PROGRESS_TRACK_ALPHA: f32 = 0.2;
+/// The fill of an indeterminate bar in a still, and its width while it moves.
+const INDETERMINATE: f32 = 0.35;
+const STRIPE: f32 = 0.3;
+const PILL_HEIGHT: f32 = 24.8;
+const PILL_PAD: f32 = 10.5;
+const PILL_GAP: f32 = 5.3;
+const PILL_INNER: f32 = 3.8;
+const PILL_SYMBOL: f32 = 13.0;
+const PILL_ALPHA: f32 = 0.14;
+/// The cross of a round close button.
+const X_SIZE: f32 = 15.0;
+const HEAD_HEIGHT: f32 = 28.6;
+const HEAD_GAP: f32 = 5.3;
+const DISMISS_BOX: f32 = 16.0;
+const DEVICE_HEIGHT: f32 = 31.6;
+const DEVICE_GAP: f32 = 3.8;
+const DEVICE_RADIUS: f32 = 12.0;
+const DEVICE_PAD: f32 = 9.8;
+const DEVICE_ICON_FRAME: f32 = 21.0;
+const DEVICE_ICON: f32 = 14.0;
+const DEVICE_TEXT_GAP: f32 = 8.3;
+const DEVICE_ALPHA: f32 = 0.10;
+/// Below an alert's status line.
+const STATUS_TO_NEXT: f32 = 3.0;
+const STATUS_TEXT_GAP: f32 = 4.5;
+const SPINNER: f32 = 14.0;
+const SPINNER_GAP: f32 = 6.0;
+const SPINNER_STROKE: f32 = 2.0;
+const DISC_ALPHA: f32 = 0.10;
+const DISC_SYMBOL: f32 = 26.0;
+const DEVICE_NAME_GAP: f32 = 0.8;
 
 /// Greedy word wrap at `width` characters; a longer word keeps its own line.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -507,6 +532,203 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Width in DIPs a string would occupy.
+fn dip_width(text: &mut TextPainter, value: &str, size: f32, bold: bool, s: f32) -> f32 {
+    text_width(text, value, size, bold, s) as f32 / s
+}
+
+/// `value` cut at the end with an ellipsis to at most `max` DIPs.
+fn fit_tail(
+    text: &mut TextPainter,
+    value: &str,
+    (size, bold): (f32, bool),
+    max: f32,
+    s: f32,
+) -> String {
+    if dip_width(text, value, size, bold, s) <= max {
+        return value.to_string();
+    }
+    let mut kept: Vec<char> = value.chars().collect();
+    while !kept.is_empty() {
+        kept.pop();
+        let cut = kept.iter().collect::<String>() + "\u{2026}";
+        if dip_width(text, &cut, size, bold, s) <= max {
+            return cut;
+        }
+    }
+    String::new()
+}
+
+/// `value` cut in the middle with an ellipsis to at most `max` DIPs, so the start of a name
+/// and the count or extension at its end both stay readable.
+fn fit_middle(
+    text: &mut TextPainter,
+    value: &str,
+    (size, bold): (f32, bool),
+    max: f32,
+    s: f32,
+) -> String {
+    if dip_width(text, value, size, bold, s) <= max {
+        return value.to_string();
+    }
+    let chars: Vec<char> = value.chars().collect();
+    for keep in (0..chars.len()).rev() {
+        let head = keep.div_ceil(2);
+        let tail = keep - head;
+        let mut cut: String = chars[..head].iter().collect();
+        cut.push('\u{2026}');
+        cut.extend(&chars[chars.len() - tail..]);
+        if dip_width(text, &cut, size, bold, s) <= max {
+            return cut;
+        }
+    }
+    "\u{2026}".to_string()
+}
+
+/// Greedy word wrap of `value` at body size to `max` DIPs, at most `lines` lines: what does
+/// not fit on the last one is cut with an ellipsis (the Mac's `lineLimit(2)`).
+fn wrap_measured(
+    text: &mut TextPainter,
+    value: &str,
+    max: f32,
+    lines: usize,
+    s: f32,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut words = value.split_whitespace();
+    while let Some(word) = words.next() {
+        let fits = out.last().is_some_and(|line| {
+            dip_width(text, &format!("{line} {word}"), BODY_SIZE, false, s) <= max
+        });
+        if fits {
+            if let Some(line) = out.last_mut() {
+                line.push(' ');
+                line.push_str(word);
+            }
+        } else if out.len() == lines {
+            let mut rest = out.pop().unwrap_or_default();
+            rest.push(' ');
+            rest.push_str(word);
+            for more in words.by_ref() {
+                rest.push(' ');
+                rest.push_str(more);
+            }
+            out.push(fit_tail(text, &rest, (BODY_SIZE, false), max, s));
+            break;
+        } else {
+            out.push(word.to_string());
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    for line in &mut out {
+        if dip_width(text, line, BODY_SIZE, false, s) > max {
+            *line = fit_tail(text, line, (BODY_SIZE, false), max, s);
+        }
+    }
+    out
+}
+
+/// Where one row sits, in DIPs from the card's top-left, and what its drawing needs measured.
+#[derive(Clone, Default)]
+struct Placed {
+    top: f32,
+    height: f32,
+    /// The lines of a wrapped text row.
+    lines: Vec<String>,
+    /// Left edge and width of each button of a button row (the close is the last, a circle).
+    spans: Vec<(f32, f32)>,
+}
+
+/// A card laid out: its size and where everything goes, from one measuring of the text.
+struct Plan {
+    width: f32,
+    height: f32,
+    /// Left edge of a banner's text column.
+    text_left: f32,
+    /// A banner's wrapped detail lines.
+    detail: Vec<String>,
+    rows: Vec<Placed>,
+    /// Each header button's rectangle `(x, y, w, h)`.
+    head: Vec<(f32, f32, f32, f32)>,
+}
+
+/// Left edge and width of each pill of a button row from `left`, then the close circle.
+fn button_spans(
+    buttons: &[Button],
+    close: bool,
+    left: f32,
+    text: &mut TextPainter,
+    s: f32,
+) -> Vec<(f32, f32)> {
+    let mut spans = Vec::new();
+    let mut x = left;
+    for button in buttons {
+        let label = dip_width(text, &button.label, BODY_SIZE, true, s);
+        let symbol = if button.symbol.is_some() {
+            PILL_SYMBOL + PILL_INNER
+        } else {
+            0.0
+        };
+        let width = 2.0 * PILL_PAD + symbol + label;
+        spans.push((x, width));
+        x += width + PILL_GAP;
+    }
+    if close {
+        spans.push((x, PILL_HEIGHT));
+    }
+    spans
+}
+
+/// Height in DIPs of the lines of a wrapped paragraph.
+fn lines_height(count: usize, m: Metrics) -> f32 {
+    (count.max(1) - 1) as f32 * WRAP_PITCH + m.line
+}
+
+/// Height, wrapped lines and button spans of `row` in a plain (non-banner) card.
+fn flow_row(
+    row: &Row,
+    m: Metrics,
+    text: &mut TextPainter,
+    s: f32,
+) -> (f32, Vec<String>, Vec<(f32, f32)>) {
+    let paragraph = |value: &str, width: usize| {
+        let lines = wrap(value, width);
+        (lines_height(lines.len(), m), lines, Vec::new())
+    };
+    match row {
+        Row::Pair { value, .. } if value.is_empty() => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
+        Row::Pair { .. } | Row::Status { .. } => (m.line, Vec::new(), Vec::new()),
+        Row::Bar { .. } => (m.line + LABEL_TO_BAR + BAR_HEIGHT, Vec::new(), Vec::new()),
+        Row::Meter { fraction, .. } => {
+            let bar = if fraction.is_some() {
+                LABEL_TO_BAR + BAR_HEIGHT
+            } else {
+                0.0
+            };
+            (m.line + bar + BAR_TO_USED + m.line, Vec::new(), Vec::new())
+        }
+        Row::Note(value) | Row::Text(value) | Row::Tinted { text: value, .. } => {
+            paragraph(value, WRAP_CHARS)
+        }
+        Row::Alert(value) => paragraph(value, WRAP_CHARS - 4),
+        Row::Rule => (HAIRLINE, Vec::new(), Vec::new()),
+        Row::Session { .. } => (2.0 * m.line + SESSION_GAP, Vec::new(), Vec::new()),
+        Row::Buttons { buttons, close } => (
+            PILL_HEIGHT,
+            Vec::new(),
+            button_spans(buttons, *close, CARD_PAD, text, s),
+        ),
+        Row::Progress(_) => (PROGRESS_HEIGHT, Vec::new(), Vec::new()),
+        Row::Device { .. } | Row::Waiting(_) => (DEVICE_HEIGHT, Vec::new(), Vec::new()),
+    }
+}
+
+fn round_head(content: &CardContent) -> bool {
+    content.head.iter().any(|head| *head != Head::Dismiss)
+}
+
 fn header_height(content: &CardContent, m: Metrics) -> f32 {
     let text = m.title
         + if content.subtitle.is_some() {
@@ -514,47 +736,152 @@ fn header_height(content: &CardContent, m: Metrics) -> f32 {
         } else {
             0.0
         };
-    if content.mark == Mark::None {
+    let text = if content.mark == Mark::None {
         text
     } else {
         text.max(MARK_SIZE)
+    };
+    if round_head(content) {
+        text.max(HEAD_HEIGHT)
+    } else {
+        text
     }
 }
 
-/// Top and height of each row, in DIPs from the card's top edge.
-fn row_tops(content: &CardContent, m: Metrics) -> Vec<(f32, f32)> {
-    let mut y = CARD_PAD + header_height(content, m);
-    content
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            y += if index == 0 {
-                HEADER_TO_BLOCK
-            } else {
-                BLOCK_GAP
-            };
-            let top = y;
-            let height = row_height(row, m);
-            y += height;
-            (top, height)
-        })
-        .collect()
+/// Each header button's rectangle: round ones centred on the header's height, a bare dismiss
+/// on the title line, right to left from the card's padding.
+fn head_rects(content: &CardContent, width: f32, m: Metrics) -> Vec<(f32, f32, f32, f32)> {
+    let header = header_height(content, m);
+    let mut rects = vec![(0.0, 0.0, 0.0, 0.0); content.head.len()];
+    let mut right = width - CARD_PAD;
+    for (index, head) in content.head.iter().enumerate().rev() {
+        let (side, centre) = if *head == Head::Dismiss {
+            (DISMISS_BOX, CARD_PAD + m.title / 2.0)
+        } else {
+            (PILL_HEIGHT, CARD_PAD + header / 2.0)
+        };
+        rects[index] = (right - side, centre - side / 2.0, side, side);
+        right -= side + PILL_GAP;
+    }
+    rects
 }
 
-fn card_height(content: &CardContent) -> f32 {
-    let header = CARD_PAD + header_height(content, BUDGET);
-    let bottom = row_tops(content, BUDGET)
-        .last()
-        .map_or(header, |(top, height)| top + height);
-    bottom + CARD_PAD
+/// A plain card: header, then rows top to bottom.
+fn flow_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32) -> Plan {
+    let width = if content.wide { WIDE_WIDTH } else { CARD_WIDTH };
+    let round = round_head(content);
+    let mut y = CARD_PAD + header_height(content, m);
+    let mut rows = Vec::new();
+    let mut previous: Option<&Row> = None;
+    for row in &content.rows {
+        y += match (previous, row) {
+            (None, _) if round => HEAD_GAP,
+            (None, _) => HEADER_TO_BLOCK,
+            (Some(Row::Status { .. }), _) => STATUS_TO_NEXT,
+            (Some(Row::Device { .. } | Row::Waiting(_)), Row::Device { .. }) => DEVICE_GAP,
+            _ => BLOCK_GAP,
+        };
+        let (height, lines, spans) = flow_row(row, m, text, s);
+        rows.push(Placed {
+            top: y,
+            height,
+            lines,
+            spans,
+        });
+        y += height;
+        previous = Some(row);
+    }
+    Plan {
+        width,
+        height: content.height.unwrap_or(y + CARD_PAD),
+        text_left: CARD_PAD,
+        detail: Vec::new(),
+        rows,
+        head: head_rects(content, width, m),
+    }
+}
+
+/// A banner card (the Mac's disk image, update and transfer cards): the icon at the left, the
+/// title, detail and caveat lines of the text column from the top, the bar and the buttons
+/// from the bottom, the card at least as tall as the Mac's fixed height.
+fn banner_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32) -> Plan {
+    let width = if content.wide { WIDE_WIDTH } else { CARD_WIDTH };
+    let text_left = CARD_PAD + LEAD_FRAME + LEAD_GAP;
+    let room = width - CARD_PAD - text_left;
+    let detail = content
+        .subtitle
+        .as_deref()
+        .map(|value| wrap_measured(text, value, room, 2, s))
+        .unwrap_or_default();
+    let mut y = CARD_PAD + m.title;
+    if !detail.is_empty() {
+        y += BANNER_GAP + lines_height(detail.len(), m);
+    }
+    let mut rows = Vec::new();
+    for row in &content.rows {
+        let mut placed = Placed::default();
+        if let Row::Tinted { text: value, .. } | Row::Note(value) | Row::Text(value) = row {
+            placed.lines = wrap_measured(text, value, room, 2, s);
+            y += BANNER_GAP;
+            placed.top = y;
+            placed.height = lines_height(placed.lines.len(), m);
+            y += placed.height;
+        }
+        rows.push(placed);
+    }
+    // The bottom stack, measured up from the card's content bottom: (row, top above it).
+    let mut up = 0.0f32;
+    let mut stack: Vec<(usize, f32, f32)> = Vec::new();
+    for (index, row) in content.rows.iter().enumerate().rev() {
+        match row {
+            Row::Buttons { .. } => {
+                up += PILL_HEIGHT;
+                stack.push((index, up, PILL_HEIGHT));
+            }
+            Row::Progress(_) => {
+                up += if up == 0.0 {
+                    PROGRESS_ALONE
+                } else {
+                    PROGRESS_ABOVE_BUTTONS
+                } + PROGRESS_HEIGHT;
+                stack.push((index, up, PROGRESS_HEIGHT));
+            }
+            _ => {}
+        }
+    }
+    let needed = y + if up > 0.0 { BANNER_SPACER + up } else { 0.0 } + CARD_PAD;
+    let height = content.height.unwrap_or(BANNER_HEIGHT).max(needed);
+    for (index, above, row_height) in stack {
+        rows[index].top = height - CARD_PAD - above;
+        rows[index].height = row_height;
+        if let Row::Buttons { buttons, close } = &content.rows[index] {
+            rows[index].spans = button_spans(buttons, *close, text_left, text, s);
+        }
+    }
+    Plan {
+        width,
+        height,
+        text_left,
+        detail,
+        rows,
+        head: Vec::new(),
+    }
+}
+
+fn plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32) -> Plan {
+    if content.lead.is_some() {
+        banner_plan(content, m, text, s)
+    } else {
+        flow_plan(content, m, text, s)
+    }
 }
 
 /// The card's rectangle in the window, device pixels: `(x, y, width, height)`; the window is
 /// larger by the tail on the side facing the notch.
-fn card_rect(content: &CardContent, s: f32) -> (i32, i32, i32, i32) {
+fn card_rect(content: &CardContent, text: &mut TextPainter, s: f32) -> (i32, i32, i32, i32) {
+    let laid = plan(content, BUDGET, text, s);
     let tail = px(TAIL_LENGTH, s);
-    let (width, height) = (px(CARD_WIDTH, s), px(card_height(content), s));
+    let (width, height) = (px(laid.width, s), px(laid.height, s));
     match content.tail.map(|t| t.edge) {
         Some(Edge::Top) => (0, tail, width, height),
         Some(Edge::Left) => (tail, 0, width, height),
@@ -562,25 +889,68 @@ fn card_rect(content: &CardContent, s: f32) -> (i32, i32, i32, i32) {
     }
 }
 
-/// Index of the row under `y` (window-local device pixels), if any.
-pub fn row_at(content: &CardContent, dpi: u32, y: i32) -> Option<usize> {
-    let s = layout::scale(dpi);
-    let y = (y - card_rect(content, s).1) as f32 / s;
-    row_tops(content, DRAWN)
-        .into_iter()
-        .position(|(top, height)| y >= top - BLOCK_GAP / 2.0 && y < top + height + BLOCK_GAP / 2.0)
-}
-
-/// Size in device pixels of the card window for `content`: the card plus its tail.
-pub fn card_size(content: &CardContent, dpi: u32) -> (i32, i32) {
-    let s = layout::scale(dpi);
-    let (x, y, width, height) = card_rect(content, s);
+/// The window around `rect`: the card plus its tail.
+fn window_size(content: &CardContent, rect: (i32, i32, i32, i32), s: f32) -> (i32, i32) {
+    let (x, y, width, height) = rect;
     let tail = px(TAIL_LENGTH, s);
     match content.tail.map(|t| t.edge) {
         Some(Edge::Left | Edge::Right) => (width + tail, height),
         Some(Edge::Top | Edge::Bottom) => (width, height + tail),
         None => (x + width, y + height),
     }
+}
+
+/// Size in device pixels of the card window for `content`: the card plus its tail.
+pub fn card_size(content: &CardContent, dpi: u32, text: &mut TextPainter) -> (i32, i32) {
+    let s = layout::scale(dpi);
+    window_size(content, card_rect(content, text, s), s)
+}
+
+/// What is under `(x, y)` (window-local device pixels): a header button, a pill or round
+/// button of a button row, or a row that is one thing to press (a text row is not).
+pub fn hit_at(
+    content: &CardContent,
+    dpi: u32,
+    text: &mut TextPainter,
+    (x, y): (i32, i32),
+) -> Option<Hit> {
+    let s = layout::scale(dpi);
+    let (ox, oy, _, _) = card_rect(content, text, s);
+    let (x, y) = ((x - ox) as f32 / s, (y - oy) as f32 / s);
+    let laid = plan(content, DRAWN, text, s);
+    let inside = |(rx, ry, rw, rh): (f32, f32, f32, f32)| {
+        x >= rx - 2.0 && x < rx + rw + 2.0 && y >= ry - 2.0 && y < ry + rh + 2.0
+    };
+    if let Some(index) = laid.head.iter().position(|rect| inside(*rect)) {
+        return Some(Hit::Head(index));
+    }
+    for (index, (row, placed)) in content.rows.iter().zip(&laid.rows).enumerate() {
+        if let Row::Buttons { .. } = row {
+            let found = placed
+                .spans
+                .iter()
+                .position(|&(bx, bw)| inside((bx, placed.top, bw, placed.height)));
+            if let Some(button) = found {
+                return Some(Hit::Row(index, button));
+            }
+            continue;
+        }
+        let band =
+            y >= placed.top - BLOCK_GAP / 2.0 && y < placed.top + placed.height + BLOCK_GAP / 2.0;
+        if band && content.lead.is_none() {
+            return Some(Hit::Row(index, 0));
+        }
+    }
+    None
+}
+
+/// The card moves (a spinner or a travelling bar), so the owner should redraw it on a timer.
+pub fn animated(content: &CardContent) -> bool {
+    content.head.contains(&Head::Scanning)
+        || content
+            .rows
+            .iter()
+            .any(|row| matches!(row, Row::Progress(None) | Row::Waiting(_)))
 }
 
 /// The tail's seven control points `(tip, a, b, a shoulder, a tip, b tip, b shoulder)` inside
@@ -666,8 +1036,8 @@ fn polygon_coverage(poly: &[(f32, f32)], (px, py): (f32, f32)) -> f32 {
 }
 
 /// The card and its tail as one black silhouette.
-fn draw_silhouette(canvas: &mut Canvas, content: &CardContent, s: f32) {
-    let (x, y, width, height) = card_rect(content, s);
+fn draw_silhouette(canvas: &mut Canvas, content: &CardContent, rect: (i32, i32, i32, i32), s: f32) {
+    let (x, y, width, height) = rect;
     canvas.fill_round_rect(
         x as f32,
         y as f32,
@@ -746,6 +1116,8 @@ struct Pen<'a> {
     canvas: &'a mut Canvas,
     text: &'a mut TextPainter,
     s: f32,
+    /// Where an animation is in its loop (0..1); `None` draws a still.
+    phase: Option<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -866,213 +1238,589 @@ impl Pen<'_> {
 
     /// The icon in front of a card's title.
     fn mark(&mut self, mark: Mark, (x, y): (f32, f32)) {
-        // HOOK(glyphs.rs): the vector icons (Claude, Codex, chip, drive, send) are drawn here
-        // once that module lands, into the `MARK_SIZE` square at `(x, y)`. Until then the
-        // glyph's text abbreviation stands in.
-        let abbreviation = match mark {
+        let glyph = match mark {
             Mark::None => return,
-            Mark::Claude => "Cl",
-            Mark::Codex => "Cx",
-            Mark::System => "CPU",
-            Mark::Disks => "DSK",
-            Mark::Send => "Snd",
+            Mark::Claude => Glyph::Claude,
+            Mark::Codex => Glyph::OpenAi,
+            Mark::System => Glyph::Chip,
+            Mark::Disks => Glyph::Drive,
+            Mark::Send => Glyph::Plane,
         };
+        let centre = (x + MARK_SIZE * self.s / 2.0, y + MARK_SIZE * self.s / 2.0);
+        glyphs::draw(self.canvas, glyph, centre, self.s, INK_PRIMARY, 1.0);
+    }
+
+    /// A progress bar: white on a faint track. `None` is indeterminate: a stripe that travels
+    /// while the card animates, a fixed share in a still.
+    fn progress(&mut self, (left, right): (f32, f32), top: f32, fraction: Option<f32>) {
+        let height = PROGRESS_HEIGHT * self.s;
+        let radius = height / 2.0;
+        let width = right - left;
+        self.canvas.fill_round_rect(
+            left,
+            top,
+            width,
+            height,
+            [radius; 4],
+            0xFFFFFF,
+            PROGRESS_TRACK_ALPHA,
+        );
+        let (from, share) = match (fraction, self.phase) {
+            (Some(f), _) => (0.0, f.clamp(0.0, 1.0)),
+            (None, None) => (0.0, INDETERMINATE),
+            (None, Some(phase)) => {
+                let start = (1.0 + STRIPE) * phase - STRIPE;
+                let end = (start + STRIPE).min(1.0);
+                (start.max(0.0), end - start.max(0.0))
+            }
+        };
+        if share > 0.0 {
+            let fill = (width * share).max(height).min(width - width * from);
+            self.canvas.fill_round_rect(
+                left + width * from,
+                top,
+                fill,
+                height,
+                [radius; 4],
+                INK_PRIMARY,
+                1.0,
+            );
+        }
+    }
+
+    /// A quarter-turn gap ring, turning while the card animates.
+    fn spinner(&mut self, (cx, cy): (f32, f32), radius: f32) {
+        let start = self.phase.unwrap_or(0.0) * 360.0 - 90.0;
+        let points: Vec<(f32, f32)> = (0..=18)
+            .map(|step| {
+                let angle = (start + 270.0 * step as f32 / 18.0).to_radians();
+                (cx + radius * angle.cos(), cy + radius * angle.sin())
+            })
+            .collect();
+        self.canvas
+            .stroke_polyline(&points, SPINNER_STROKE * self.s, false, INK_PRIMARY, 1.0);
+    }
+
+    /// A pill: a faint plate, the symbol and the label in white (dimmed when it does nothing).
+    fn pill(&mut self, (x, y, width): (f32, f32, f32), button: &Button, live: bool) {
+        let s = self.s;
+        let height = PILL_HEIGHT * s;
+        self.canvas
+            .fill_round_rect(x, y, width, height, [height / 2.0; 4], 0xFFFFFF, PILL_ALPHA);
+        let ink = if live { INK_PRIMARY } else { INK_SECONDARY };
+        let centre = y + height / 2.0;
+        let mut cursor = x + PILL_PAD * s;
+        if let Some(symbol) = button.symbol {
+            glyphs::symbol(
+                self.canvas,
+                symbol,
+                (cursor + PILL_SYMBOL * s / 2.0, centre),
+                PILL_SYMBOL * s,
+                ink,
+                1.0,
+            );
+            cursor += (PILL_SYMBOL + PILL_INNER) * s;
+        }
         let style = Style {
-            size: 8.0,
+            size: BODY_SIZE,
+            bold: true,
+            color: ink,
+        };
+        let baseline = centre + (BODY_BASELINE - DRAWN.line / 2.0) * s;
+        self.put(&button.label, cursor, baseline, style, false);
+    }
+
+    /// A round header or row button: a faint disc with a cross, a refresh arrow or a spinner;
+    /// a dismiss is the bare cross.
+    fn round(&mut self, (x, y, side): (f32, f32, f32), head: Head, live: bool) {
+        let s = self.s;
+        let centre = (x + side / 2.0, y + side / 2.0);
+        let ink = if live { INK_PRIMARY } else { INK_SECONDARY };
+        if head == Head::Dismiss {
+            glyphs::symbol(
+                self.canvas,
+                Symbol::Xmark,
+                centre,
+                X_SIZE * s,
+                INK_SECONDARY,
+                1.0,
+            );
+            return;
+        }
+        self.canvas
+            .fill_round_rect(x, y, side, side, [side / 2.0; 4], 0xFFFFFF, PILL_ALPHA);
+        match head {
+            Head::Scanning => self.spinner(centre, (SPINNER - SPINNER_STROKE) / 2.0 * s),
+            Head::Refresh => {
+                glyphs::symbol(
+                    self.canvas,
+                    Symbol::Refresh,
+                    centre,
+                    PILL_SYMBOL * s,
+                    ink,
+                    1.0,
+                );
+            }
+            Head::Close | Head::Dismiss => {
+                glyphs::symbol(self.canvas, Symbol::Xmark, centre, X_SIZE * s, ink, 1.0);
+            }
+        }
+    }
+
+    /// The banner's large icon centred on `centre`.
+    fn lead(&mut self, lead: &Lead, centre: (f32, f32)) {
+        let s = self.s;
+        match lead {
+            Lead::Tile(tile) => glyphs::tile(self.canvas, *tile, centre, LEAD_SIZE * s),
+            Lead::File(path) => match fileicon::of(path) {
+                Some(icon) => {
+                    let side = LEAD_SIZE * s;
+                    self.canvas.draw_image(
+                        &icon.pixels,
+                        (icon.width, icon.height),
+                        centre.0 - side / 2.0,
+                        centre.1 - side / 2.0,
+                        side,
+                        side,
+                    );
+                }
+                None => glyphs::tile(self.canvas, Tile::Package, centre, LEAD_SIZE * s),
+            },
+            Lead::Disc { symbol, problem } => {
+                let side = LEAD_FRAME * s;
+                self.canvas.fill_round_rect(
+                    centre.0 - side / 2.0,
+                    centre.1 - side / 2.0,
+                    side,
+                    side,
+                    [side / 2.0; 4],
+                    0xFFFFFF,
+                    DISC_ALPHA,
+                );
+                let ink = if *problem {
+                    layout::BAND_WATCH
+                } else {
+                    INK_PRIMARY
+                };
+                glyphs::symbol(self.canvas, *symbol, centre, DISC_SYMBOL * s, ink, 1.0);
+            }
+        }
+    }
+
+    /// A device row: a faint plate, its symbol, the name in bold with the model beneath, and
+    /// the send arrow at the right.
+    fn device(
+        &mut self,
+        (left, right, y): (f32, f32, f32),
+        device: (Symbol, &str, &str),
+        live: bool,
+    ) {
+        let (symbol, alias, model) = device;
+        let s = self.s;
+        let height = DEVICE_HEIGHT * s;
+        self.canvas.fill_round_rect(
+            left,
+            y,
+            right - left,
+            height,
+            [DEVICE_RADIUS * s; 4],
+            0xFFFFFF,
+            DEVICE_ALPHA,
+        );
+        let centre = y + height / 2.0;
+        let icon = (left + (DEVICE_PAD + DEVICE_ICON_FRAME / 2.0) * s, centre);
+        glyphs::symbol(self.canvas, symbol, icon, DEVICE_ICON * s, INK_PRIMARY, 1.0);
+        let arrow = (right - (DEVICE_PAD + DEVICE_ICON / 2.0) * s, centre);
+        let arrow_alpha = if live { 0.35 } else { 0.2 };
+        glyphs::symbol(
+            self.canvas,
+            Symbol::Plane,
+            arrow,
+            DEVICE_ICON * s,
+            INK_PRIMARY,
+            arrow_alpha,
+        );
+        let x = left + (DEVICE_PAD + DEVICE_ICON_FRAME + DEVICE_TEXT_GAP) * s;
+        let room = (arrow.0 - DEVICE_ICON * s - x) / s;
+        let name = fit_tail(self.text, alias, (TITLE_SIZE, true), room, s);
+        let title = Style {
+            size: TITLE_SIZE,
             bold: true,
             color: INK_PRIMARY,
         };
-        let width = self.width(abbreviation, style) as f32;
-        let centre = (x + MARK_SIZE * self.s / 2.0, y + MARK_SIZE * self.s / 2.0);
+        if model.is_empty() {
+            let baseline = centre + (TITLE_BASELINE - DRAWN.title / 2.0) * s;
+            self.put(&name, x, baseline, title, false);
+            return;
+        }
+        let block = DRAWN.title + DEVICE_NAME_GAP + DRAWN.line;
+        let top = centre - block / 2.0 * s;
+        self.put(&name, x, top + TITLE_BASELINE * s, title, false);
+        let model = fit_tail(self.text, model, (BODY_SIZE, false), room, s);
+        let baseline = top + (DRAWN.title + DEVICE_NAME_GAP + BODY_BASELINE) * s;
+        self.put(&model, x, baseline, body(INK_SECONDARY), false);
+    }
+
+    /// A plain card: the header (icon, title, plan line, note, round buttons), then rows.
+    fn flow(&mut self, content: &CardContent, laid: &Plan, live: &Live, (ox, oy): (f32, f32)) {
+        let s = self.s;
+        let pad = CARD_PAD * s;
+        let columns = (ox + pad, ox + (laid.width - CARD_PAD) * s);
+        let (left, right) = columns;
+        let top = oy;
+        // Header: the icon centred on the title block, the note on the title's line.
+        let text_height = DRAWN.title
+            + if content.subtitle.is_some() {
+                DRAWN.line
+            } else {
+                0.0
+            };
+        let header = header_height(content, DRAWN);
+        let text_top = top + (CARD_PAD + (header - text_height) / 2.0) * s;
+        let title_x = if content.mark == Mark::None {
+            left
+        } else {
+            self.mark(
+                content.mark,
+                (left, top + (CARD_PAD + (header - MARK_SIZE) / 2.0) * s),
+            );
+            left + (MARK_SIZE + MARK_GAP) * s
+        };
+        // The text stops short of the header's buttons.
+        let limit = laid
+            .head
+            .iter()
+            .map(|rect| rect.0)
+            .fold(laid.width - CARD_PAD, f32::min);
+        let text_room = (ox + (limit - VALUE_GAP) * s - title_x) / s;
+        let title_baseline = text_top + TITLE_BASELINE * s;
+        let title_style = Style {
+            size: TITLE_SIZE,
+            bold: true,
+            color: INK_PRIMARY,
+        };
+        let title = if laid.head.is_empty() {
+            content.title.clone()
+        } else {
+            fit_tail(self.text, &content.title, (TITLE_SIZE, true), text_room, s)
+        };
+        self.put(&title, title_x, title_baseline, title_style, false);
+        if let Some(note) = &content.accessory {
+            self.put(note, right, title_baseline, body(INK_SECONDARY), true);
+        }
+        if let Some(subtitle) = &content.subtitle {
+            let ink = if content.problem {
+                layout::BAND_WATCH
+            } else {
+                INK_SECONDARY
+            };
+            let subtitle = if laid.head.is_empty() {
+                subtitle.clone()
+            } else {
+                fit_middle(self.text, subtitle, (BODY_SIZE, false), text_room, s)
+            };
+            self.put(
+                &subtitle,
+                title_x,
+                text_top + (DRAWN.title + BODY_BASELINE) * s,
+                body(ink),
+                false,
+            );
+        }
+        for (index, (head, rect)) in content.head.iter().zip(&laid.head).enumerate() {
+            let on = live.head.get(index) == Some(&true);
+            let place = (ox + rect.0 * s, oy + rect.1 * s, rect.2 * s);
+            self.round(place, *head, on);
+        }
+        for (index, (row, placed)) in content.rows.iter().zip(&laid.rows).enumerate() {
+            let on = live.row(index, 0);
+            let y = top + placed.top * s;
+            // Baseline of the line `extra` DIPs down the row.
+            let base = |extra: f32| y + (extra + BODY_BASELINE) * s;
+            match row {
+                Row::Pair { label, value } if value.is_empty() => {
+                    let height = BUTTON_HEIGHT * s;
+                    self.canvas.fill_round_rect(
+                        left,
+                        y,
+                        right - left,
+                        height,
+                        [BUTTON_RADIUS * s; 4],
+                        0xFFFFFF,
+                        TRACK_ALPHA,
+                    );
+                    let ink = body(if on { INK_PRIMARY } else { INK_SECONDARY });
+                    let label_width = self.width(label, ink) as f32;
+                    self.put(
+                        label,
+                        (left + right - label_width) / 2.0,
+                        y + (BUTTON_HEIGHT - DRAWN.line) / 2.0 * s + BODY_BASELINE * s,
+                        ink,
+                        false,
+                    );
+                }
+                Row::Pair { label, value } => {
+                    let label_width = self.put(label, left, base(0.0), body(INK_PRIMARY), false);
+                    let room = (right - left) as i32 - label_width - (VALUE_GAP * s) as i32;
+                    let value = self.fit(value, body(INK_SECONDARY), room);
+                    self.put(&value, right, base(0.0), body(INK_SECONDARY), true);
+                }
+                Row::Bar {
+                    label,
+                    value,
+                    fraction,
+                } => {
+                    self.put(label, left, base(0.0), body(INK_PRIMARY), false);
+                    self.put(value, right, base(0.0), body(INK_SECONDARY), true);
+                    self.bar(columns, y + (DRAWN.line + LABEL_TO_BAR) * s, *fraction);
+                }
+                Row::Meter {
+                    label,
+                    trailing,
+                    fraction,
+                    summary,
+                } => {
+                    self.put(label, left, base(0.0), body(INK_PRIMARY), false);
+                    self.put(trailing, right, base(0.0), body(INK_SECONDARY), true);
+                    let mut next = DRAWN.line;
+                    if let Some(share) = fraction {
+                        self.bar(columns, y + (next + LABEL_TO_BAR) * s, Some(*share));
+                        next += LABEL_TO_BAR + BAR_HEIGHT;
+                    }
+                    next += BAR_TO_USED;
+                    self.put(summary, left, base(next), body(INK_PRIMARY), false);
+                }
+                Row::Note(_) | Row::Text(_) => {
+                    let ink = if matches!(row, Row::Note(_)) {
+                        INK_SECONDARY
+                    } else {
+                        INK_PRIMARY
+                    };
+                    for (n, line) in placed.lines.iter().enumerate() {
+                        self.put(line, left, base(n as f32 * WRAP_PITCH), body(ink), false);
+                    }
+                }
+                Row::Tinted { tone, .. } => {
+                    for (n, line) in placed.lines.iter().enumerate() {
+                        let ink = body(tone_color(*tone));
+                        self.put(line, left, base(n as f32 * WRAP_PITCH), ink, false);
+                    }
+                }
+                Row::Alert(_) => {
+                    self.pause_mark((left + STATUS_DOT / 2.0 * s, y + DRAWN.line / 2.0 * s));
+                    let indent = left + (STATUS_DOT + STATUS_GAP) * s;
+                    for (n, line) in placed.lines.iter().enumerate() {
+                        let ink = body(layout::BAND_CRITICAL);
+                        self.put(line, indent, base(n as f32 * WRAP_PITCH), ink, false);
+                    }
+                }
+                Row::Status { text, tone } => {
+                    let colour = tone_color(*tone);
+                    let radius = STATUS_DOT / 2.0 * s;
+                    let centre = (left + radius, y + DRAWN.line / 2.0 * s);
+                    self.canvas.fill_round_rect(
+                        centre.0 - radius,
+                        centre.1 - radius,
+                        2.0 * radius,
+                        2.0 * radius,
+                        [radius; 4],
+                        colour,
+                        1.0,
+                    );
+                    let indent = left + (STATUS_DOT + STATUS_TEXT_GAP) * s;
+                    self.put(text, indent, base(0.0), body(colour), false);
+                }
+                Row::Rule => self.canvas.fill_round_rect(
+                    left,
+                    y,
+                    right - left,
+                    (HAIRLINE * s).max(1.0),
+                    [0.0; 4],
+                    0xFFFFFF,
+                    RULE_ALPHA,
+                ),
+                Row::Session {
+                    name,
+                    dot,
+                    word,
+                    detail,
+                    age,
+                } => {
+                    let ink = match dot {
+                        Dot::Busy => INK_PRIMARY,
+                        Dot::Waiting => layout::BAND_WATCH,
+                        Dot::Success => layout::BAND_AMPLE,
+                        Dot::Idle => INK_SECONDARY,
+                    };
+                    let word_width = self.put(word, right, base(0.0), body(ink), true) as f32;
+                    let centre_x = right - word_width - (STATUS_GAP + STATUS_DOT / 2.0) * s;
+                    self.status_ring((centre_x, y + DRAWN.line / 2.0 * s), *dot);
+                    let room = centre_x - left - (STATUS_DOT / 2.0 + VALUE_GAP) * s;
+                    let name = self.fit(name, body(INK_PRIMARY), room as i32);
+                    self.put(&name, left, base(0.0), body(INK_PRIMARY), false);
+                    let second = DRAWN.line + SESSION_GAP;
+                    let age_width =
+                        self.put(age, right, base(second), body(INK_SECONDARY), true) as f32;
+                    let room = right - left - age_width - VALUE_GAP * s;
+                    let detail = self.fit(detail, body(INK_SECONDARY), room as i32);
+                    self.put(&detail, left, base(second), body(INK_SECONDARY), false);
+                }
+                Row::Buttons { buttons, .. } => {
+                    self.button_row(buttons, placed, live, (index, ox, y));
+                }
+                Row::Progress(fraction) => self.progress(columns, y, *fraction),
+                Row::Device {
+                    symbol,
+                    alias,
+                    model,
+                } => self.device(
+                    (left, right, y),
+                    (*symbol, alias.as_str(), model.as_str()),
+                    on,
+                ),
+                Row::Waiting(label) => {
+                    let ink = body(INK_SECONDARY);
+                    let label_width = self.width(label, ink) as f32;
+                    let total = (SPINNER + SPINNER_GAP) * s + label_width;
+                    let x0 = (left + right - total) / 2.0;
+                    let centre = y + DEVICE_HEIGHT * s / 2.0;
+                    let radius = (SPINNER - SPINNER_STROKE) / 2.0 * s;
+                    self.spinner((x0 + SPINNER * s / 2.0, centre), radius);
+                    let baseline = centre + (BODY_BASELINE - DRAWN.line / 2.0) * s;
+                    self.put(
+                        label,
+                        x0 + (SPINNER + SPINNER_GAP) * s,
+                        baseline,
+                        ink,
+                        false,
+                    );
+                }
+            }
+        }
+    }
+
+    /// The pills of a button row then its round close, at the spans the plan measured.
+    fn button_row(
+        &mut self,
+        buttons: &[Button],
+        placed: &Placed,
+        live: &Live,
+        (index, ox, y): (usize, f32, f32),
+    ) {
+        let s = self.s;
+        for (n, (x, width)) in placed.spans.iter().enumerate() {
+            let on = live.row(index, n);
+            let at = (ox + x * s, y, width * s);
+            match buttons.get(n) {
+                Some(button) => self.pill(at, button, on),
+                None => self.round(at, Head::Close, on),
+            }
+        }
+    }
+
+    /// A banner card: the large icon, the title, the detail and caveat lines, then the bar
+    /// and the buttons at the bottom of the text column.
+    fn banner(&mut self, content: &CardContent, laid: &Plan, live: &Live, (ox, oy): (f32, f32)) {
+        let s = self.s;
+        let column = ox + laid.text_left * s;
+        let right = ox + (laid.width - CARD_PAD) * s;
+        if let Some(lead) = &content.lead {
+            let centre = (
+                ox + (CARD_PAD + LEAD_FRAME / 2.0) * s,
+                oy + laid.height * s / 2.0,
+            );
+            self.lead(lead, centre);
+        }
+        let title = fit_middle(
+            self.text,
+            &content.title,
+            (TITLE_SIZE, true),
+            (right - column) / s,
+            s,
+        );
+        let title_style = Style {
+            size: TITLE_SIZE,
+            bold: true,
+            color: INK_PRIMARY,
+        };
         self.put(
-            abbreviation,
-            centre.0 - width / 2.0,
-            centre.1 + 4.0 * self.s,
-            style,
+            &title,
+            column,
+            oy + (CARD_PAD + TITLE_BASELINE) * s,
+            title_style,
             false,
         );
+        let detail_ink = if content.problem {
+            layout::BAND_WATCH
+        } else {
+            INK_SECONDARY
+        };
+        let detail_top = CARD_PAD + DRAWN.title + BANNER_GAP;
+        for (n, line) in laid.detail.iter().enumerate() {
+            let baseline = oy + (detail_top + n as f32 * WRAP_PITCH + BODY_BASELINE) * s;
+            self.put(line, column, baseline, body(detail_ink), false);
+        }
+        for (index, (row, placed)) in content.rows.iter().zip(&laid.rows).enumerate() {
+            let y = oy + placed.top * s;
+            match row {
+                Row::Note(_) | Row::Text(_) | Row::Tinted { .. } => {
+                    let ink = match row {
+                        Row::Tinted { tone, .. } => tone_color(*tone),
+                        Row::Text(_) => INK_PRIMARY,
+                        _ => INK_SECONDARY,
+                    };
+                    for (n, line) in placed.lines.iter().enumerate() {
+                        let baseline = y + (n as f32 * WRAP_PITCH + BODY_BASELINE) * s;
+                        self.put(line, column, baseline, body(ink), false);
+                    }
+                }
+                Row::Progress(fraction) => self.progress((column, right), y, *fraction),
+                Row::Buttons { buttons, .. } => {
+                    self.button_row(buttons, placed, live, (index, ox, y));
+                }
+                _ => {}
+            }
+        }
     }
 }
 
-/// The hover card: a header (icon, title, plan line, note), then rows, in a rounded card with
-/// a tail toward the notch. `clickable[i]` marks row `i` as live; a button row that is not
-/// reads dimmed.
+/// The colour a tone reads in.
+fn tone_color(tone: Tone) -> u32 {
+    match tone {
+        Tone::Warning => layout::BAND_WATCH,
+        Tone::Good => layout::BAND_AMPLE,
+        Tone::Critical => layout::BAND_CRITICAL,
+    }
+}
+
+/// The card: a plain one (header, then rows) or a banner (large icon beside the title block,
+/// the buttons below), in a rounded shape with a tail toward the notch. `live` marks which
+/// buttons have an action; a dead button reads dimmed. `phase` (0..1, looping) moves a
+/// spinner or an indeterminate bar; `None` draws them still.
 pub fn render_card(
     content: &CardContent,
-    clickable: &[bool],
+    live: &Live,
     dpi: u32,
     text: &mut TextPainter,
+    phase: Option<f32>,
 ) -> Canvas {
     let s = layout::scale(dpi);
-    let (width, height) = card_size(content, dpi);
+    let rect = card_rect(content, text, s);
+    let (width, height) = window_size(content, rect, s);
     let mut canvas = Canvas::new(width as usize, height as usize);
-    draw_silhouette(&mut canvas, content, s);
-    let (ox, oy, card_width, _) = card_rect(content, s);
-    let pad = CARD_PAD * s;
-    let columns = (ox as f32 + pad, (ox + card_width) as f32 - pad);
-    let (left, right) = columns;
-    let top = oy as f32;
+    draw_silhouette(&mut canvas, content, rect, s);
+    let laid = plan(content, DRAWN, text, s);
+    let origin = (rect.0 as f32, rect.1 as f32);
     let mut pen = Pen {
         canvas: &mut canvas,
         text,
         s,
+        phase,
     };
-
-    // Header: the icon centred on the title block, the note on the title's line.
-    let text_height = DRAWN.title
-        + if content.subtitle.is_some() {
-            DRAWN.line
-        } else {
-            0.0
-        };
-    let header = header_height(content, DRAWN);
-    let text_top = top + (CARD_PAD + (header - text_height) / 2.0) * s;
-    let title_x = if content.mark == Mark::None {
-        left
+    if content.lead.is_some() {
+        pen.banner(content, &laid, live, origin);
     } else {
-        pen.mark(
-            content.mark,
-            (left, top + (CARD_PAD + (header - MARK_SIZE) / 2.0) * s),
-        );
-        left + (MARK_SIZE + MARK_GAP) * s
-    };
-    let title_baseline = text_top + TITLE_BASELINE * s;
-    pen.put(
-        &content.title,
-        title_x,
-        title_baseline,
-        Style {
-            size: TITLE_SIZE,
-            bold: true,
-            color: INK_PRIMARY,
-        },
-        false,
-    );
-    if let Some(note) = &content.accessory {
-        pen.put(note, right, title_baseline, body(INK_SECONDARY), true);
-    }
-    if let Some(subtitle) = &content.subtitle {
-        pen.put(
-            subtitle,
-            title_x,
-            text_top + (DRAWN.title + BODY_BASELINE) * s,
-            body(INK_SECONDARY),
-            false,
-        );
-    }
-
-    let tops = row_tops(content, DRAWN);
-    for (index, (row, (row_top, _))) in content.rows.iter().zip(tops).enumerate() {
-        let live = clickable.get(index) == Some(&true);
-        let y = top + row_top * s;
-        // Baseline of the line `extra` DIPs down the row.
-        let base = |extra: f32| y + (extra + BODY_BASELINE) * s;
-        match row {
-            Row::Pair { label, value } if value.is_empty() => {
-                let height = BUTTON_HEIGHT * s;
-                pen.canvas.fill_round_rect(
-                    left,
-                    y,
-                    right - left,
-                    height,
-                    [BUTTON_RADIUS * s; 4],
-                    0xFFFFFF,
-                    TRACK_ALPHA,
-                );
-                let ink = body(if live { INK_PRIMARY } else { INK_SECONDARY });
-                let label_width = pen.width(label, ink) as f32;
-                pen.put(
-                    label,
-                    (left + right - label_width) / 2.0,
-                    y + (BUTTON_HEIGHT - DRAWN.line) / 2.0 * s + BODY_BASELINE * s,
-                    ink,
-                    false,
-                );
-            }
-            Row::Pair { label, value } => {
-                let label_width = pen.put(label, left, base(0.0), body(INK_PRIMARY), false);
-                let room = (right - left) as i32 - label_width - (VALUE_GAP * s) as i32;
-                let value = pen.fit(value, body(INK_SECONDARY), room);
-                pen.put(&value, right, base(0.0), body(INK_SECONDARY), true);
-            }
-            Row::Bar {
-                label,
-                value,
-                fraction,
-            } => {
-                pen.put(label, left, base(0.0), body(INK_PRIMARY), false);
-                pen.put(value, right, base(0.0), body(INK_SECONDARY), true);
-                pen.bar(columns, y + (DRAWN.line + LABEL_TO_BAR) * s, *fraction);
-            }
-            Row::Meter {
-                label,
-                trailing,
-                fraction,
-                summary,
-            } => {
-                pen.put(label, left, base(0.0), body(INK_PRIMARY), false);
-                pen.put(trailing, right, base(0.0), body(INK_SECONDARY), true);
-                let mut next = DRAWN.line;
-                if let Some(share) = fraction {
-                    pen.bar(columns, y + (next + LABEL_TO_BAR) * s, Some(*share));
-                    next += LABEL_TO_BAR + BAR_HEIGHT;
-                }
-                next += BAR_TO_USED;
-                pen.put(summary, left, base(next), body(INK_PRIMARY), false);
-            }
-            Row::Note(note) | Row::Text(note) => {
-                let ink = if matches!(row, Row::Note(_)) {
-                    INK_SECONDARY
-                } else {
-                    INK_PRIMARY
-                };
-                for (n, line) in wrap(note, WRAP_CHARS).iter().enumerate() {
-                    pen.put(line, left, base(n as f32 * WRAP_PITCH), body(ink), false);
-                }
-            }
-            Row::Alert(alert) => {
-                pen.pause_mark((left + STATUS_DOT / 2.0 * s, y + DRAWN.line / 2.0 * s));
-                let indent = left + (STATUS_DOT + STATUS_GAP) * s;
-                for (n, line) in wrap(alert, WRAP_CHARS - 4).iter().enumerate() {
-                    let ink = body(layout::BAND_CRITICAL);
-                    pen.put(line, indent, base(n as f32 * WRAP_PITCH), ink, false);
-                }
-            }
-            Row::Rule => pen.canvas.fill_round_rect(
-                left,
-                y,
-                right - left,
-                (HAIRLINE * s).max(1.0),
-                [0.0; 4],
-                0xFFFFFF,
-                RULE_ALPHA,
-            ),
-            Row::Session {
-                name,
-                dot,
-                word,
-                detail,
-                age,
-            } => {
-                let ink = match dot {
-                    Dot::Busy => INK_PRIMARY,
-                    Dot::Waiting => layout::BAND_WATCH,
-                    Dot::Success => layout::BAND_AMPLE,
-                    Dot::Idle => INK_SECONDARY,
-                };
-                let word_width = pen.put(word, right, base(0.0), body(ink), true) as f32;
-                let centre_x = right - word_width - (STATUS_GAP + STATUS_DOT / 2.0) * s;
-                pen.status_ring((centre_x, y + DRAWN.line / 2.0 * s), *dot);
-                let room = centre_x - left - (STATUS_DOT / 2.0 + VALUE_GAP) * s;
-                let name = pen.fit(name, body(INK_PRIMARY), room as i32);
-                pen.put(&name, left, base(0.0), body(INK_PRIMARY), false);
-                let second = DRAWN.line + SESSION_GAP;
-                let age_width = pen.put(age, right, base(second), body(INK_SECONDARY), true) as f32;
-                let room = right - left - age_width - VALUE_GAP * s;
-                let detail = pen.fit(detail, body(INK_SECONDARY), room as i32);
-                pen.put(&detail, left, base(second), body(INK_SECONDARY), false);
-            }
-        }
+        pen.flow(content, &laid, live, origin);
     }
     canvas
 }

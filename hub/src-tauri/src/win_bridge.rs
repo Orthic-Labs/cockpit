@@ -27,6 +27,7 @@ unsafe extern "system" {
     fn ResetEvent(event: Handle) -> i32;
     fn CloseHandle(object: Handle) -> i32;
     fn CreateMutexW(attributes: *const c_void, initial_owner: i32, name: *const u16) -> Handle;
+    fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
     fn WaitForMultipleObjects(count: u32, handles: *const Handle, wait_all: i32, milliseconds: u32) -> u32;
 }
 
@@ -36,6 +37,22 @@ fn wide(text: &str) -> Vec<u16> {
 
 fn show_name(section: &str) -> String {
     format!("Local\\dev.orthic.pulse.hub.show.{section}")
+}
+
+/// Signals the auto-reset event `Local\<name>` (created when absent, so a notch that starts
+/// later still sees the request). Used for `dev.orthic.pulse.hub.command`, which the notch
+/// waits on after it drains `hub-commands\`; the Mac posts a Darwin notification instead.
+pub fn post(name: &str) {
+    let event_name = wide(&format!("Local\\{name}"));
+    // SAFETY: NUL-terminated name; auto-reset, initially non-signaled. The handle is closed
+    // right after the signal; a waiting notch keeps the event alive.
+    unsafe {
+        let event = CreateEventW(std::ptr::null(), 0, 0, event_name.as_ptr());
+        if !event.is_null() {
+            SetEvent(event);
+            CloseHandle(event);
+        }
+    }
 }
 
 /// Signals a running hub's show event for `section`. False when it has not created it.
@@ -114,6 +131,23 @@ pub fn watch(app: tauri::AppHandle) {
     for chunk in slots.chunks(MAX_WAIT).map(<[Slot]>::to_vec) {
         let app = app.clone();
         std::thread::spawn(move || wait_loop(app, chunk));
+    }
+    // The notch signals `Local\dev.orthic.pulse.notch.state` after each atomic write of
+    // `notch-state.json`; the page refreshes through the same "notch-state" event as on the Mac.
+    let state_name = wide("Local\\dev.orthic.pulse.notch.state");
+    // SAFETY: NUL-terminated name; auto-reset, initially non-signaled; the handle lives for
+    // the whole process.
+    let state_event = unsafe { CreateEventW(std::ptr::null(), 0, 0, state_name.as_ptr()) } as usize;
+    if state_event != 0 {
+        std::thread::spawn({
+            let app = app.clone();
+            move || {
+                // SAFETY: a live event handle owned by this thread for the process lifetime.
+                while unsafe { WaitForSingleObject(state_event as Handle, INFINITE) } == WAIT_OBJECT_0 {
+                    let _ = app.emit("notch-state", String::new());
+                }
+            }
+        });
     }
     // A section passed at launch (`--section`) is also sent once the page has had time to
     // load and subscribe, as on macOS.

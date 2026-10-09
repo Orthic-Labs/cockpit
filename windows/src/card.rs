@@ -3,6 +3,7 @@
 
 use crate::alerts;
 use crate::drive_health::{self, Report};
+use crate::glyphs::{Symbol, Tile};
 use crate::layout::{Cell, Edge};
 use crate::send::{self, Panel};
 use crate::sensors::{Machine, size_text};
@@ -38,6 +39,83 @@ pub struct Tail {
     pub offset: i32,
 }
 
+/// Colour of a tinted line or a status dot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    /// Amber: a caveat.
+    Warning,
+    /// Green: all well.
+    Good,
+    /// Red: stopped.
+    Critical,
+}
+
+/// The large icon a card leads with, beside its title block.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Lead {
+    /// A colour icon the renderer draws itself.
+    Tile(Tile),
+    /// The shell's icon for this file when it has one (live cards), else the package tile.
+    File(String),
+    /// A symbol on a dim disc (a transfer card); `problem` draws it in the warning colour.
+    Disc { symbol: Symbol, problem: bool },
+}
+
+/// A round button in the header's top right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Head {
+    /// Look again.
+    Refresh,
+    /// A scan is running: a spinner where Refresh would be.
+    Scanning,
+    /// The round close.
+    Close,
+    /// A bare small cross with no disc (the alert card's dismiss).
+    Dismiss,
+}
+
+/// One pill of a button row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Button {
+    pub label: String,
+    pub symbol: Option<Symbol>,
+}
+
+impl Button {
+    pub fn new(label: impl Into<String>, symbol: Symbol) -> Self {
+        Self {
+            label: label.into(),
+            symbol: Some(symbol),
+        }
+    }
+}
+
+/// What the pointer is over on a card: a header button, or a row's button (index 0 for a
+/// row that is one button itself, such as a device).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    Head(usize),
+    Row(usize, usize),
+}
+
+/// Which of a card's buttons are live (have an action): per header button, and per row per
+/// button. A dead one reads dimmed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Live {
+    pub head: Vec<bool>,
+    pub rows: Vec<Vec<bool>>,
+}
+
+impl Live {
+    pub fn row(&self, row: usize, button: usize) -> bool {
+        self.rows
+            .get(row)
+            .and_then(|buttons| buttons.get(button))
+            .copied()
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     /// Label on the left, quieter value on the right. An empty value makes it a button.
@@ -64,6 +142,22 @@ pub enum Row {
     Alert(String),
     /// Hairline that sets the session list apart from the limit windows.
     Rule,
+    /// A line in a tone (the amber caveat under a disk image's detail).
+    Tinted { text: String, tone: Tone },
+    /// A filled dot and a line in its tone (an alert's status).
+    Status { text: String, tone: Tone },
+    /// Side-by-side pills, then an optional round close.
+    Buttons { buttons: Vec<Button>, close: bool },
+    /// A bare progress bar; `None` is indeterminate.
+    Progress(Option<f32>),
+    /// A nearby device: its symbol, its name in bold, its model beneath and a send arrow.
+    Device {
+        symbol: Symbol,
+        alias: String,
+        model: String,
+    },
+    /// A spinner with a line beside it.
+    Waiting(String),
     /// A live session: name and status word with its ring, then detail and age.
     Session {
         name: String,
@@ -74,9 +168,30 @@ pub enum Row {
     },
 }
 
+impl Row {
+    /// How many things on the row can be pressed: its buttons, or the row itself.
+    pub fn slots(&self) -> usize {
+        match self {
+            Row::Buttons { buttons, close } => buttons.len() + usize::from(*close),
+            _ => 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CardContent {
     pub title: String,
+    /// The large icon beside the title block: makes the card a banner (icon, then title,
+    /// detail and the buttons at the bottom), like the Mac's disk image and update cards.
+    pub lead: Option<Lead>,
+    /// Round buttons at the header's top right, left to right.
+    pub head: Vec<Head>,
+    /// The wide card of the disk image and update cards.
+    pub wide: bool,
+    /// The detail line reads in the warning colour.
+    pub problem: bool,
+    /// The Mac's fixed card height, in DIPs, when it has one.
+    pub height: Option<f32>,
     /// Quiet text on the title's line, at the right.
     pub accessory: Option<String>,
     /// Quiet line under the title (the account's plan).
@@ -207,8 +322,7 @@ pub fn panel_for(
         };
     }
     let content = content_for(cell, machine, usage, now);
-    let actions = vec![None; content.rows.len()];
-    (Panel { content, actions }, false)
+    (Panel::new(content), false)
 }
 
 fn content_for(cell: Cell, machine: Option<&Machine>, usage: &[Usage; 2], now: u64) -> CardContent {

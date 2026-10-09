@@ -130,6 +130,11 @@ pub struct PillSettings {
     /// Watch Downloads and install signed installers on its own, with Undo (the Mac's disk
     /// image installer). On by default; an unsigned installer is always asked about.
     pub installer_auto: bool,
+    /// Provider ids ("claude", "codex") the hub's Accounts page has hidden (the Mac's
+    /// `connected` off). Empty means both shown.
+    pub hidden_providers: Vec<String>,
+    /// Provider ids in the order the hub chose; empty keeps the default order.
+    pub provider_order: Vec<String>,
 }
 
 impl PillSettings {
@@ -156,6 +161,8 @@ impl PillSettings {
             mute_codex_alerts: false,
             auto_update_check: true,
             installer_auto: true,
+            hidden_providers: Vec::new(),
+            provider_order: Vec::new(),
         }
     }
     /// Remembered position for a monitor; unknown monitors are centred.
@@ -263,7 +270,7 @@ enum Json {
     Bool(bool),
     Number(String),
     Text(String),
-    Array,
+    Array(Vec<Json>),
     Object(Vec<(String, Json)>),
 }
 
@@ -348,22 +355,26 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Arrays only need to be skipped (unknown fields); elements are validated, not kept.
+    /// Arrays keep their elements (bounded) for the provider lists and hub commands.
     fn array(&mut self, depth: usize) -> Result<Json, ParseError> {
         self.expect(b'[')?;
         self.skip_ws();
+        let mut items: Vec<Json> = Vec::new();
         if self.peek() == Some(b']') {
             self.pos += 1;
-            return Ok(Json::Array);
+            return Ok(Json::Array(items));
         }
         loop {
-            self.value(depth + 1)?;
+            items.push(self.value(depth + 1)?);
+            if items.len() > 4 * MAX_MONITORS {
+                return Err(ParseError::Malformed);
+            }
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,
                 Some(b']') => {
                     self.pos += 1;
-                    return Ok(Json::Array);
+                    return Ok(Json::Array(items));
                 }
                 _ => return Err(ParseError::Malformed),
             }
@@ -478,6 +489,23 @@ fn member<'a>(members: &'a [(String, Json)], name: &str) -> Option<&'a Json> {
     members.iter().find(|(key, _)| key == name).map(|(_, v)| v)
 }
 
+/// A list of short ids; `None` when an element is not text or the list is implausibly long.
+fn text_list(items: &[Json]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let Json::Text(text) = item else {
+            return None;
+        };
+        if text.len() > MAX_KEY_BYTES || out.len() >= 16 {
+            return None;
+        }
+        if !out.contains(text) {
+            out.push(text.clone());
+        }
+    }
+    Some(out)
+}
+
 fn integer(value: &Json) -> Result<i64, ParseError> {
     match value {
         Json::Number(text) => text.parse::<i64>().map_err(|_| ParseError::Malformed),
@@ -587,6 +615,16 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         match member(&root, name) {
             None | Some(Json::Null) => {}
             Some(Json::Text(text)) => *slot = Some(text.clone()),
+            Some(_) => return Err(ParseError::Malformed),
+        }
+    }
+    for (name, slot) in [
+        ("hidden_providers", &mut settings.hidden_providers),
+        ("provider_order", &mut settings.provider_order),
+    ] {
+        match member(&root, name) {
+            None | Some(Json::Null) => {}
+            Some(Json::Array(items)) => *slot = text_list(items).ok_or(ParseError::Malformed)?,
             Some(_) => return Err(ParseError::Malformed),
         }
     }
@@ -716,6 +754,21 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
             out.push_str(&format!(",\"{name}\":{value}"));
         }
     }
+    for (name, list) in [
+        ("hidden_providers", &settings.hidden_providers),
+        ("provider_order", &settings.provider_order),
+    ] {
+        if !list.is_empty() {
+            out.push_str(&format!(",\"{name}\":["));
+            for (index, id) in list.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                push_json_string(&mut out, id);
+            }
+            out.push(']');
+        }
+    }
     if !settings.positions.is_empty() {
         out.push_str(",\"positions\":{");
         for (index, (key, value)) in settings.positions.iter().enumerate() {
@@ -747,6 +800,61 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
         return Err(ParseError::Oversized);
     }
     Ok(out)
+}
+
+// ------------------------------------------------------------------ hub commands
+
+/// The value a hub command carries.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Arg {
+    Null,
+    Bool(bool),
+    Number(f64),
+    Text(String),
+    List(Vec<String>),
+}
+
+/// One `hub-commands/*.json` file: `{"command":..,"key":..,"provider":..,"value":..}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Command {
+    pub name: String,
+    pub key: Option<String>,
+    pub provider: Option<String>,
+    pub value: Arg,
+}
+
+/// Parses one command file; `None` when it is not an object with a `command` text.
+pub fn parse_command(bytes: &[u8]) -> Option<Command> {
+    if bytes.len() > MAX_FILE_BYTES {
+        return None;
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let mut reader = Reader { bytes, pos: 0 };
+    let root = reader.value(0).ok()?;
+    reader.skip_ws();
+    let Json::Object(members) = root else {
+        return None;
+    };
+    if reader.pos != bytes.len() {
+        return None;
+    }
+    let text = |name: &str| match member(&members, name) {
+        Some(Json::Text(text)) => Some(text.clone()),
+        _ => None,
+    };
+    let value = match member(&members, "value") {
+        Some(Json::Bool(value)) => Arg::Bool(*value),
+        Some(Json::Number(text)) => text.parse::<f64>().map_or(Arg::Null, Arg::Number),
+        Some(Json::Text(text)) => Arg::Text(text.clone()),
+        Some(Json::Array(items)) => text_list(items).map_or(Arg::Null, Arg::List),
+        _ => Arg::Null,
+    };
+    Some(Command {
+        name: text("command")?,
+        key: text("key"),
+        provider: text("provider"),
+        value,
+    })
 }
 
 // ------------------------------------------------------------------ store

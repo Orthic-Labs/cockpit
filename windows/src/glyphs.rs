@@ -197,6 +197,377 @@ fn plane(canvas: &mut Canvas, centre: (f32, f32), scale: f32, color: u32, alpha:
     );
 }
 
+// ---- card symbols -------------------------------------------------------------------------------
+//
+// The SF Symbols the Mac cards use (pills, device rows, transfer discs), redrawn as strokes in a
+// unit box: `-1.0..=1.0` spans the symbol's frame.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Symbol {
+    Xmark,
+    Refresh,
+    Stop,
+    Clock,
+    DownCircle,
+    DownApp,
+    Cycle,
+    Undo,
+    Box,
+    Folder,
+    Copy,
+    Compass,
+    Plane,
+    Phone,
+    Laptop,
+    Desktop,
+    Globe,
+    Terminal,
+    Server,
+    Check,
+    Hand,
+    Warning,
+}
+
+impl Symbol {
+    /// The symbol for an SF Symbol name in a view fixture; the display for any other.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "iphone" => Symbol::Phone,
+            "laptopcomputer" => Symbol::Laptop,
+            "globe" => Symbol::Globe,
+            "terminal" => Symbol::Terminal,
+            "server.rack" => Symbol::Server,
+            "checkmark.circle" => Symbol::Check,
+            "hand.raised" => Symbol::Hand,
+            "exclamationmark.triangle" => Symbol::Warning,
+            _ => Symbol::Desktop,
+        }
+    }
+}
+
+/// The large colour icons a card leads with when there is no real file icon to show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tile {
+    Folder,
+    Message,
+    Package,
+    App,
+}
+
+/// Strokes in unit coordinates around a centre.
+struct Brush<'a> {
+    canvas: &'a mut Canvas,
+    centre: (f32, f32),
+    half: f32,
+    width: f32,
+    color: u32,
+    alpha: f32,
+}
+
+type Point = (f32, f32);
+
+/// Points of a circular arc, angles in degrees clockwise from 3 o'clock (y points down).
+fn arc(centre: Point, radius: f32, from: f32, to: f32) -> Vec<Point> {
+    let steps = ((to - from).abs() / 10.0).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|step| {
+            let angle = (from + (to - from) * step as f32 / steps as f32).to_radians();
+            (
+                centre.0 + radius * angle.cos(),
+                centre.1 + radius * angle.sin(),
+            )
+        })
+        .collect()
+}
+
+/// A closed ellipse as an outline.
+fn ellipse(centre: Point, rx: f32, ry: f32) -> Vec<Point> {
+    arc((0.0, 0.0), 1.0, 0.0, 360.0)
+        .into_iter()
+        .map(|(x, y)| (centre.0 + x * rx, centre.1 + y * ry))
+        .collect()
+}
+
+fn shifted(points: Vec<Point>, (dx, dy): Point) -> Vec<Point> {
+    points.into_iter().map(|(x, y)| (x + dx, y + dy)).collect()
+}
+
+impl Brush<'_> {
+    fn at(&self, (x, y): Point) -> Point {
+        (self.centre.0 + x * self.half, self.centre.1 + y * self.half)
+    }
+
+    fn path(&mut self, points: &[Point], closed: bool) {
+        let placed: Vec<Point> = points.iter().map(|&p| self.at(p)).collect();
+        self.canvas
+            .stroke_polyline(&placed, self.width, closed, self.color, self.alpha);
+    }
+
+    fn circle(&mut self, centre: Point, radius: f32) {
+        let (x, y) = self.at(centre);
+        self.canvas.stroke_arc(
+            x,
+            y,
+            radius * self.half,
+            self.width,
+            1.0,
+            self.color,
+            self.alpha,
+        );
+    }
+
+    fn fill(&mut self, points: &[Point]) {
+        let placed: Vec<Point> = points.iter().map(|&p| self.at(p)).collect();
+        self.canvas.fill_polygon(&[placed], self.color, self.alpha);
+    }
+
+    fn rect(&mut self, (hx, hy): Point, radius: f32, centre: Point) {
+        self.path(&shifted(rounded_rect(hx, hy, radius), centre), true);
+    }
+
+    /// An arrow head: a chevron with its tip at `tip`, pointing along `dir`.
+    fn head(&mut self, tip: Point, dir: Point, len: f32) {
+        let side = (-dir.1, dir.0);
+        let back = (tip.0 - dir.0 * len, tip.1 - dir.1 * len);
+        let wing = len * 0.85;
+        self.path(
+            &[
+                (back.0 + side.0 * wing, back.1 + side.1 * wing),
+                tip,
+                (back.0 - side.0 * wing, back.1 - side.1 * wing),
+            ],
+            false,
+        );
+    }
+
+    /// The tangent of a clockwise circle at `angle` degrees.
+    fn tangent(angle: f32) -> Point {
+        let a = angle.to_radians();
+        (-a.sin(), a.cos())
+    }
+}
+
+/// Draws `symbol` in a square of `size` device pixels centred on `centre`.
+pub fn symbol(
+    canvas: &mut Canvas,
+    symbol: Symbol,
+    centre: (f32, f32),
+    size: f32,
+    color: u32,
+    alpha: f32,
+) {
+    if symbol == Symbol::Plane {
+        plane(canvas, centre, size / 15.0, color, alpha);
+        return;
+    }
+    let mut b = Brush {
+        canvas,
+        centre,
+        half: size / 2.0,
+        width: (size * 0.085).max(1.0),
+        color,
+        alpha,
+    };
+    match symbol {
+        Symbol::Xmark => {
+            b.width = (size * 0.14).max(1.2);
+            b.path(&[(-0.55, -0.55), (0.55, 0.55)], false);
+            b.path(&[(0.55, -0.55), (-0.55, 0.55)], false);
+        }
+        Symbol::Refresh => {
+            let end = 290.0;
+            b.path(&arc((0.0, 0.0), 0.72, -10.0, end), false);
+            let a = end.to_radians();
+            b.head((0.72 * a.cos(), 0.72 * a.sin()), Brush::tangent(end), 0.32);
+        }
+        Symbol::Stop => {
+            b.circle((0.0, 0.0), 0.86);
+            b.fill(&rounded_rect(0.3, 0.3, 0.08));
+        }
+        Symbol::Clock => {
+            b.circle((0.0, 0.0), 0.86);
+            b.path(&[(0.0, -0.5), (0.0, 0.0), (0.34, 0.34)], false);
+        }
+        Symbol::DownCircle => {
+            b.circle((0.0, 0.0), 0.86);
+            b.path(&[(0.0, -0.42), (0.0, 0.4)], false);
+            b.path(&[(-0.3, 0.1), (0.0, 0.42), (0.3, 0.1)], false);
+        }
+        Symbol::DownApp => {
+            b.rect((0.82, 0.82), 0.3, (0.0, 0.0));
+            b.path(&[(0.0, -0.4), (0.0, 0.34)], false);
+            b.path(&[(-0.28, 0.06), (0.0, 0.36), (0.28, 0.06)], false);
+        }
+        Symbol::Cycle => {
+            b.path(&arc((0.0, 0.0), 0.68, -150.0, -30.0), false);
+            b.head(
+                (
+                    0.68 * (-30f32).to_radians().cos(),
+                    0.68 * (-30f32).to_radians().sin(),
+                ),
+                Brush::tangent(-30.0),
+                0.3,
+            );
+            b.path(&arc((0.0, 0.0), 0.68, 30.0, 150.0), false);
+            b.head(
+                (
+                    0.68 * 150f32.to_radians().cos(),
+                    0.68 * 150f32.to_radians().sin(),
+                ),
+                Brush::tangent(150.0),
+                0.3,
+            );
+        }
+        Symbol::Undo => {
+            let mut turn = vec![(-0.55, -0.45), (0.2, -0.45)];
+            turn.extend(arc((0.2, 0.0), 0.45, -90.0, 90.0));
+            turn.push((-0.4, 0.45));
+            b.path(&turn, false);
+            b.head((-0.62, -0.45), (-1.0, 0.0), 0.34);
+        }
+        Symbol::Box => {
+            b.path(
+                &[(0.0, -0.88), (0.8, -0.44), (0.0, 0.0), (-0.8, -0.44)],
+                true,
+            );
+            b.path(
+                &[
+                    (-0.8, -0.44),
+                    (-0.8, 0.46),
+                    (0.0, 0.9),
+                    (0.8, 0.46),
+                    (0.8, -0.44),
+                ],
+                false,
+            );
+            b.path(&[(0.0, 0.0), (0.0, 0.9)], false);
+        }
+        Symbol::Folder => {
+            b.path(
+                &[
+                    (-0.88, 0.66),
+                    (-0.88, -0.66),
+                    (-0.2, -0.66),
+                    (0.06, -0.38),
+                    (0.88, -0.38),
+                    (0.88, 0.66),
+                ],
+                true,
+            );
+        }
+        Symbol::Copy => {
+            b.rect((0.46, 0.62), 0.12, (0.22, 0.2));
+            b.path(
+                &[
+                    (-0.24, 0.42),
+                    (-0.66, 0.42),
+                    (-0.66, -0.82),
+                    (0.2, -0.82),
+                    (0.2, -0.42),
+                ],
+                false,
+            );
+        }
+        Symbol::Compass => {
+            b.circle((0.0, 0.0), 0.86);
+            b.path(
+                &[(0.38, -0.38), (0.12, 0.12), (-0.38, 0.38), (-0.12, -0.12)],
+                true,
+            );
+        }
+        Symbol::Phone => {
+            b.rect((0.38, 0.86), 0.2, (0.0, 0.0));
+            b.path(&[(-0.14, 0.66), (0.14, 0.66)], false);
+        }
+        Symbol::Laptop => {
+            b.rect((0.7, 0.4), 0.1, (0.0, -0.22));
+            b.path(&[(-0.95, 0.52), (0.95, 0.52)], false);
+        }
+        Symbol::Desktop => {
+            b.rect((0.86, 0.5), 0.12, (0.0, -0.22));
+            b.path(&[(0.0, 0.28), (0.0, 0.62)], false);
+            b.path(&[(-0.36, 0.7), (0.36, 0.7)], false);
+        }
+        Symbol::Globe => {
+            b.circle((0.0, 0.0), 0.86);
+            b.path(&ellipse((0.0, 0.0), 0.38, 0.86), true);
+            b.path(&[(-0.86, 0.0), (0.86, 0.0)], false);
+        }
+        Symbol::Terminal => {
+            b.rect((0.88, 0.68), 0.14, (0.0, 0.0));
+            b.path(&[(-0.5, -0.25), (-0.15, 0.0), (-0.5, 0.25)], false);
+            b.path(&[(0.0, 0.28), (0.45, 0.28)], false);
+        }
+        Symbol::Server => {
+            b.rect((0.82, 0.3), 0.1, (0.0, -0.5));
+            b.rect((0.82, 0.3), 0.1, (0.0, 0.5));
+            b.path(&[(-0.5, -0.5), (-0.4, -0.5)], false);
+            b.path(&[(-0.5, 0.5), (-0.4, 0.5)], false);
+        }
+        Symbol::Check => {
+            b.circle((0.0, 0.0), 0.86);
+            b.path(&[(-0.4, 0.02), (-0.1, 0.32), (0.42, -0.3)], false);
+        }
+        Symbol::Hand => {
+            b.rect((0.5, 0.42), 0.3, (0.0, 0.42));
+            for (x, top) in [(-0.38, -0.5), (-0.13, -0.8), (0.13, -0.85), (0.38, -0.55)] {
+                let half = (0.1, (0.1 - top) / 2.0);
+                b.rect(half, 0.1, (x, (top + 0.1) / 2.0));
+            }
+        }
+        Symbol::Warning => {
+            b.path(&[(0.0, -0.8), (0.9, 0.74), (-0.9, 0.74)], true);
+            b.path(&[(0.0, -0.22), (0.0, 0.26)], false);
+            b.path(&[(0.0, 0.5), (0.0, 0.5)], false);
+        }
+        Symbol::Plane => {}
+    }
+}
+
+/// A large colour icon filling a square of `size` device pixels centred on `centre`.
+pub fn tile(canvas: &mut Canvas, tile: Tile, (cx, cy): (f32, f32), size: f32) {
+    let half = size / 2.0;
+    let rect = |canvas: &mut Canvas, (x0, y0, x1, y1): (f32, f32, f32, f32), r: f32, color: u32| {
+        canvas.fill_round_rect(
+            cx + x0 * half,
+            cy + y0 * half,
+            (x1 - x0) * half,
+            (y1 - y0) * half,
+            [r * half; 4],
+            color,
+            1.0,
+        );
+    };
+    match tile {
+        Tile::Folder => {
+            rect(canvas, (-0.9, -0.72, 0.9, 0.78), 0.14, 0x4BA3E6);
+            rect(canvas, (-0.9, -0.82, -0.1, -0.5), 0.1, 0x4BA3E6);
+            rect(canvas, (-0.9, -0.42, 0.9, 0.78), 0.14, 0x78C5F6);
+        }
+        Tile::Message => {
+            rect(canvas, (-0.92, -0.92, 0.92, 0.92), 0.4, 0x5CB85C);
+            let bubble: Vec<Point> = ellipse((0.0, -0.08), 0.58, 0.44)
+                .into_iter()
+                .map(|(x, y)| (cx + x * half, cy + y * half))
+                .collect();
+            canvas.fill_polygon(&[bubble], 0xFFFFFF, 1.0);
+            let tail: Vec<Point> = [(-0.38, 0.26), (-0.62, 0.6), (-0.08, 0.36)]
+                .iter()
+                .map(|&(x, y)| (cx + x * half, cy + y * half))
+                .collect();
+            canvas.fill_polygon(&[tail], 0xFFFFFF, 1.0);
+        }
+        Tile::Package => {
+            rect(canvas, (-0.92, -0.92, 0.92, 0.92), 0.4, 0x4B5567);
+            symbol(canvas, Symbol::Box, (cx, cy), size * 0.56, 0xFFFFFF, 1.0);
+        }
+        Tile::App => {
+            rect(canvas, (-0.92, -0.92, 0.92, 0.92), 0.4, 0x14141A);
+            canvas.stroke_arc(cx, cy, 0.38 * half, 0.13 * half, 0.78, 0xFFFFFF, 1.0);
+        }
+    }
+}
+
 #[rustfmt::skip]
 const CLAUDE: &[&[(f32, f32)]] = &[
     &[

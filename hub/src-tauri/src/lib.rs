@@ -80,7 +80,12 @@ fn post(name: &str) {
 }
 
 /// Darwin notifications do not exist off macOS; the Windows bridge uses named events.
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn post(name: &str) {
+    win_bridge::post(name);
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn post(_name: &str) {}
 
 pub(crate) fn home() -> PathBuf {

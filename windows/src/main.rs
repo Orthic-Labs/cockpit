@@ -13,10 +13,12 @@
 
 mod alerts;
 mod autostart;
+mod bridge;
 mod canvas;
 mod card;
 mod diag;
 mod drive_health;
+mod fileicon;
 mod glyphs;
 mod http;
 mod hub;
@@ -91,6 +93,12 @@ const HOVER_GRACE_MS: u32 = 220;
 /// One-second tick while an alert or update card is up (alerts put themselves away).
 const NOTICE_TIMER_ID: usize = 10;
 static NOTICE_TIMER_ARMED: AtomicBool = AtomicBool::new(false);
+/// Redraws a card that moves (a spinner, a travelling progress bar) while one is up.
+const ANIM_TIMER_ID: usize = 22;
+const ANIM_MS: u32 = 50;
+/// One turn of a spinner or one sweep of a travelling bar.
+const ANIM_PERIOD_MS: u128 = 1200;
+static ANIM_TIMER_ARMED: AtomicBool = AtomicBool::new(false);
 /// Posted by `send` when the Send ring, its hover card or a popup changed.
 const WM_SEND: u32 = WM_APP + 0x5E;
 static COORDINATES_COMPARABLE: AtomicBool = AtomicBool::new(false);
@@ -411,6 +419,20 @@ fn run_pill() -> Result<(), Error> {
     let _keys = keys::start(mac_shortcuts, shots.is_some());
 
     usage::start(controller.key());
+    bridge::start(
+        controller.key(),
+        bridge::Hooks {
+            settings: || {
+                let app = lock_state();
+                (app.settings.clone(), app.settings_writable)
+            },
+            commit: |next| {
+                lock_state().settings = next;
+                persist_settings();
+            },
+            check_updates: update::check_now,
+        },
+    );
     update::start(controller.key(), lock_state().settings.auto_update_check);
     drive_health::start();
     let nearby = lock_state().settings.nearby_enabled;
@@ -1149,6 +1171,7 @@ fn hide_card() {
     if release {
         send::popup_hover(false);
     }
+    sync_card_animation(false);
     sync_send_hover();
 }
 
@@ -1260,8 +1283,7 @@ fn sync_card() {
     // Claude Code sessions on this PC, listed under the Claude ring's limits.
     if Cell::ALL[cell] == Cell::Claude && !is_popup && !show_notice {
         for row in sessions::card_rows(&sessions::snapshot(), sessions::now_ms()) {
-            panel.content.rows.push(row);
-            panel.actions.push(None);
+            panel.row(row, None);
         }
     }
     // The shown card carries the tail `show_card` gave it; compare the content without it.
@@ -1322,7 +1344,9 @@ fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notic
     // The card's tail leaves the side facing the notch; its offset (set once the card is
     // placed) keeps the point on the hovered ring when the monitor pushes the card aside.
     panel.content.tail = Some(card::Tail { edge, offset: 0 });
-    let card_size = render::card_size(&panel.content, dpi);
+    let Some(card_size) = with_text(|text| render::card_size(&panel.content, dpi, text)) else {
+        return;
+    };
     let (ring_x, ring_y) = layout::ring_center(edge, cell, dpi);
     // A popup pinned to the folded pill hangs from the pill's middle.
     let centre = match (edge.is_vertical(), folded) {
@@ -1348,8 +1372,10 @@ fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notic
     let Some(card_key) = ensure_card() else {
         return;
     };
-    let clickable: Vec<bool> = panel.actions.iter().map(Option::is_some).collect();
-    let Some(canvas) = with_text(|text| render::render_card(&panel.content, &clickable, dpi, text))
+    let live = panel.live();
+    let phase = card_phase(&panel.content);
+    let Some(canvas) =
+        with_text(|text| render::render_card(&panel.content, &live, dpi, text, phase))
     else {
         return;
     };
@@ -1362,6 +1388,7 @@ fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notic
         diag::win32_error("SetWindowPos", &error, "card show");
         return;
     }
+    let animated = render::animated(&panel.content);
     lock_state().ui.card_shown = Some(Shown {
         key,
         cell,
@@ -1369,6 +1396,64 @@ fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notic
         popup,
         notice,
     });
+    sync_card_animation(animated);
+}
+
+/// Where a moving card is in its loop (0..1), or `None` for a card that holds still.
+fn card_phase(content: &card::CardContent) -> Option<f32> {
+    render::animated(content).then(|| {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis());
+        (ms % ANIM_PERIOD_MS) as f32 / ANIM_PERIOD_MS as f32
+    })
+}
+
+/// Starts or stops the timer that redraws a moving card.
+fn sync_card_animation(active: bool) {
+    if ANIM_TIMER_ARMED.swap(active, Ordering::Relaxed) == active {
+        return;
+    }
+    if let Some(controller) = controller_hwnd() {
+        if active {
+            let _ = unsafe { SetTimer(Some(controller), ANIM_TIMER_ID, ANIM_MS, None) };
+        } else {
+            let _ = unsafe { KillTimer(Some(controller), ANIM_TIMER_ID) };
+        }
+    }
+}
+
+/// The card on screen, its DPI and its window, when one is up.
+fn shown_card() -> Option<(send::Panel, u32, isize)> {
+    let app = lock_state();
+    let shown = app.ui.card_shown.as_ref()?;
+    let dpi = app
+        .panels
+        .iter()
+        .find(|p| p.window.key() == shown.key)
+        .map(|p| p.slot.dpi)?;
+    let window = app.card.as_ref().map(OwnedWindow::key)?;
+    Some((shown.panel.clone(), dpi, window))
+}
+
+/// One frame of a moving card, drawn in place.
+fn animate_card() {
+    let Some((panel, dpi, window)) = shown_card() else {
+        sync_card_animation(false);
+        return;
+    };
+    if !render::animated(&panel.content) {
+        sync_card_animation(false);
+        return;
+    }
+    let live = panel.live();
+    let phase = card_phase(&panel.content);
+    let Some(canvas) =
+        with_text(|text| render::render_card(&panel.content, &live, dpi, text, phase))
+    else {
+        return;
+    };
+    let _ = present(hwnd_from_key(window), &canvas, None);
 }
 
 /// Starts or stops the one-second tick that expires alert cards.
@@ -1659,14 +1744,14 @@ fn on_card_mouse_leave() {
 }
 
 /// A click on the Send card: runs the action of the row under the pointer.
-fn on_card_click(y: i32) {
+fn on_card_click(x: i32, y: i32) {
     let notice = lock_state()
         .ui
         .card_shown
         .as_ref()
         .is_some_and(|shown| shown.notice);
     if notice {
-        on_notice_click(y);
+        on_notice_click(x, y);
         return;
     }
     let action = {
@@ -1682,8 +1767,9 @@ fn on_card_click(y: i32) {
         else {
             return;
         };
-        render::row_at(&shown.panel.content, dpi, y)
-            .and_then(|row| shown.panel.actions.get(row).cloned().flatten())
+        with_text(|text| render::hit_at(&shown.panel.content, dpi, text, (x, y)))
+            .flatten()
+            .and_then(|hit| shown.panel.action(hit))
     };
     if let Some(action) = action {
         send::perform(action);
@@ -1695,8 +1781,8 @@ fn on_card_click(y: i32) {
 }
 
 /// A click on an alert card puts it away; on the update card it presses the row under it.
-fn on_notice_click(y: i32) {
-    let row = {
+fn on_notice_click(x: i32, y: i32) {
+    let hit = {
         let app = lock_state();
         let shown = app.ui.card_shown.as_ref();
         let dpi = shown.and_then(|s| {
@@ -1705,13 +1791,13 @@ fn on_notice_click(y: i32) {
                 .find(|p| p.window.key() == s.key)
                 .map(|p| p.slot.dpi)
         });
-        shown
-            .zip(dpi)
-            .and_then(|(shown, dpi)| render::row_at(&shown.panel.content, dpi, y))
+        shown.zip(dpi).and_then(|(shown, dpi)| {
+            with_text(|text| render::hit_at(&shown.panel.content, dpi, text, (x, y))).flatten()
+        })
     };
     if update::panel().is_some() {
-        if let Some(row) = row {
-            update::click(row);
+        if let Some(hit) = hit {
+            update::click(hit);
         }
     } else {
         alerts::dismiss();
@@ -2043,6 +2129,10 @@ extern "system" fn controller_proc(
                 sync_card();
                 return LRESULT(0);
             }
+            WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
+                animate_card();
+                return LRESULT(0);
+            }
             update::MSG_UPDATE => {
                 sync_card();
                 return LRESULT(0);
@@ -2091,6 +2181,7 @@ extern "system" fn controller_proc(
                 let _ = KillTimer(Some(hwnd), HOVER_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), FOLD_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), NOTICE_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), ANIM_TIMER_ID);
                 teardown_panels();
                 PostQuitMessage(0);
                 return LRESULT(0);
@@ -2200,8 +2291,8 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                         let _ = PostMessageW(Some(controller), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                 } else {
-                    let (_, y) = lparam_point(lparam);
-                    on_card_click(y);
+                    let (x, y) = lparam_point(lparam);
+                    on_card_click(x, y);
                 }
                 return LRESULT(0);
             }
