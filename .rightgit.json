@@ -34,16 +34,23 @@
     "stageSummaryScript": "release:summary",
     "artifactRoot": "cockpit-candidate",
     "os": [
-      "xcode-27"
+      "xcode-27",
+      "windows-2025"
     ],
     "targets": [
       {
         "os": "xcode-27",
         "platform": "macos",
         "architecture": "arm64"
+      },
+      {
+        "os": "windows-2025",
+        "platform": "windows",
+        "architecture": "x86_64"
       }
     ],
-    "signMacos": true
+    "signMacos": true,
+    "signWindows": true
   },
   "qaEvidencePath": "pulse-hub-qa",
   "qaEvidenceRetentionDays": 7,

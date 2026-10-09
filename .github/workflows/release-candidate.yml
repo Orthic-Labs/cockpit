@@ -83,7 +83,7 @@ jobs:
 
       - name: RightKit ownership (protected registry roots)
         shell: bash
-        run: test "$(git rev-parse HEAD)" = "${{ inputs.source_revision }}" && pnpm exec right-release ownership --app .
+        run: test "$(git rev-parse HEAD)" = "${{ inputs.source_revision }}" && pnpm exec right-release ownership --app . --advisory-when-pending
       - name: Admit exact main revision & version
         id: admit
         run: pnpm run release:admit
@@ -110,6 +110,11 @@ jobs:
             platform: "macos"
             architecture: "arm64"
             targetTriple: "aarch64-apple-darwin"
+          - os: "windows-2025"
+            node: "26.8.1"
+            platform: "windows"
+            architecture: "x86_64"
+            targetTriple: "x86_64-pc-windows-msvc"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,6 +207,124 @@ jobs:
           path: ${{ runner.temp }}/right-git-stage-summary/stage-summary.json
           if-no-files-found: error
 
+  windows-sign:
+    needs: [admission, candidate]
+    if: ${{ needs.admission.outputs.signed_qualification == 'true' }}
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "windows-2025"
+            platform: "windows"
+            architecture: "x86_64"
+            targetTriple: "x86_64-pc-windows-msvc"
+            node: "26.8.1"
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.admission.outputs.source_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.8.1
+          package-manager-cache: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.24.0
+      - uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0
+        with:
+          targets: ${{ matrix.targetTriple }}
+      - run: pnpm install --frozen-lockfile
+      - name: Initialize Windows signing stage summary
+        run: pnpm run release:summary
+        env:
+          RIGHT_GIT_STAGE_ACTION: init
+          RIGHT_GIT_STAGE_ROOT: ${{ runner.temp }}/right-git-stage-summary
+          RIGHT_GIT_STAGE_EVIDENCE_ROOT: ${{ runner.temp }}/finalized-windows
+          RIGHT_GIT_STAGE: windows-sign
+          RIGHT_GIT_STAGE_PRODUCER: windows-sign-${{ matrix.architecture }}
+          RIGHT_GIT_RELEASE_VERSION: ${{ needs.admission.outputs.version }}
+          RIGHT_GIT_SOURCE_REVISION: ${{ needs.admission.outputs.source_revision }}
+          RIGHT_GIT_RELEASE_PLATFORM: ${{ matrix.platform }}
+          RIGHT_GIT_RELEASE_ARCHITECTURE: ${{ matrix.architecture }}
+          RIGHT_GIT_RUN_ID: ${{ github.run_id }}
+          RIGHT_GIT_RUN_ATTEMPT: ${{ github.run_attempt }}
+      - name: Download exact unsigned Windows candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          path: ${{ runner.temp }}/unsigned-windows-candidate
+      - name: Authenticate to Azure with GitHub OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install pinned Artifact Signing client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'artifact-signing-tools'
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $client = Join-Path $tools 'client.zip'
+          $sdk = Join-Path $tools 'sdk.zip'
+          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/1.0.128/microsoft.artifactsigning.client.1.0.128.nupkg' -OutFile $client
+          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.buildtools/10.0.26100.4188/microsoft.windows.sdk.buildtools.10.0.26100.4188.nupkg' -OutFile $sdk
+          if ((Get-FileHash $client -Algorithm SHA256).Hash -ne '74BD7D27E6CE1051409C38D9B46BC8DF0400ECD643D51FFBF2AC00869061E40B') { throw 'Artifact Signing client hash mismatch' }
+          if ((Get-FileHash $sdk -Algorithm SHA256).Hash -ne '180DEB372659029864C10A0C04787833234D64AACD1D2C0661D2C00295D8E022') { throw 'Windows SDK Build Tools hash mismatch' }
+          Expand-Archive $client (Join-Path $tools 'client')
+          Expand-Archive $sdk (Join-Path $tools 'sdk')
+          "AZURE_ARTIFACT_SIGNING_DLIB_PATH=$tools\client\bin\x64\Azure.CodeSigning.Dlib.dll" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AZURE_SIGNTOOL_PATH=$tools\sdk\bin\10.0.26100.0\x64\signtool.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Sign & finalize Windows candidate
+        run: pnpm exec right-release build --platform win --skip-checks
+        env:
+          LEGION_UNSIGNED_CANDIDATE_ROOT: ${{ runner.temp }}/unsigned-windows-candidate
+          LEGION_SOURCE_REVISION: ${{ env.RIGHT_GIT_SOURCE_REVISION }}
+          RIGHT_GIT_RELEASE_PLATFORM: ${{ matrix.platform }}
+          RIGHT_GIT_RELEASE_ARCHITECTURE: ${{ matrix.architecture }}
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          AZURE_ARTIFACT_SIGNING_PROFILE: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+      - name: Finalize Windows signing stage summary
+        if: ${{ always() }}
+        run: pnpm run release:summary
+        env:
+          RIGHT_GIT_STAGE_ACTION: finalize
+          RIGHT_GIT_STAGE_ROOT: ${{ runner.temp }}/right-git-stage-summary
+          RIGHT_GIT_STAGE_EVIDENCE_ROOT: ${{ runner.temp }}/finalized-windows
+          RIGHT_GIT_STAGE: windows-sign
+          RIGHT_GIT_STAGE_PRODUCER: windows-sign-${{ matrix.architecture }}
+          RIGHT_GIT_STAGE_STATUS: ${{ job.status == 'success' && 'SUCCEEDED' || 'FAILED' }}
+          RIGHT_GIT_STAGE_EXIT_CODE: ${{ job.status == 'success' && '0' || '1' }}
+          RIGHT_GIT_RELEASE_VERSION: ${{ needs.admission.outputs.version }}
+          RIGHT_GIT_SOURCE_REVISION: ${{ needs.admission.outputs.source_revision }}
+          RIGHT_GIT_RELEASE_PLATFORM: ${{ matrix.platform }}
+          RIGHT_GIT_RELEASE_ARCHITECTURE: ${{ matrix.architecture }}
+          RIGHT_GIT_RUN_ID: ${{ github.run_id }}
+          RIGHT_GIT_RUN_ATTEMPT: ${{ github.run_attempt }}
+      - name: Upload signed Windows candidate
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-signed-windows-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          path: |
+            dist/releases/windows/**
+            .right-release/receipts/windows-*.json
+          if-no-files-found: error
+      - name: Upload Windows signing stage summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-windows-sign-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          path: ${{ runner.temp }}/right-git-stage-summary/stage-summary.json
+          if-no-files-found: error
 
   macos-sign:
     needs: [admission, candidate]

@@ -12,6 +12,11 @@ const run = (cmd, args, options={}) => {
   return r.stdout;
 };
 const revision = env.RIGHT_GIT_SOURCE_REVISION;
+if ((action === 'build' || action === 'check') && process.platform === 'win32') {
+  // Windows candidate leg: the ci lane already ran the Windows gate; payload and smoke live in windows-payload.mjs.
+  run(process.execPath, [path.join('scripts', 'release', 'windows-payload.mjs'), action === 'build' ? 'candidate' : 'check']);
+  process.exit(0);
+}
 if (action === 'admit') {
   const version = env.RIGHT_GIT_RELEASE_VERSION;
   const head = run('git', ['rev-parse','HEAD'], {encoding:'utf8',stdio:'pipe'}).trim();

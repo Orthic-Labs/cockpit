@@ -16,6 +16,8 @@
     "release:check": "node scripts/release/candidate.mjs check",
     "rightkit:prepare:mac": "node scripts/release/mac-payload.mjs prepare",
     "rightkit:package:mac": "node scripts/release/mac-payload.mjs package",
+    "rightkit:prepare:win": "node scripts/release/windows-payload.mjs prepare",
+    "rightkit:package:win": "node scripts/release/windows-payload.mjs package",
     "postinstall": "node scripts/release/dispatch-env.mjs"
   },
   "devDependencies": {
