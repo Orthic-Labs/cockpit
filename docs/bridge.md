@@ -9,11 +9,11 @@ The installed CLI is `Pulse.app/Contents/Helpers/pulse` on Mac and `Pulse\Helper
 - `pulse bridge peers [--json]`: every chat that can be messaged, here and on paired computers, as "<chat> on <device>" with kind (`claude` or `codex`) and status.
 - `pulse bridge send "<chat> on <device>" "<text>" [--json]`: a chat on another computer goes through the relay and is delivered natively there; a chat on this computer is delivered natively here, so one command works everywhere. The result is `delivered`, `held`, `refused` or `queued` (no relay running yet).
 
-Also: `pulse bridge status` (relay, chat counts, paired computers seen), `pulse bridge inbox [--from CHAT]` (only for messages that could not be delivered natively: held or refused), `pulse bridge daemon` (relay without the hub).
+Also: `pulse bridge status` (relay, chat counts, paired computers seen), `pulse bridge inbox [--from CHAT]` (only for messages that could not be delivered natively: held or refused).
 
 ## Pairing
 
-`pulse bridge pair <device>` asks a nearby computer to pair; accept the prompt there. Both sides keep one random 32-byte key. Pair once per pair of computers; a running hub reads the new key when it restarts (the sharing port is held by one process, so quit the hub to pair from the CLI).
+`pulse bridge pair <device>` asks a nearby computer to pair; accept the prompt there. Both sides keep one random 32-byte key. Pair once per pair of computers; the CLI hands the request to the running Pulse hub (it owns nearby sharing and its port) through files in the state folder (`bridge/control/requests` and `replies`), and the hub uses the new key at once. The prompt on the other computer reads "Pair with <this computer> for Pulse bridge". If Pulse is not running, `pair` says to start it. `peers`, `send`, `status` and `inbox` need no service: they use the shared store and the hub relays.
 
 ## Skill
 

@@ -7,8 +7,8 @@
 //! * `envelope`: the signed JSON message (`HMAC-SHA256` with a per-pair key).
 //! * `store`: inboxes, outbox, roster cache, relay heartbeat.
 //! * `roster`: which chats exist (`LocalSession`, `Peer`).
-//! * `relay`: what a host with a running `localsend::Service` calls (the hub,
-//!   or `pulse bridge daemon`): `tick` sends the outbox and publishes the
+//! * `control`: how the CLI asks the running hub to pair (files in the state folder).
+//! * `relay`: what a host with a running `localsend::Service` (the hub) calls: `tick` sends the outbox and publishes the
 //!   roster, `on_inbound` handles `Event::Bridge`, `on_local_reply` relays a
 //!   chat's reply, `is_known_local_session`, `status`.
 //! * `deliver_claude`, `deliver_codex`: native delivery into a chat here.
@@ -27,6 +27,7 @@
 //! `Service::bridge_pair(<alias or fingerprint>)` (a prompt appears on the
 //! other computer); `Service::is_paired` tells who is paired.
 
+pub mod control;
 pub mod deliver_claude;
 pub mod deliver_codex;
 pub mod envelope;
@@ -383,7 +384,7 @@ pub fn send_text(
             msg_id: env.id,
             to: peer,
             status: "queued".to_string(),
-            detail: "No Pulse relay is running (open the Pulse hub or run `pulse bridge daemon`); it is sent when one starts.".to_string(),
+            detail: "No Pulse relay is running (open Pulse); it is sent when one starts.".to_string(),
         });
     }
     let started = Instant::now();

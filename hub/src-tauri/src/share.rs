@@ -526,6 +526,67 @@ mod agent_bridge {
         });
     }
 
+    /// Requests from the `pulse bridge` CLI (`pulse_core::bridge::control`), polled on their own
+    /// thread; each runs on its own thread too, since pairing waits for the other computer
+    /// (up to 190 s) and must not hold up the service or the next request.
+    pub fn start_control() {
+        std::thread::spawn(|| {
+            let Ok(store) = pulse_core::bridge::Store::open_default() else { return };
+            loop {
+                std::thread::sleep(Duration::from_millis(250));
+                if !BRIDGE_ACTIVE.load(Ordering::Relaxed) {
+                    continue;
+                }
+                for request in pulse_core::bridge::control::take_requests(&store) {
+                    let store = store.clone();
+                    std::thread::spawn(move || {
+                        let reply = handle(&request);
+                        pulse_core::bridge::control::reply(&store, &request.id, &reply);
+                        DIRTY.store(true, Ordering::Relaxed);
+                    });
+                }
+            }
+        });
+    }
+
+    fn handle(request: &pulse_core::bridge::control::Request) -> Value {
+        let Some(service) = current_service() else {
+            return json!({"ok": false, "error": "Nearby sharing isn't running in Pulse."});
+        };
+        match request.op.as_str() {
+            "pair" => {
+                let device = request.args["device"].as_str().unwrap_or("").trim().to_string();
+                if device.is_empty() {
+                    return json!({"ok": false, "error": "Pairing needs a device name."});
+                }
+                let find = |service: &Service| {
+                    service
+                        .devices()
+                        .into_iter()
+                        .find(|d| d.fingerprint == device || d.alias.eq_ignore_ascii_case(&device))
+                };
+                let started = Instant::now();
+                let found = loop {
+                    if let Some(found) = find(&service) {
+                        break Some(found);
+                    }
+                    if started.elapsed() > Duration::from_secs(15) {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                };
+                let Some(found) = found else {
+                    return json!({"ok": false, "error": format!("{device} is not nearby (is Pulse running there?)")});
+                };
+                match service.bridge_pair(&found.fingerprint) {
+                    Ok(()) => json!({"ok": true, "fingerprint": found.fingerprint, "alias": found.alias}),
+                    Err(error) => json!({"ok": false, "error": error}),
+                }
+            }
+            other => json!({"ok": false, "error": format!("Unknown request: {other}")}),
+        }
+    }
+
     /// `{enabled, active, localChats, remoteChats, peers, lastError}` for the page.
     pub fn state() -> Value {
         let mut value = serde_json::to_value(pulse_core::bridge::status()).unwrap_or(Value::Null);
@@ -691,6 +752,7 @@ pub fn start_background(app: AppHandle) {
         let mut last_drain = Instant::now();
         agent_bridge::load();
         agent_bridge::start_tick();
+        agent_bridge::start_control();
         reconcile();
         let mut last_bridge_sync = Instant::now() - Duration::from_secs(10);
         loop {

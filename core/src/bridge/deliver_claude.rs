@@ -532,7 +532,7 @@ fn hub_slot() -> &'static Mutex<Option<Arc<ReplyHub>>> {
     HUB.get_or_init(|| Mutex::new(None))
 }
 
-/// The hub `deliver` takes reply addresses from. The daemon sets it while sharing runs.
+/// The hub `deliver` takes reply addresses from. The hub sets it while sharing runs.
 pub fn set_reply_hub(hub: Option<Arc<ReplyHub>>) {
     if let Ok(mut slot) = hub_slot().lock() {
         if let Some(old) = slot.take() {

@@ -1,7 +1,7 @@
 //! What a host with a running sharing `Service` calls to run the bridge: send
 //! queued messages, publish the roster to paired computers, hand incoming
 //! bridge messages to the right chat, and carry chats' replies back.
-//! The hub calls these from its own threads; `pulse bridge daemon` does the same.
+//! The hub calls these from its own threads.
 
 use super::deliver_claude::ReplyMessage;
 use super::envelope::{Envelope, Kind, Sender, Target, now_ms};

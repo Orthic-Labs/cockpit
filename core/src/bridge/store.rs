@@ -486,7 +486,7 @@ impl Store {
         read_json(&self.relay_path())
     }
 
-    /// Whether a relay (the hub or `pulse bridge daemon`) is running.
+    /// Whether a relay (the hub) is running.
     pub fn relay_alive(&self) -> bool {
         self.relay_status()
             .is_some_and(|s| now_ms().saturating_sub(s.ts) < RELAY_STALE_MS)

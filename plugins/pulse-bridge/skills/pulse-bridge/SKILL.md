@@ -23,7 +23,7 @@ Do not use Pulse. Message a Claude chat on this computer with SendMessage. Messa
 
    `pulse bridge send "<chat> on <device>" "<text>"`
 
-   The command prints delivered, held, refused or queued. Delivered means the chat on the other machine has the message. Queued means the Pulse relay is not running yet; open the Pulse hub or run `pulse bridge daemon`.
+   The command prints delivered, held, refused or queued. Delivered means the chat on the other machine has the message. Queued means the Pulse relay is not running yet; open Pulse.
 
 Run the commands from your shell tool. If `pulse` is not on PATH, call the binary directly:
 

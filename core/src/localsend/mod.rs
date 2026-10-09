@@ -789,11 +789,13 @@ impl Service {
             .ok_or_else(|| "That device is no longer nearby.".to_string())?;
         let key = envelope::new_pair_key();
         let offer = serde_json::json!({ "offer": key }).to_string();
+        // The receiving card shows this name: say what Accept means.
+        let title = format!("Pair with {} for Pulse bridge", self.alias());
         let status = post_preview(
             &self.inner.me,
             &device,
             envelope::PAIR_FILE_TYPE,
-            "Pulse bridge pairing",
+            &title,
             offer,
             Duration::from_secs(190),
         )?;

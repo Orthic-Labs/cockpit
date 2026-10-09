@@ -4,25 +4,21 @@
 //!
 //! peers [--json]                      every chat that can be messaged, here and on paired computers
 //! send <chat on device> <text…> [--from CHAT] [--json]
-//! pair <device>                       pair with a nearby computer (a prompt appears there)
+//! pair <device>                       pair with a nearby computer (a prompt appears there); the running Pulse hub does it
 //! status [--json]                     relay, chats here, chats on paired computers
 //! install|uninstall [--claude] [--codex] [--dry-run]   the Pulse skill for Claude and Codex
 //! inbox [--from CHAT] [--json]        messages that could not be delivered natively
-//! daemon                              sharing service plus the relay, without the hub
 
-use pulse_core::bridge::install;
 use pulse_core::bridge::roster::{self, REMOTE_MAX_AGE_MS};
 use pulse_core::bridge::store::Store;
-use pulse_core::bridge::{self, Caller, deliver_claude, identify, local_identity};
-use pulse_core::localsend::{Config, Event, Service, proto};
+use pulse_core::bridge::{self, Caller, control, identify, install, local_identity};
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     if args.is_empty() {
         return Err(
-            "bridge needs a command: peers, send, pair, status, install, uninstall, inbox, daemon"
+            "bridge needs a command: peers, send, pair, status, install, uninstall, inbox"
                 .into(),
         );
     }
@@ -47,7 +43,6 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
             inbox(from.as_deref(), machine)
         }
         "install" | "uninstall" => install::run(&command, args, machine),
-        "daemon" => daemon(),
         other => Err(format!("unknown bridge command: {other}")),
     }
 }
@@ -142,7 +137,7 @@ fn status(machine: bool) -> Result<(), String> {
         if relay {
             "running"
         } else {
-            "not running (open the Pulse hub or run `pulse bridge daemon`)"
+            "not running (open Pulse)"
         }
     );
     println!("{here} chats on {}", me.alias);
@@ -180,89 +175,28 @@ fn inbox(from: Option<&str>, machine: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn home_downloads() -> std::path::PathBuf {
-    #[cfg(windows)]
-    let variable = "USERPROFILE";
-    #[cfg(not(windows))]
-    let variable = "HOME";
-    std::env::var_os(variable)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_default()
-        .join("Downloads")
-}
-
-/// The sharing service with the bridge wired in, for `pair` and `daemon`. The
-/// hub does the same inside itself; only one process can hold the port.
-fn start_service() -> Result<Arc<Service>, String> {
-    let store = Store::open_default().map_err(|e| e.to_string())?;
-    let host = sysinfo::System::host_name().unwrap_or_else(|| "Computer".to_string());
-    let config = Config {
-        alias: format!("{host} (Pulse)"),
-        port: proto::PORT,
-        save_dir: home_downloads(),
-        accept_known: false,
-        state_dir: store.localsend_dir(),
-        device_model: if cfg!(windows) { "Windows" } else { "Mac" }.to_string(),
-    };
-    let slot: Arc<Mutex<Option<Arc<Service>>>> = Arc::new(Mutex::new(None));
-    let for_events = slot.clone();
-    let service = Arc::new(
-        Service::start(
-            config,
-            Arc::new(move |event: Event| {
-                if let Event::Bridge(envelope) = event {
-                    let current = for_events.lock().ok().and_then(|s| s.clone());
-                    if let Some(service) = current {
-                        std::thread::spawn(move || bridge::on_inbound(&service, envelope));
-                    }
-                }
-            }),
-        )
-        .map_err(|e| {
-            format!("{e} (If the Pulse hub is running, quit it first; the bridge runs inside it.)")
-        })?,
-    );
-    if let Ok(mut current) = slot.lock() {
-        *current = Some(service.clone());
-    }
-    let for_replies = service.clone();
-    let on_reply = Arc::new(move |reply: deliver_claude::ReplyMessage| {
-        let service = for_replies.clone();
-        std::thread::spawn(move || bridge::on_local_reply(&service, reply));
-    });
-    let is_known = Arc::new(bridge::is_known_local_session);
-    deliver_claude::set_reply_hub(Some(deliver_claude::ReplyHub::new(on_reply, is_known)));
-    Ok(service)
-}
-
-/// Ask a nearby computer to pair; accept on that computer. A running hub reads
-/// the new key when it next starts.
+/// Ask a nearby computer to pair; accept on that computer. The running Pulse
+/// hub (it owns nearby sharing and its port) does the pairing and starts using
+/// the new key at once.
 fn pair(device: &str) -> Result<(), String> {
-    let service = start_service()?;
-    let started = Instant::now();
-    while !service
-        .devices()
-        .iter()
-        .any(|d| d.fingerprint == device || d.alias.eq_ignore_ascii_case(device))
-    {
-        if started.elapsed() > Duration::from_secs(15) {
-            return Err(format!("{device} is not nearby (is Pulse running there?)"));
-        }
-        std::thread::sleep(Duration::from_millis(500));
+    let store = Store::open_default().map_err(|e| e.to_string())?;
+    if !control::hub_running(&store) {
+        return Err("Start Pulse (the hub runs nearby sharing) and try again.".to_string());
     }
     eprintln!("Asking {device} to pair; accept on that computer...");
-    service.bridge_pair(device)?;
-    println!("Paired with {device}. Restart the Pulse hub if it is running.");
-    Ok(())
-}
-
-/// The relay without the hub: run it while chats here and on paired computers
-/// should reach each other.
-fn daemon() -> Result<(), String> {
-    let service = start_service()?;
-    eprintln!("Pulse bridge relay running. Press Ctrl-C to stop.");
-    loop {
-        bridge::tick(&service);
-        std::thread::sleep(Duration::from_secs(2));
+    let reply = control::call(
+        &store,
+        "pair",
+        json!({"device": device}),
+        Duration::from_secs(210),
+    )?;
+    if reply["ok"].as_bool() == Some(true) {
+        println!("Paired with {device}.");
+        Ok(())
+    } else {
+        Err(reply["error"]
+            .as_str()
+            .unwrap_or("Pairing failed.")
+            .to_string())
     }
 }
