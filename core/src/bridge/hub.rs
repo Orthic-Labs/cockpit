@@ -95,12 +95,39 @@ fn register(alias: &str) {
         return;
     }
     let pid = std::process::id();
-    // Leftovers from an earlier hub with this pid (rare) or our own earlier files.
-    let _ = std::fs::remove_file(dir.join(format!("{pid}.json")));
+    // Leftovers: an earlier hub that was killed (an install) never unregistered, and a
+    // file with this pid could be ours from before. Only entries this hub wrote
+    // (`entrypoint` pulse-hub) whose process is gone are removed.
+    let mut stale: Vec<u32> = vec![pid];
+    if let Ok(listing) = std::fs::read_dir(&dir) {
+        for entry in listing.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let Some(value) = std::fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            else {
+                continue;
+            };
+            if value["entrypoint"] == ENTRYPOINT
+                && let Some(old) = value["pid"].as_u64().and_then(|p| u32::try_from(p).ok())
+                && old != pid
+                && !roster::live_pids()(old)
+            {
+                stale.push(old);
+            }
+        }
+    }
     if let Ok(listing) = std::fs::read_dir(&dir) {
         for entry in listing.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&format!("{pid}.")) && name.ends_with(".key") {
+            let ours = stale.iter().any(|p| {
+                name == format!("{p}.json")
+                    || (name.starts_with(&format!("{p}.")) && name.ends_with(".key"))
+            });
+            if ours {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
