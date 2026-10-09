@@ -148,6 +148,8 @@ fn fake_chat(_b: &std::path::Path) -> (String, std::sync::mpsc::Receiver<String>
             let served = std::mem::replace(&mut current, create());
             let tx = line_tx.clone();
             std::thread::spawn(move || {
+                // Capture the whole `Pipe` (Send), not its raw-pointer field.
+                let served = served;
                 // SAFETY: the handle is owned by `served` and moved into the File.
                 let file = unsafe { std::fs::File::from_raw_handle(served.0.0) };
                 let mut reader = BufReader::new(&file);
