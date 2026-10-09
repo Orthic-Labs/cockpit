@@ -407,11 +407,19 @@ fn absolute_clean(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn abs_path(path: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:{path}"))
+        } else {
+            PathBuf::from(path)
+        }
+    }
+
     fn request(format: CompressionFormat) -> CompressionRequest {
         CompressionRequest::new(
-            PathBuf::from("/input/photo.jpg"),
-            PathBuf::from("/input"),
-            PathBuf::from("/output"),
+            abs_path("/input/photo.jpg"),
+            abs_path("/input"),
+            abs_path("/output"),
             format,
             80,
             ResizePolicy::Keep,
@@ -443,7 +451,7 @@ mod tests {
         plan.begin_publishing().unwrap();
         let result = plan
             .finalize(OutputEvidence {
-                path: PathBuf::from("/output/photo.jpg"),
+                path: abs_path("/output/photo.jpg"),
                 logical_bytes: Some(400),
                 identity: Some(FileIdentity {
                     volume_id: "v".into(),
@@ -496,7 +504,7 @@ mod tests {
         plan.begin_publishing().unwrap();
         let failure = plan
             .finalize(OutputEvidence {
-                path: PathBuf::from("/output/photo.jpg"),
+                path: abs_path("/output/photo.jpg"),
                 logical_bytes: Some(400),
                 identity: None,
                 is_regular_file: true,

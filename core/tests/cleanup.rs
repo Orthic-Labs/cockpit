@@ -2,10 +2,19 @@ use pulse_core::cleanup::*;
 use pulse_core::model::{EntryKind, FileIdentity, VolumeIdentity};
 use std::path::PathBuf;
 
+/// Host-absolute form of a rooted fixture path (Windows needs a drive prefix).
+fn abs_path(path: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{path}"))
+    } else {
+        PathBuf::from(path)
+    }
+}
+
 fn item(path: &str, id: &str) -> CleanupItem {
     let volume = VolumeIdentity::new("vol-a");
     CleanupItem {
-        path: path.into(),
+        path: abs_path(path),
         volume: volume.clone(),
         identity: FileIdentity {
             volume,
@@ -81,7 +90,7 @@ fn moved() -> ItemOutcome {
 fn overlapping_targets_are_deduplicated_to_outer_target() {
     let p = plan(vec![item("/tmp/a", "a"), item("/tmp/a/child", "child")]);
     assert_eq!(p.items.len(), 1);
-    assert_eq!(p.items[0].path, PathBuf::from("/tmp/a"));
+    assert_eq!(p.items[0].path, abs_path("/tmp/a"));
 }
 
 #[test]

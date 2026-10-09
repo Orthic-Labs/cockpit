@@ -1,8 +1,10 @@
 //! Real-filesystem runtime tests for the std provider. Every test works in a
 //! unique directory under the canonical temp dir and removes only that dir.
 
+#[cfg(unix)]
+use pulse_core::EntryKind;
 use pulse_core::{
-    EntryKind, FileMetadata, FilesystemProvider, FsError, ScanOptions, StdFilesystemProvider,
+    FileMetadata, FilesystemProvider, FsError, ScanOptions, StdFilesystemProvider,
     VolumeIdentity, VolumeUsage, scan_paths, scan_with_provider,
 };
 use std::cell::Cell;
@@ -202,6 +204,7 @@ fn special_file_is_unknown_not_zero_allocated() {
 
 /// Provider that deletes a listed child before the scanner inspects it,
 /// exercising the enumeration-to-inspection race conservatively.
+#[cfg_attr(not(unix), allow(dead_code))] // only the unix race test constructs it
 struct RemoveOnList {
     inner: StdFilesystemProvider,
     victim: PathBuf,

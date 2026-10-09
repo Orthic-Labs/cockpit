@@ -1,11 +1,20 @@
 use pulse_core::compression::*;
 use std::path::PathBuf;
 
+/// Host-absolute form of a rooted fixture path (Windows needs a drive prefix).
+fn abs_path(path: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{path}"))
+    } else {
+        PathBuf::from(path)
+    }
+}
+
 fn request(format: CompressionFormat) -> CompressionRequest {
     CompressionRequest::new(
-        PathBuf::from("/fixture/input/source.jpg"),
-        PathBuf::from("/fixture/input"),
-        PathBuf::from("/fixture/output"),
+        abs_path("/fixture/input/source.jpg"),
+        abs_path("/fixture/input"),
+        abs_path("/fixture/output"),
         format,
         75,
         ResizePolicy::Keep,
@@ -48,7 +57,7 @@ fn malformed_parameters_are_rejected_before_io() {
 #[test]
 fn unsupported_codec_is_explicit() {
     let mut unsupported = request(CompressionFormat::Webp);
-    unsupported.source = PathBuf::from("/fixture/input/source.webp");
+    unsupported.source = abs_path("/fixture/input/source.webp");
     assert_eq!(
         CompressionPlan::validate(unsupported, source()),
         Err(CompressionPlanError::UnsupportedCodec)
@@ -86,7 +95,7 @@ fn failure_and_cancel_never_complete() {
     plan.begin_publishing().unwrap();
     let failure = plan
         .finalize(OutputEvidence {
-            path: PathBuf::from("/fixture/output/result.jpg"),
+            path: abs_path("/fixture/output/result.jpg"),
             logical_bytes: Some(450),
             identity: Some(FileIdentity {
                 volume_id: "fixture-volume".into(),
@@ -118,7 +127,7 @@ fn measured_output_is_read_separately_from_estimate() {
     plan.begin_publishing().unwrap();
     let result = plan
         .finalize(OutputEvidence {
-            path: PathBuf::from("/fixture/output/result.jpg"),
+            path: abs_path("/fixture/output/result.jpg"),
             logical_bytes: Some(350),
             identity: Some(FileIdentity {
                 volume_id: "fixture-volume".into(),
@@ -143,7 +152,7 @@ fn finalize_rejects_unsafe_or_source_identity_output() {
     plan.begin_publishing().unwrap();
     let failure = plan
         .finalize(OutputEvidence {
-            path: PathBuf::from("/fixture/output/../source.jpg"),
+            path: abs_path("/fixture/output/../source.jpg"),
             logical_bytes: Some(300),
             identity: Some(FileIdentity {
                 volume_id: "fixture-volume".into(),

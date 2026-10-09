@@ -206,7 +206,12 @@ fn cpu_sums_and_memory_sums_when_complete() {
     assert_eq!(grp.cpu_usage_percent, 4.0);
     assert_eq!(grp.memory.value, Some(300));
     assert!(matches!(grp.memory.capability, Capability::Available));
-    assert!(grp.memory.label.contains("physical footprint unavailable"));
+    let expected_label = if cfg!(windows) {
+        "private bytes unavailable"
+    } else {
+        "physical footprint unavailable"
+    };
+    assert!(grp.memory.label.contains(expected_label));
     assert!(matches!(grp.evidence, GroupEvidence::VerifiedParentChain));
 }
 

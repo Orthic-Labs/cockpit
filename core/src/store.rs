@@ -618,6 +618,7 @@ mod pinned {
     const FILE_OPEN_IF: u32 = 3;
     const FILE_DISPOSITION_INFORMATION_CLASS: i32 = 13;
     const FILE_LINK_INFORMATION_CLASS: i32 = 11;
+    const STATUS_INVALID_PARAMETER: NTSTATUS = NTSTATUS(0xC000_000Du32 as i32);
     const OBJ_CASE_INSENSITIVE: u32 = 0x0000_0040;
     const OBJ_DONT_REPARSE: u32 = 0x0000_1000;
     const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
@@ -809,35 +810,59 @@ mod pinned {
             MaximumLength: (utf16.len() * 2) as u16,
             Buffer: PWSTR(utf16.as_mut_ptr()),
         };
-        let attributes = NtObjectAttributes {
-            length: std::mem::size_of::<NtObjectAttributes>() as u32,
-            root_directory: root,
-            object_name: &unicode,
-            attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
-            security_descriptor: std::ptr::null(),
-            security_quality_of_service: std::ptr::null(),
-        };
-        let mut opened = HANDLE(std::ptr::null_mut());
-        let mut status = IO_STATUS_BLOCK::default();
-        let status = unsafe {
-            NtCreateFile(
-                &mut opened,
-                access | SYNCHRONIZE_ACCESS,
-                &attributes,
-                &mut status,
-                std::ptr::null(),
-                FILE_ATTRIBUTE_NORMAL,
-                (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0,
-                disposition,
-                options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_NO_RECALL,
-                std::ptr::null(),
-                0,
-            )
-        };
-        if status.0 < 0 {
-            return Err(nt_error(status));
+        // Every open is a single relative component with FILE_OPEN_REPARSE_POINT
+        // and a post-open attribute check, so reparse points are refused even
+        // where the kernel rejects OBJ_DONT_REPARSE (STATUS_INVALID_PARAMETER);
+        // that one flag is then dropped and the open retried once.
+        let mut last = NTSTATUS(0);
+        for attribute_flags in [
+            OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
+            OBJ_CASE_INSENSITIVE,
+        ] {
+            let attributes = NtObjectAttributes {
+                length: std::mem::size_of::<NtObjectAttributes>() as u32,
+                root_directory: root,
+                object_name: &unicode,
+                attributes: attribute_flags,
+                security_descriptor: std::ptr::null(),
+                security_quality_of_service: std::ptr::null(),
+            };
+            let mut opened = HANDLE(std::ptr::null_mut());
+            let mut io_status = IO_STATUS_BLOCK::default();
+            let status = unsafe {
+                NtCreateFile(
+                    &mut opened,
+                    access | SYNCHRONIZE_ACCESS,
+                    &attributes,
+                    &mut io_status,
+                    std::ptr::null(),
+                    FILE_ATTRIBUTE_NORMAL,
+                    (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0,
+                    disposition,
+                    options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_NO_RECALL,
+                    std::ptr::null(),
+                    0,
+                )
+            };
+            if status.0 >= 0 {
+                return Ok(Handle(opened));
+            }
+            last = status;
+            if status != STATUS_INVALID_PARAMETER {
+                break;
+            }
         }
-        Ok(Handle(opened))
+        let error = nt_error(last);
+        if last == STATUS_INVALID_PARAMETER {
+            // Keep the failing request visible; every other status keeps its
+            // raw OS code for callers that match it.
+            return Err(invalid_input(format!(
+                "NtCreateFile rejected the request (status {:#010x}, access {access:#x}, \
+                 disposition {disposition}, options {options:#x}): {error}",
+                last.0 as u32
+            )));
+        }
+        Err(error)
     }
 
     fn open_drive_root(letter: u8) -> io::Result<Handle> {
