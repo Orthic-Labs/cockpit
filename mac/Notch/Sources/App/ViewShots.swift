@@ -173,49 +173,66 @@ enum ViewShots {
             .environment(\.usageWatchLimit, 0.70)
             .environment(\.usageCriticalLimit, 0.90)
             .environment(\.colorTransitionStyle, .hardStep)
-            .padding(crop ? 16 : 24)
-            .background(Color(nsColor: backdrop))
-        let renderer = ImageRenderer(content: styled)
-        renderer.scale = 2
-        guard var image = renderer.cgImage else { return nil }
-        if crop { image = Self.cropped(image, margin: 32) }
+        let scale: CGFloat = 2
+        if crop {
+            // Render on transparency, crop to what was actually drawn, then lay the
+            // result on the backdrop with a uniform margin.
+            let renderer = ImageRenderer(content: styled)
+            renderer.scale = scale
+            renderer.isOpaque = false
+            guard let image = renderer.cgImage,
+                  let out = Self.composited(image, backdrop: backdrop, margin: Int(16 * scale))
+            else { return nil }
+            return NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:])
+        }
+        let renderer = ImageRenderer(content: styled.padding(24).background(Color(nsColor: backdrop)))
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return nil }
         return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
-    /// The smallest rectangle holding everything that is not the backdrop, plus a margin
-    /// (in pixels). The backdrop colour is read from the rendered bitmap itself (its
-    /// top-left pixel, inside the padding), so colour management cannot make the whole
-    /// image look like content.
-    private static func cropped(_ image: CGImage, margin: Int) -> CGImage {
+    /// Crops a transparent render to the bounding box of pixels with alpha > 8, then
+    /// draws it on the backdrop with `margin` pixels on every side. Falls back to the
+    /// whole image when nothing is opaque enough to measure.
+    private static func composited(_ image: CGImage, backdrop: NSColor, margin: Int) -> CGImage? {
         let width = image.width, height = image.height
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                      bytesPerRow: width * 4, space: space,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let raw = context.data
-        else { return image }
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+              let probe = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                    bytesPerRow: width * 4, space: space,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let raw = probe.data
+        else { return nil }
+        probe.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        probe.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         let pixels = raw.assumingMemoryBound(to: UInt8.self)
-        let red = Int(pixels[0]), green = Int(pixels[1]), blue = Int(pixels[2])
 
         var minX = width, minY = height, maxX = -1, maxY = -1
         for y in 0..<height {
-            for x in 0..<width {
-                let i = (y * width + x) * 4
-                if abs(Int(pixels[i]) - red) > 3 || abs(Int(pixels[i + 1]) - green) > 3
-                    || abs(Int(pixels[i + 2]) - blue) > 3 {
-                    if x < minX { minX = x }
-                    if x > maxX { maxX = x }
-                    if y < minY { minY = y }
-                    if y > maxY { maxY = y }
-                }
+            for x in 0..<width where pixels[(y * width + x) * 4 + 3] > 8 {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
             }
         }
-        guard maxX >= minX, maxY >= minY else { return image }
-        let left = max(minX - margin, 0), top = max(minY - margin, 0)
-        let right = min(maxX + margin, width - 1), bottom = min(maxY + margin, height - 1)
-        let rect = CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
-        return image.cropping(to: rect) ?? image
+        var content = image
+        if maxX >= minX, maxY >= minY {
+            let rect = CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+            content = image.cropping(to: rect) ?? image
+        }
+
+        let outW = content.width + margin * 2, outH = content.height + margin * 2
+        guard let canvas = CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8,
+                                     bytesPerRow: 0, space: space,
+                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let fill = backdrop.usingColorSpace(.sRGB) ?? backdrop
+        canvas.setFillColor(red: fill.redComponent, green: fill.greenComponent,
+                            blue: fill.blueComponent, alpha: 1)
+        canvas.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
+        canvas.draw(content, in: CGRect(x: margin, y: margin,
+                                        width: content.width, height: content.height))
+        return canvas.makeImage()
     }
 
     // MARK: Building views from fixtures
