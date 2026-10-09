@@ -39,6 +39,8 @@ final class DiskImageInstaller {
     private var jobToken: UUID?
     private var busy = false
     private var cancelOffered = false
+    /// The image behind the running install was ejected before the final move.
+    private var ejectedWhileBusy = false
 
     /// A result card is up (and whether it goes away by itself).
     private var resultUp = false
@@ -99,24 +101,44 @@ final class DiskImageInstaller {
     // MARK: - Mounts
 
     private func mounted(_ url: URL) {
-        guard preferences.convDiskImageInstaller, reading.insert(url.path).inserted else { return }
+        guard preferences.convDiskImageInstaller, Self.openedByUser(url),
+              reading.insert(url.path).inserted else { return }
         Task { [weak self] in
             let contents = await Task.detached { DiskImageWork.inspect(mountedAt: url) }.value
             self?.finishedReading(url, contents)
         }
     }
 
+    /// Whether a mount is one the user opened: a browsable volume under
+    /// /Volumes. Background mounts (`hdiutil attach -nobrowse`), hidden
+    /// volumes, and mounts elsewhere (simulator runtimes) are ignored. A
+    /// volume that cannot be read is treated as not opened by the user.
+    private static func openedByUser(_ url: URL) -> Bool {
+        guard url.standardizedFileURL.path.hasPrefix("/Volumes/") else { return false }
+        let values = try? url.resourceValues(forKeys: [.volumeIsBrowsableKey, .isHiddenKey])
+        return values?.volumeIsBrowsable == true && values?.isHidden != true
+    }
+
     private func finishedReading(_ url: URL, _ contents: DiskImageContents?) {
         reading.remove(url.path)
         guard preferences.convDiskImageInstaller, let contents else { return }
+        // Ejected while it was being read: nothing to offer.
+        guard FileManager.default.fileExists(atPath: contents.mountURL.path) else { return }
         queue.append(contents)
         advance()
     }
 
-    /// An image went away: a question about it is moot.
+    /// An image went away: a question about it is moot, and an install still
+    /// short of its final move is cancelled (the install's own eject comes
+    /// after that point and is ignored here).
     private func unmounted(_ url: URL) {
         queue.removeAll { $0.mountURL.path == url.path }
-        guard let current, current.mountURL.path == url.path, !busy, !resultUp else { return }
+        guard let current, current.mountURL.path == url.path else { return }
+        if busy {
+            if jobToken != nil, control?.requestCancel() == true { ejectedWhileBusy = true }
+            return
+        }
+        guard !resultUp else { return }
         clearCard()
     }
 
@@ -286,6 +308,7 @@ final class DiskImageInstaller {
         self.control = control
         busy = true
         cancelOffered = true
+        ejectedWhileBusy = false
         showWorking(app)
         let trashDownload = preferences.convDiskImageTrashDownload
 
@@ -361,6 +384,22 @@ final class DiskImageInstaller {
         busy = false
         control = nil
         jobToken = nil
+        let ejectedMidway = ejectedWhileBusy
+        ejectedWhileBusy = false
+
+        if ejectedMidway {
+            switch result.outcome {
+            case .cancelled, .failed:
+                reopenApps(reopen)
+                showResult(DiskImagePrompt(iconPath: app.appURL.path,
+                                           title: L10n.t("Could not install \(app.name)"),
+                                           detail: L10n.t("The disk image was ejected."), style: .problem),
+                           expires: false)
+                return
+            case .installed:
+                break
+            }
+        }
 
         switch result.outcome {
         case .installed:

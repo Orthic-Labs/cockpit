@@ -807,6 +807,19 @@ fn ticker() {
             if let Some(batch) = batch {
                 model.queue.push_back(batch);
             }
+            // The file behind a question is gone from Downloads: the question is moot.
+            let moot = !model.busy
+                && model.card.as_ref().is_some_and(|c| c.style == Style::Ask)
+                && model
+                    .ctx
+                    .item
+                    .as_ref()
+                    .is_some_and(|item| matches!(item.path.try_exists(), Ok(false)));
+            if moot {
+                model.card = None;
+                model.ctx = Context::default();
+                notify();
+            }
             let expired = model
                 .card
                 .as_ref()
