@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "@rightkit/app-shell/shell.css";
 import "./styles.css";
 import { App } from "./App";
+import "./interaction.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // The hub has no Dock icon, so macOS does not bring it forward on launch.

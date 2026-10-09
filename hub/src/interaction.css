@@ -1,0 +1,103 @@
+/* Interaction states for every clickable control in the hub: a hover lift (plate or colour change,
+   hand cursor) and a stronger pressed state, immediately. One rule per component class.
+
+   The lift is an inset box-shadow wash, so it follows each control's own radius, sits over any
+   background (transparent buttons, filled buttons, cards) and leaves the existing background
+   rules alone. Loaded after every view stylesheet (see main.tsx). */
+:root {
+  --pl-hover: color-mix(in srgb, var(--rk-ink) 9%, transparent);
+  --pl-press: color-mix(in srgb, var(--rk-ink) 19%, transparent);
+  --pl-wash: 0 0 0 100vmax;
+}
+
+/* Hand cursor on everything that acts; none on disabled or the current page. */
+:root :is(.rk-btn, .rk-icon-btn, .rk-seg__item, .rk-toggle, .rk-item, .rk-pill, .ck-mini, .ck-check,
+  .mon-disclosure, .mon-seg button, .st-disclose, .st-crumb, .st-change, .st-row-more, .st-link, .st-more-btn,
+  .ck-apps-open, .ck-claude-name, .ck-forget, .ck-claude-unseen, .growth-row, .ov-card-head, .ov-action,
+  .ov-pill, .ov-attention, .ck-apps-about > summary) { cursor: pointer; }
+:root :is(button, [role="switch"]):disabled { cursor: default; }
+
+/* Plate controls: hover lifts, press lifts further and presses in. */
+:root :is(.rk-btn, .rk-icon-btn, .rk-seg__item, .rk-toggle, .ck-mini, .mon-disclosure, .mon-seg button,
+  .st-disclose, .st-crumb, .st-change, .st-row-more, .ck-apps-open, .ck-claude-name, .ck-forget,
+  .ck-claude-unseen, .growth-row, .ov-card-head, .ov-action, .ov-pill, .ov-attention, .st-row.clickable,
+  .row.clickable, .rk-pill) {
+  transition: box-shadow .1s, background-color .12s, color .1s, transform .08s;
+}
+:root :is(.rk-btn, .rk-icon-btn, .rk-seg__item, .rk-toggle, .ck-mini, .mon-disclosure, .mon-seg button,
+  .st-disclose, .st-crumb, .st-change, .st-row-more, .ck-apps-open, .ck-claude-name, .ck-forget,
+  .ck-claude-unseen, .growth-row, .ov-card-head, .ov-action, .ov-pill, .ov-attention, .st-row.clickable,
+  .row.clickable, .rk-pill):hover:not(:disabled) {
+  box-shadow: inset var(--pl-wash) var(--pl-hover);
+}
+:root :is(.rk-btn, .rk-icon-btn, .rk-seg__item, .rk-toggle, .ck-mini, .mon-disclosure, .mon-seg button,
+  .st-disclose, .st-crumb, .st-change, .st-row-more, .ck-apps-open, .ck-claude-name, .ck-forget,
+  .ck-claude-unseen, .growth-row, .ov-card-head, .ov-action, .ov-pill, .ov-attention, .st-row.clickable,
+  .row.clickable, .rk-pill):active:not(:disabled) {
+  box-shadow: inset var(--pl-wash) var(--pl-press);
+  transition-duration: 0s;
+}
+
+/* Controls that keep their own ring or shadow keep it under the wash. */
+:root .rk-btn--ghost:hover:not(:disabled) { box-shadow: inset 0 0 0 1px var(--rk-line-strong), inset var(--pl-wash) var(--pl-hover); }
+:root .rk-btn--ghost:active:not(:disabled) { box-shadow: inset 0 0 0 1px var(--rk-line-strong), inset var(--pl-wash) var(--pl-press); }
+:root .rk-seg__item.is-on:hover:not(:disabled) { box-shadow: var(--rk-knob), inset var(--pl-wash) var(--pl-hover); }
+:root .rk-seg__item.is-on:active:not(:disabled) { box-shadow: var(--rk-knob), inset var(--pl-wash) var(--pl-press); }
+:root .mon-seg button[aria-pressed="true"]:hover { box-shadow: inset 0 0 0 1px var(--rk-hairline), inset var(--pl-wash) var(--pl-hover); }
+:root .mon-seg button[aria-pressed="true"]:active { box-shadow: inset 0 0 0 1px var(--rk-hairline), inset var(--pl-wash) var(--pl-press); }
+/* Unselected segments also move their label to full ink on hover. */
+:root .rk-seg__item:not(.is-on):hover:not(:disabled),
+:root .mon-seg button:not([aria-pressed="true"]):hover { color: var(--rk-ink); }
+
+/* Switches: the wash on the track, and the knob stretches while pressed. */
+:root .rk-toggle:hover:not(:disabled) { filter: brightness(1.12); }
+:root .rk-toggle:active:not(:disabled) { filter: brightness(1.25); }
+:root .rk-toggle .rk-toggle__knob { transition: transform .15s, width .08s; }
+:root .rk-toggle:active:not(:disabled) .rk-toggle__knob { width: 22px; }
+:root .rk-toggle[aria-checked="true"]:active:not(:disabled) .rk-toggle__knob { transform: translateX(10px); }
+
+/* Press-in, only for pointer users who have not asked for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  :root :is(.rk-btn, .rk-icon-btn, .rk-seg__item, .ck-mini, .mon-seg button, .st-crumb, .st-row-more,
+    .ck-forget, .ov-action, .ov-pill, .ov-attention, .rk-pill):active:not(:disabled) { transform: scale(.96); }
+  :root :is(.ov-card-head, .mon-disclosure, .st-disclose, .st-change, .ck-apps-open, .ck-claude-name,
+    .ck-claude-unseen, .growth-row, .st-row.clickable, .row.clickable):active:not(:disabled) { transform: scale(.995); }
+}
+
+/* Primary and danger buttons darken on top of the wash instead of fighting it. */
+:root .rk-btn--primary:active:not(:disabled) { background: color-mix(in srgb, var(--rk-accent) 74%, black); }
+:root .rk-btn--danger:active:not(:disabled) { background: color-mix(in srgb, var(--rk-bad) 74%, black); }
+
+/* Sidebar: hover keeps the app-shell tint; pressing deepens it. The active row keeps its fused
+   shape untouched and dims its label instead, so the fuse curves are never altered. */
+:root .rk-item:not(.is-active):active { background: var(--rk-fill-3); transition-duration: 0s; }
+:root .rk-item.is-active .rk-item__label { transition: opacity .1s; }
+:root .rk-item.is-active:hover .rk-item__label { opacity: .78; }
+:root .rk-item.is-active:active .rk-item__label { opacity: .55; transition-duration: 0s; }
+
+/* Overview cards: the whole header strip is the button, so it gets a plate that bleeds 6px past the
+   text without moving the layout (negative margins give the room back). */
+:root .ov-card-head { box-sizing: border-box; width: calc(100% + 12px); height: 26px; margin: -4px -6px; padding: 0 6px; border-radius: 7px; }
+:root .ov-card-head:hover:not(:disabled) .ov-card-go { color: var(--rk-ink); }
+:root .ov-card-head:active:not(:disabled) .ov-card-go { color: var(--rk-accent); }
+
+/* Text-only buttons: underline and ink on hover, dim on press. */
+:root :is(.st-link, .st-more-btn):hover:not(:disabled) { text-decoration: underline; filter: brightness(1.15); }
+:root :is(.st-link, .st-more-btn):active:not(:disabled) { text-decoration: underline; opacity: .6; transition-duration: 0s; }
+:root .ck-apps-about > summary:hover { color: var(--rk-ink); }
+:root .ck-apps-about > summary:active { opacity: .6; }
+:root .ck-claude-unseen:hover:not(:disabled) { color: var(--rk-ink); }
+:root .st-crumb:hover:not(:disabled) { color: var(--rk-ink); }
+
+/* Labelled checkboxes and native selects: a plate on hover, a ring on press. Text inputs are the
+   one exception to the hover standard: they show a focus ring instead. */
+:root .ck-check { border-radius: 8px; }
+:root .ck-check:hover { box-shadow: inset var(--pl-wash) var(--pl-hover); }
+:root .ck-check:active { box-shadow: inset var(--pl-wash) var(--pl-press); }
+:root :is(.ck-select, select):hover:not(:disabled):not(:focus-visible) { border-color: var(--rk-ink-3); cursor: pointer; }
+:root :is(.ck-select, select):active:not(:disabled) { border-color: var(--rk-accent); }
+
+/* Reduced motion: no transform, the wash still shows. */
+@media (prefers-reduced-motion: reduce) {
+  :root .rk-toggle .rk-toggle__knob { transition: none; }
+}

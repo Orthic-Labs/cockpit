@@ -1344,8 +1344,17 @@ fn crawl_nav(ctl: &Control, shots: &Path, inventory: &mut Vec<Value>) {
             "hover": null, "pressed": null, "after": null, "hover_style_changed": null,
             "press_pixels_changed": null, "clicked": true, "action": "", "disabled": false,
         });
+        let sig_js = crawl_js(
+            "const b=[...document.querySelectorAll('nav.rk-nav button')].find(e=>e.textContent.trim()===__TITLE__); return b ? styleSig(b) : '';",
+            &[("__TITLE__", json!(sec.title).to_string())],
+        );
+        let _ = ctl.move_to(2.0, 2.0);
+        std::thread::sleep(Duration::from_millis(80));
+        let rest_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
         let _ = ctl.move_to(x, y);
         std::thread::sleep(Duration::from_millis(120));
+        let hover_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
+        entry["hover_style_changed"] = json!(rest_sig != hover_sig);
         let hover_png = shots.join(name("hover"));
         if ctl.screenshot_to(&hover_png).is_ok() {
             entry["hover"] = json!(name("hover"));
@@ -1368,6 +1377,40 @@ fn crawl_nav(ctl: &Control, shots: &Path, inventory: &mut Vec<Value>) {
         inventory.push(entry);
     }
     let _ = ctl.move_to(2.0, 2.0);
+}
+
+/// The interaction standard, enforced on the crawl inventory: every control shows a hover state
+/// and every clicked control shows a pressed state. Allowlist: text inputs and native value
+/// controls (selects, sliders) show focus or a native popup instead, and disabled controls are inert.
+#[cfg(target_os = "macos")]
+const STATE_ALLOWLIST_ROLES: &[&str] = &["textbox", "searchbox", "select", "combobox", "slider", "spinbutton"];
+
+#[cfg(target_os = "macos")]
+fn check_interaction_states(inventory: &[Value]) -> Vec<String> {
+    let mut problems = Vec::new();
+    // The pressed check is only meaningful when the harness's mouse-down reaches the page at
+    // all: if not one clicked control changed between its hover and pressed shots, the
+    // harness could not press, and that is reported once rather than per control.
+    let harness_presses = inventory
+        .iter()
+        .any(|e| e["clicked"] == true && e["press_pixels_changed"] == true);
+    if !harness_presses && inventory.iter().any(|e| e["clicked"] == true) {
+        eprintln!("interaction states: the harness produced no pressed state on any control; pressed checks skipped");
+    }
+    for e in inventory {
+        let role = e["role"].as_str().unwrap_or("");
+        if e["disabled"] == true || STATE_ALLOWLIST_ROLES.contains(&role) {
+            continue;
+        }
+        let who = format!("{} / {} ({role})", s(e["surface"].clone()), s(e["label"].clone()));
+        if !e["hover"].is_null() && e["hover_style_changed"] != true {
+            problems.push(format!("no hover state: {who}"));
+        }
+        if harness_presses && e["clicked"] == true && e["press_pixels_changed"] != true {
+            problems.push(format!("no pressed state: {who}"));
+        }
+    }
+    problems
 }
 
 // ------------------------------------------------------------------------------------- the tour
@@ -1498,6 +1541,7 @@ fn hub_tour(h: &Harness) {
         {
             crawl_nav(&ctl, &shots, &mut inventory);
             write_inventory(&shots, &inventory);
+            problems.extend(check_interaction_states(&inventory));
         }
         let _ = std::fs::remove_dir_all(&home);
         if !problems.is_empty() {
