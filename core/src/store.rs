@@ -623,6 +623,7 @@ mod pinned {
     const OBJ_DONT_REPARSE: u32 = 0x0000_1000;
     const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
     const FILE_WRITE_ATTRIBUTES_ACCESS: u32 = 0x0000_0100;
+    const FILE_READ_ATTRIBUTES_ACCESS: u32 = 0x0000_0080;
     const DELETE_ACCESS: u32 = 0x0001_0000;
     const FILE_ATTRIBUTE_OFFLINE: u32 = 0x0000_1000;
     const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
@@ -1054,9 +1055,11 @@ mod pinned {
         /// verified after open). No mode/ACL is applied: creation inherits
         /// the parent ACL, and existing ACLs are never rewritten.
         pub fn create_temp(&self, name: &str) -> io::Result<fs::File> {
+            // FILE_READ_ATTRIBUTES: open_verified reads the new file's
+            // attributes; a write-only handle gets ERROR_ACCESS_DENIED there.
             self.open_verified(
                 name,
-                FILE_GENERIC_WRITE.0,
+                FILE_GENERIC_WRITE.0 | FILE_READ_ATTRIBUTES_ACCESS,
                 FILE_CREATE,
                 FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             )
