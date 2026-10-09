@@ -259,6 +259,9 @@ fn root_label(root: &Path) -> String {
         "Home".into()
     } else if root == Path::new("/") {
         "Macintosh HD".into()
+    } else if root.file_name().is_none() {
+        // A drive root such as `C:\` has no file name; show it as written.
+        root.to_string_lossy().trim_end_matches(['\\', '/']).to_string()
     } else {
         root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into())
     }
@@ -391,6 +394,12 @@ fn idle_loop() {
 }
 
 /// Resident memory of this process in MB, from `ps` (logging only).
+#[cfg(not(unix))]
+fn rss_mb() -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
 fn rss_mb() -> Option<u64> {
     let out = std::process::Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &std::process::id().to_string()])
@@ -406,7 +415,7 @@ pub(crate) fn log(line: &str) {
     if std::env::var_os("PULSE_SCAN_LOG").is_some() {
         eprintln!("{line}");
     }
-    let dir = home().join("Library/Application Support/Pulse");
+    let dir = cache::dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }

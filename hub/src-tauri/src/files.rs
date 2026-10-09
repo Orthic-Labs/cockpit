@@ -9,6 +9,7 @@
 use std::ffi::CString;
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -49,10 +50,47 @@ fn stat(path: &Path) -> Result<std::fs::Metadata, String> {
     std::fs::symlink_metadata(path).map_err(|_| "That item is no longer there.".to_string())
 }
 
+/// The item's (device, inode) pair. On Windows these are stable hashes of the
+/// volume serial and the NTFS file id, kept under 2^53 so they survive the
+/// trip through the page's numbers.
+#[cfg(unix)]
+fn ids(_path: &Path, metadata: &std::fs::Metadata) -> Result<(u64, u64), String> {
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn ids(path: &Path, metadata: &std::fs::Metadata) -> Result<(u64, u64), String> {
+    fn fold(text: &str) -> u64 {
+        // FNV-1a, masked to 53 bits.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in text.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash & ((1 << 53) - 1)
+    }
+    let info = pulse_core::platform::inspect(path, metadata);
+    let id = info.file_id.ok_or_else(|| "This drive does not give files a stable identity.".to_string())?;
+    Ok((fold(&id.volume.id), fold(&id.id)))
+}
+
+/// Whether two items are on the same drive.
+#[cfg(unix)]
+fn same_drive(_a: (&Path, &std::fs::Metadata), _b: (&Path, &std::fs::Metadata), dev_a: u64, dev_b: u64) -> bool {
+    dev_a == dev_b
+}
+
+#[cfg(windows)]
+fn same_drive(a: (&Path, &std::fs::Metadata), b: (&Path, &std::fs::Metadata), _dev_a: u64, _dev_b: u64) -> bool {
+    let first = pulse_core::platform::inspect(a.0, a.1);
+    let second = pulse_core::platform::inspect(b.0, b.1);
+    first.volume == second.volume
+}
+
 /// The item at `path` is still the one the person chose: same device and inode.
 fn same_item(path: &Path, dev: u64, ino: u64) -> Result<std::fs::Metadata, String> {
     let metadata = stat(path)?;
-    if metadata.dev() != dev || metadata.ino() != ino {
+    if ids(path, &metadata)? != (dev, ino) {
         return Err("That item changed since you chose it. Nothing was changed.".into());
     }
     Ok(metadata)
@@ -63,7 +101,8 @@ fn same_item(path: &Path, dev: u64, ino: u64) -> Result<std::fs::Metadata, Strin
 pub fn file_identity(path: String) -> Result<Identity, String> {
     let path = absolute(&path)?;
     let metadata = stat(&path)?;
-    Ok(Identity { dev: metadata.dev(), ino: metadata.ino(), is_dir: metadata.is_dir() })
+    let (dev, ino) = ids(&path, &metadata)?;
+    Ok(Identity { dev, ino, is_dir: metadata.is_dir() })
 }
 
 /// Show an item in Finder: a folder opens, a file is selected in its folder.
@@ -72,17 +111,58 @@ pub fn file_identity(path: String) -> Result<Identity, String> {
 pub fn finder_open(path: String) -> Result<(), String> {
     let path = absolute(&path)?;
     let metadata = stat(&path)?;
-    let mut command = std::process::Command::new("/usr/bin/open");
-    if !metadata.is_dir() {
-        command.arg("-R");
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        if !metadata.is_dir() {
+            command.arg("-R");
+        }
+        command.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
-    command.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+    #[cfg(windows)]
+    {
+        crate::explorer_show(&path, metadata.is_dir())
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = (path, metadata);
+        Err("Not available on this system.".to_string())
+    }
 }
 
 /// The native folder picker. None when the person cancels.
 #[tauri::command]
 pub async fn file_choose_folder() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(choose_folder).await.map_err(|e| e.to_string())?
+}
+
+/// The Windows folder picker (a PowerShell FolderBrowserDialog). Empty output means cancelled.
+#[cfg(windows)]
+fn choose_folder() -> Result<Option<String>, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let script = "Add-Type -AssemblyName System.Windows.Forms; \
+        $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+        $d.Description = 'Move to'; \
+        if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }";
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("Could not open the folder picker: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Could not open the folder picker: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!text.is_empty()).then_some(text))
+}
+
+#[cfg(not(windows))]
+fn choose_folder() -> Result<Option<String>, String> {
+    {
         let output = std::process::Command::new("/usr/bin/osascript")
             .args(["-e", "POSIX path of (choose folder with prompt \"Move to\")"])
             .output()
@@ -99,9 +179,7 @@ pub async fn file_choose_folder() -> Result<Option<String>, String> {
         } else {
             Err(format!("Could not open the folder picker: {}", error.trim()))
         }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }
 }
 
 /// What a move would do, checked now: the item is still the same, the
@@ -124,7 +202,9 @@ fn plan_move(path: &Path, dev: u64, ino: u64, destination: &Path) -> Result<(Pat
     if std::fs::symlink_metadata(&target).is_ok() {
         return Err(format!("{} already exists there. Nothing was moved.", name.to_string_lossy()));
     }
-    Ok((target, folder.dev() == metadata.dev()))
+    let (folder_dev, _) = ids(destination, &folder).unwrap_or((0, 0));
+    let (item_dev, _) = ids(path, &metadata)?;
+    Ok((target, same_drive((destination, &folder), (path, &metadata), folder_dev, item_dev)))
 }
 
 #[tauri::command]
@@ -230,7 +310,14 @@ fn copy_item(source: &Path, target: &Path) -> std::io::Result<()> {
     let metadata = std::fs::symlink_metadata(source)?;
     let kind = metadata.file_type();
     if kind.is_symlink() {
-        std::os::unix::fs::symlink(std::fs::read_link(source)?, target)
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(std::fs::read_link(source)?, target)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Links cannot be copied."))
+        }
     } else if kind.is_dir() {
         std::fs::create_dir(target)?;
         for entry in std::fs::read_dir(source)? {
@@ -254,7 +341,7 @@ fn copy_item(source: &Path, target: &Path) -> std::io::Result<()> {
 pub async fn file_trash(path: String, dev: u64, ino: u64) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let path = absolute(&path)?;
-        if path == Path::new("/") || path == crate::home() {
+        if path.parent().is_none() || path == crate::home() {
             return Err("The home folder and the startup disk cannot be moved to the Trash from here.".into());
         }
         same_item(&path, dev, ino)?;

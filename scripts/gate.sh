@@ -54,6 +54,12 @@ if [[ "$RUNNER_OS" == "Windows" ]]; then
   cargo fmt --manifest-path windows/Cargo.toml
   cargo test --locked --manifest-path windows/Cargo.toml
   cargo clippy --locked --manifest-path windows/Cargo.toml --all-targets --keep-going -- -D warnings
+  # Pulse hub (Tauri) backend: compile check only. tauri::generate_context! needs the
+  # frontend dist folder to exist; the page itself is type-checked and bundled on the
+  # macOS leg, so a placeholder page is enough here. The hub is its own workspace.
+  mkdir -p hub/dist
+  [[ -f hub/dist/index.html ]] || echo '<!doctype html><title>Pulse</title>' > hub/dist/index.html
+  (cd hub/src-tauri && cargo check --all-targets)
 fi
 if [[ "$RUNNER_OS" == "macOS" ]]; then
   export PULSE_APFS_FIXTURE=1

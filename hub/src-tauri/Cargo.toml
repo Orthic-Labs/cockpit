@@ -37,5 +37,9 @@ tauri-plugin-os = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 rightkit-fsindex = "0.1.0"
 
+# Uninstall-key inventory for the Apps page (apps_windows.rs).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 # The hub is its own workspace so the core's locked workspace stays unchanged.
 [workspace]

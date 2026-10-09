@@ -26,9 +26,34 @@ fn tool_candidates() -> Vec<PathBuf> {
             candidates.push(helpers.join("smartctl"));
         }
     }
-    candidates.push(PathBuf::from("/opt/homebrew/bin/smartctl"));
-    candidates.push(PathBuf::from("/usr/local/bin/smartctl"));
+    #[cfg(windows)]
+    {
+        if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) {
+            candidates.push(dir.join("smartctl.exe"));
+            candidates.push(dir.join("Helpers").join("smartctl.exe"));
+        }
+        candidates.push(PathBuf::from(r"C:\Program Files\smartmontools\bin\smartctl.exe"));
+    }
+    #[cfg(not(windows))]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/smartctl"));
+        candidates.push(PathBuf::from("/usr/local/bin/smartctl"));
+    }
     candidates
+}
+
+/// A mount worth sampling: the startup disk or a drive under /Volumes (every
+/// lettered drive on Windows).
+fn is_drive_mount(mount: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = mount;
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        mount == "/" || (mount.starts_with("/Volumes/") && !mount.contains("com.apple."))
+    }
 }
 
 /// Mounted drives, not installer images or system volumes.
@@ -37,7 +62,7 @@ fn mounts() -> Vec<String> {
         .disks
         .into_iter()
         .map(|disk| disk.mount_point)
-        .filter(|mount| mount == "/" || (mount.starts_with("/Volumes/") && !mount.contains("com.apple.")))
+        .filter(|mount| is_drive_mount(mount))
         .filter(|mount| mount == "/" || !crate::is_disk_image(mount))
         .collect();
     mounts.sort();

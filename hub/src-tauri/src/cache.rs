@@ -23,10 +23,7 @@ struct Loaded<T> {
 
 /// The Pulse state directory shared with the core and the notch.
 pub fn dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
-        .join("Library/Application Support/Pulse")
+    crate::bridge_dir()
 }
 
 /// `name` as saved at `version`, or `None` if it is missing, unreadable,

@@ -9,6 +9,32 @@
 //! see `docs/donors.md`). Petal hands changes to its GPUI window; this version
 //! hands them to the hub's scanner.
 
+#[cfg(target_os = "macos")]
+pub use mac::{current_event_id, start, stop};
+
+/// Off macOS there is no FSEvents; the index is refreshed by the next scan.
+#[cfg(not(target_os = "macos"))]
+pub use fallback::{current_event_id, start, stop};
+
+#[cfg(not(target_os = "macos"))]
+mod fallback {
+    use std::path::PathBuf;
+
+    use tauri::AppHandle;
+
+    pub fn current_event_id() -> u64 {
+        0
+    }
+
+    pub fn start(_app: AppHandle, _root: PathBuf, _since: u64, _epoch: u64) {
+        crate::scanner::log("live refresh unavailable: no change journal on this platform");
+    }
+
+    pub fn stop() {}
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -249,4 +275,5 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn dispatch_queue_create(label: *const c_char, attr: *const c_void) -> DispatchQueue;
     fn dispatch_release(object: DispatchQueue);
+}
 }

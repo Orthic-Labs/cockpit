@@ -2,6 +2,10 @@
 //! commands only read. The only commands that change anything are in `apps`:
 //! uninstall (move to Trash) and process Quit / Force Quit.
 
+#[cfg(unix)]
+mod apps;
+#[cfg(windows)]
+#[path = "apps_windows.rs"]
 mod apps;
 
 mod cache;
@@ -33,7 +37,9 @@ mod win_bridge;
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{Emitter, Manager};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+use tauri::Manager;
 
 // The notch's settings bridge (see mac/Notch/Sources/System/HubBridge.swift).
 // Darwin notifications through libSystem; no payloads.
@@ -44,8 +50,20 @@ unsafe extern "C" {
     fn notify_check(token: i32, changed: *mut i32) -> u32;
 }
 
-fn bridge_dir() -> PathBuf {
-    home().join("Library/Application Support/Pulse")
+/// Where the notch and the hub meet: `~/Library/Application Support/Pulse`, or
+/// `%LOCALAPPDATA%\Pulse` on Windows.
+pub(crate) fn bridge_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join("AppData").join("Local"))
+            .join("Pulse")
+    }
+    #[cfg(not(windows))]
+    {
+        home().join("Library/Application Support/Pulse")
+    }
 }
 
 /// Sections the hub understands for `--section` and the show/select events.
@@ -65,8 +83,12 @@ fn post(name: &str) {
 #[cfg(not(target_os = "macos"))]
 fn post(_name: &str) {}
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+pub(crate) fn home() -> PathBuf {
+    #[cfg(windows)]
+    let variable = "USERPROFILE";
+    #[cfg(not(windows))]
+    let variable = "HOME";
+    std::env::var_os(variable).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }))
 }
 
 #[tauri::command]
@@ -217,6 +239,7 @@ struct Volume {
 
 /// The name Finder shows for the startup disk: the entry in /Volumes that
 /// links to "/".
+#[cfg(unix)]
 fn startup_name() -> String {
     std::fs::read_dir("/Volumes")
         .ok()
@@ -230,8 +253,15 @@ fn startup_name() -> String {
         .unwrap_or_else(|| "Macintosh HD".into())
 }
 
+/// A mounted disk image (an installer DMG), not a drive. Windows has none here.
+#[cfg(windows)]
+pub(crate) fn is_disk_image(_mount: &str) -> bool {
+    false
+}
+
 /// A mounted disk image (an installer DMG), not a drive.
-fn is_disk_image(mount: &str) -> bool {
+#[cfg(unix)]
+pub(crate) fn is_disk_image(mount: &str) -> bool {
     std::process::Command::new("/usr/sbin/diskutil")
         .args(["info", "-plist", mount])
         .output()
@@ -244,31 +274,50 @@ fn is_disk_image(mount: &str) -> bool {
 
 /// Every mounted volume a person would recognise: the startup disk, external
 /// drives and mounted disk images (flagged) under /Volumes, not system
-/// volumes or Time Machine snapshots.
+/// volumes or Time Machine snapshots. On Windows: every lettered drive.
 #[tauri::command]
 async fn volumes() -> Result<Vec<Volume>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let mut out: Vec<Volume> = Vec::new();
+        #[cfg(windows)]
+        let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()).to_uppercase();
         for disk in pulse_core::system_status().disks {
             let mount = disk.mount_point.clone();
+            #[cfg(unix)]
             let internal = mount == "/";
+            #[cfg(windows)]
+            let internal = mount.to_uppercase().starts_with(&system_drive);
+            #[cfg(unix)]
             if !internal && !mount.starts_with("/Volumes/") {
                 continue;
             }
-            if mount.contains("com.apple.") || out.iter().any(|v| v.mount_point == mount) {
+            #[cfg(unix)]
+            if mount.contains("com.apple.") {
                 continue;
             }
+            if out.iter().any(|v| v.mount_point == mount) {
+                continue;
+            }
+            #[cfg(unix)]
             let disk_image = !internal && is_disk_image(&mount);
+            #[cfg(windows)]
+            let disk_image = false;
             let (Some(total), Some(available)) = (disk.total_bytes, disk.available_bytes) else {
                 continue;
             };
             if total == 0 {
                 continue;
             }
+            #[cfg(unix)]
             let name = if internal {
                 startup_name()
             } else {
                 mount.rsplit('/').next().unwrap_or(&mount).to_string()
+            };
+            #[cfg(windows)]
+            let name = {
+                let letter = mount.trim_end_matches(['\\', '/']);
+                if internal { format!("Windows ({letter})") } else { format!("Local Disk ({letter})") }
             };
             out.push(Volume {
                 name,
@@ -289,6 +338,7 @@ async fn volumes() -> Result<Vec<Volume>, String> {
 
 /// Eject a mounted disk image. Only a direct child of /Volumes that is a disk
 /// image is accepted, never a drive. A busy image is reported, not forced.
+#[cfg(unix)]
 #[tauri::command]
 async fn eject(mount: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -318,25 +368,55 @@ async fn eject(mount: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Disk images are a macOS idea; drives are ejected from File Explorer.
+#[cfg(windows)]
+#[tauri::command]
+async fn eject(mount: String) -> Result<(), String> {
+    let _ = mount;
+    Err("Eject drives from File Explorer.".into())
+}
+
 /// Open System Settings at Full Disk Access. Opens a window; changes nothing.
 #[tauri::command]
 fn open_full_disk_access() -> Result<(), String> {
-    std::process::Command::new("/usr/bin/open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    permissions::fda_request()
 }
 
-/// Show a file or folder in Finder. Read-only: it only opens a window.
+/// Show an item in File Explorer.
+#[cfg(windows)]
+pub(crate) fn explorer_show(path: &std::path::Path, is_dir: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new("explorer.exe");
+    if is_dir {
+        command.arg(path);
+    } else {
+        command.raw_arg(format!("/select,\"{}\"", path.display()));
+    }
+    command.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Show a file or folder in Finder or File Explorer. Read-only: it only opens a window.
 #[tauri::command]
 fn reveal(path: String) -> Result<(), String> {
-    std::process::Command::new("/usr/bin/open")
-        .arg("-R")
-        .arg(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let target = std::path::Path::new(&path);
+        explorer_show(target, target.is_dir())
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = path;
+        Err("Not available on this system.".to_string())
+    }
 }
 
 #[cfg(all(not(debug_assertions), feature = "qa-native"))]
@@ -367,6 +447,8 @@ pub fn run() {
     // HOME (a fixture folder Storage scans) arrives as RIGHTKIT_PULSE_QA_HOME.
     #[cfg(all(debug_assertions, feature = "qa-native"))]
     if let Some(home) = std::env::var_os("RIGHTKIT_PULSE_QA_HOME") {
+        #[cfg(windows)]
+        std::env::set_var("USERPROFILE", &home);
         std::env::set_var("HOME", home);
     }
     #[cfg(target_os = "macos")]

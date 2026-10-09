@@ -1,11 +1,13 @@
 //! Cleanup commands for the hub. The only effect is a move to Trash (through
-//! NSFileManager, not AppleScript) and, for Restore, a move back; both are
-//! re-checked in core immediately before they happen.
+//! NSFileManager on macOS, not AppleScript; the Recycle Bin on Windows) and,
+//! for Restore, a move back; both are re-checked in core immediately before
+//! they happen.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 use pulse_core::cleanup_scan as cs;
+#[cfg(target_os = "macos")]
 use trash::macos::{DeleteMethod, TrashContextExtMacos};
 
 use crate::cache;
@@ -14,9 +16,7 @@ use crate::cache;
 const FINDINGS_FILE: &str = "cleanup-findings-v1.json";
 const FINDINGS_FORMAT: u32 = 1;
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
-}
+use crate::home;
 
 /// The last saved findings, shown at once on open. They may be stale: every
 /// item is checked again (dev and inode) before anything moves.
@@ -26,7 +26,9 @@ pub fn cleanup_cached() -> Option<cs::Report> {
 }
 
 pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
+    #[allow(unused_mut)]
     let mut context = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
     context.set_delete_method(DeleteMethod::NsFileManager);
     context.delete(path).map_err(|e| e.to_string())
 }
@@ -83,7 +85,52 @@ pub fn cleanup_history() -> Vec<cs::Activity> {
 
 #[tauri::command]
 pub async fn cleanup_restore(id: String) -> Result<cs::RestoreResult, String> {
-    tauri::async_runtime::spawn_blocking(move || cs::restore(&home(), &id))
+    tauri::async_runtime::spawn_blocking(move || restore(&id))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[cfg(not(windows))]
+fn restore(id: &str) -> Result<cs::RestoreResult, String> {
+    cs::restore(&home(), id)
+}
+
+/// Windows: the core only knows `~/.Trash`, so each item is found in the
+/// Recycle Bin by its original path and restored there. An item goes back only
+/// if it is still in the bin, its original path is free and it lies under home.
+#[cfg(windows)]
+fn restore(id: &str) -> Result<cs::RestoreResult, String> {
+    let home = home();
+    let activity = cs::history(&home).into_iter().find(|a| a.id == id).ok_or("No such action")?;
+    let bin = trash::os_limited::list().map_err(|e| e.to_string())?;
+    let mut result = cs::RestoreResult::default();
+    for item in activity.items.iter().filter(|item| !item.restored) {
+        let wanted = std::path::PathBuf::from(&item.path);
+        let skip = |reason: &str| cs::Skipped { path: item.path.clone(), reason: reason.to_string() };
+        if !wanted.starts_with(&home) {
+            result.skipped.push(skip("Location not allowed"));
+            continue;
+        }
+        let found = bin
+            .iter()
+            .filter(|entry| entry.original_path() == wanted)
+            .max_by_key(|entry| entry.time_deleted)
+            .cloned();
+        let Some(found) = found else {
+            result.skipped.push(skip("No longer in the Recycle Bin"));
+            continue;
+        };
+        if wanted.symlink_metadata().is_ok() {
+            result.skipped.push(skip("Something is already at the original location"));
+            continue;
+        }
+        match trash::os_limited::restore_all([found]) {
+            Ok(()) => {
+                result.restored_items += 1;
+                result.restored_bytes += item.bytes;
+            }
+            Err(error) => result.skipped.push(skip(&error.to_string())),
+        }
+    }
+    Ok(result)
 }
