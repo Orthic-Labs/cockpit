@@ -647,6 +647,19 @@ final class UsageStore: ObservableObject {
         Task { await provider.signOut() }
     }
 
+    /// Pulse fork: Claude Desktop's signed-in account changed. Drop the old
+    /// account's numbers (on screen and archived) so they are never shown under
+    /// the new one, and read the new account at once, bypassing the schedule.
+    /// The provider's own 429 back-off still applies.
+    func accountSwitched(providerID: String) {
+        guard providers.contains(where: { $0.id == providerID }) else { return }
+        cancelRefresh(providerID: providerID)
+        snapshots.removeAll { $0.id == providerID }
+        lastGood.removeValue(forKey: providerID)
+        archive.save(lastGood)
+        refresh(providerID: providerID, freshness: .fromSource)
+    }
+
     /// Take the user to wherever this provider's account is signed into.
     ///
     /// Three different places, because the providers differ in what they own: a

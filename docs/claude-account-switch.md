@@ -42,7 +42,7 @@ Nothing detects accounts. Every account folder present under `claude-code-sessio
 ## Use
 
 - Mac notch, Claude hover card: a small round button at the right of the "Claude Usage" header ("Restart Claude and sync chats"). It runs off the main thread: `NSRunningApplication.terminate()` on Claude if open and waits up to 20 s (never force-kills), runs the bundled `Contents/Helpers/pulse claude sync --apply --json`, then reopens Claude. The button is the only feedback: spinner while running, a checkmark for about 2 s on success, a red exclamation on failure with the error as its tooltip ("Claude is still open", or the CLI error). Claude is reopened even if the sync failed.
-- Hub, Accounts, Claude row: the same action, "Restart Claude and sync chats" (asks the notch to `terminate()` Claude, waits 20 s, syncs with backup, reopens), one result line ("Synced 312 sessions across 3 accounts") with Undo (which also quits Claude, restores, reopens). Accounts found and a backups list with Restore.
+- No hub UI. After the notch reopens Claude, and whenever `lastKnownAccountUuid` in Claude's `config.json` changes (polled by stat every 3 s, every 1 s for 60 s after the button), the notch drops the old account's cached Claude numbers and reads usage at once (`.fromSource`; the endpoint's 429 back-off still applies).
 - CLI: `pulse claude accounts|known|backups [--json]`, `pulse claude sync --dry-run|--apply [--json]` (all accounts except explicit exclusions), `pulse claude auto [--json]` (sync if Claude is closed), `pulse claude include|exclude <id>`, `pulse claude restore <backup-id> [--force]`. `--root`, `--backups`, `--registry` point at a copy of the layout.
 
 ## Limits

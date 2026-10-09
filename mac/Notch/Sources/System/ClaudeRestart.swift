@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Pulse fork: the Claude card's "Restart Claude and sync chats" button. The
-/// owner presses it after signing in to a new account; nothing is detected.
+/// owner presses it after signing in to a new account. `ClaudeAccountWatcher`
+/// then notices the account Claude opens with and refreshes usage at once.
 /// Quit Claude politely (never a force-kill, up to 20 s), run the bundled
 /// `pulse claude sync --apply --json` over every account, reopen Claude.
 @MainActor
@@ -58,6 +59,7 @@ final class ClaudeRestart: ObservableObject {
         if let claudeURL {
             NSWorkspace.shared.openApplication(at: claudeURL,
                                                configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
+            NotificationCenter.default.post(name: ClaudeAccountWatcher.claudeReopened, object: nil)
         } else if failure == nil {
             return "Synced, but Claude could not be found to reopen"
         }

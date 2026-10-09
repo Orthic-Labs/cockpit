@@ -185,6 +185,18 @@ actor ClaudeOAuthProvider: UsageProvider {
         return until.timeIntervalSince(now) > slack
     }
 
+    /// Pulse fork: Claude Desktop's signed-in account changed. Everything held
+    /// from the previous account goes, so the next read starts from the source:
+    /// the cache reading, the rescan throttle, the CLI answer and its lock-out.
+    /// The 429 back-off is deliberately kept; it belongs to the endpoint.
+    func forgetAccountState() {
+        lastDesktopReading = nil
+        lastDesktopMiss = nil
+        lastCLIWindows = nil
+        lastCLIPlan = nil
+        lastCLIFailure = nil
+    }
+
     func fetchSnapshot() async throws -> ProviderSnapshot {
         try await fetchSnapshot(freshness: .standard)
     }

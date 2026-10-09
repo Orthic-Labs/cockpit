@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// refresher needs to ask one of them how long its token has left, and the
     /// protocol has no business carrying that.
     private var claudeProviders: [ClaudeOAuthProvider] = []
+    private var claudeAccountWatcher: ClaudeAccountWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set here, not in the Info.plist: this call is applied at launch and
@@ -413,6 +414,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 .store(in: &cancellables)
             store.start()
+            if !isRunningTests, let defaultClaude = claudeProviders.first(where: { $0.profile.slug == nil }) {
+                let watcher = ClaudeAccountWatcher { [weak store] in
+                    Task { @MainActor in
+                        await defaultClaude.forgetAccountState()
+                        store?.accountSwitched(providerID: defaultClaude.id)
+                    }
+                }
+                watcher.start()
+                claudeAccountWatcher = watcher
+            }
 
             // Pulse fork: share settings and accounts with the hub.
             var bridgeActions = HubBridge.Actions()
