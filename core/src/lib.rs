@@ -4,6 +4,7 @@ pub mod activity;
 #[cfg(unix)]
 pub mod app_manager;
 pub mod apps;
+pub mod claude_sync;
 pub mod cleanup;
 pub mod cleanup_scan;
 pub mod compression;

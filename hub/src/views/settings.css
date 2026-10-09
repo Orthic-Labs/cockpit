@@ -100,3 +100,7 @@
   .ck-settings .ck-card, .ck-settings .ck-status, .ck-settings .ck-select, .ck-settings .ck-input, .ck-settings .ck-mini { border: 1px solid CanvasText; }
   .ck-settings :focus-visible { outline: 2px solid Highlight; }
 }
+
+/* Claude session sync (Accounts) */
+.ck-settings .ck-claude-sync { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; flex-basis: 100%; }
+.ck-settings .ck-claude-sync .ck-subhead { padding: 6px 0 0; }

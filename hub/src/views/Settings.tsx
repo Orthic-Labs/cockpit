@@ -5,6 +5,7 @@ import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightki
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
+import { ClaudeSync } from "./ClaudeSync";
 import { isWindows } from "../api";
 import "./settings.css";
 
@@ -617,6 +618,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
                   title={`Clears what Pulse read. You stay signed in to ${a.name.split(" ")[0]} itself.`}>Forget reading</Button>
               )}
             </div>
+            {a.id === "claude" && <ClaudeSync />}
           </div>
           <div className="ck-ctl">
             <span className="ck-order">

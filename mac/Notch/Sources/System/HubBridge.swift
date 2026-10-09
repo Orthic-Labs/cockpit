@@ -286,6 +286,11 @@ final class HubBridge {
                 lastDriveAlertID = id
                 actions.driveAlert(message)
             }
+        case "quitClaude":
+            // The hub's "New Claude account" button: a polite quit, never a force-kill.
+            for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop") {
+                _ = app.terminate()
+            }
         default: break
         }
     }
