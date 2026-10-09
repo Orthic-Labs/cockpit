@@ -1,12 +1,14 @@
 //! Push a bridged message into a Codex thread on this computer, as far as the
 //! bundled Codex CLI allows.
 //!
-//! Prototype: `codex queue --thread <id> --message <text>` ("Queue a message
-//! for an existing session", present in the Codex CLI bundled with the ChatGPT
-//! app). It runs with a 5 s limit and no terminal or console window. If it
-//! can't be found, fails or times out the receipt is `unsupported` with the
-//! reason, and the message simply stays in the MCP inbox for the thread to pick
-//! up through `bridge_inbox`.
+//! `codex queue --thread <id> --message <text>` ("Queue a message for an
+//! existing session", in the Codex CLI bundled with the ChatGPT app) delivers
+//! into a thread the Codex desktop app owns; the thread processes it and can
+//! reply. It runs with a 5 s limit and no terminal or console window. Exit 0
+//! (stdout "Queued message <id> for thread <id>.") is a `delivered` receipt
+//! carrying that message id. If the CLI can't be found, fails or times out the
+//! receipt is `held` with the reason, and the message stays in the MCP inbox
+//! (`bridge_inbox`).
 //!
 //! Where the CLI is looked for:
 //! * macOS: `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`
@@ -18,9 +20,9 @@
 //!   install is not readable and is not searched.
 //!
 //! Thread discovery: `~/.codex/session_index.jsonl` (one `{id, thread_name,
-//! updated_at}` per line, read-only). It lists threads, not which are open, so
-//! `list_threads` is only a hint; the bridge roster should list a Codex thread
-//! as reachable only when it has called the Pulse MCP (`bridge_whoami`).
+//! updated_at}` per line, read-only). The roster lists the most recent threads
+//! as reachable peers (`roster::local_sessions`), whether or not they have
+//! called the Pulse MCP.
 
 use super::deliver_claude::shim;
 use super::{BridgeError, Envelope, LocalSession, Receipt};
@@ -141,7 +143,7 @@ pub fn list_threads(limit: usize) -> Vec<CodexThread> {
     threads
 }
 
-fn run_queue(binary: &Path, thread: &str, message: &str) -> Result<(), String> {
+fn run_queue(binary: &Path, thread: &str, message: &str) -> Result<String, String> {
     let mut command = Command::new(binary);
     command
         .args(["queue", "--thread", thread, "--message", message])
@@ -162,7 +164,11 @@ fn run_queue(binary: &Path, thread: &str, message: &str) -> Result<(), String> {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
-                    return Ok(());
+                    let mut out = String::new();
+                    if let Some(mut stdout) = child.stdout.take() {
+                        let _ = stdout.by_ref().take(2000).read_to_string(&mut out);
+                    }
+                    return Ok(out.trim().to_string());
                 }
                 let mut detail = String::new();
                 if let Some(mut err) = child.stderr.take() {
@@ -192,8 +198,16 @@ fn run_queue(binary: &Path, thread: &str, message: &str) -> Result<(), String> {
     }
 }
 
-/// Try to queue the message into the Codex thread. Never an `Err` for "can't
-/// push": that is `Receipt::unsupported`, and the message stays in the inbox.
+/// The message id in "Queued message <id> for thread <id>.".
+fn queued_id(stdout: &str) -> Option<&str> {
+    stdout
+        .strip_prefix("Queued message ")?
+        .split_whitespace()
+        .next()
+}
+
+/// Queue the message into the Codex thread. Never an `Err` for "can't push":
+/// that is a `held` receipt, and the message stays in the inbox.
 pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, BridgeError> {
     let Some(binary) = codex_binary() else {
         return Ok(shim::unsupported(
@@ -212,7 +226,10 @@ pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, Bridge
         shim::env_text(env)
     );
     Ok(match run_queue(&binary, thread, &text) {
-        Ok(()) => shim::delivered("Queued in the Codex thread."),
+        Ok(out) => match queued_id(&out) {
+            Some(id) => shim::delivered(&format!("Queued in the Codex thread (message {id}).")),
+            None => shim::delivered("Queued in the Codex thread."),
+        },
         Err(reason) => shim::unsupported(&format!("{reason} The message waits in the inbox.")),
     })
 }

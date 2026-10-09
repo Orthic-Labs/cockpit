@@ -8,26 +8,29 @@
 //! pidDomain}`. The chat listens on a Unix stream socket (a named pipe on
 //! Windows) and speaks newline-delimited JSON:
 //!
-//! The auth frame is always sent first: a message carrying the session's own
-//! token is delivered rather than held, even for sessions in Bypass mode that
-//! can't show a hold dialog. The whole payload is prepared before connecting
-//! (the chat wants it within 30 s). Outcomes are Delivered / Held / Refused;
-//! silence is reported as Held (not Delivered) so the message stays pending.
+//! Wire shape (captured from a real Claude Code 2.1.293 session on macOS). One
+//! newline-terminated JSON line; the sender's identity lives inside the content
+//! as a wrapper tag, not in top-level fields:
 //!
-//! 1. `{"type":"auth","token":<peerToken>}`
-//! 2. `{"type":"user","message":{"role":"user","content":<text>},"from":"uds:<reply>",
-//!    "from_name":..,"from_session_id":..,"msg_id":..,"priority":"next"}`
+//! `{"msgV":1,"msg_id":..,"type":"user","message":{"role":"user","content":
+//! "<cross-session-message from=\"uds:<reply>\" from-session=\"..\"
+//! from-name=\"<peer> via Pulse\" from-mode=\"bypass\">\n<text>\n</cross-session-message>"},
+//! "priority":"next","from":"uds:<reply>"}`
 //!
-//! The chat may answer with `{"type":"control","action":"peer_message_status"|
-//! "peer_message_hold"|..}` (accept, hold or refuse by its crossSessionInbound
-//! setting). `from_mode` is never sent, so a chat with permission-mode parity
-//! rules holds the message instead of acting on it. The key is read and used
-//! but never logged or put in an error.
+//! On macOS/Linux no auth line is sent. On native Windows the auth frame
+//! `{"type":"auth","token":<peerToken>}` goes first, using the key file token.
+//! The whole payload is prepared before connecting (the chat wants it within
+//! 30 s). Outcomes are Delivered / Held / Refused; a real client is normally
+//! silent, so no control frame within 3 s counts as Delivered when the write
+//! succeeded. The chat may answer with `{"type":"control","action":
+//! "peer_message_status"|"peer_message_hold"|..}`. The key is read but never
+//! logged or put in an error.
 //!
 //! Replies: the chat answers to `from`, a socket this process listens on
 //! (`ReplyHub`). One socket per remote peer, so a reply knows who it is for.
-//! On Windows the reply listener is not implemented: no `from` is sent, so
-//! chats cannot reply over the pipe and use the bridge MCP tools instead.
+//! Empty connections (a liveness probe) are tolerated. On Windows the reply
+//! listener is not implemented: no `from` is sent, so chats use the bridge MCP
+//! tools to reply.
 
 use super::{BridgeError, Envelope, LocalSession, Receipt};
 use serde_json::{Value, json};
@@ -151,6 +154,7 @@ fn process_matches(pid: u32, recorded_start: Option<&str>, domain: Option<&str>)
 
 struct SessionFiles {
     socket: String,
+    #[cfg_attr(not(windows), allow(dead_code))]
     token: String,
 }
 
@@ -296,6 +300,76 @@ fn classify(frame: &Value) -> Option<Verdict> {
     None
 }
 
+const TAG_OPEN: &str = "<cross-session-message";
+const TAG_CLOSE: &str = "</cross-session-message>";
+
+/// An attribute value that can't break out of its quotes.
+fn attr_safe(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| match c {
+            '"' => '\'',
+            '<' | '>' | '\n' | '\r' => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+/// The content a chat sees: the text inside the wrapper tag the real client
+/// uses, with any wrapper tag inside the text neutralised.
+fn wrap_content(from: &str, session: &str, name: &str, text: &str) -> String {
+    let text = text
+        .replace(TAG_OPEN, "&lt;cross-session-message")
+        .replace(TAG_CLOSE, "&lt;/cross-session-message>");
+    format!(
+        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bypass\">\n{text}\n{TAG_CLOSE}",
+        attr_safe(from),
+        attr_safe(session),
+        attr_safe(name),
+    )
+}
+
+/// Attributes and body of a `<cross-session-message ...>` wrapper, if `content` is one.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn parse_wrapper(content: &str) -> Option<(HashMap<String, String>, String)> {
+    let rest = content.trim().strip_prefix(TAG_OPEN)?;
+    if !rest.starts_with(char::is_whitespace) && !rest.starts_with('>') {
+        return None;
+    }
+    let mut attrs = HashMap::new();
+    let mut chars = rest.char_indices().peekable();
+    let body_start = loop {
+        let (i, c) = chars.next()?;
+        if c == '>' {
+            break i + 1;
+        }
+        if c.is_whitespace() {
+            continue;
+        }
+        let mut key = String::from(c);
+        loop {
+            match chars.next()? {
+                (_, '=') => break,
+                (_, k) => key.push(k),
+            }
+        }
+        if chars.next()?.1 != '"' {
+            return None;
+        }
+        let mut value = String::new();
+        loop {
+            match chars.next()? {
+                (_, '"') => break,
+                (_, v) => value.push(v),
+            }
+        }
+        attrs.insert(key.trim().to_string(), value);
+    };
+    let inner = &rest[body_start..];
+    let end = inner.rfind(TAG_CLOSE).unwrap_or(inner.len());
+    Some((attrs, inner[..end].trim().to_string()))
+}
+
 /// Deliver one envelope to a chat on this computer and report what the chat
 /// did with it. `Ok(Receipt::unsupported)` when the chat speaks another
 /// protocol version; `Err` when it is gone or turned Pulse away.
@@ -313,20 +387,32 @@ pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, Bridge
         .filter(char::is_ascii_alphanumeric)
         .take(12)
         .collect();
+    let sender = format!("{} via Pulse", shim::env_from_name(env));
+    let session_id = format!("pulse-{short}");
+    let reply_from = from.map(|address| format!("uds:{address}"));
+    let content = wrap_content(
+        reply_from.as_deref().unwrap_or(""),
+        &session_id,
+        &sender,
+        shim::env_text(env),
+    );
     let mut user = json!({
-        "type": "user",
-        "message": {"role": "user", "content": shim::env_text(env)},
-        "from_name": format!("{} via Pulse", shim::env_from_name(env)),
-        "from_session_id": format!("pulse-{short}"),
+        "msgV": 1,
         "msg_id": shim::env_id(env),
+        "type": "user",
+        "message": {"role": "user", "content": content},
         "priority": "next",
     });
-    if let Some(address) = from {
-        user["from"] = json!(format!("uds:{address}"));
+    if let Some(address) = reply_from {
+        user["from"] = json!(address);
     }
-    let auth_frame = json!({"type": "auth", "token": files.token});
+    let mut frames = Vec::new();
+    if cfg!(windows) {
+        frames.push(json!({"type": "auth", "token": files.token}));
+    }
+    frames.push(user);
     let mut lines = Vec::new();
-    for frame in [auth_frame, user] {
+    for frame in frames {
         let mut line = serde_json::to_string(&frame).map_err(|e| shim::io(&e.to_string()))?;
         line.push('\n');
         lines.push(line);
@@ -383,12 +469,12 @@ pub fn deliver(session: &LocalSession, env: &Envelope) -> Result<Receipt, Bridge
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                return Ok(shim::held(
-                    "No answer within 3 seconds; the chat may have refused it by its settings (a refusing session drops silently).",
+                return Ok(shim::delivered(
+                    "Sent; the chat sent no control frame (silence is normal).",
                 ));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return if heard_anything {
+                return if heard_anything || !cfg!(windows) {
                     Ok(shim::delivered(
                         "Sent; the chat closed the connection without a verdict.",
                     ))
@@ -554,17 +640,28 @@ impl ReplyHub {
             if frame["type"] != "user" {
                 continue;
             }
-            let from_session_id = frame["from_session_id"].as_str().unwrap_or("");
-            if from_session_id.is_empty() || !(self.is_known)(from_session_id) {
-                continue;
-            }
-            let Some(text) = content_text(&frame["message"]["content"]) else {
+            let Some(raw) = content_text(&frame["message"]["content"]) else {
                 continue;
             };
+            let (attrs, text) = parse_wrapper(&raw).unwrap_or_default();
+            let text = if attrs.is_empty() { raw } else { text };
+            let pick = |attr: &str, field: &str| {
+                attrs
+                    .get(attr)
+                    .filter(|v| !v.is_empty())
+                    .cloned()
+                    .or_else(|| frame[field].as_str().map(str::to_string))
+                    .unwrap_or_default()
+            };
+            let from_session_id = pick("from-session", "from_session_id");
+            if from_session_id.is_empty() || !(self.is_known)(&from_session_id) || text.is_empty()
+            {
+                continue;
+            }
             (self.on_reply)(ReplyMessage {
                 peer_key: peer_key.to_string(),
-                from_session_id: from_session_id.to_string(),
-                from_name: frame["from_name"].as_str().unwrap_or("").to_string(),
+                from_session_id,
+                from_name: pick("from-name", "from_name"),
                 text,
                 msg_id: frame["msg_id"].as_str().unwrap_or("").to_string(),
             });

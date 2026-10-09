@@ -1,9 +1,11 @@
 //! Which chats can be messaged: live Claude chats read from
 //! `~/.claude/sessions/*.json`, chats that registered through the MCP server
-//! (Codex, and Claude without a session file), and the rosters paired
+//! (and Claude without a session file), the most recent Codex threads from
+//! `~/.codex/session_index.jsonl`, and the rosters paired
 //! computers publish. A peer is shown as "<chat title> on <device alias>".
 
 use super::BridgeError;
+use super::deliver_codex::{CodexThread, list_threads};
 use super::store::{RemoteRoster, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -178,10 +180,42 @@ pub fn local_sessions_in(
     sessions
 }
 
-/// `local_sessions_in` for this computer's real folders.
+/// How many Codex threads from the session index are listed.
+pub const CODEX_THREAD_LIMIT: usize = 50;
+
+/// Add the Codex threads in `threads` that are not already listed. Whether a
+/// thread is open is unknown, so its status is "idle".
+pub fn add_codex_threads(sessions: &mut Vec<LocalSession>, threads: Vec<CodexThread>) {
+    for thread in threads {
+        if sessions.iter().any(|s| s.id == thread.id) {
+            continue;
+        }
+        sessions.push(LocalSession {
+            name: title_for(&thread.name, "", "Codex chat"),
+            raw: serde_json::json!({
+                "id": thread.id,
+                "thread_name": thread.name,
+                "updated_at": thread.updated_at,
+            }),
+            id: thread.id,
+            kind: "codex".to_string(),
+            cwd: String::new(),
+            status: "idle".to_string(),
+            pid: None,
+            messaging_socket: None,
+            peer_protocol: None,
+            entrypoint: None,
+        });
+    }
+}
+
+/// `local_sessions_in` for this computer's real folders, plus the most recent
+/// Codex threads from `~/.codex/session_index.jsonl`.
 pub fn local_sessions(store: &Store) -> Vec<LocalSession> {
     let alive = live_pids();
-    local_sessions_in(store, claude_sessions_dir().as_deref(), &alive)
+    let mut sessions = local_sessions_in(store, claude_sessions_dir().as_deref(), &alive);
+    add_codex_threads(&mut sessions, list_threads(CODEX_THREAD_LIMIT));
+    sessions
 }
 
 pub fn local_entries(sessions: &[LocalSession]) -> Vec<RosterEntry> {

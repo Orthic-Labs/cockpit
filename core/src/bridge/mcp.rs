@@ -87,7 +87,7 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "bridge_list",
-            "description": "List the chats you can message through Pulse: other chats on this computer and on paired computers, with device, name, folder and status.",
+            "description": "List the chats you can message through Pulse: other chats on this computer and on paired computers, with kind (claude or codex), device, name, folder and status; a Codex chat also has its threadId. Codex chats are messaged through `codex queue`.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
         },
         {
@@ -155,6 +155,10 @@ impl Server {
                     .map(|p| {
                         let mut row = serde_json::to_value(p).unwrap_or(Value::Null);
                         row["self"] = json!(p.local && p.session == self.caller.id);
+                        row["kind"] = json!(p.kind);
+                        if p.kind == "codex" {
+                            row["threadId"] = json!(p.session);
+                        }
                         row
                     })
                     .collect();
