@@ -84,6 +84,34 @@ pub struct CleanupRule {
     /// rule with `discover` finds directories by name and project marker.
     #[serde(default)]
     pub discover: Option<Discover>,
+    /// Operating systems the rule applies to: `"macos"`, `"windows"`,
+    /// `"linux"`. Empty means every system except Windows (the original
+    /// macOS pack), so a rule is never silently run on a platform whose
+    /// paths and process names it was not written for.
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    /// Name each finding after its parent folder too ("Default · Cache"):
+    /// many browser profiles hold a folder with the same name.
+    #[serde(default)]
+    pub label_parent: bool,
+}
+
+fn current_platform() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
+}
+
+fn applies_here(rule: &CleanupRule) -> bool {
+    if rule.platforms.is_empty() {
+        !cfg!(windows)
+    } else {
+        rule.platforms.iter().any(|p| p == current_platform())
+    }
 }
 
 /// Find directories called `dir` next to one of the `markers` (for example
@@ -124,17 +152,27 @@ fn not_a_project_area(name: &str) -> bool {
     name.starts_with('.')
         || matches!(
             name,
-            "Library" | "Applications" | "Movies" | "Music" | "Pictures"
+            "Library" | "Applications" | "Movies" | "Music" | "Pictures" | "AppData"
         )
+        // Cloud-synced folders: deleting there deletes the cloud copy too.
+        || name.starts_with("OneDrive")
         || name.rsplit_once('.').is_some_and(|(stem, ext)| {
             !stem.is_empty() && BUNDLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
         })
 }
 
 fn has_marker(parent: &Path, d: &Discover) -> bool {
-    d.markers
-        .iter()
-        .any(|m| parent.join(m).symlink_metadata().is_ok())
+    d.markers.iter().any(|m| {
+        if m.contains('*') {
+            fs::read_dir(parent).is_ok_and(|entries| {
+                entries
+                    .flatten()
+                    .any(|e| e.file_name().to_str().is_some_and(|n| wild(m, n)))
+            })
+        } else {
+            parent.join(m).symlink_metadata().is_ok()
+        }
+    })
 }
 
 fn discover_dirs(home: &Path, d: &Discover) -> Vec<PathBuf> {
@@ -279,8 +317,17 @@ const COUNT_SAMPLE_GAP_SECS: u64 = 86_400;
 const COUNT_WINDOW_SECS: u64 = 30 * 86_400;
 const COUNT_KEEP: usize = 60;
 
+/// Where Pulse keeps its own state for this user.
+fn state_dir(home: &Path) -> PathBuf {
+    if cfg!(windows) {
+        home.join("AppData").join("Local").join("Pulse")
+    } else {
+        home.join("Library/Application Support/Pulse")
+    }
+}
+
 fn count_log_path(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Pulse/chrome-snapshots.json")
+    state_dir(home).join("chrome-snapshots.json")
 }
 
 /// Add a sample when the last one is a day old or more, and pick the baseline
@@ -331,7 +378,11 @@ pub fn running_process_names() -> Vec<String> {
     system
         .processes()
         .values()
-        .map(|p| p.name().to_string_lossy().to_lowercase())
+        .map(|p| {
+            let name = p.name().to_string_lossy().to_lowercase();
+            // Windows names carry ".exe"; owners are written without it.
+            name.strip_suffix(".exe").map(str::to_owned).unwrap_or(name)
+        })
         .collect()
 }
 
@@ -344,8 +395,16 @@ fn now_millis() -> u64 {
 
 /// `*` matches any run of characters inside one path segment.
 fn wild(pattern: &str, value: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let v: Vec<char> = value.chars().collect();
+    // NTFS names are case-insensitive.
+    let fold = |text: &str| -> Vec<char> {
+        if cfg!(windows) {
+            text.to_lowercase().chars().collect()
+        } else {
+            text.chars().collect()
+        }
+    };
+    let p = fold(pattern);
+    let v = fold(value);
     let (mut pi, mut vi) = (0usize, 0usize);
     let mut star: Option<usize> = None;
     let mut mark = 0usize;
@@ -371,17 +430,75 @@ fn wild(pattern: &str, value: &str) -> bool {
     pi == p.len()
 }
 
+/// A Windows environment folder, kept inside `home`: the value of the
+/// variable when it lies under the user's profile, else the standard
+/// location under it. Findings therefore never leave the profile, and
+/// `apply` re-resolves to the same place the scan did.
+fn windows_var(name: &str, home: &Path) -> Option<String> {
+    let default = match name.to_ascii_uppercase().as_str() {
+        "USERPROFILE" => return Some(home.display().to_string()),
+        "LOCALAPPDATA" => home.join("AppData").join("Local"),
+        "APPDATA" => home.join("AppData").join("Roaming"),
+        "TEMP" | "TMP" => home.join("AppData").join("Local").join("Temp"),
+        _ => return None,
+    };
+    let from_env = std::env::var_os(name).map(PathBuf::from).filter(|value| {
+        let value = value.to_string_lossy().to_lowercase().replace('\\', "/");
+        let home = home.to_string_lossy().to_lowercase().replace('\\', "/");
+        let home = home.trim_end_matches('/');
+        value.starts_with(&format!("{home}/"))
+    });
+    Some(from_env.unwrap_or(default).display().to_string())
+}
+
 fn resolve_pattern(pattern: &str, home: &Path) -> String {
-    match pattern.strip_prefix("~/") {
+    let mut text = match pattern.strip_prefix("~/") {
         Some(rest) => format!("{}/{}", home.display(), rest),
         None => pattern.to_string(),
+    };
+    // `%NAME%` environment folders (Windows rules only).
+    while let Some(open) = text.find('%') {
+        let Some(len) = text[open + 1..].find('%') else {
+            break;
+        };
+        let name = &text[open + 1..open + 1 + len];
+        let Some(value) = windows_var(name, home) else {
+            break;
+        };
+        text.replace_range(open..open + len + 2, &value);
     }
+    text
+}
+
+/// Root to start from and the path segments of a resolved pattern. On
+/// Windows both separators are accepted and a leading `C:` becomes the root.
+fn split_pattern(full: &str) -> (PathBuf, Vec<String>) {
+    let normal = if cfg!(windows) {
+        full.replace('\\', "/")
+    } else {
+        full.to_string()
+    };
+    let mut segments = normal
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .peekable();
+    if cfg!(windows)
+        && let Some(drive) = segments
+            .peek()
+            .filter(|s| s.len() == 2 && s.ends_with(':'))
+            .cloned()
+    {
+        segments.next();
+        return (PathBuf::from(format!("{drive}\\")), segments.collect());
+    }
+    (PathBuf::from("/"), segments.collect())
 }
 
 fn expand(pattern: &str, home: &Path) -> Vec<PathBuf> {
-    let full = resolve_pattern(pattern, home);
-    let mut current = vec![PathBuf::from("/")];
-    for segment in full.split('/').filter(|s| !s.is_empty()) {
+    let (root, segments) = split_pattern(&resolve_pattern(pattern, home));
+    let mut current = vec![root];
+    for segment in &segments {
         let mut next = Vec::new();
         for base in &current {
             if segment.contains('*') {
@@ -409,8 +526,7 @@ fn expand(pattern: &str, home: &Path) -> Vec<PathBuf> {
 }
 
 fn path_matches(pattern: &str, path: &Path, home: &Path) -> bool {
-    let full = resolve_pattern(pattern, home);
-    let want: Vec<&str> = full.split('/').filter(|s| !s.is_empty()).collect();
+    let (_, want) = split_pattern(&resolve_pattern(pattern, home));
     let have: Vec<String> = path
         .components()
         .filter_map(|c| match c {
@@ -424,6 +540,7 @@ fn path_matches(pattern: &str, path: &Path, home: &Path) -> bool {
 fn excluded(rule: &CleanupRule, name: &str) -> bool {
     name == ".DS_Store"
         || name == ".localized"
+        || name.eq_ignore_ascii_case("desktop.ini")
         || rule.exclude_names.iter().any(|pattern| wild(pattern, name))
 }
 
@@ -456,9 +573,53 @@ fn is_dataless(md: &fs::Metadata) -> bool {
     md.st_flags() & 0x4000_0000 != 0
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: offline, recall-on-open and recall-on-data-access items are cloud
+/// placeholders; any other reparse point (junction, dedup, WIM) has semantics
+/// Pulse does not know, so it is left alone too.
+#[cfg(windows)]
+fn is_dataless(md: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    md.file_attributes() & (0x0400 | 0x1000 | 0x0004_0000 | 0x0040_0000) != 0
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn is_dataless(_md: &fs::Metadata) -> bool {
     false
+}
+
+/// Windows: whether another program holds `path` open so that a move would
+/// fail or break it. Asks for DELETE access without recalling anything; a
+/// sharing violation means in use, and an answer that cannot be had (access
+/// denied) counts as in use too, because unknown is never eligible.
+#[cfg(windows)]
+fn held_open(path: &Path) -> Option<String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const READ_ATTRIBUTES: u32 = 0x0000_0080;
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const OPEN_NO_RECALL: u32 = 0x0010_0000;
+    match fs::OpenOptions::new()
+        .access_mode(DELETE | READ_ATTRIBUTES)
+        .share_mode(SHARE_READ_WRITE)
+        .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT | OPEN_NO_RECALL)
+        .open(path)
+    {
+        Ok(_) => None,
+        Err(error) => match error.raw_os_error() {
+            // ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND: gone, nothing to hold.
+            Some(2) | Some(3) => None,
+            // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+            Some(32) | Some(33) => Some("In use by another program".into()),
+            _ => Some("Can't tell whether another program is using this".into()),
+        },
+    }
+}
+
+#[cfg(not(windows))]
+fn held_open(_path: &Path) -> Option<String> {
+    None
 }
 
 /// Allocated bytes under `path` without following symlinks, and whether the
@@ -598,6 +759,9 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
     let mut snapshots_seen = false;
 
     for rule in &pack.rules {
+        if !applies_here(rule) {
+            continue;
+        }
         let groups: Vec<Vec<PathBuf>> = match &rule.discover {
             Some(d) => vec![discover_dirs(home, d)],
             None => rule.paths.iter().map(|p| expand(p, home)).collect(),
@@ -655,7 +819,7 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                 }
                 let name = display_name(&path);
                 let (dev, ino) = identity(&md);
-                let (eligible, reason) = judge(rule, &name, &md, running);
+                let (eligible, reason) = judge(rule, &name, &path, &md, running);
                 seen.insert(path.clone());
                 let path_text = path.to_string_lossy().into_owned();
                 if eligible {
@@ -669,7 +833,12 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),
                     category: rule.category.clone(),
-                    name: if rule.discover.is_some() {
+                    name: if rule.label_parent && !name.is_empty() {
+                        match path.parent().map(display_name) {
+                            Some(parent) if !parent.is_empty() => format!("{parent} · {name}"),
+                            _ => name,
+                        }
+                    } else if rule.discover.is_some() {
                         let project = path.parent().map(display_name).unwrap_or_default();
                         format!("{} · {}", rule.name, project)
                     } else if rule.risk == RuleRisk::Info || name.is_empty() {
@@ -707,7 +876,13 @@ pub fn scan(home: &Path, running: &[String]) -> Result<Report, String> {
     Ok(report)
 }
 
-fn judge(rule: &CleanupRule, name: &str, md: &fs::Metadata, running: &[String]) -> (bool, String) {
+fn judge(
+    rule: &CleanupRule,
+    name: &str,
+    path: &Path,
+    md: &fs::Metadata,
+    running: &[String],
+) -> (bool, String) {
     if rule.risk == RuleRisk::Info {
         return (false, rule.reason.clone());
     }
@@ -717,7 +892,10 @@ fn judge(rule: &CleanupRule, name: &str, md: &fs::Metadata, running: &[String]) 
     match in_use(rule, name, running) {
         Err(why) => (false, why),
         Ok(Some(process)) => (false, format!("In use: {process} is running")),
-        Ok(None) => (true, rule.reason.clone()),
+        Ok(None) => match held_open(path) {
+            Some(why) => (false, why),
+            None => (true, rule.reason.clone()),
+        },
     }
 }
 
@@ -777,7 +955,7 @@ struct ActivityLog {
 }
 
 fn log_path(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Pulse/cleanup-activity.json")
+    state_dir(home).join("cleanup-activity.json")
 }
 
 fn read_log(home: &Path) -> ActivityLog {
@@ -830,6 +1008,9 @@ fn revalidate(
     if rule.risk == RuleRisk::Info {
         return Err("Not something to move".into());
     }
+    if !applies_here(rule) {
+        return Err("Not a rule for this system".into());
+    }
     let path = PathBuf::from(&request.path);
     let covered = match &rule.discover {
         Some(d) => is_discovered(&path, home, d),
@@ -862,6 +1043,9 @@ fn revalidate(
     match in_use(rule, &display_name(&path), running)? {
         Some(process) => Err(format!("In use: {process} is running")),
         None => {
+            if let Some(why) = held_open(&path) {
+                return Err(why);
+            }
             let bytes = match rule.measurement {
                 Measurement::Allocated => measure(&path).0,
                 Measurement::CloneAware => {
@@ -1050,5 +1234,45 @@ mod tests {
             "/private/var/folders/ab/cd/X/com.example.App.code_sign_clone/code_sign_clone.1",
         );
         assert!(!rule.paths.iter().any(|pat| path_matches(pat, &other, home)));
+    }
+
+    #[test]
+    fn windows_rules_stay_inside_the_profile_and_never_preselect_unknowns() {
+        let pack = load_pack().unwrap();
+        let mut ids = HashSet::new();
+        let home = Path::new("/profile");
+        for rule in &pack.rules {
+            assert!(ids.insert(rule.id.clone()), "duplicate id {}", rule.id);
+            if !rule.platforms.iter().any(|p| p == "windows") {
+                continue;
+            }
+            assert!(
+                rule.discover.is_some() || !rule.paths.is_empty(),
+                "{} has nothing to look at",
+                rule.id
+            );
+            assert!(rule.action == "Move to Trash" || rule.risk == RuleRisk::Info);
+            if rule.risk == RuleRisk::Safe {
+                // Safe means preselected, so liveness must be owner-bound.
+                assert!(rule.liveness != LivenessCheck::Age, "{}", rule.id);
+            }
+            for pattern in &rule.paths {
+                let full = resolve_pattern(pattern, home).replace('\\', "/");
+                assert!(
+                    full.starts_with("/profile/"),
+                    "{}: {pattern} resolves to {full}",
+                    rule.id
+                );
+                assert!(!full.contains('%'), "{}: unresolved {pattern}", rule.id);
+            }
+        }
+        assert_eq!(
+            split_pattern("C:\\Users\\x/AppData/*").1,
+            if cfg!(windows) {
+                vec!["Users", "x", "AppData", "*"]
+            } else {
+                vec!["C:\\Users\\x", "AppData", "*"]
+            }
+        );
     }
 }

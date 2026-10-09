@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "pack_version": 1,
-  "sources": "Patterns re-implemented from Mole (tw93/Mole, lib/clean) and Kudu (AdventDevInc/kudu, rules/darwin). No code copied.",
+  "sources": "Patterns re-implemented from Mole (tw93/Mole, lib/clean) and Kudu (AdventDevInc/kudu, rules/darwin). No code copied. Windows rules (platforms: windows) re-implement the same categories for per-user folders only; Delivery Optimization and Windows Update caches need administrator rights and are deliberately not covered.",
   "rules": [
     {
       "id": "user-caches", "name": "App caches", "category": "App caches", "risk": "safe",
@@ -73,6 +73,7 @@
     {
       "id": "cargo-cache", "name": "Cargo registry and git caches", "category": "Package caches", "risk": "safe",
       "paths": ["~/.cargo/registry/cache/*", "~/.cargo/registry/src/*", "~/.cargo/git/checkouts/*"],
+      "platforms": ["macos", "linux", "windows"],
       "liveness": "owners", "owners": ["cargo", "rustc", "rust-analyzer"],
       "reason": "Downloaded crates and checkouts; Cargo fetches them again when needed.",
       "action": "Move to Trash"
@@ -87,6 +88,7 @@
     {
       "id": "gradle-cache", "name": "Gradle caches", "category": "Package caches", "risk": "safe",
       "paths": ["~/.gradle/caches/*"],
+      "platforms": ["macos", "linux", "windows"],
       "liveness": "owners", "owners": ["gradle", "java", "Android Studio"],
       "reason": "Downloaded dependencies and build caches; Gradle recreates them on the next build.",
       "action": "Move to Trash"
@@ -181,6 +183,7 @@
     {
       "id": "node-modules", "name": "node_modules", "category": "Build outputs", "risk": "safe",
       "paths": [], "discover": {"dir": "node_modules", "markers": ["package.json"]},
+      "platforms": ["macos", "linux", "windows"],
       "liveness": "owners", "owners": ["node", "npm", "pnpm", "yarn", "bun", "deno"], "min_age_days": 14,
       "reason": "Your package manager reinstalls it the next time you work on the project.",
       "action": "Move to Trash"
@@ -188,6 +191,7 @@
     {
       "id": "cargo-target", "name": "Rust target", "category": "Build outputs", "risk": "safe",
       "paths": [], "discover": {"dir": "target", "markers": ["Cargo.toml"]},
+      "platforms": ["macos", "linux", "windows"],
       "liveness": "owners", "owners": ["cargo", "rustc"], "min_age_days": 14,
       "reason": "Cargo rebuilds it the next time you build the project.",
       "action": "Move to Trash"
@@ -197,6 +201,144 @@
       "paths": [], "discover": {"dir": ".build", "markers": ["Package.swift"]},
       "liveness": "owners", "owners": ["swift-build", "swift", "swift-package", "xcodebuild"], "min_age_days": 14,
       "reason": "Swift rebuilds it the next time you build the package.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-temp", "name": "Temporary files", "category": "Temporary files", "risk": "review", "platforms": ["windows"],
+      "paths": ["%TEMP%/*"],
+      "liveness": "age", "owners": [], "min_age_days": 7,
+      "reason": "Left in your temp folder for over 7 days. Programs that are still using a file are skipped, but look before you move anything you recognise.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-chrome-cache", "name": "Chrome cache", "category": "Browser caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/Google/Chrome/User Data/*/Cache", "%LOCALAPPDATA%/Google/Chrome/User Data/*/Code Cache", "%LOCALAPPDATA%/Google/Chrome/User Data/*/GPUCache"],
+      "liveness": "owners", "owners": ["chrome"],
+      "label_parent": true,
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-edge-cache", "name": "Edge cache", "category": "Browser caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Cache", "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Code Cache", "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/GPUCache"],
+      "liveness": "owners", "owners": ["msedge"],
+      "label_parent": true,
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-brave-cache", "name": "Brave cache", "category": "Browser caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Cache", "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Code Cache", "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/GPUCache"],
+      "liveness": "owners", "owners": ["brave"],
+      "label_parent": true,
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-firefox-cache", "name": "Firefox cache", "category": "Browser caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/Mozilla/Firefox/Profiles/*/cache2", "%LOCALAPPDATA%/Mozilla/Firefox/Profiles/*/startupCache"],
+      "liveness": "owners", "owners": ["firefox"],
+      "label_parent": true,
+      "reason": "Cached web content only; never your profile, passwords or history.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-npm-cache", "name": "npm cache", "category": "Package caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/npm-cache/_cacache"],
+      "liveness": "owners", "owners": ["npm", "npx", "node"],
+      "reason": "Downloaded packages; npm fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-pnpm-store", "name": "pnpm store", "category": "Package caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/pnpm/store/*", "%LOCALAPPDATA%/pnpm-store/*", "~/.pnpm-store/*"],
+      "liveness": "owners", "owners": ["pnpm", "node"],
+      "reason": "Shared package store; pnpm downloads packages again on the next install.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-yarn-cache", "name": "Yarn cache", "category": "Package caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/Yarn/Cache/*", "%LOCALAPPDATA%/Yarn/Berry/cache/*"],
+      "liveness": "owners", "owners": ["yarn", "node"],
+      "reason": "Downloaded packages; Yarn fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-pip-cache", "name": "pip cache", "category": "Package caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/pip/Cache/*"],
+      "liveness": "owners", "owners": ["pip", "pip3", "python"],
+      "reason": "Downloaded wheels; pip fetches them again when needed.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-go-cache", "name": "Go build and module caches", "category": "Package caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/go-build/*", "~/go/pkg/mod/cache/download/*"],
+      "liveness": "owners", "owners": ["go", "gopls"],
+      "reason": "Build output and downloaded modules; Go recreates them on demand.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-nuget-cache", "name": "NuGet web caches", "category": "Package caches", "risk": "safe", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/NuGet/v3-cache/*", "%LOCALAPPDATA%/NuGet/plugins-cache/*"],
+      "liveness": "owners", "owners": ["dotnet", "nuget", "msbuild", "devenv"],
+      "reason": "Cached package feed responses; NuGet downloads them again when needed. Installed packages are not touched.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-maven-repository", "name": "Maven local repository", "category": "Package caches", "risk": "review", "platforms": ["windows"],
+      "paths": ["~/.m2/repository"],
+      "liveness": "owners", "owners": ["mvn", "mvnd", "java"],
+      "reason": "Downloaded dependencies, plus anything you installed locally with mvn install. Maven fetches the first kind again; the second kind is gone for good.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-dotnet-obj", "name": ".NET obj", "category": "Build outputs", "risk": "safe", "platforms": ["windows"],
+      "paths": [], "discover": {"dir": "obj", "markers": ["*.csproj", "*.fsproj", "*.vbproj"]},
+      "liveness": "owners", "owners": ["dotnet", "msbuild", "devenv", "vbcscompiler"], "min_age_days": 14,
+      "reason": "Intermediate build files; the next build or restore recreates them.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-dotnet-bin", "name": ".NET bin", "category": "Build outputs", "risk": "review", "platforms": ["windows"],
+      "paths": [], "discover": {"dir": "bin", "markers": ["*.csproj", "*.fsproj", "*.vbproj"]},
+      "liveness": "owners", "owners": ["dotnet", "msbuild", "devenv", "vbcscompiler"], "min_age_days": 14,
+      "reason": "Compiled output; the next build recreates it. Check that nothing you ship by hand lives here.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-download-installers", "name": "Installers", "category": "Downloads", "risk": "review", "platforms": ["windows"],
+      "paths": ["~/Downloads/*.msi", "~/Downloads/*.exe", "~/Downloads/*.msix", "~/Downloads/*.msixbundle", "~/Downloads/*.appx", "~/Downloads/*.iso"],
+      "liveness": "age", "owners": [], "min_age_days": 30,
+      "reason": "An installer you have probably used already. Some .exe files are portable programs you run from here, so look first; one that is running is skipped.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-old-downloads", "name": "Old downloads", "category": "Downloads", "risk": "review", "platforms": ["windows"],
+      "paths": ["~/Downloads/*"],
+      "exclude_names": [".*", "*.crdownload", "*.opdownload", "*.part", "*.partial", "*.tmp"],
+      "liveness": "age", "owners": [], "min_age_days": 90,
+      "reason": "Not modified in over 90 days. These are your own files, so look before you move them.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-crash-dumps", "name": "Crash dumps", "category": "Logs", "risk": "review", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/CrashDumps/*"],
+      "liveness": "age", "owners": [], "min_age_days": 7,
+      "reason": "Memory dumps from crashed programs, often large. Keep one if you are chasing that crash.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-error-reports", "name": "Windows error reports", "category": "Logs", "risk": "review", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/Microsoft/Windows/WER/ReportArchive/*", "%LOCALAPPDATA%/Microsoft/Windows/WER/ReportQueue/*"],
+      "liveness": "age", "owners": [], "min_age_days": 7,
+      "reason": "Crash reports Windows saved for you; nothing needs them once you have looked.",
+      "action": "Move to Trash"
+    },
+    {
+      "id": "win-thumbnail-cache", "name": "Thumbnail and icon cache", "category": "System caches", "risk": "review", "platforms": ["windows"],
+      "paths": ["%LOCALAPPDATA%/Microsoft/Windows/Explorer/thumbcache_*.db", "%LOCALAPPDATA%/Microsoft/Windows/Explorer/iconcache_*.db"],
+      "liveness": "owners", "owners": ["explorer"],
+      "reason": "Explorer rebuilds these previews on demand. Explorer keeps them open, so they are offered only when it is not running.",
       "action": "Move to Trash"
     },
     {

@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use pulse_core::duplicates::{
     ContentHandle, ContentMetadata, ContentReader, DuplicateOptions, find_duplicates,
     find_duplicates_with_reader,
@@ -57,9 +55,13 @@ fn hardlinks_are_skipped_by_identity_and_symlinks_are_refused() {
     let root = fixture();
     let original = root.join("original");
     let hardlink = root.join("hardlink");
-    let link = root.join("symlink");
     fs::write(&original, b"hardlink bytes").unwrap();
     fs::hard_link(&original, &hardlink).unwrap();
+    // Windows symlink creation needs a privilege CI does not guarantee, so
+    // the link refusal is exercised on Unix only.
+    #[cfg(unix)]
+    let link = root.join("symlink");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&original, &link).unwrap();
 
     let report = find_duplicates(std::slice::from_ref(&root), &options());
@@ -67,6 +69,7 @@ fn hardlinks_are_skipped_by_identity_and_symlinks_are_refused() {
     assert!(report.skipped.iter().any(|skip| {
         (skip.path == hardlink || skip.path == original) && skip.reason.contains("hard link")
     }));
+    #[cfg(unix)]
     assert!(
         report
             .skipped

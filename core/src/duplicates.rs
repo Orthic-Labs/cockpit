@@ -102,7 +102,11 @@ pub fn find_duplicates(paths: &[PathBuf], options: &DuplicateOptions) -> Duplica
     {
         find_duplicates_with_reader(paths, options, &UnixContentReader)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        find_duplicates_with_reader(paths, options, &WindowsContentReader)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let mut report = DuplicateReport::default();
         let _ = (paths, options);
@@ -679,5 +683,127 @@ fn open_component(
         Err(std::io::Error::last_os_error().to_string())
     } else {
         Ok(fd)
+    }
+}
+
+/// Windows content adapter. Opens with `FILE_FLAG_OPEN_REPARSE_POINT` and
+/// `FILE_FLAG_OPEN_NO_RECALL`, then refuses (from the opened handle's own
+/// attributes) reparse points, offline and recall-on-access items, so a link
+/// is never followed and a cloud placeholder is never hydrated. Identity is
+/// the NTFS `FILE_ID_INFO` read from the handle, formatted exactly as
+/// `platform::inspect` formats it, so hard links collapse before any read.
+#[cfg(windows)]
+pub struct WindowsContentReader;
+
+#[cfg(windows)]
+impl ContentReader for WindowsContentReader {
+    fn open(&self, path: &Path) -> Result<Box<dyn ContentHandle>, String> {
+        WindowsContentHandle::open(path).map(|handle| Box::new(handle) as Box<dyn ContentHandle>)
+    }
+}
+
+#[cfg(windows)]
+struct WindowsContentHandle {
+    file: fs::File,
+    cursor: u64,
+}
+
+#[cfg(windows)]
+impl WindowsContentHandle {
+    fn open(path: &Path) -> Result<Self, String> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let before = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !before.is_file() || before.file_type().is_symlink() {
+            return Err("content handle requires a regular non-link file".into());
+        }
+        let native = platform::inspect(path, &before);
+        if native.file_id.is_none() || !native.volume_stable || native.is_placeholder {
+            return Err("native adapter cannot guarantee local content".into());
+        }
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | FILE_FLAG_OPEN_NO_RECALL.0)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        let handle = Self { file, cursor: 0 };
+        let (attributes, _) = handle.handle_facts()?;
+        const REFUSED: u32 = 0x0000_0400 | 0x0000_1000 | 0x0004_0000 | 0x0040_0000;
+        if attributes & (REFUSED | 0x0000_0010) != 0 {
+            return Err("placeholder, reparse point or directory refused".into());
+        }
+        let opened = handle.metadata()?;
+        if Some(&opened.file_id) != native.file_id.as_ref() || opened.size != before.len() {
+            return Err("identity or size changed while opening content".into());
+        }
+        Ok(handle)
+    }
+
+    /// Attributes and the volume-qualified id of the opened object.
+    fn handle_facts(&self) -> Result<(u32, FileIdentity), String> {
+        use std::ffi::c_void;
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandle,
+            GetFileInformationByHandleEx,
+        };
+        let handle = HANDLE(self.file.as_raw_handle());
+        let mut basic = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe { GetFileInformationByHandle(handle, &mut basic) }.map_err(|e| e.to_string())?;
+        let mut id_info = FILE_ID_INFO::default();
+        unsafe {
+            GetFileInformationByHandleEx(
+                handle,
+                FileIdInfo,
+                (&mut id_info as *mut FILE_ID_INFO).cast::<c_void>(),
+                std::mem::size_of::<FILE_ID_INFO>() as u32,
+            )
+        }
+        .map_err(|e| e.to_string())?;
+        let hex: String = id_info
+            .FileId
+            .Identifier
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Ok((
+            basic.dwFileAttributes,
+            FileIdentity {
+                volume: crate::model::VolumeIdentity::new(format!(
+                    "serial:{:016x}",
+                    id_info.VolumeSerialNumber
+                )),
+                id: hex,
+            },
+        ))
+    }
+}
+
+#[cfg(windows)]
+impl ContentHandle for WindowsContentHandle {
+    fn metadata(&self) -> Result<ContentMetadata, String> {
+        let (_, file_id) = self.handle_facts()?;
+        let size = self.file.metadata().map_err(|e| e.to_string())?.len();
+        Ok(ContentMetadata { file_id, size })
+    }
+
+    fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, String> {
+        use std::os::windows::fs::FileExt;
+        self.file
+            .seek_read(buffer, offset)
+            .map_err(|e| e.to_string())
+    }
+
+    fn read_next(&mut self, buffer: &mut [u8]) -> Result<usize, String> {
+        let count = self.read_at(self.cursor, buffer)?;
+        self.cursor = self
+            .cursor
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+        Ok(count)
     }
 }
