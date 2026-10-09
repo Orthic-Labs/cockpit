@@ -196,7 +196,7 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
         </span>
         <div className="ov-hero-copy">
           <h2 className="ov-hero-title">{headline.title}</h2>
-          <p className="ov-hero-reason">{headline.reason}</p>
+          <p className="ov-hero-reason" title={headline.reason}>{headline.reason}</p>
         </div>
         <div className="ov-hero-actions">
           {headline.actions.map((a, i) => (

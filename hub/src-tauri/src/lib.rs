@@ -142,8 +142,15 @@ fn watch_notch(app: tauri::AppHandle) {
             ("dev.orthic.pulse.hub.show.permissions", "show-section", "permissions"),
             ("dev.orthic.pulse.notch.state", "notch-state", ""),
         ];
+        // `hub.select.<section>` switches the page without showing or focusing
+        // the window, so checks can look at a page while someone else works.
+        let quiet: Vec<(String, &str, &str)> = names
+            .iter()
+            .filter(|(_, event, _)| *event == "show-section")
+            .map(|(name, _, payload)| (name.replace(".hub.show.", ".hub.select."), "select-section", *payload))
+            .collect();
         let mut tokens = Vec::new();
-        for (name, event, payload) in names {
+        for (name, event, payload) in names.iter().map(|(n, e, p)| (n.to_string(), *e, *p)).chain(quiet) {
             let Ok(cname) = std::ffi::CString::new(name) else { continue };
             let mut token = 0i32;
             if unsafe { notify_register_check(cname.as_ptr(), &mut token) } == 0 {
@@ -179,6 +186,7 @@ fn watch_notch(app: tauri::AppHandle) {
                     if *event == "show-section" {
                         show_in_dock(&app);
                     }
+                    let event = if *event == "select-section" { "show-section" } else { *event };
                     let _ = app.emit(event, payload.to_string());
                 }
             }

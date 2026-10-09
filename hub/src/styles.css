@@ -24,6 +24,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .strong { font-weight: 600; color: var(--rk-ink); }
 .error { color: var(--rk-bad); font-size: 12px; }
 /* Page titles in the titlebar use the suite face too. */
+/* The plane's top-left corner is rounded 20px. The active row's top fuse curve
+   reaches 12px above the row, so the first row must start at least 32px below
+   the plane top or the curve lands on the rounded corner and leaves a notch. */
+.rk-nav { padding-top: 18px; }
 .rk-top__title { font-family: var(--rk-wordmark); font-weight: 400; font-size: 18px; letter-spacing: 0.01em; }
 .wordmark { font-family: var(--rk-wordmark); font-weight: 400; font-size: 20px; letter-spacing: 0.01em; }
 .nav-icon { font-size: 13px; opacity: 0.8; }
@@ -137,21 +141,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .ov-attention { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--rk-warn-soft); color: var(--rk-warn); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
 .ov-attention:hover { filter: brightness(1.08); }
 .ov button:focus-visible { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 3px; }
-.ov-hero { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); }
-.ov-hero-mark { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; }
+.ov-hero { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); }
+.ov-hero-mark { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; }
 .ov-hero-mark.ok { background: var(--rk-ok-soft, var(--rk-plane)); color: var(--rk-ok); }
 .ov-hero-mark.warn { background: var(--rk-warn-soft, var(--rk-plane)); color: var(--rk-warn); }
 .ov-hero-mark.bad { background: var(--rk-bad-soft, var(--rk-plane)); color: var(--rk-bad); }
 .ov-hero-copy { flex: 1; min-width: 0; }
-.ov-hero-title { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; color: var(--rk-ink); overflow-wrap: anywhere; }
-.ov-hero-reason { margin: 2px 0 0; font-size: 13px; line-height: 1.45; color: var(--rk-ink-2); }
-.ov-hero-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 45%; }
+.ov-hero-title { margin: 0; font-size: 19px; line-height: 1.25; font-weight: 650; color: var(--rk-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-hero-reason { margin: 1px 0 0; font-size: 12px; line-height: 1.4; color: var(--rk-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-hero-actions { flex: none; display: flex; gap: 6px; }
 .ov-action { min-height: 32px; padding: 5px 12px; border: 1px solid var(--rk-hairline); border-radius: 7px; background: var(--rk-fill-2); color: var(--rk-ink); font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .ov-action:hover { filter: brightness(1.08); }
 .ov-action.primary { background: var(--rk-accent); border-color: var(--rk-accent); color: var(--rk-accent-ink, #fff); }
-.ov-row { display: grid; gap: 12px; min-width: 0; align-items: start; }
-.ov-row--2 { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
-.ov-row--3 { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr); }
+.ov-row { display: grid; gap: 12px; min-width: 0; align-items: stretch; }
+.ov-row--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ov-row--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ov-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 14px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); color: var(--rk-ink); }
 .ov-card-head { display: flex; align-items: center; gap: 7px; width: 100%; padding: 0; border: 0; background: none; color: var(--rk-ink); font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer; }
 .ov-card-head:hover { filter: none; }
@@ -195,8 +199,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 @media (max-width: 860px) {
   .view.ov { gap: 10px; padding: 10px 12px; }
   .ov-hero { padding: 10px 14px; }
-  .ov-hero-title { font-size: 21px; }
-  .ov-hero-mark { width: 38px; height: 38px; }
+  .ov-hero-title { font-size: 17px; }
+  .ov-hero-mark { width: 32px; height: 32px; }
   .ov-hero-reason { font-size: 12px; }
   .ov-row { gap: 10px; }
   .ov-card { padding: 8px 12px; gap: 8px; }
