@@ -238,7 +238,9 @@ pub fn merge(local: &[LocalSession], local_alias: &str, remotes: &[RemoteChats])
         })
         .collect();
     for remote in remotes {
-        let Ok(listing) = &remote.listing else { continue };
+        let Ok(listing) = &remote.listing else {
+            continue;
+        };
         for entry in &listing.chats {
             peers.push(Peer {
                 id: format!("{}:{}", remote.link.device, entry.session),

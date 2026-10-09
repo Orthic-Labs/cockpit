@@ -176,7 +176,7 @@ pub fn read() -> Value {
         }
         Err(e) => return gone(&format!("couldn't read the notch's snapshot: {e}")),
     };
-    let snapshot: Value = match serde_json::from_str(text.trim_start_matches('\u{feff}')) {
+    let snapshot: Value = match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
         Ok(v) if v["product"] == "Pulse" => v,
         _ => return gone("the notch's snapshot isn't readable (not a Pulse notch-state file)"),
     };

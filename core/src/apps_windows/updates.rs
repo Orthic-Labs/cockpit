@@ -249,7 +249,10 @@ pub fn check(installed: &[Installed], on_row: &dyn Fn(&AppUpdate)) -> Result<Fou
         CHECK_TIMEOUT,
     )?;
     let rows = parse_upgrades(&text);
-    if rows.is_empty() && code != 0 && code != NO_APPLICATIONS_FOUND && code != NO_APPLICABLE_UPGRADE
+    if rows.is_empty()
+        && code != 0
+        && code != NO_APPLICATIONS_FOUND
+        && code != NO_APPLICABLE_UPGRADE
     {
         return Err(format!(
             "winget could not list updates (exit code {code:#010X})."
@@ -289,9 +292,10 @@ pub fn check(installed: &[Installed], on_row: &dyn Fn(&AppUpdate)) -> Result<Fou
             checked_at: now,
         };
         on_row(&update);
-        found
-            .targets
-            .insert(path, (row.id.clone(), row.source.clone().unwrap_or_default()));
+        found.targets.insert(
+            path,
+            (row.id.clone(), row.source.clone().unwrap_or_default()),
+        );
         found.apps.push(update);
     }
     Ok(found)

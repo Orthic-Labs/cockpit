@@ -271,9 +271,7 @@ pub fn identify(
             } else {
                 None
             });
-        return hit
-            .map(caller_of)
-            .ok_or(BridgeError::NotFound(wanted));
+        return hit.map(caller_of).ok_or(BridgeError::NotFound(wanted));
     }
     let claude_id = var("CLAUDE_SESSION_ID").or_else(|| var("CLAUDE_CODE_SESSION_ID"));
     if let Some(socket) = var("CLAUDE_CODE_MESSAGING_SOCKET") {
@@ -317,8 +315,7 @@ pub fn identify(
 /// macOS a chat accepts a peer message only from a process descending from a
 /// registered session: a chat's own shell is one; `pulse` run by sshd is not.
 fn direct_post_trusted() -> bool {
-    !cfg!(unix)
-        || std::env::var("CLAUDE_CODE_MESSAGING_SOCKET").is_ok_and(|v| !v.trim().is_empty())
+    !cfg!(unix) || std::env::var("CLAUDE_CODE_MESSAGING_SOCKET").is_ok_and(|v| !v.trim().is_empty())
 }
 
 /// Put `env` into a chat on this computer the way that works here: through
@@ -350,7 +347,10 @@ pub fn deliver_here(
                 msg_id: env.id.clone(),
                 session: session.id.clone(),
                 state: ReceiptState::Held,
-                detail: reply["error"].as_str().unwrap_or("Pulse refused").to_string(),
+                detail: reply["error"]
+                    .as_str()
+                    .unwrap_or("Pulse refused")
+                    .to_string(),
             },
             Err(e) => Receipt {
                 msg_id: env.id.clone(),

@@ -78,7 +78,11 @@ pub fn new_uuid() -> String {
 
 impl Envelope {
     /// A new envelope with a fresh id and time.
-    pub fn new(from: Sender, to: Target, body: impl Into<String>) -> Result<Envelope, EnvelopeError> {
+    pub fn new(
+        from: Sender,
+        to: Target,
+        body: impl Into<String>,
+    ) -> Result<Envelope, EnvelopeError> {
         let body = body.into();
         if body.len() > MAX_BODY_BYTES {
             return Err(EnvelopeError::Oversize);

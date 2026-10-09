@@ -195,9 +195,7 @@ pub(crate) fn run_capture(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(100))
-            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -275,12 +273,7 @@ fn flag_of(value: &Value) -> bool {
 /// reads the same keys with `winreg` and calls `assemble`/`usage::apply` itself.
 pub fn read_installed() -> Result<Vec<Installed>, String> {
     let mut command = Command::new(powershell());
-    command.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        READ_SCRIPT,
-    ]);
+    command.args(["-NoProfile", "-NonInteractive", "-Command", READ_SCRIPT]);
     let (code, text) = run_capture(
         command,
         READ_TIMEOUT,

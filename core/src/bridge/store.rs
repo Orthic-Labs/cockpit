@@ -167,7 +167,6 @@ impl Store {
         &self.root
     }
 
-
     fn lock(&self, target: &Path) -> io::Result<LockFile> {
         let path = target.with_extension("lock");
         if let Some(parent) = path.parent() {

@@ -77,7 +77,11 @@ fn local_chats(store: &Store, max_age: Duration) -> Vec<LocalSession> {
 
 /// Whether `id` is a chat on this computer (for `ReplyHub`).
 pub fn is_known_local_session(id: &str) -> bool {
-    store().is_some_and(|s| local_chats(s, SESSION_SCAN_EVERY).iter().any(|c| c.id == id))
+    store().is_some_and(|s| {
+        local_chats(s, SESSION_SCAN_EVERY)
+            .iter()
+            .any(|c| c.id == id)
+    })
 }
 
 // ---- registration ------------------------------------------------------------------

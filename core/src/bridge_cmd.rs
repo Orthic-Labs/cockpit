@@ -207,7 +207,12 @@ fn status(machine: bool) -> Result<(), String> {
     }
     for r in &remotes {
         match &r.listing {
-            Ok(l) => println!("{} chats on {} ({})", l.chats.len(), r.link.device, r.link.ssh),
+            Ok(l) => println!(
+                "{} chats on {} ({})",
+                l.chats.len(),
+                r.link.device,
+                r.link.ssh
+            ),
             Err(e) => println!("{} ({}): {e}", r.link.device, r.link.ssh),
         }
     }

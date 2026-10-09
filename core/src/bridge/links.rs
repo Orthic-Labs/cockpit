@@ -292,10 +292,7 @@ pub fn list_all(store: &Store) -> Vec<RemoteChats> {
             })
         })
         .collect();
-    handles
-        .into_iter()
-        .filter_map(|h| h.join().ok())
-        .collect()
+    handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
 
 /// Deliver `env` to the chat it names on the linked computer. The result is
