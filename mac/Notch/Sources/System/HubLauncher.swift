@@ -28,6 +28,33 @@ enum HubLauncher {
         }
     }
 
+    /// A hub left behind by an earlier Pulse outlives that notch, because it is
+    /// a child that is never told to quit when the app is replaced. Called once
+    /// at launch, before this notch starts or addresses a hub. Found by bundle
+    /// id, and by its executable for a hub Launch Services does not list under
+    /// one. Asked to quit, given three seconds, then forced.
+    static func retireHubsFromEarlierLaunches() {
+        let launched = NSRunningApplication.current.launchDate ?? Date()
+        var seen = Set<pid_t>()
+        let candidates = (NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            + NSWorkspace.shared.runningApplications.filter {
+                $0.executableURL?.path.hasSuffix("Helpers/Pulse.app/Contents/MacOS/pulse-hub") == true
+            })
+        .filter {
+            !$0.isTerminated && seen.insert($0.processIdentifier).inserted
+                && ($0.launchDate ?? .distantFuture) < launched
+        }
+        guard !candidates.isEmpty else { return }
+        for app in candidates { app.terminate() }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, candidates.contains(where: { !$0.isTerminated }) {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let remaining = candidates.filter { !$0.isTerminated }
+        for app in remaining { app.forceTerminate() }
+        Log.usage.info("retired \(candidates.count, privacy: .public) hub(s) from an earlier launch, \(remaining.count, privacy: .public) forced")
+    }
+
     static var location: URL? {
         let embedded = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers/Pulse.app", isDirectory: true)

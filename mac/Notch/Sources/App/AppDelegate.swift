@@ -107,6 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         Self.retireOlderInstances()
+        // A hub left by an earlier Pulse is retired before this one uses a hub.
+        MainActor.assumeIsolated { HubLauncher.retireHubsFromEarlierLaunches() }
         ChannelNotifications.installPresenter()
 
         // Before Preferences reads anything, or the first launch flag and
