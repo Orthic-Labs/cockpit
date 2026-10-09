@@ -150,6 +150,8 @@ impl Canvas {
 
     /// Even-odd fill of one or more closed loops (device pixels), anti-aliased with eight
     /// sub-scanlines per row and exact horizontal coverage.
+    // Coverage is accumulated per pixel column; the index is the pixel position.
+    #[allow(clippy::needless_range_loop)]
     pub fn fill_polygon(&mut self, loops: &[Vec<(f32, f32)>], color: Rgb, alpha: f32) {
         const SUB: usize = 8;
         let (mut top, mut bottom) = (f32::MAX, f32::MIN);

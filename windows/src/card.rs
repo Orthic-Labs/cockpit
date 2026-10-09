@@ -120,12 +120,6 @@ impl Live {
 pub enum Row {
     /// Label on the left, quieter value on the right. An empty value makes it a button.
     Pair { label: String, value: String },
-    /// Pair plus a progress bar for a used share (`None` draws an empty track).
-    Bar {
-        label: String,
-        value: String,
-        fraction: Option<f32>,
-    },
     /// One metered window: label and trailing text on a line, a bar (none without a share),
     /// then the summary line.
     Meter {

@@ -612,6 +612,8 @@ const CLAUDE: &[&[(f32, f32)]] = &[
 ];
 
 #[rustfmt::skip]
+// Traced outline coordinates; values near pi/4 are coincidence, not the constant.
+#[allow(clippy::approx_constant)]
 const OPENAI: &[&[(f32, f32)]] = &[
     &[
         (0.4234, -0.0272), (0.3541, -0.0187), (0.3013, 0.0040), (0.2422, 0.0495),

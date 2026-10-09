@@ -700,7 +700,6 @@ fn flow_row(
     match row {
         Row::Pair { value, .. } if value.is_empty() => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
         Row::Pair { .. } | Row::Status { .. } => (m.line, Vec::new(), Vec::new()),
-        Row::Bar { .. } => (m.line + LABEL_TO_BAR + BAR_HEIGHT, Vec::new(), Vec::new()),
         Row::Meter { fraction, .. } => {
             let bar = if fraction.is_some() {
                 LABEL_TO_BAR + BAR_HEIGHT
@@ -1564,15 +1563,6 @@ impl Pen<'_> {
                     let room = (right - left) as i32 - label_width - (VALUE_GAP * s) as i32;
                     let value = self.fit(value, body(INK_SECONDARY), room);
                     self.put(&value, right, base(0.0), body(INK_SECONDARY), true);
-                }
-                Row::Bar {
-                    label,
-                    value,
-                    fraction,
-                } => {
-                    self.put(label, left, base(0.0), body(INK_PRIMARY), false);
-                    self.put(value, right, base(0.0), body(INK_SECONDARY), true);
-                    self.bar(columns, y + (DRAWN.line + LABEL_TO_BAR) * s, *fraction);
                 }
                 Row::Meter {
                     label,
