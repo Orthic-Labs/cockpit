@@ -1291,7 +1291,7 @@ fn sync_card() {
 
 /// Shows (or updates) `panel` as the card of `cell` of the notch `key`, beside the notch on
 /// the side away from its screen edge.
-fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool) {
+fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool, notice: bool) {
     let (dpi, monitor, edge, folded) = {
         let app = lock_state();
         if app.shutting_down {

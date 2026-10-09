@@ -17,6 +17,8 @@ const BLOCKED_GLYPH: f32 = 0.35;
 const PILL_DOT: f32 = 4.0;
 const BADGE_DOT: f32 = 6.0;
 const BORDER: u32 = 0x2A2A2A;
+/// Limit-reached line on a card (readable red on the black card).
+const INK_ALERT: u32 = 0xFF6961;
 /// Side margin around a lone ring in `render_cell`.
 const CELL_MARGIN: f32 = 8.0;
 
@@ -332,6 +334,7 @@ fn row_height(row: &Row) -> f32 {
         Row::Pair { .. } => LINE_HEIGHT,
         Row::Bar { .. } => LINE_HEIGHT + BAR_ROW_EXTRA,
         Row::Note(_) => NOTE_HEIGHT,
+        Row::Alert(_) => LINE_HEIGHT,
     }
 }
 
@@ -488,6 +491,18 @@ pub fn render_card(
                     (NOTE_SIZE, false),
                     s,
                     INK_SECONDARY,
+                    1.0,
+                );
+            }
+            Row::Alert(alert) => {
+                draw_text(
+                    &mut canvas,
+                    text,
+                    alert,
+                    (left, px(y, s)),
+                    (ROW_SIZE, true),
+                    s,
+                    INK_ALERT,
                     1.0,
                 );
             }
