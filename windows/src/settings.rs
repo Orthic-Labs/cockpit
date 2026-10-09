@@ -1156,6 +1156,8 @@ mod tests {
         let base =
             std::env::temp_dir().join(format!("pulse-settings-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
+        // CreateDirectoryW makes one level only; the restricted dir goes under it.
+        fs::create_dir_all(&base).unwrap();
         (base.clone(), paths_under(&base))
     }
 
