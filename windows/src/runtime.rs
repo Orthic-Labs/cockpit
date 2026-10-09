@@ -452,6 +452,13 @@ fn system_sid() -> winsec::PSID {
     SYSTEM_SID.as_ptr().cast::<c_void>().cast_mut()
 }
 
+/// Well-known BUILTIN\Administrators SID (S-1-5-32-544) as raw bytes: revision 1, two
+/// sub-authorities, identifier authority 5 (NT), RIDs 32 and 544.
+fn administrators_sid() -> winsec::PSID {
+    const ADMINISTRATORS_SID: [u8; 16] = [1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
+    ADMINISTRATORS_SID.as_ptr().cast::<c_void>().cast_mut()
+}
+
 /// SDDL for the restrictive DACL: protected DACL, allow GENERIC_ALL to `user_sid`
 /// and to `SY` (SYSTEM), with explicit user ownership. A token's default
 /// owner may be a group; creation must match our current-user owner check.
@@ -540,9 +547,10 @@ impl TrustError {
 
 /// Trust policy for the settings path (applied to the directory and the file):
 /// the object must be owned by the current user and its DACL may contain only
-/// allow-ACEs for that user and SYSTEM. Anything else — a foreign owner, a
-/// missing/empty DACL, deny or callback ACEs, or any third principal (e.g.
-/// Everyone/WD or Administrators) — is *refused*, never silently repaired.
+/// allow-ACEs for that user, SYSTEM and the built-in Administrators group (the
+/// default `%LOCALAPPDATA%` inheritance grants exactly these). Anything else — a foreign
+/// owner, a missing/empty DACL, deny or callback ACEs, or any other principal (e.g.
+/// Everyone/WD, Users or Authenticated Users) — is *refused*, never silently repaired.
 pub(crate) fn verify_restricted(path: &Path, ctx: &UserSecurity) -> Result<(), TrustError> {
     let wide = crate::settings::wide_path(path);
     let mut owner: winsec::PSID = std::ptr::null_mut();
@@ -633,7 +641,8 @@ fn verify_restricted_parts(
             return Err(TrustError::tag("ace_sid_invalid"));
         }
         let allowed = unsafe { winsec::EqualSid(sid, ctx.sid()) }.as_bool()
-            || unsafe { winsec::EqualSid(sid, system_sid()) }.as_bool();
+            || unsafe { winsec::EqualSid(sid, system_sid()) }.as_bool()
+            || unsafe { winsec::EqualSid(sid, administrators_sid()) }.as_bool();
         if !allowed {
             return Err(TrustError::tag("broad_dacl"));
         }

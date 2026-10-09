@@ -5,15 +5,15 @@
 //! `{"schema_version":1,"visible":true,"cadence_seconds":2,
 //!   "monitors":{"<monitor-key>":{"enabled":true,"anchor":"top-right"}}}`
 //! Optional additions (omitted while at their defaults, ignored by older readers):
-//! `"launch_at_login":false` and `"positions":{"<monitor-key>":<per-mille>}`, the Alt-drag
+//! `"launch_at_login":true` and `"positions":{"<monitor-key>":<per-mille>}`, the Alt-drag
 //! position of the notch's centre along that monitor's top edge (0..=1000, default 500),
-//! `"mac_shortcuts":false` (Alt+A/C/V/X/Z editing shortcuts off), `"screenshot_shortcuts":false`
+//! `"mac_shortcuts":true` (Alt+A/C/V/X/Z editing shortcuts on), `"screenshot_shortcuts":false`
 //! (Alt+Shift+4/5 screenshots off) and `"screenshot_to_desktop":false` (clipboard only).
 //! Nearby sharing (written by the hub's settings, kept here so a save never drops them):
 //! `"nearby_enabled":false`, `"nearby_alias":"<name>"`, `"nearby_save_folder":"<path>"` and
 //! `"nearby_accept_known":true`.
-//! Installer cards: `"installer_auto":false` (ask about every installer in Downloads instead of
-//! installing signed MSIX/MSI packages on its own).
+//! Installer cards: `"installer_auto":true` (install signed MSIX/MSI packages on its own instead of asking
+//! about every installer in Downloads).
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -91,9 +91,9 @@ pub struct PillSettings {
     pub visible: bool,
     pub cadence_seconds: u32,
     pub monitors: BTreeMap<String, MonitorSetting>,
-    /// Start with Windows (HKCU Run entry). On by default.
+    /// Start with Windows (HKCU Run entry). Off by default.
     pub launch_at_login: bool,
-    /// Alt+A/C/V/X/Z act as Ctrl+A/C/V/X/Z (Alt+Shift+Z redoes). On by default.
+    /// Alt+A/C/V/X/Z act as Ctrl+A/C/V/X/Z (Alt+Shift+Z redoes). Off by default.
     pub mac_shortcuts: bool,
     /// Alt+Shift+4 / Alt+Shift+5 screenshots. On by default.
     pub screenshot_shortcuts: bool,
@@ -143,8 +143,8 @@ impl PillSettings {
             visible: true,
             cadence_seconds: CADENCE_DEFAULT,
             monitors: BTreeMap::new(),
-            launch_at_login: true,
-            mac_shortcuts: true,
+            launch_at_login: false,
+            mac_shortcuts: false,
             screenshot_shortcuts: true,
             screenshot_to_desktop: true,
             positions: BTreeMap::new(),
@@ -160,7 +160,7 @@ impl PillSettings {
             mute_claude_alerts: false,
             mute_codex_alerts: false,
             auto_update_check: true,
-            installer_auto: true,
+            installer_auto: false,
             hidden_providers: Vec::new(),
             provider_order: Vec::new(),
         }
@@ -704,14 +704,14 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
         ));
     }
     out.push('}');
-    if !settings.launch_at_login {
-        out.push_str(",\"launch_at_login\":false");
+    if settings.launch_at_login {
+        out.push_str(",\"launch_at_login\":true");
     }
     if !settings.folds {
         out.push_str(",\"folds\":false");
     }
-    if !settings.mac_shortcuts {
-        out.push_str(",\"mac_shortcuts\":false");
+    if settings.mac_shortcuts {
+        out.push_str(",\"mac_shortcuts\":true");
     }
     if !settings.screenshot_shortcuts {
         out.push_str(",\"screenshot_shortcuts\":false");
@@ -748,7 +748,7 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
         ("mute_claude_alerts", settings.mute_claude_alerts, false),
         ("mute_codex_alerts", settings.mute_codex_alerts, false),
         ("auto_update_check", settings.auto_update_check, true),
-        ("installer_auto", settings.installer_auto, true),
+        ("installer_auto", settings.installer_auto, false),
     ] {
         if value != default {
             out.push_str(&format!(",\"{name}\":{value}"));

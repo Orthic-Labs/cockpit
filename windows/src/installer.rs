@@ -8,7 +8,7 @@
 //!   writing. Files already there when the notch starts are left alone.
 //! * `WinVerifyTrust` (`WINTRUST_ACTION_GENERIC_VERIFY_V2`) decides whether the signature is
 //!   trusted; the signer's name is read from the certificate with PowerShell.
-//! * Signed MSIX and MSI packages install on their own while `installer_auto` is on (default):
+//! * Signed MSIX and MSI packages install on their own while `installer_auto` is on (off by default):
 //!   MSIX through `Add-AppxPackage`, MSI through `msiexec /i /qb`. A four second window with a
 //!   Cancel button comes first. Undo removes the package by its full name or product code.
 //!   Everything else (unsigned, an installed copy to replace, a running app, a setup `.exe`,

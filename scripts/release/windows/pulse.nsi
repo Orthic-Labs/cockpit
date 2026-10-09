@@ -32,10 +32,14 @@ Section "Pulse"
   ; Remember whether Pulse is running (0 = it is): a running Pulse is started again at the
   ; end, so a reinstall or update always leaves the new code running. Its hub is Pulse's
   ; child and starts with it.
-  nsExec::Exec '"$SYSDIR\cmd.exe" /c ""$SYSDIR\tasklist.exe" /FI "IMAGENAME eq Pulse.exe" /NH | "$SYSDIR\find.exe" /I "Pulse.exe""'
+  ; Match the notch by full image path: the CLI at Helpers\pulse.exe also matches /IM Pulse.exe
+  ; (case-insensitive), so a name-only filter would count or kill it too.
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (@(Get-Process -Name Pulse -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\Pulse.exe' }).Count -gt 0) { exit 0 } else { exit 1 }"`
   Pop $R9
   ; Upgrade in place: release file locks held by a running notch or hub.
-  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Pulse.exe /IM pulse-hub.exe'
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-Process -Name Pulse -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\Pulse.exe' } | Stop-Process -Force"`
+  Pop $0
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM pulse-hub.exe'
   Pop $0
   Sleep 500
   File /r "${STAGE}\*"

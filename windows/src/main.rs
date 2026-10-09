@@ -275,6 +275,12 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), Error> {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let text = info.to_string();
+        diag::write_line(&diag::format_line("error", "panic", &[("info", &text)]));
+        default_hook(info);
+    }));
     // Declared first, so it is released last (after windows, timer, classes and the final
     // settings write). Held for the lifetime of the process.
     let _instance = match InstanceLock::acquire() {

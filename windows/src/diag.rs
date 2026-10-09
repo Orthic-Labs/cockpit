@@ -45,9 +45,35 @@ pub fn format_line(level: &str, event: &str, fields: &[(&str, &str)]) -> String 
     line
 }
 
+/// Write one line to stderr and append it to `%LOCALAPPDATA%\Pulse\notch.log`.
+/// Errors are ignored: diagnostics must never take the pill down.
+pub fn write_line(line: &str) {
+    let _ = writeln!(std::io::stderr(), "{line}");
+    append_log(line);
+}
+
+const LOG_CAP: u64 = 1024 * 1024;
+
+fn append_log(line: &str) {
+    let Some(base) = std::env::var_os("LOCALAPPDATA") else {
+        return;
+    };
+    let dir = std::path::Path::new(&base).join("Pulse");
+    let path = dir.join("notch.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_CAP) {
+        let _ = std::fs::rename(&path, dir.join("notch.log.1"));
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 pub fn emit(level: &str, event: &str, fields: &[(&str, &str)]) {
-    // Ignore write errors: diagnostics must never take the pill down.
-    let _ = writeln!(std::io::stderr(), "{}", format_line(level, event, fields));
+    write_line(&format_line(level, event, fields));
 }
 
 pub fn info(event: &str, fields: &[(&str, &str)]) {
@@ -70,7 +96,7 @@ pub fn failure_fields(op: &str, code: u32, message: &str, ctx: &str) -> String {
 
 pub fn win32_error(op: &str, error: &windows::core::Error, ctx: &str) {
     let line = failure_fields(op, error.code().0 as u32, &error.message(), ctx);
-    let _ = writeln!(std::io::stderr(), "{line}");
+    write_line(&line);
 }
 
 /// Report the calling thread's last Win32 error for APIs that only return BOOL/null.
