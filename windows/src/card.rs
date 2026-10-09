@@ -4,9 +4,9 @@
 use crate::alerts;
 use crate::drive_health::{self, Report};
 use crate::glyphs::{Symbol, Tile};
-use crate::layout::{Cell, Edge};
+use crate::layout::{self, Cell, Edge};
 use crate::send::{self, Panel};
-use crate::sensors::{Machine, size_text};
+use crate::sensors::{Machine, Reading, size_text};
 use crate::usage::{Status, Usage};
 
 /// The icon beside a card's title (the Mac's provider glyph); drawn by `render.rs`.
@@ -128,6 +128,9 @@ pub enum Row {
         fraction: Option<f32>,
         summary: String,
     },
+    /// A model's or feature's own limits (the Mac's grouped box): its title in bold over a
+    /// rounded inset box holding `Meter` rows.
+    Group { title: String, rows: Vec<Row> },
     /// Secondary-ink paragraph.
     Note(String),
     /// Primary-ink paragraph.
@@ -332,9 +335,12 @@ fn content_for(cell: Cell, machine: Option<&Machine>, usage: &[Usage; 2], now: u
     }
 }
 
-/// The System card: CPU, then memory, each a bar with its detail line.
+/// The System card, row for row as the Mac's: CPU and memory pressure as bars with a detail
+/// line, then GPU, network and fans as one-line pairs. A reading this PC cannot give says so
+/// ("Unavailable on this PC"); one not sampled yet says "Measuring\u{2026}".
 pub fn system(machine: Option<&Machine>) -> CardContent {
     let mut rows = Vec::new();
+    let mut accessory = None;
     match machine {
         Some(m) => {
             let busy = if m.cpu.is_some() {
@@ -353,18 +359,89 @@ pub fn system(machine: Option<&Machine>) -> CardContent {
             ));
             match m.memory {
                 Some(mem) => rows.push(meter(
-                    "Memory",
+                    "Memory pressure",
                     Some(mem.used_fraction()),
-                    format!("{} of {} used", size_text(mem.used()), size_text(mem.total)),
+                    format!(
+                        "Pressure {} \u{b7} {} of {} used",
+                        pressure_word(m),
+                        size_text(mem.used()),
+                        size_text(mem.total)
+                    ),
                 )),
-                None => rows.push(meter("Memory", None, "Memory readings unavailable".into())),
+                None => rows.push(meter(
+                    "Memory pressure",
+                    None,
+                    "Memory readings unavailable".into(),
+                )),
+            }
+            rows.push(pair("GPU", &m.gpu, |share| {
+                format!("{} busy", percent_text(Some(*share)))
+            }));
+            rows.push(pair("Network", &m.network, |rate| {
+                format!(
+                    "\u{2193} {} \u{b7} \u{2191} {} \u{b7} {}",
+                    rate_text(rate.down),
+                    rate_text(rate.up),
+                    rate.kind
+                )
+            }));
+            rows.push(pair("Fans", &m.fans, |fans| {
+                let speeds: Vec<String> = fans.iter().map(u32::to_string).collect();
+                format!("{} rpm", speeds.join(" / "))
+            }));
+            // The Mac shows the CPU temperature at the title's right; with no reading the
+            // row says so instead of leaving it out.
+            match &m.temperature {
+                Reading::Value(degrees) => accessory = Some(format!("{} \u{b0}C", degrees.round())),
+                other => rows.push(pair("Temperature", other, |_: &f32| String::new())),
             }
         }
         None => rows.push(Row::Note("Waiting for the first sample".into())),
     }
     CardContent {
         mark: Mark::System,
+        accessory,
         ..CardContent::plain("System Usage", rows)
+    }
+}
+
+/// "normal", "warning" or "critical" (the Mac's words) from the memory bands the ring colours use.
+fn pressure_word(machine: &Machine) -> &'static str {
+    // Without a commit limit the bands are not computed from both inputs: unknown.
+    if machine.memory.is_none_or(|m| m.commit_limit == 0) {
+        return "unknown";
+    }
+    match layout::memory_band(Some(machine)) {
+        Some(layout::BAND_CRITICAL) => "critical",
+        Some(layout::BAND_WATCH) => "warning",
+        Some(_) => "normal",
+        None => "unknown",
+    }
+}
+
+/// A label with its value on the right, or why there is none.
+fn pair<T>(label: &str, reading: &Reading<T>, text: impl Fn(&T) -> String) -> Row {
+    Row::Pair {
+        label: label.to_string(),
+        value: match reading {
+            Reading::Value(value) => text(value),
+            Reading::Pending => "Measuring\u{2026}".to_string(),
+            Reading::Unavailable => "Unavailable on this PC".to_string(),
+        },
+    }
+}
+
+/// A transfer rate the way the Mac words it: "1.2 MB/s", "180 KB/s".
+fn rate_text(bytes_per_second: f64) -> String {
+    let value = bytes_per_second.max(0.0);
+    if value >= 1e9 {
+        format!("{:.1} GB/s", value / 1e9)
+    } else if value >= 1e6 {
+        format!("{:.1} MB/s", value / 1e6)
+    } else if value >= 1e3 {
+        format!("{:.0} KB/s", value / 1e3)
+    } else {
+        format!("{value:.0} B/s")
     }
 }
 
@@ -458,7 +535,7 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
     }
     for window in &usage.windows {
         let (used, left) = halves(window.fraction);
-        rows.push(Row::Meter {
+        let meter = Row::Meter {
             label: window.label.clone(),
             trailing: window
                 .resets_at
@@ -466,7 +543,22 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
                 .unwrap_or_default(),
             fraction: Some(window.fraction),
             summary: format!("{used}% Used \u{b7} {left}% left"),
-        });
+        };
+        // Consecutive windows of one group share a box, as on the Mac.
+        let shares_box = matches!(
+            rows.last(),
+            Some(Row::Group { title, .. }) if Some(title) == window.group.as_ref()
+        );
+        if let (true, Some(Row::Group { rows: inner, .. })) = (shares_box, rows.last_mut()) {
+            inner.push(meter);
+        } else if let Some(group) = &window.group {
+            rows.push(Row::Group {
+                title: group.clone(),
+                rows: vec![meter],
+            });
+        } else {
+            rows.push(meter);
+        }
     }
     // Only worth saying when the numbers are not current: a remembered reading has to be
     // dated, or it quietly passes itself off as live.

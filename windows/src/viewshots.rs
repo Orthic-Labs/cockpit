@@ -21,7 +21,7 @@ use crate::json::{self, Value};
 use crate::layout::{self, Badges, Cell, CellView, Edge};
 use crate::render;
 use crate::send::{self, Action, Panel};
-use crate::sensors::{Drive, Machine, MemInfo};
+use crate::sensors::{Drive, Machine, MemInfo, NetRate, Reading};
 use crate::sessions::{self, Session, State};
 use crate::surface::TextPainter;
 use crate::update;
@@ -245,11 +245,10 @@ fn cores_in(detail: &str) -> u32 {
 fn usage_from(cell: &Value) -> Usage {
     let windows = arr(cell, "windows")
         .iter()
-        // The Windows readers know only the plain windows, not per-model groups.
-        .filter(|w| str_of(w, "group").is_none())
         .filter_map(|w| {
             Some(LimitWindow {
                 key: str_of(w, "id")?.to_string(),
+                group: str_of(w, "group").map(str::to_string),
                 label: str_of(w, "label")?.to_string(),
                 fraction: num_of(w, "used")? as f32,
                 resets_at: num_of(w, "resetsInMinutes").map(|m| NOW + (m * 60.0) as u64),
@@ -379,13 +378,87 @@ fn memory_from(window: &Value) -> Option<MemInfo> {
         .copied()
         .unwrap_or(DEFAULT_MEMORY);
     let used_bytes = (used * total as f64) as u64;
-    // The fixture has no commit figure; commit mirrors the in-use share.
+    // The fixture has no commit figure: commit is chosen so the Windows bands (available
+    // memory and commit charge) land in the fixture's band. A fixture with no band has an
+    // unknown pressure, which a zero commit limit stands for.
+    let (commit_limit, commit_used) = match str_of(window, "band") {
+        Some("critical") => (total, (total as f64 * 0.97) as u64),
+        Some("watch") => (total, (total as f64 * 0.9) as u64),
+        Some(_) => (total, used_bytes),
+        None => (0, 0),
+    };
     Some(MemInfo {
         total,
         available: total.saturating_sub(used_bytes),
-        commit_limit: total,
-        commit_used: used_bytes,
+        commit_limit,
+        commit_used,
     })
+}
+
+/// The rate after `arrow` in a detail like "down 1.2 MB/s, up 180 KB/s, Wi-Fi" (the Mac's
+/// arrows and dots), as bytes per second.
+fn rate_after(detail: &str, arrow: char) -> Option<f64> {
+    let rest = detail.split_once(arrow)?.1;
+    let mut words = rest.split_whitespace();
+    let value: f64 = words.next()?.parse().ok()?;
+    let unit = match words.next()? {
+        "B/s" => 1.0,
+        "KB/s" => 1e3,
+        "MB/s" => 1e6,
+        "GB/s" => 1e9,
+        _ => return None,
+    };
+    Some(value * unit)
+}
+
+fn gpu_from(window: &Value) -> Reading<f32> {
+    let busy = str_of(window, "detail")
+        .and_then(|d| d.split('%').next())
+        .and_then(|n| n.trim().parse::<f32>().ok());
+    busy.map_or(Reading::Unavailable, |n| Reading::Value(n / 100.0))
+}
+
+fn network_from(window: &Value) -> Reading<NetRate> {
+    let detail = str_of(window, "detail").unwrap_or("");
+    match (
+        rate_after(detail, '\u{2193}'),
+        rate_after(detail, '\u{2191}'),
+    ) {
+        (Some(down), Some(up)) => Reading::Value(NetRate {
+            down,
+            up,
+            kind: detail
+                .rsplit(" \u{b7} ")
+                .next()
+                .unwrap_or("Network")
+                .to_string(),
+        }),
+        _ => Reading::Unavailable,
+    }
+}
+
+fn fans_from(window: &Value) -> Reading<Vec<u32>> {
+    let speeds: Vec<u32> = str_of(window, "detail")
+        .unwrap_or("")
+        .split(" rpm")
+        .next()
+        .unwrap_or("")
+        .split(" / ")
+        .filter_map(|n| n.trim().parse().ok())
+        .collect();
+    if speeds.is_empty() {
+        Reading::Unavailable
+    } else {
+        Reading::Value(speeds)
+    }
+}
+
+/// The header note ("54" and the degree sign C) as degrees.
+fn temperature_from(cell: &Value) -> Reading<f32> {
+    str_of(cell, "headerNote")
+        .and_then(|n| n.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .map_or(Reading::Unavailable, Reading::Value)
 }
 
 fn drive_from(window: &Value, system: bool) -> Option<Drive> {
@@ -449,6 +522,11 @@ impl<'a> Scene<'a> {
             cores: 0,
             memory: None,
             drives: Vec::new(),
+            // A reading the fixture does not state is one this PC cannot give.
+            gpu: Reading::Unavailable,
+            network: Reading::Unavailable,
+            temperature: Reading::Unavailable,
+            fans: Reading::Unavailable,
         };
         let mut usage = [Usage::waiting(), Usage::waiting()];
         let mut send_cell = None;
@@ -461,9 +539,18 @@ impl<'a> Scene<'a> {
                 Some("system-disks") => health = health_from(arr(cell, "windows")),
                 _ => {}
             }
+            if str_of(cell, "id") == Some("system-cpu") {
+                machine.temperature = temperature_from(cell);
+            }
             for window in arr(cell, "windows") {
                 let id = str_of(window, "id").unwrap_or("");
-                if id == "cpu" {
+                if id == "gpu" {
+                    machine.gpu = gpu_from(window);
+                } else if id == "network" {
+                    machine.network = network_from(window);
+                } else if id == "fans" {
+                    machine.fans = fans_from(window);
+                } else if id == "cpu" {
                     machine.cpu = num_of(window, "used").map(|u| u as f32);
                     machine.cores = cores_in(str_of(window, "detail").unwrap_or(""));
                 } else if id == "pressure" {
@@ -797,7 +884,7 @@ fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
             }
             Ok(vec![(card_canvas(&panel, text), 0, 0)])
         }
-        // One System card; Windows draws memory as a used share, with no pressure word.
+        // One System card: CPU, memory pressure, GPU, network, fans (and temperature).
         "system-cpu" => Ok(vec![(card_canvas(&scene.panel(Cell::Cpu), text), 0, 0)]),
         "system-disks" => Ok(vec![(card_canvas(&scene.panel(Cell::Disk), text), 0, 0)]),
         "system-send" => Ok(vec![(card_canvas(&scene.panel(Cell::Send), text), 0, 0)]),

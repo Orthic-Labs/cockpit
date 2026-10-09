@@ -461,6 +461,15 @@ const BUTTON_HEIGHT: f32 = 22.0;
 const BUTTON_RADIUS: f32 = 6.0;
 /// Space kept between a label and its value.
 const VALUE_GAP: f32 = 7.5;
+/// A grouped limits box (the Mac's `TooltipCard` group): title inset, title to box, box
+/// padding, corner radius, outline, and the gap above a group that follows other rows.
+const GROUP_TITLE_INSET: f32 = 1.5;
+const GROUP_TITLE_GAP: f32 = 4.5;
+const GROUP_PAD: f32 = 6.0;
+const GROUP_RADIUS: f32 = 7.5;
+const GROUP_STROKE: f32 = 0.56;
+const GROUP_ALPHA: f32 = 0.25;
+const GROUP_GAP: f32 = 10.5;
 /// White over the black card: bar tracks and button plates (0.176), the rule (0.188).
 const TRACK_ALPHA: f32 = 0.176;
 const RULE_ALPHA: f32 = 0.188;
@@ -710,6 +719,53 @@ fn button_spans(
     spans
 }
 
+/// Height of one meter: label line, bar (none without a share), summary line.
+fn meter_height(fraction: Option<f32>, m: Metrics) -> f32 {
+    let bar = if fraction.is_some() {
+        LABEL_TO_BAR + BAR_HEIGHT
+    } else {
+        0.0
+    };
+    m.line + bar + BAR_TO_USED + m.line
+}
+
+/// Where each meter of a group sits inside its box (DIPs from the box's top) and the box's
+/// height: padding, the meters a block gap apart, padding.
+fn group_tops(rows: &[Row], m: Metrics) -> (Vec<f32>, f32) {
+    let mut y = GROUP_PAD;
+    let mut tops = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            y += BLOCK_GAP;
+        }
+        tops.push(y);
+        if let Row::Meter { fraction, .. } = row {
+            y += meter_height(*fraction, m);
+        }
+    }
+    (tops, y + GROUP_PAD)
+}
+
+/// A closed rounded-rectangle outline.
+fn round_rect_outline(x: f32, y: f32, w: f32, h: f32, r: f32) -> Vec<(f32, f32)> {
+    const STEPS: usize = 8;
+    let r = r.min(w / 2.0).min(h / 2.0);
+    let corners = [
+        (x + w - r, y + r, -std::f32::consts::FRAC_PI_2),
+        (x + w - r, y + h - r, 0.0),
+        (x + r, y + h - r, std::f32::consts::FRAC_PI_2),
+        (x + r, y + r, std::f32::consts::PI),
+    ];
+    let mut points = Vec::new();
+    for (cx, cy, start) in corners {
+        for step in 0..=STEPS {
+            let angle = start + std::f32::consts::FRAC_PI_2 * step as f32 / STEPS as f32;
+            points.push((cx + r * angle.cos(), cy + r * angle.sin()));
+        }
+    }
+    points
+}
+
 /// Height in DIPs of the lines of a wrapped paragraph.
 fn lines_height(count: usize, m: Metrics) -> f32 {
     (count.max(1) - 1) as f32 * WRAP_PITCH + m.line
@@ -732,13 +788,10 @@ fn flow_row(
     match row {
         Row::Pair { value, .. } if value.is_empty() => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
         Row::Pair { .. } | Row::Status { .. } => (m.line, Vec::new(), Vec::new()),
-        Row::Meter { fraction, .. } => {
-            let bar = if fraction.is_some() {
-                LABEL_TO_BAR + BAR_HEIGHT
-            } else {
-                0.0
-            };
-            (m.line + bar + BAR_TO_USED + m.line, Vec::new(), Vec::new())
+        Row::Meter { fraction, .. } => (meter_height(*fraction, m), Vec::new(), Vec::new()),
+        Row::Group { rows, .. } => {
+            let (_, box_height) = group_tops(rows, m);
+            (m.line + GROUP_TITLE_GAP + box_height, Vec::new(), Vec::new())
         }
         Row::Note(value) | Row::Text(value) | Row::Tinted { text: value, .. } => {
             paragraph(text, value, room)
@@ -809,6 +862,7 @@ fn flow_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32) 
             (None, _) if round => HEAD_GAP,
             (None, _) => HEADER_TO_BLOCK,
             (Some(Row::Status { .. }), _) => STATUS_TO_NEXT,
+            (Some(_), Row::Group { .. }) => GROUP_GAP,
             (Some(Row::Device { .. } | Row::Waiting(_)), Row::Device { .. }) => DEVICE_GAP,
             _ => BLOCK_GAP,
         };
@@ -1232,6 +1286,30 @@ impl Pen<'_> {
         }
     }
 
+    /// One meter at `y` between `columns`: label and trailing text, the bar, the summary.
+    fn meter(&mut self, (left, right): (f32, f32), y: f32, row: &Row) {
+        let Row::Meter {
+            label,
+            trailing,
+            fraction,
+            summary,
+        } = row
+        else {
+            return;
+        };
+        let s = self.s;
+        let base = |extra: f32| y + (extra + BODY_BASELINE) * s;
+        self.put(label, left, base(0.0), body(INK_PRIMARY), false);
+        self.put(trailing, right, base(0.0), body(INK_SECONDARY), true);
+        let mut next = DRAWN.line;
+        if let Some(share) = *fraction {
+            self.bar((left, right), y + (next + LABEL_TO_BAR) * s, Some(share));
+            next += LABEL_TO_BAR + BAR_HEIGHT;
+        }
+        next += BAR_TO_USED;
+        self.put(summary, left, base(next), body(INK_PRIMARY), false);
+    }
+
     /// The ring beside a session's status: turning (three quarters) while busy, half a ring
     /// when blocked, whole otherwise.
     fn status_ring(&mut self, (cx, cy): (f32, f32), dot: Dot) {
@@ -1612,21 +1690,30 @@ impl Pen<'_> {
                     let value = self.fit(value, body(INK_SECONDARY), room);
                     self.put(&value, right, base(0.0), body(INK_SECONDARY), true);
                 }
-                Row::Meter {
-                    label,
-                    trailing,
-                    fraction,
-                    summary,
-                } => {
-                    self.put(label, left, base(0.0), body(INK_PRIMARY), false);
-                    self.put(trailing, right, base(0.0), body(INK_SECONDARY), true);
-                    let mut next = DRAWN.line;
-                    if let Some(share) = fraction {
-                        self.bar(columns, y + (next + LABEL_TO_BAR) * s, Some(*share));
-                        next += LABEL_TO_BAR + BAR_HEIGHT;
+                Row::Meter { .. } => self.meter(columns, y, row),
+                Row::Group { title, rows } => {
+                    let bold = Style {
+                        size: BODY_SIZE,
+                        bold: true,
+                        color: INK_PRIMARY,
+                    };
+                    self.put(title, left + GROUP_TITLE_INSET * s, base(0.0), bold, false);
+                    let box_top = y + (BUDGET.line + GROUP_TITLE_GAP) * s;
+                    let (tops, height) = group_tops(rows, BUDGET);
+                    let outline = round_rect_outline(
+                        left,
+                        box_top,
+                        right - left,
+                        height * s,
+                        GROUP_RADIUS * s,
+                    );
+                    let stroke = GROUP_STROKE * s;
+                    self.canvas
+                        .stroke_polyline(&outline, stroke, true, 0xFFFFFF, GROUP_ALPHA);
+                    let inner = (left + GROUP_PAD * s, right - GROUP_PAD * s);
+                    for (meter, top) in rows.iter().zip(tops) {
+                        self.meter(inner, box_top + top * s, meter);
                     }
-                    next += BAR_TO_USED;
-                    self.put(summary, left, base(next), body(INK_PRIMARY), false);
                 }
                 Row::Note(_) | Row::Text(_) => {
                     let ink = if matches!(row, Row::Note(_)) {

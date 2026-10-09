@@ -82,6 +82,9 @@ impl Status {
 pub struct LimitWindow {
     /// Stable id: `session`/`weekly_all`/... for Claude, `primary`/`secondary` for Codex.
     pub key: String,
+    /// The model or feature a window belongs to (Codex's Spark, code review): windows of a
+    /// group show together in a titled box. `None` for the account's own windows.
+    pub group: Option<String>,
     pub label: String,
     /// Used share, 0..=1.
     pub fraction: f32,
@@ -108,9 +111,11 @@ pub struct Block {
     pub resets_at: Option<u64>,
 }
 
-/// The pause a set of fresh windows implies: the first window that is fully used.
+/// The pause a set of fresh windows implies: the first account window that is fully used. A
+/// spent model or feature group (Spark, code review) does not pause the account.
 fn block_of(windows: &[LimitWindow]) -> Option<Block> {
-    windows.iter().find(|w| w.fraction >= 1.0).map(|w| Block {
+    let own = |w: &&LimitWindow| w.group.is_none() && w.fraction >= 1.0;
+    windows.iter().find(own).map(|w| Block {
         reason: if w.key == "session" || w.key == "primary" {
             "Session limit reached".to_string()
         } else {
@@ -528,6 +533,7 @@ pub fn claude_windows(root: &Value) -> Vec<LimitWindow> {
                 .filter(|name| !name.is_empty());
             windows.push(LimitWindow {
                 key: kind.to_string(),
+                group: None,
                 label: model.map_or_else(|| claude_label(kind), str::to_string),
                 fraction: percent_to_fraction(percent),
                 resets_at: Some(resets_at),
@@ -553,6 +559,7 @@ pub fn claude_windows(root: &Value) -> Vec<LimitWindow> {
         };
         windows.push(LimitWindow {
             key: key.to_string(),
+            group: None,
             label: claude_label(key),
             fraction: percent_to_fraction(utilization),
             resets_at: Some(resets_at),
@@ -585,39 +592,90 @@ fn codex_label(window_seconds: f64, fallback_primary: bool) -> String {
     }
 }
 
-/// Primary and secondary rate-limit windows. One unreadable window never drops its sibling.
+/// One Codex window object as a `LimitWindow`, or `None` when it has no used share.
+fn codex_window(
+    window: &Value,
+    key: &str,
+    group: Option<&str>,
+    primary: bool,
+    now: u64,
+) -> Option<LimitWindow> {
+    let percent = window.get("used_percent").and_then(Value::as_f64)?;
+    let seconds = window
+        .get("limit_window_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let resets_at = window
+        .get("reset_at")
+        .and_then(Value::as_f64)
+        .map(|at| at as u64)
+        .or_else(|| {
+            window
+                .get("reset_after_seconds")
+                .and_then(Value::as_f64)
+                .map(|after| now + after as u64)
+        });
+    Some(LimitWindow {
+        key: key.to_string(),
+        group: group.map(str::to_string),
+        label: codex_label(seconds, primary),
+        fraction: percent_to_fraction(percent),
+        resets_at,
+    })
+}
+
+/// A rate-limit object's primary then secondary window under the given keys. One unreadable
+/// window never drops its sibling; keys already present are not added twice.
+fn push_codex_pair(
+    windows: &mut Vec<LimitWindow>,
+    limit: &Value,
+    keys: (&str, &str),
+    group: Option<&str>,
+    now: u64,
+) {
+    for (key, member, primary) in [
+        (keys.0, "primary_window", true),
+        (keys.1, "secondary_window", false),
+    ] {
+        if windows.iter().any(|w| w.key == key) {
+            continue;
+        }
+        if let Some(window) = limit
+            .get(member)
+            .and_then(|w| codex_window(w, key, group, primary, now))
+        {
+            windows.push(window);
+        }
+    }
+}
+
+fn is_spark(extra: &Value) -> bool {
+    ["limit_name", "metered_feature"].iter().any(|name| {
+        extra
+            .get(name)
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.to_ascii_lowercase().contains("spark"))
+    })
+}
+
+/// The account's primary and secondary windows, then (as on the Mac) the Spark model's own
+/// windows and code review's, each grouped under a title for the hover card.
 pub fn codex_windows(root: &Value, now: u64) -> Vec<LimitWindow> {
     let mut windows = Vec::new();
-    for (key, member) in [
-        ("primary", "primary_window"),
-        ("secondary", "secondary_window"),
-    ] {
-        let Some(window) = root.path(&["rate_limit", member]) else {
-            continue;
-        };
-        let Some(percent) = window.get("used_percent").and_then(Value::as_f64) else {
-            continue;
-        };
-        let seconds = window
-            .get("limit_window_seconds")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let resets_at = window
-            .get("reset_at")
-            .and_then(Value::as_f64)
-            .map(|at| at as u64)
-            .or_else(|| {
-                window
-                    .get("reset_after_seconds")
-                    .and_then(Value::as_f64)
-                    .map(|after| now + after as u64)
-            });
-        windows.push(LimitWindow {
-            key: key.to_string(),
-            label: codex_label(seconds, key == "primary"),
-            fraction: percent_to_fraction(percent),
-            resets_at,
-        });
+    if let Some(limit) = root.get("rate_limit") {
+        push_codex_pair(&mut windows, limit, ("primary", "secondary"), None, now);
+    }
+    if let Some(extras) = root.get("additional_rate_limits").and_then(Value::as_array) {
+        for extra in extras.iter().filter(|extra| is_spark(extra)) {
+            if let Some(limit) = extra.get("rate_limit") {
+                let keys = ("spark", "spark-secondary");
+                push_codex_pair(&mut windows, limit, keys, Some("Spark"), now);
+            }
+        }
+    }
+    if let Some(limit) = root.get("code_review_rate_limit") {
+        let keys = ("code-review", "code-review-secondary");
+        push_codex_pair(&mut windows, limit, keys, Some("Code review"), now);
     }
     windows
 }

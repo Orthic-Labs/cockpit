@@ -2,12 +2,31 @@
 //! `GetSystemTimes` deltas, physical and commit memory from `GlobalMemoryStatusEx`, and the
 //! fixed drives with the system drive singled out. A failing counter yields `None` (shown
 //! as `--`), never zero; failures are logged once per episode.
+//!
+//! The System card's extra rows (GPU busy share from the PDH "GPU Engine" counters, network
+//! rates from `GetIfTable2` over physical adapters) are sampled on their own background
+//! thread, because the GPU counter needs two collections a second apart. The UI thread only
+//! copies the latest result. Windows offers no CPU temperature or fan speed without a kernel
+//! driver or administrator rights, so those are reported as unavailable, never estimated.
 
 use crate::diag::{self, FailureLatch, Transition};
 use crate::lifecycle::cpu_fraction;
+use std::collections::HashMap;
 use std::mem::size_of;
+use std::sync::{Mutex, Once, PoisonError};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::FILETIME;
+use windows::Win32::NetworkManagement::IpHelper::{
+    FreeMibTable, GetIfTable2, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211,
+    IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL, MIB_IF_TABLE2,
+};
+use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives};
+use windows::Win32::System::Performance::{
+    PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA,
+    PDH_NO_DATA, PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData,
+    PdhGetFormattedCounterArrayW, PdhOpenQueryW,
+};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::GetSystemTimes;
 use windows::core::{Error, PCWSTR};
@@ -50,6 +69,26 @@ impl Drive {
     }
 }
 
+/// A reading the notch may not have yet or may never get: the card says which.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reading<T> {
+    /// Not sampled yet.
+    Pending,
+    /// This PC cannot provide it.
+    Unavailable,
+    Value(T),
+}
+
+/// Receive and send rates summed over the physical adapters that are up.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetRate {
+    /// Bytes per second.
+    pub down: f64,
+    pub up: f64,
+    /// "Wi-Fi", "Ethernet", "Cellular" or "Network": the adapter carrying the most traffic.
+    pub kind: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Machine {
     /// Share of all logical processors busy since the previous sample.
@@ -58,6 +97,13 @@ pub struct Machine {
     pub cores: u32,
     pub memory: Option<MemInfo>,
     pub drives: Vec<Drive>,
+    /// Busiest adapter's 3D engine share, 0..=1.
+    pub gpu: Reading<f32>,
+    pub network: Reading<NetRate>,
+    /// Degrees Celsius; never available from a live reader on Windows.
+    pub temperature: Reading<f32>,
+    /// Fan speeds in rpm; never available from a live reader on Windows.
+    pub fans: Reading<Vec<u32>>,
 }
 
 impl Machine {
@@ -140,6 +186,11 @@ impl Sampler {
             ),
             Transition::Unchanged => {}
         }
+        start_extras();
+        let extras = EXTRAS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         Machine {
             cpu: cpu.map(|v| v.clamp(0.0, 1.0)),
             cores: std::thread::available_parallelism()
@@ -147,8 +198,256 @@ impl Sampler {
                 .unwrap_or(0),
             memory,
             drives,
+            gpu: extras.gpu,
+            network: extras.network,
+            temperature: Reading::Unavailable,
+            fans: Reading::Unavailable,
         }
     }
+}
+
+#[derive(Clone)]
+struct Extras {
+    gpu: Reading<f32>,
+    network: Reading<NetRate>,
+}
+
+static EXTRAS: Mutex<Extras> = Mutex::new(Extras {
+    gpu: Reading::Pending,
+    network: Reading::Pending,
+});
+static EXTRAS_START: Once = Once::new();
+
+/// Starts the background sampler once; if it cannot start, the rows say unavailable.
+fn start_extras() {
+    EXTRAS_START.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("pulse-sensors".into())
+            .spawn(extras_loop);
+        if spawned.is_err() {
+            diag::info(
+                "sampler_failed",
+                &[("op", "spawn"), ("ctx", "sensors_thread")],
+            );
+            let mut extras = EXTRAS.lock().unwrap_or_else(PoisonError::into_inner);
+            extras.gpu = Reading::Unavailable;
+            extras.network = Reading::Unavailable;
+        }
+    });
+}
+
+fn extras_loop() {
+    let mut gpu_latch = FailureLatch::new();
+    let mut net_latch = FailureLatch::new();
+    let mut previous: Option<(Instant, Vec<Iface>)> = None;
+    loop {
+        let taken = Instant::now();
+        let current = read_interfaces();
+        let network = match &current {
+            Some(now) => {
+                let rate = previous
+                    .as_ref()
+                    .and_then(|(at, before)| net_rate(before, now, taken.duration_since(*at)));
+                match rate {
+                    Some(rate) => Reading::Value(rate),
+                    None if now.is_empty() => Reading::Unavailable,
+                    None => Reading::Pending,
+                }
+            }
+            None => Reading::Unavailable,
+        };
+        let net_failed = matches!(network, Reading::Unavailable);
+        log_transition(net_latch.observe(net_failed), "GetIfTable2", "network");
+        previous = current.map(|now| (taken, now));
+
+        let gpu = match read_gpu() {
+            Ok(share) => Reading::Value(share),
+            Err(_) => Reading::Unavailable,
+        };
+        log_transition(
+            gpu_latch.observe(matches!(gpu, Reading::Unavailable)),
+            "PdhGetFormattedCounterArrayW",
+            "gpu",
+        );
+        {
+            let mut extras = EXTRAS.lock().unwrap_or_else(PoisonError::into_inner);
+            extras.gpu = gpu;
+            extras.network = network;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+fn log_transition(transition: Transition, op: &str, ctx: &str) {
+    match transition {
+        Transition::Failed => diag::info("sampler_failed", &[("op", op), ("ctx", ctx)]),
+        Transition::Recovered => diag::info("sampler_recovered", &[("op", op), ("ctx", ctx)]),
+        Transition::Unchanged => {}
+    }
+}
+
+/// One physical adapter's lifetime byte counters.
+struct Iface {
+    index: u32,
+    kind: &'static str,
+    received: u64,
+    sent: u64,
+}
+
+/// `MIB_IF_ROW2` interface-flag bit 0: a physical (hardware) adapter. Virtual switches,
+/// VPN and Wi-Fi Direct adapters lack it, so their traffic (already counted on the physical
+/// adapter, or never leaving the PC) is excluded along with loopback and tunnels.
+const HARDWARE_INTERFACE: u8 = 1;
+/// `IF_TYPE` values for mobile broadband (GSM and CDMA).
+const IF_TYPE_WWANPP: u32 = 243;
+const IF_TYPE_WWANPP2: u32 = 244;
+
+/// Physical adapters that are up, or `None` when the table cannot be read.
+fn read_interfaces() -> Option<Vec<Iface>> {
+    let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+    // `GetIfTable2` allocates the table; it is read here and released with `FreeMibTable`.
+    let status = unsafe { GetIfTable2(&mut table) };
+    if status.0 != 0 || table.is_null() {
+        return None;
+    }
+    let rows = unsafe {
+        std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize)
+    };
+    let found = rows
+        .iter()
+        .filter(|row| {
+            row.OperStatus == IfOperStatusUp
+                && row.InterfaceAndOperStatusFlags._bitfield & HARDWARE_INTERFACE != 0
+                && row.Type != IF_TYPE_SOFTWARE_LOOPBACK
+                && row.Type != IF_TYPE_TUNNEL
+        })
+        .map(|row| Iface {
+            index: row.InterfaceIndex,
+            kind: match row.Type {
+                IF_TYPE_IEEE80211 => "Wi-Fi",
+                IF_TYPE_ETHERNET_CSMACD => "Ethernet",
+                IF_TYPE_WWANPP | IF_TYPE_WWANPP2 => "Cellular",
+                _ => "Network",
+            },
+            received: row.InOctets,
+            sent: row.OutOctets,
+        })
+        .collect();
+    unsafe { FreeMibTable(table as *const _) };
+    Some(found)
+}
+
+/// Bytes per second since `before`. An adapter whose counter went backwards (reset) is
+/// skipped; `None` when no adapter was present in both samples.
+fn net_rate(before: &[Iface], now: &[Iface], elapsed: Duration) -> Option<NetRate> {
+    let seconds = elapsed.as_secs_f64();
+    if seconds <= 0.0 {
+        return None;
+    }
+    let (mut down, mut up) = (0u64, 0u64);
+    let mut busiest: Option<(u64, &'static str)> = None;
+    for adapter in now {
+        let Some(old) = before.iter().find(|o| o.index == adapter.index) else {
+            continue;
+        };
+        let (Some(rx), Some(tx)) = (
+            adapter.received.checked_sub(old.received),
+            adapter.sent.checked_sub(old.sent),
+        ) else {
+            continue;
+        };
+        down = down.saturating_add(rx);
+        up = up.saturating_add(tx);
+        let traffic = rx.saturating_add(tx);
+        if busiest.is_none_or(|(most, _)| traffic > most) {
+            busiest = Some((traffic, adapter.kind));
+        }
+    }
+    let (_, kind) = busiest?;
+    Some(NetRate {
+        down: down as f64 / seconds,
+        up: up as f64 / seconds,
+        kind: kind.to_string(),
+    })
+}
+
+/// 3D-engine utilisation of the busiest GPU adapter, 0..=1. The PDH counter needs two
+/// collections, so this takes about a second. Instances are per process and engine
+/// ("pid_..._luid_0xHIGH_0xLOW_phys_0_eng_3_engtype_3D"); they are summed per adapter (luid).
+/// Fails (PDH status) when the counter set does not exist, e.g. no WDDM GPU driver.
+fn read_gpu() -> Result<f32, u32> {
+    let mut query = PDH_HQUERY(std::ptr::null_mut());
+    let status = unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &mut query) };
+    if status != 0 {
+        return Err(status);
+    }
+    let result = gpu_in(query);
+    unsafe { PdhCloseQuery(query) };
+    result
+}
+
+fn gpu_in(query: PDH_HQUERY) -> Result<f32, u32> {
+    let path: Vec<u16> = "\\GPU Engine(*engtype_3D)\\Utilization Percentage"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut counter = PDH_HCOUNTER(std::ptr::null_mut());
+    let status = unsafe { PdhAddEnglishCounterW(query, PCWSTR(path.as_ptr()), 0, &mut counter) };
+    if status != 0 {
+        return Err(status);
+    }
+    let status = unsafe { PdhCollectQueryData(query) };
+    if status != 0 {
+        return Err(status);
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    let status = unsafe { PdhCollectQueryData(query) };
+    if status != 0 {
+        return Err(status);
+    }
+    let mut size = 0u32;
+    let mut count = 0u32;
+    let status = unsafe {
+        PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &mut size, &mut count, None)
+    };
+    // No 3D engine instance exists: nothing is using the GPU.
+    if status == PDH_NO_DATA {
+        return Ok(0.0);
+    }
+    if status != PDH_MORE_DATA {
+        return Err(status);
+    }
+    // 8-byte aligned storage for the item array and the names that follow it.
+    let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+    let items = buffer.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
+    let status = unsafe {
+        PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &mut size, &mut count, Some(items))
+    };
+    if status != 0 {
+        return Err(status);
+    }
+    // PDH filled `count` items inside `buffer`, which outlives this borrow.
+    let items = unsafe { std::slice::from_raw_parts(items, count as usize) };
+    let mut per_adapter: HashMap<String, f64> = HashMap::new();
+    for item in items {
+        // CStatus 0 is valid data, 1 is valid new data.
+        if item.FmtValue.CStatus > 1 {
+            continue;
+        }
+        let name = unsafe { item.szName.to_string() }.unwrap_or_default();
+        let value = unsafe { item.FmtValue.Anonymous.doubleValue };
+        *per_adapter.entry(adapter_of(&name)).or_default() += value.max(0.0);
+    }
+    let busiest = per_adapter.values().copied().fold(0.0f64, f64::max);
+    Ok((busiest / 100.0).clamp(0.0, 1.0) as f32)
+}
+
+/// The adapter part of a GPU Engine instance name: the text from "luid_" to "_phys".
+fn adapter_of(instance: &str) -> String {
+    let start = instance.find("luid_").unwrap_or(0);
+    let tail = &instance[start..];
+    let end = tail.find("_phys").unwrap_or(tail.len());
+    tail[..end].to_string()
 }
 
 fn note(latch: &mut FailureLatch, op: &str, ctx: &str) {

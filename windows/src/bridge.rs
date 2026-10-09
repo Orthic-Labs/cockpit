@@ -305,7 +305,13 @@ fn state_json(hooks: &Hooks) -> String {
                 out.push(',');
             }
             out.push_str("{\"label\":");
-            esc(&mut out, &window.label);
+            // Grouped windows (Codex Spark, code review) carry their group so the hub
+            // can tell "Spark · 5h limit" from the account's own "5h limit".
+            let label = match &window.group {
+                Some(group) => format!("{group} · {}", window.label),
+                None => window.label.clone(),
+            };
+            esc(&mut out, &label);
             out.push_str(&format!(
                 ",\"usedFraction\":{}}}",
                 if window.fraction.is_finite() {
