@@ -422,7 +422,7 @@ export function Settings({ section, notch, onNavigate }: {
                 {bool("launcherDictionary", "Dictionary", "“define word” looks words up in the Mac's dictionaries.")}
                 {bool("launcherShortcuts", "Apple Shortcuts", "Search and run the shortcuts in the Shortcuts app.")}
                 {bool("launcherClipboard", "Clipboard history",
-                  "Text and images you copy, kept on this Mac, searchable with “clip”. Off until you turn it on.")}
+                  (isWindows ? "Text and images you copy, kept on this PC, searchable with “clip”. Off until you turn it on." : "Text and images you copy, kept on this Mac, searchable with “clip”. Off until you turn it on."))}
                 {bool("launcherCurrency", "Currency and crypto rates",
                   "Fetches exchange rates once a day from open.er-api.com and CoinGecko. Off until you turn it on.")}
                 <LauncherLists
