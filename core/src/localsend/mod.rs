@@ -839,6 +839,8 @@ fn run_send(
     let register = |stream: Option<TcpStream>| {
         *lock(&handle.stream) = stream;
     };
+    // A message counts as sent once it is on the other screen.
+    let delivered = std::cell::Cell::new(false);
     let result = send::deliver(
         &inner.me,
         &peer,
@@ -846,6 +848,11 @@ fn run_send(
         &handle.flag,
         &register,
         &mut |p| {
+            if p.phase == send::Phase::Delivered {
+                delivered.set(true);
+                inner.end_transfer(&id, "done", None);
+                return;
+            }
             let waiting = p.phase == send::Phase::Waiting;
             inner.update_transfer(&id, p.total > 0 && p.done >= p.total, |t| {
                 t.state = if waiting { "waiting" } else { "active" }.to_string();
@@ -857,6 +864,10 @@ fn run_send(
             });
         },
     );
+    if delivered.get() {
+        lock(&inner.cancels).remove(&id);
+        return;
+    }
     match result {
         Ok(send::Outcome::Done) => finish("done", None),
         Ok(send::Outcome::Declined) => finish("declined", None),

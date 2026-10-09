@@ -48,6 +48,9 @@ pub enum Phase {
     /// Waiting for the other device to accept.
     Waiting,
     Sending,
+    /// A message (text only) is on the other device's screen. Its answer only
+    /// comes when someone closes it there, which nobody needs to wait for.
+    Delivered,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +159,7 @@ fn exchange(
     json: Option<&[u8]>,
     timeout: Duration,
     register: &dyn Fn(Option<TcpStream>),
+    sent: &mut dyn FnMut(),
 ) -> Result<net::Reply, String> {
     let mut wire = net::connect(peer.ip, peer.port, peer.https, &peer.fingerprint, timeout)
         .map_err(|e| format!("Couldn't reach {}: {e}", peer.alias))?;
@@ -169,7 +173,12 @@ fn exchange(
         target,
         json.map(|_| "application/json"),
         payload.len() as u64,
-        &mut |w| w.write_all(payload),
+        &mut |w| {
+            w.write_all(payload)?;
+            w.flush()?;
+            sent();
+            Ok(())
+        },
     );
     wire.finish();
     register(None);
@@ -230,13 +239,23 @@ pub fn deliver(
     let body =
         serde_json::to_vec(&PrepareUploadRequest { info, files }).map_err(|e| e.to_string())?;
     let prepare = format!("{}/prepare-upload", proto::API);
-    // The other person may take a while to say yes.
+    // The other person may take a while to say yes. A message is done once it
+    // is on their screen; the request stays open until they close it there.
+    let text_only = entries.iter().all(|e| matches!(e.source, Source::Text(_)));
     let reply = exchange(
         peer,
         &prepare,
         Some(&body),
         Duration::from_secs(190),
         register,
+        &mut || {
+            if text_only {
+                on(Progress {
+                    phase: Phase::Delivered,
+                    ..progress.clone()
+                });
+            }
+        },
     );
     if cancel.load(Ordering::Relaxed) {
         return Ok(Outcome::Cancelled);
