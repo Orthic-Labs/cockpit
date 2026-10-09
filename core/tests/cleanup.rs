@@ -80,7 +80,7 @@ fn moved() -> ItemOutcome {
                 volume,
                 id: "trash-1".into(),
             },
-            path: "/.Trash/plan-1".into(),
+            path: abs_path("/.Trash/plan-1"),
         },
         moved_bytes: 8,
     }
