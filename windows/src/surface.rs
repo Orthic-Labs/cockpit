@@ -11,9 +11,9 @@ use std::mem::size_of;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
-    CreateDIBSection, CreateFontIndirectW, DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC,
-    DeleteObject, GdiFlush, GetDC, GetTextExtentPoint32W, HBITMAP, HDC, HFONT, HGDIOBJ, LOGFONTW,
-    ReleaseDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+    CreateDIBSection, CreateFontIndirectW, DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC, DeleteObject,
+    GdiFlush, GetDC, GetTextExtentPoint32W, HBITMAP, HDC, HFONT, HGDIOBJ, LOGFONTW, ReleaseDC,
+    SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{ULW_ALPHA, UpdateLayeredWindow};
 use windows::core::Error;
@@ -128,7 +128,7 @@ pub fn present(hwnd: HWND, canvas: &Canvas, position: Option<(i32, i32)>) -> Res
     let destination = position.map(|(x, y)| POINT { x, y });
     let destination_ptr: Option<*const POINT> = destination.as_ref().map(|p| p as *const POINT);
     let blend = BLENDFUNCTION {
-        BlendOp: 0,    // AC_SRC_OVER
+        BlendOp: 0, // AC_SRC_OVER
         BlendFlags: 0,
         SourceConstantAlpha: 255,
         AlphaFormat: 1, // AC_SRC_ALPHA: the bitmap carries premultiplied alpha
@@ -184,7 +184,10 @@ impl TextPainter {
         }
         // SAFETY: `logical` is a fully initialised LOGFONTW (face name NUL-terminated by the
         // zeroed default) that outlives the call.
-        let font = GdiObject::new(unsafe { CreateFontIndirectW(&logical) }, "CreateFontIndirectW")?;
+        let font = GdiObject::new(
+            unsafe { CreateFontIndirectW(&logical) },
+            "CreateFontIndirectW",
+        )?;
         let handle = font.get();
         self.fonts.push((size_px, bold, font));
         Some(handle)

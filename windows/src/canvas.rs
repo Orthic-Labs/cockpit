@@ -139,7 +139,8 @@ impl Canvas {
                     let along_start = theta * radius;
                     let along_end = (end_angle - theta) * radius;
                     let body = (0.5 + along_start.min(along_end)).clamp(0.0, 1.0) * radial;
-                    let cap = |c: (f32, f32)| (0.5 - ((fx - c.0).hypot(fy - c.1) - half)).clamp(0.0, 1.0);
+                    let cap =
+                        |c: (f32, f32)| (0.5 - ((fx - c.0).hypot(fy - c.1) - half)).clamp(0.0, 1.0);
                     body.max(cap(start_cap)).max(cap(end_cap))
                 };
                 self.blend(px, py, color, coverage * alpha);
@@ -161,7 +162,12 @@ impl Canvas {
                 }
                 let level = mask.coverage[row * mask.width + column];
                 if level != 0 {
-                    self.blend(px as usize, py as usize, color, f32::from(level) / 255.0 * alpha);
+                    self.blend(
+                        px as usize,
+                        py as usize,
+                        color,
+                        f32::from(level) / 255.0 * alpha,
+                    );
                 }
             }
         }

@@ -26,6 +26,7 @@ const BAR_HEIGHT: f32 = 4.0;
 const BAR_ROW_EXTRA: f32 = 8.0;
 const ROW_GAP: f32 = 4.0;
 const BAR_TRACK_ALPHA: f32 = 0.176;
+const BUTTON_PLATE_ALPHA: f32 = 0.10;
 
 pub const MENU_WIDTH: f32 = 112.0;
 pub const MENU_HEIGHT: f32 = 36.0;
@@ -79,7 +80,7 @@ fn draw_centered(
     canvas.draw_mask(&mask, x, top.round() as i32, color, alpha);
 }
 
-/// The notch body with its five cells.
+/// The notch body with its six cells.
 pub fn render_panel(views: &[CellView], dpi: u32, text: &mut TextPainter) -> Canvas {
     let s = layout::scale(dpi);
     let (width, height) = layout::body_size(dpi);
@@ -152,7 +153,11 @@ pub fn render_panel(views: &[CellView], dpi: u32, text: &mut TextPainter) -> Can
             (cx, cy - glyph_size * s * 0.6),
             (glyph_size, true),
             s,
-            INK_PRIMARY,
+            if view.problem {
+                layout::BAND_WATCH
+            } else {
+                INK_PRIMARY
+            },
             dim,
         );
         let known = view.main.is_some();
@@ -176,6 +181,21 @@ fn row_height(row: &Row) -> f32 {
         Row::Bar { .. } => LINE_HEIGHT + BAR_ROW_EXTRA,
         Row::Note(_) => NOTE_HEIGHT,
     }
+}
+
+/// Index of the row under `y` (card-local device pixels), if any.
+pub fn row_at(content: &CardContent, dpi: u32, y: i32) -> Option<usize> {
+    let s = layout::scale(dpi);
+    let y = y as f32;
+    let mut top = CARD_PAD + TITLE_HEIGHT + 6.0;
+    for (index, row) in content.rows.iter().enumerate() {
+        let height = row_height(row);
+        if y >= (top - ROW_GAP / 2.0) * s && y < (top + height + ROW_GAP / 2.0) * s {
+            return Some(index);
+        }
+        top += height + ROW_GAP;
+    }
+    None
 }
 
 /// Size in device pixels of the card for `content`.
@@ -202,8 +222,14 @@ fn card_background(canvas: &mut Canvas, scale: f32) {
     );
 }
 
-/// The hover card: title (with optional plan on the right), then rows.
-pub fn render_card(content: &CardContent, dpi: u32, text: &mut TextPainter) -> Canvas {
+/// The hover card: title (with optional plan on the right), then rows. `clickable[i]` marks
+/// row `i` as a button (primary ink on a faint plate); missing entries are plain text.
+pub fn render_card(
+    content: &CardContent,
+    clickable: &[bool],
+    dpi: u32,
+    text: &mut TextPainter,
+) -> Canvas {
     let s = layout::scale(dpi);
     let (width, height) = card_size(content, dpi);
     let mut canvas = Canvas::new(width as usize, height as usize);
@@ -235,17 +261,46 @@ pub fn render_card(content: &CardContent, dpi: u32, text: &mut TextPainter) -> C
         );
     }
     y += TITLE_HEIGHT + 6.0;
-    for row in &content.rows {
+    for (index, row) in content.rows.iter().enumerate() {
+        let button = clickable.get(index) == Some(&true);
+        if button {
+            canvas.fill_round_rect(
+                left as f32 - 6.0 * s,
+                (y - 1.0) * s,
+                (right - left) as f32 + 12.0 * s,
+                LINE_HEIGHT * s,
+                [4.0 * s; 4],
+                0xFFFFFF,
+                BUTTON_PLATE_ALPHA,
+            );
+        }
+        let label_ink = if button { INK_PRIMARY } else { INK_SECONDARY };
         match row {
             Row::Pair { label, value } => {
-                draw_pair(&mut canvas, text, label, value, (left, right), y, s);
+                draw_pair(
+                    &mut canvas,
+                    text,
+                    (label, label_ink),
+                    value,
+                    (left, right),
+                    y,
+                    s,
+                );
             }
             Row::Bar {
                 label,
                 value,
                 fraction,
             } => {
-                draw_pair(&mut canvas, text, label, value, (left, right), y, s);
+                draw_pair(
+                    &mut canvas,
+                    text,
+                    (label, label_ink),
+                    value,
+                    (left, right),
+                    y,
+                    s,
+                );
                 let bar_top = (y + LINE_HEIGHT + 1.0) * s;
                 let bar_width = (right - left) as f32;
                 let bar_height = BAR_HEIGHT * s;
@@ -294,7 +349,7 @@ pub fn render_card(content: &CardContent, dpi: u32, text: &mut TextPainter) -> C
 fn draw_pair(
     canvas: &mut Canvas,
     text: &mut TextPainter,
-    label: &str,
+    (label, label_ink): (&str, u32),
     value: &str,
     (left, right): (i32, i32),
     y: f32,
@@ -307,7 +362,7 @@ fn draw_pair(
         (left, px(y, scale)),
         (ROW_SIZE, false),
         scale,
-        INK_SECONDARY,
+        label_ink,
         1.0,
     );
     let w = text_width(text, value, ROW_SIZE, false, scale);

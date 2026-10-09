@@ -4,9 +4,7 @@
 use crate::diag;
 use std::ffi::c_void;
 use windows::Win32::Foundation::{HINSTANCE, HWND};
-use windows::Win32::Graphics::Gdi::{
-    DeleteObject, HDC, HGDIOBJ, SelectObject,
-};
+use windows::Win32::Graphics::Gdi::{DeleteObject, HDC, HGDIOBJ, SelectObject};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, IDC_ARROW, IsWindow, KillTimer, LoadCursorW, RegisterClassW,
     UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDPROC,

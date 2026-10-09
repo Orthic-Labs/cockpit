@@ -45,8 +45,8 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFOHEADER, BLENDFUNCTION, BitBlt, CAPTUREBLT, EnumDisplayMonitors, GdiFlush,
-    GetDC, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromPoint, ROP_CODE, ReleaseDC, SRCCOPY, ValidateRect,
+    GetDC, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    ROP_CODE, ReleaseDC, SRCCOPY, ValidateRect,
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppBGRA,
@@ -61,12 +61,16 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock,
+};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId, Sleep};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
-use windows::Win32::UI::Shell::{FOLDERID_Desktop, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath, ShellExecuteW};
+use windows::Win32::UI::Shell::{
+    FOLDERID_Desktop, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath, ShellExecuteW,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Error, IUnknown, Interface, PCWSTR, w};
 
@@ -266,11 +270,11 @@ fn monitor_geo(point: (i32, i32)) -> MonitorGeo {
         (fallback, fallback)
     };
     let (mut dpi_x, mut dpi_y) = (0u32, 0u32);
-    let scale = match unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }
-    {
-        Ok(()) if dpi_x > 0 => dpi_x as f32 / 96.0,
-        _ => 1.0,
-    };
+    let scale =
+        match unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } {
+            Ok(()) if dpi_x > 0 => dpi_x as f32 / 96.0,
+            _ => 1.0,
+        };
     MonitorGeo {
         monitor: rect,
         work,
@@ -314,17 +318,27 @@ fn with_session<R>(f: impl FnOnce(&mut Session) -> R) -> Option<R> {
 }
 
 fn take_session() -> Option<Session> {
-    SESSION.with(|cell| cell.try_borrow_mut().ok().and_then(|mut guard| guard.take()))
+    SESSION.with(|cell| {
+        cell.try_borrow_mut()
+            .ok()
+            .and_then(|mut guard| guard.take())
+    })
 }
 
 fn take_thumb() -> Option<Thumb> {
-    THUMB.with(|cell| cell.try_borrow_mut().ok().and_then(|mut guard| guard.take()))
+    THUMB.with(|cell| {
+        cell.try_borrow_mut()
+            .ok()
+            .and_then(|mut guard| guard.take())
+    })
 }
 
 fn text(label: &str, px: i32, bold: bool) -> Option<Mask> {
     PAINTER.with(|cell| {
         let mut guard = cell.try_borrow_mut().ok()?;
-        guard.as_mut().and_then(|painter| painter.render(label, px, bold))
+        guard
+            .as_mut()
+            .and_then(|painter| painter.render(label, px, bold))
     })
 }
 
@@ -432,7 +446,8 @@ impl Overlay {
             r: width as i32,
             b: height as i32,
         };
-        let touches = |r: Option<RectI>| r.is_some_and(|r| r.inflate(2).intersect(bounds).is_some());
+        let touches =
+            |r: Option<RectI>| r.is_some_and(|r| r.inflate(2).intersect(bounds).is_some());
         if !everything && !touches(local) && !touches(self.hole) {
             self.hole = local;
             return;
@@ -583,11 +598,7 @@ impl Pick {
             return None;
         }
         let label = match OwnedWindow::create(
-            WS_EX_LAYERED
-                | WS_EX_TOPMOST
-                | WS_EX_TOOLWINDOW
-                | WS_EX_NOACTIVATE
-                | WS_EX_TRANSPARENT,
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
             PLAIN_CLASS,
             &wide("Pulse Screenshot Size"),
             WS_POPUP,
@@ -650,7 +661,10 @@ impl Pick {
             return;
         };
         let (pad_x, pad_y) = ((8.0 * s) as i32, (4.0 * s) as i32);
-        let (width, height) = (mask.width as i32 + 2 * pad_x, mask.height as i32 + 2 * pad_y);
+        let (width, height) = (
+            mask.width as i32 + 2 * pad_x,
+            mask.height as i32 + 2 * pad_y,
+        );
         let mut canvas = Canvas::new(width as usize, height as usize);
         canvas.fill_round_rect(
             0.0,
@@ -991,7 +1005,11 @@ fn install(session: Session) {
 }
 
 fn begin(request: Request) {
-    let busy = SESSION.with(|cell| cell.try_borrow().map(|guard| guard.is_some()).unwrap_or(true));
+    let busy = SESSION.with(|cell| {
+        cell.try_borrow()
+            .map(|guard| guard.is_some())
+            .unwrap_or(true)
+    });
     if busy {
         return;
     }
@@ -1188,7 +1206,8 @@ fn encode_png(shot: &mut Surface, path: &Path) -> Result<(), Error> {
     let (width, height) = (shot.width as u32, shot.height as u32);
     let pixels = shot.pixels_mut();
     // SAFETY: a u32 slice viewed as its own bytes (BGRA in memory order on little endian).
-    let bytes = unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), pixels.len() * 4) };
+    let bytes =
+        unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), pixels.len() * 4) };
     let name: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -1197,8 +1216,11 @@ fn encode_png(shot: &mut Surface, path: &Path) -> Result<(), Error> {
     // SAFETY: COM is initialised on this thread; every interface is released on drop and
     // `name` / `bytes` outlive the calls.
     unsafe {
-        let factory: IWICImagingFactory =
-            CoCreateInstance(&CLSID_WICImagingFactory, None::<&IUnknown>, CLSCTX_INPROC_SERVER)?;
+        let factory: IWICImagingFactory = CoCreateInstance(
+            &CLSID_WICImagingFactory,
+            None::<&IUnknown>,
+            CLSCTX_INPROC_SERVER,
+        )?;
         let stream = factory.CreateStream()?;
         stream.InitializeFromFilename(PCWSTR(name.as_ptr()), 0x4000_0000)?; // GENERIC_WRITE
         let istream: IStream = stream.cast()?;
@@ -1422,7 +1444,12 @@ fn open_thumb() {
 
 // ---------------------------------------------------------------- window procedures
 
-extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+extern "system" fn overlay_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe {
         match message {
             WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
@@ -1469,7 +1496,12 @@ fn lparam_point(lparam: LPARAM) -> (i32, i32) {
     )
 }
 
-extern "system" fn toolbar_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+extern "system" fn toolbar_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe {
         match message {
             WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),

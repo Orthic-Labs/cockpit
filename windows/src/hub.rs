@@ -22,7 +22,14 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const EVENT_MODIFY_STATE: u32 = 0x0002;
 /// Sections the hub understands for `--section` and the show-section events.
 const SECTIONS: [&str; 9] = [
-    "overview", "settings", "storage", "monitor", "cleanup", "apps", "accounts", "general",
+    "overview",
+    "settings",
+    "storage",
+    "monitor",
+    "cleanup",
+    "apps",
+    "accounts",
+    "general",
     "permissions",
 ];
 
@@ -103,7 +110,12 @@ fn raise(pid: u32) -> bool {
     let mut state = Raise { pid, found: false };
     // The callback only reads window attributes; `state` outlives the synchronous call.
     // EnumWindows reports an error when the callback stops it early, which is expected.
-    let _ = unsafe { EnumWindows(Some(raise_window), LPARAM(&mut state as *mut Raise as isize)) };
+    let _ = unsafe {
+        EnumWindows(
+            Some(raise_window),
+            LPARAM(&mut state as *mut Raise as isize),
+        )
+    };
     state.found
 }
 
@@ -123,7 +135,10 @@ fn spawn(section: &str) -> Option<Child> {
     match spawned {
         Ok(child) => Some(child),
         Err(error) => {
-            diag::info("hub_spawn_failed", &[("reason", error.to_string().as_str())]);
+            diag::info(
+                "hub_spawn_failed",
+                &[("reason", error.to_string().as_str())],
+            );
             None
         }
     }

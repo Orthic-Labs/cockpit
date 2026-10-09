@@ -136,7 +136,10 @@ pub fn apply(enabled: bool) {
         // SAFETY: valid key handle and NUL-terminated value name.
         let status = unsafe { RegDeleteValueW(key.0, PCWSTR(name.as_ptr())) };
         if status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND {
-            diag::info("autostart_remove_failed", &[("status", format!("{status}").as_str())]);
+            diag::info(
+                "autostart_remove_failed",
+                &[("status", format!("{status}").as_str())],
+            );
         }
         return;
     }
@@ -163,6 +166,9 @@ pub fn apply(enabled: bool) {
     if status == ERROR_SUCCESS {
         diag::info("autostart_enabled", &[]);
     } else {
-        diag::info("autostart_set_failed", &[("status", format!("{status}").as_str())]);
+        diag::info(
+            "autostart_set_failed",
+            &[("status", format!("{status}").as_str())],
+        );
     }
 }

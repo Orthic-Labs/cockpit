@@ -1,11 +1,14 @@
-//! Notch geometry and the view model for its five cells. Metrics are in DIPs (1/96 inch)
+//! Notch geometry and the view model for its six cells. Metrics are in DIPs (1/96 inch)
 //! and scale with the monitor DPI; they follow the Mac notch's design frame (44 pt ring,
 //! 5.8 pt track, 3 pt arc, thin inner ring for the weekly window). Pure code.
 
+use crate::send;
 use crate::sensors::Machine;
 use crate::usage::Usage;
 
-pub const CELL_COUNT: usize = 5;
+pub const CELL_COUNT: usize = 6;
+/// Index of the nearby-sharing cell in `Cell::ALL`.
+pub const SEND_CELL: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
@@ -14,10 +17,19 @@ pub enum Cell {
     Disk,
     Claude,
     Codex,
+    /// Nearby sharing (the Send ring).
+    Send,
 }
 
 impl Cell {
-    pub const ALL: [Cell; CELL_COUNT] = [Cell::Cpu, Cell::Memory, Cell::Disk, Cell::Claude, Cell::Codex];
+    pub const ALL: [Cell; CELL_COUNT] = [
+        Cell::Cpu,
+        Cell::Memory,
+        Cell::Disk,
+        Cell::Claude,
+        Cell::Codex,
+        Cell::Send,
+    ];
 
     /// Hub section a click opens (same mapping as the Mac notch).
     pub fn section(self) -> &'static str {
@@ -25,6 +37,7 @@ impl Cell {
             Cell::Cpu | Cell::Memory => "monitor",
             Cell::Disk => "storage",
             Cell::Claude | Cell::Codex => "accounts",
+            Cell::Send => send::SECTION,
         }
     }
 
@@ -36,6 +49,7 @@ impl Cell {
             Cell::Disk => "DSK",
             Cell::Claude => "Cl",
             Cell::Codex => "Cx",
+            Cell::Send => send::GLYPH,
         }
     }
 }
@@ -118,6 +132,8 @@ pub struct CellView {
     pub inner: Option<u8>,
     /// Latest poll failed; the reading is dimmed.
     pub stale: bool,
+    /// Sharing cannot work: the glyph is drawn in the warning colour.
+    pub problem: bool,
     /// Text under the ring: `42%` or `--`.
     pub label: String,
 }
@@ -130,8 +146,8 @@ fn label(value: Option<u8>) -> String {
     value.map_or_else(|| "--".to_string(), |p| format!("{p}%"))
 }
 
-/// Builds the five cell views. Unknown readings are `None` and show as `--`.
-pub fn views(machine: Option<&Machine>, usage: &[Usage; 2]) -> Vec<CellView> {
+/// Builds the six cell views. Unknown readings are `None` and show as `--`.
+pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -> Vec<CellView> {
     let system = |cell: Cell, fraction: Option<f32>| {
         let main = fraction.map(percent);
         CellView {
@@ -139,6 +155,7 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2]) -> Vec<CellView> {
             main,
             inner: None,
             stale: false,
+            problem: false,
             label: label(main),
         }
     };
@@ -149,6 +166,7 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2]) -> Vec<CellView> {
             main,
             inner: usage.weekly().map(|w| percent(w.fraction)),
             stale: usage.is_stale(),
+            problem: false,
             label: label(main),
         }
     };
@@ -158,6 +176,14 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2]) -> Vec<CellView> {
         system(Cell::Disk, machine.and_then(Machine::disk_fraction)),
         ai(Cell::Claude, &usage[0]),
         ai(Cell::Codex, &usage[1]),
+        CellView {
+            glyph: Cell::Send.glyph(),
+            main: ring.fraction.filter(|_| ring.active).map(percent),
+            inner: None,
+            stale: false,
+            problem: ring.problem,
+            label: ring.label.clone(),
+        },
     ]
 }
 

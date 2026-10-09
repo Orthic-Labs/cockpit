@@ -2,6 +2,7 @@
 //! hover cards). Pure data; `render.rs` draws it. Unknown values read `--`.
 
 use crate::layout::Cell;
+use crate::send::{self, Panel};
 use crate::sensors::{Machine, size_text};
 use crate::usage::{Status, Usage, age_text, reset_in};
 
@@ -41,18 +42,35 @@ fn bar(label: &str, value: String, fraction: Option<f32>) -> Row {
     }
 }
 
-pub fn content_for(
+/// The card for `cell` and whether it is a nearby-sharing popup (news, shown without hover).
+/// Every row of a non-Send card is plain text; the Send cell shows `popup` when there is one,
+/// else its hover panel, whose rows with an action are clickable.
+pub fn panel_for(
     cell: Cell,
     machine: Option<&Machine>,
     usage: &[Usage; 2],
     now: u64,
-) -> CardContent {
+    popup: Option<Panel>,
+) -> (Panel, bool) {
+    if cell == Cell::Send {
+        return match popup {
+            Some(panel) => (panel, true),
+            None => (send::hover_panel(), false),
+        };
+    }
+    let content = content_for(cell, machine, usage, now);
+    let actions = vec![None; content.rows.len()];
+    (Panel { content, actions }, false)
+}
+
+fn content_for(cell: Cell, machine: Option<&Machine>, usage: &[Usage; 2], now: u64) -> CardContent {
     match cell {
         Cell::Cpu => cpu(machine),
         Cell::Memory => memory(machine),
         Cell::Disk => disks(machine),
         Cell::Claude => provider("Claude", &usage[0], now),
         Cell::Codex => provider("Codex", &usage[1], now),
+        Cell::Send => send::hover_panel().content,
     }
 }
 
@@ -163,7 +181,11 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
     let status = match (usage.status, usage.updated) {
         (Status::Ok, Some(updated)) => format!("Updated {}", age_text(updated, now)),
         (status, Some(updated)) => {
-            format!("{} - last reading {}", status.text(), age_text(updated, now))
+            format!(
+                "{} - last reading {}",
+                status.text(),
+                age_text(updated, now)
+            )
         }
         (status, None) => status.text().to_string(),
     };

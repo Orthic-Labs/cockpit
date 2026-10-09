@@ -29,7 +29,12 @@ struct Point {
 #[allow(non_snake_case)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn CreateEventW(attributes: *const c_void, manual_reset: i32, initial_state: i32, name: *const u16) -> Handle;
+    fn CreateEventW(
+        attributes: *const c_void,
+        manual_reset: i32,
+        initial_state: i32,
+        name: *const u16,
+    ) -> Handle;
     fn SetEvent(event: Handle) -> i32;
     fn CloseHandle(object: Handle) -> i32;
     fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
@@ -154,9 +159,12 @@ pub fn take_drop(hdrop: isize) -> (Vec<PathBuf>, (i32, i32)) {
                 continue;
             }
             let mut buffer = vec![0u16; length + 1];
-            let copied = DragQueryFileW(handle, index, buffer.as_mut_ptr(), buffer.len() as u32) as usize;
+            let copied =
+                DragQueryFileW(handle, index, buffer.as_mut_ptr(), buffer.len() as u32) as usize;
             if copied > 0 && copied <= length {
-                files.push(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..copied])));
+                files.push(PathBuf::from(std::ffi::OsString::from_wide(
+                    &buffer[..copied],
+                )));
             }
         }
         DragFinish(handle);
@@ -216,9 +224,13 @@ pub fn read_clipboard() -> Clip {
                         continue;
                     }
                     let mut buffer = vec![0u16; length + 1];
-                    let copied = DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as u32) as usize;
+                    let copied =
+                        DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as u32)
+                            as usize;
                     if copied > 0 && copied <= length {
-                        files.push(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..copied])));
+                        files.push(PathBuf::from(std::ffi::OsString::from_wide(
+                            &buffer[..copied],
+                        )));
                     }
                 }
                 if !files.is_empty() {
@@ -226,10 +238,10 @@ pub fn read_clipboard() -> Clip {
                 }
             }
         }
-        if let Some(bytes) = image_bytes() {
-            if let Some(path) = save_image(&bytes.0, bytes.1) {
-                return Clip::Image(path);
-            }
+        if let Some(bytes) = image_bytes()
+            && let Some(path) = save_image(&bytes.0, bytes.1)
+        {
+            return Clip::Image(path);
         }
         if IsClipboardFormatAvailable(CF_UNICODETEXT) != 0 {
             let memory = GetClipboardData(CF_UNICODETEXT);
@@ -242,7 +254,8 @@ pub fn read_clipboard() -> Clip {
                     while length < units && *pointer.add(length) != 0 {
                         length += 1;
                     }
-                    let text = String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length));
+                    let text =
+                        String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length));
                     GlobalUnlock(memory);
                     if !text.is_empty() {
                         return Clip::Text(text);
@@ -290,7 +303,7 @@ unsafe fn image_bytes() -> Option<(Vec<u8>, &'static str)> {
         if pointer.is_null() {
             return None;
         }
-        let dib = if size >= 40 && size <= MAX_CLIPBOARD {
+        let dib = if (40..=MAX_CLIPBOARD).contains(&size) {
             Some(std::slice::from_raw_parts(pointer, size).to_vec())
         } else {
             None
@@ -302,9 +315,12 @@ unsafe fn image_bytes() -> Option<(Vec<u8>, &'static str)> {
 
 /// A clipboard DIB (BITMAPINFOHEADER and pixels) with the 14-byte file header put in front.
 fn bmp_file(dib: &[u8]) -> Option<Vec<u8>> {
-    let u32_at = |at: usize| dib.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let u32_at = |at: usize| {
+        dib.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
     let header = u32_at(0)? as usize;
-    if header < 40 || header > dib.len() {
+    if !(40..=dib.len()).contains(&header) {
         return None;
     }
     let bits = dib.get(14..16).map(|b| u16::from_le_bytes([b[0], b[1]]))? as u32;
@@ -358,7 +374,10 @@ pub fn write_text(text: &str) -> bool {
     let Some(_open) = Open::acquire() else {
         return false;
     };
-    let units: Vec<u16> = std::ffi::OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect();
+    let units: Vec<u16> = std::ffi::OsStr::new(text)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let bytes = units.len() * 2;
     // SAFETY: the allocation is filled before it is handed over; ownership passes to the
     // clipboard on success and is freed here only when SetClipboardData fails.

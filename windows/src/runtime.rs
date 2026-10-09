@@ -392,9 +392,8 @@ impl UserSecurity {
         }
         // `Vec<u8>` only guarantees byte alignment; TOKEN_USER contains a pointer.
         // Read the header unaligned, while keeping the backing buffer alive for SID use.
-        let sid = unsafe {
-            std::ptr::read_unaligned(buffer.as_ptr().cast::<winsec::TOKEN_USER>()).Sid
-        };
+        let sid =
+            unsafe { std::ptr::read_unaligned(buffer.as_ptr().cast::<winsec::TOKEN_USER>()).Sid };
         if sid.is_null() || !unsafe { winsec::IsValidSid(sid) }.as_bool() {
             return Err(Error::new(E_INVALIDARG, "invalid token user SID"));
         }
@@ -420,10 +419,7 @@ impl UserSecurity {
     /// out before use — pointers are only taken inside calls here).
     pub(crate) fn sid(&self) -> winsec::PSID {
         unsafe {
-            std::ptr::read_unaligned(
-                self.token_user.as_ptr().cast::<winsec::TOKEN_USER>(),
-            )
-            .Sid
+            std::ptr::read_unaligned(self.token_user.as_ptr().cast::<winsec::TOKEN_USER>()).Sid
         }
     }
 
@@ -828,7 +824,10 @@ mod tests {
             vec![Placement::Move(placed("A", M1, 900))]
         );
         let dpi_change = [Placed {
-            slot: Slot { along: 500, dpi: 144 },
+            slot: Slot {
+                along: 500,
+                dpi: 144,
+            },
             ..placed("A", M1, 500)
         }];
         assert_eq!(plan_placements(&existing, &dpi_change).len(), 1);

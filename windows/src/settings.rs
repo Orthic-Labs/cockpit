@@ -9,6 +9,9 @@
 //! position of the notch's centre along that monitor's top edge (0..=1000, default 500),
 //! `"mac_shortcuts":false` (Alt+A/C/V/X/Z editing shortcuts off), `"screenshot_shortcuts":false`
 //! (Alt+Shift+4/5 screenshots off) and `"screenshot_to_desktop":false` (clipboard only).
+//! Nearby sharing (written by the hub's settings, kept here so a save never drops them):
+//! `"nearby_enabled":false`, `"nearby_alias":"<name>"`, `"nearby_save_folder":"<path>"` and
+//! `"nearby_accept_known":true`.
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -96,6 +99,14 @@ pub struct PillSettings {
     pub screenshot_to_desktop: bool,
     /// Per-monitor notch position along the top edge, per mille of the monitor width.
     pub positions: BTreeMap<String, u16>,
+    /// Nearby sharing is on. On by default.
+    pub nearby_enabled: bool,
+    /// Name other devices see; `None` lets the hub choose.
+    pub nearby_alias: Option<String>,
+    /// Folder received files are saved to; `None` is Downloads.
+    pub nearby_save_folder: Option<String>,
+    /// Accept requests from known devices without asking. Off by default.
+    pub nearby_accept_known: bool,
 }
 
 impl PillSettings {
@@ -109,6 +120,10 @@ impl PillSettings {
             screenshot_shortcuts: true,
             screenshot_to_desktop: true,
             positions: BTreeMap::new(),
+            nearby_enabled: true,
+            nearby_alias: None,
+            nearby_save_folder: None,
+            nearby_accept_known: false,
         }
     }
     /// Remembered position for a monitor; unknown monitors are centred.
@@ -495,10 +510,22 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         ("mac_shortcuts", &mut settings.mac_shortcuts),
         ("screenshot_shortcuts", &mut settings.screenshot_shortcuts),
         ("screenshot_to_desktop", &mut settings.screenshot_to_desktop),
+        ("nearby_enabled", &mut settings.nearby_enabled),
+        ("nearby_accept_known", &mut settings.nearby_accept_known),
     ] {
         match member(&root, name) {
             None | Some(Json::Null) => {}
             Some(Json::Bool(value)) => *slot = *value,
+            Some(_) => return Err(ParseError::Malformed),
+        }
+    }
+    for (name, slot) in [
+        ("nearby_alias", &mut settings.nearby_alias),
+        ("nearby_save_folder", &mut settings.nearby_save_folder),
+    ] {
+        match member(&root, name) {
+            None | Some(Json::Null) => {}
+            Some(Json::Text(text)) => *slot = Some(text.clone()),
             Some(_) => return Err(ParseError::Malformed),
         }
     }
@@ -570,6 +597,20 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
     }
     if !settings.screenshot_to_desktop {
         out.push_str(",\"screenshot_to_desktop\":false");
+    }
+    if !settings.nearby_enabled {
+        out.push_str(",\"nearby_enabled\":false");
+    }
+    if let Some(alias) = &settings.nearby_alias {
+        out.push_str(",\"nearby_alias\":");
+        push_json_string(&mut out, alias);
+    }
+    if let Some(folder) = &settings.nearby_save_folder {
+        out.push_str(",\"nearby_save_folder\":");
+        push_json_string(&mut out, folder);
+    }
+    if settings.nearby_accept_known {
+        out.push_str(",\"nearby_accept_known\":true");
     }
     if !settings.positions.is_empty() {
         out.push_str(",\"positions\":{");

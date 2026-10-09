@@ -24,6 +24,7 @@ mod lifecycle;
 mod raii;
 mod render;
 mod runtime;
+mod send;
 mod sensors;
 mod settings;
 mod shot;
@@ -31,8 +32,7 @@ mod surface;
 mod usage;
 mod visibility;
 
-use card::CardContent;
-use layout::{Cell, CellView};
+use layout::{Cell, CellView, SEND_CELL};
 use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate};
 use raii::{ClassGuard, OwnedWindow, TimerGuard, hwnd_from_key, hwnd_key};
 use runtime::{
@@ -73,6 +73,11 @@ const CARD_CLASS: PCWSTR = w!("PulseM1Card");
 const TIMER_ID: usize = 7;
 const MENU_TIMER_ID: usize = 8;
 const MENU_POLL_MS: u32 = 80;
+/// Grace period for the pointer to cross the gap from the Send cell to its card.
+const HOVER_TIMER_ID: usize = 9;
+const HOVER_GRACE_MS: u32 = 220;
+/// Posted by `send` when the Send ring, its hover card or a popup changed.
+const WM_SEND: u32 = WM_APP + 0x5E;
 static COORDINATES_COMPARABLE: AtomicBool = AtomicBool::new(false);
 
 struct Panel {
@@ -110,8 +115,22 @@ struct Interaction {
     drag: Option<Drag>,
     /// Quit menu: owning panel and its screen rectangle.
     menu: Option<(isize, RECT)>,
-    /// What the card window shows: panel, cell and content.
-    card_shown: Option<(isize, usize, CardContent)>,
+    /// What the card window shows.
+    card_shown: Option<Shown>,
+    /// Pointer is over the card window (only the Send card takes the pointer).
+    card_hover: bool,
+    /// Leave notification armed on the card window.
+    card_tracking: bool,
+    /// `send::popup_hover(true)` was sent for the popup under the pointer.
+    popup_hover_sent: bool,
+}
+
+/// The card on screen: owning panel, cell, content and whether it is a sharing popup.
+struct Shown {
+    key: isize,
+    cell: usize,
+    panel: send::Panel,
+    popup: bool,
 }
 
 impl Interaction {
@@ -123,6 +142,9 @@ impl Interaction {
             drag: None,
             menu: None,
             card_shown: None,
+            card_hover: false,
+            card_tracking: false,
+            popup_hover_sent: false,
         }
     }
 }
@@ -238,6 +260,7 @@ fn run() -> Result<(), Error> {
     let result = run_pill();
     // run_pill has returned: timer killed, panels destroyed, classes unregistered.
     usage::stop();
+    send::stop();
     hub::terminate();
     persist_settings();
     result
@@ -292,7 +315,10 @@ fn persist_settings() {
         return;
     }
     if !writable {
-        diag::info("settings_persist_skipped", &[("reason", "unusable_or_unavailable")]);
+        diag::info(
+            "settings_persist_skipped",
+            &[("reason", "unusable_or_unavailable")],
+        );
         return;
     }
     let result = settings::settings_paths().and_then(|paths| settings::save(&paths, &current));
@@ -351,6 +377,9 @@ fn run_pill() -> Result<(), Error> {
     let _keys = keys::start(mac_shortcuts, shots.is_some());
 
     usage::start(controller.key());
+    let nearby = lock_state().settings.nearby_enabled;
+    send::set_enabled(nearby);
+    send::start(controller.key(), WM_SEND);
     reconcile_panels();
     let interval = refresh_panels(Some(sample_once()));
     arm_timer(controller.hwnd(), interval);
@@ -688,6 +717,7 @@ fn create_panel(placed: &Placed) -> Result<Panel, Error> {
         (target.left, target.top, target.width(), target.height()),
         instance,
     )?;
+    send::accept_drops(window.key());
     Ok(Panel {
         id: spec.id.clone(),
         bounds: spec.bounds,
@@ -792,24 +822,22 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
         }
         (
             app.panels.len(),
-            app.panels
-                .iter()
-                .filter(|p| p.visibility.applied())
-                .count(),
+            app.panels.iter().filter(|p| p.visibility.applied()).count(),
         )
     };
-    refresh_card(&usage);
+    sync_card();
     interval_ms(cadence, total, hidden_count)
 }
 
 /// Draws the panel's bitmap when the cells it shows (or its DPI) changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
+    let ring = send::ring();
     let (views, dpi) = {
         let app = lock_state();
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
-        let views = layout::views(app.machine.as_ref(), usage);
+        let views = layout::views(app.machine.as_ref(), usage, &ring);
         let dpi = panel.slot.dpi;
         if panel
             .drawn
@@ -844,7 +872,15 @@ unsafe fn set_panel_hidden(hwnd: HWND, hidden: bool) -> Result<(), Error> {
     let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
     unsafe {
         if hidden {
-            SetWindowPos(hwnd, None, 0, 0, 0, 0, flags | SWP_NOZORDER | SWP_HIDEWINDOW)
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                flags | SWP_NOZORDER | SWP_HIDEWINDOW,
+            )
         } else {
             SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags | SWP_SHOWWINDOW)
         }
@@ -992,7 +1028,8 @@ fn lparam_point(lparam: LPARAM) -> (i32, i32) {
 }
 
 fn alt_down() -> bool {
-    unsafe { GetKeyState(VK_MENU.0 as i32) } < 0
+    let state = unsafe { GetKeyState(VK_MENU.0 as i32) };
+    state < 0
 }
 
 fn panel_dpi(key: isize) -> Option<u32> {
@@ -1033,14 +1070,20 @@ fn ensure_card() -> Option<isize> {
 }
 
 fn hide_card() {
-    let key = {
+    let (key, release) = {
         let mut app = lock_state();
         app.ui.card_shown = None;
-        app.card.as_ref().map(OwnedWindow::key)
+        app.ui.card_hover = false;
+        let release = std::mem::take(&mut app.ui.popup_hover_sent);
+        (app.card.as_ref().map(OwnedWindow::key), release)
     };
     if let Some(key) = key {
         let _ = unsafe { set_panel_hidden(hwnd_from_key(key), true) };
     }
+    if release {
+        send::popup_hover(false);
+    }
+    sync_send_hover();
 }
 
 /// Clears hover/menu/card state that belongs to `key` (the panel was hidden or removed).
@@ -1049,7 +1092,7 @@ fn dismiss_card_for(key: isize) {
         let mut app = lock_state();
         let relevant = app.ui.hover.is_some_and(|h| h.0 == key)
             || app.ui.menu.is_some_and(|m| m.0 == key)
-            || app.ui.card_shown.as_ref().is_some_and(|c| c.0 == key);
+            || app.ui.card_shown.as_ref().is_some_and(|c| c.key == key);
         if relevant {
             app.ui.hover = None;
             app.ui.menu = None;
@@ -1072,37 +1115,111 @@ fn clamp_x(x: i32, width: i32, monitor: Bounds) -> i32 {
     x.clamp(monitor.left, (monitor.right - width).max(monitor.left))
 }
 
-/// Shows (or updates) the hover card for `cell` of the notch `key`, below the notch.
-fn show_card(key: isize, cell: usize) {
+/// Ctrl+V belongs to the Send cell while the pointer is on it or on its card.
+fn sync_send_hover() {
+    let over = {
+        let app = lock_state();
+        app.ui.hover.is_some_and(|h| h.1 == SEND_CELL)
+            || (app.ui.card_hover
+                && app
+                    .ui
+                    .card_shown
+                    .as_ref()
+                    .is_some_and(|c| c.cell == SEND_CELL))
+    };
+    send::set_hover(over);
+}
+
+/// Decides which card should be up and shows, updates or hides it: the card of the hovered
+/// cell, else (Send popup news, no hover needed) the popup under the first visible notch.
+/// The Quit menu and a notch drag own the card window and are left alone.
+fn sync_card() {
     let usage = usage::snapshot();
     let now = usage::now_secs();
-    let (content, dpi, monitor) = {
+    let popup = send::popup_panel();
+    let (target, current_empty) = {
+        let app = lock_state();
+        if app.shutting_down || app.ui.menu.is_some() || app.ui.drag.is_some() {
+            return;
+        }
+        // The pointer on the card itself keeps it; a popup needs no hover at all.
+        let on_card = if app.ui.card_hover {
+            app.ui.card_shown.as_ref().map(|s| (s.key, s.cell))
+        } else {
+            None
+        };
+        let popup_target = if popup.is_some() {
+            app.panels
+                .iter()
+                .find(|p| !p.visibility.applied())
+                .map(|p| (p.window.key(), SEND_CELL))
+        } else {
+            None
+        };
+        (
+            app.ui.hover.or(on_card).or(popup_target),
+            app.ui.card_shown.is_none(),
+        )
+    };
+    let Some((key, cell)) = target else {
+        if !current_empty {
+            hide_card();
+        }
+        return;
+    };
+    let (panel, is_popup) = {
+        let app = lock_state();
+        card::panel_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now, popup)
+    };
+    let unchanged = lock_state().ui.card_shown.as_ref().is_some_and(|shown| {
+        shown.key == key && shown.cell == cell && shown.popup == is_popup && shown.panel == panel
+    });
+    if !unchanged {
+        show_card(key, cell, panel, is_popup);
+    }
+    // A popup that replaced the one under the pointer has not heard about the hover yet.
+    let announce = {
+        let mut app = lock_state();
+        let over_popup = app.ui.card_hover && app.ui.card_shown.as_ref().is_some_and(|c| c.popup);
+        let announce = over_popup && !app.ui.popup_hover_sent;
+        if announce {
+            app.ui.popup_hover_sent = true;
+        }
+        announce
+    };
+    if announce {
+        send::popup_hover(true);
+    }
+    sync_send_hover();
+}
+
+/// Shows (or updates) `panel` as the card of `cell` of the notch `key`, below the notch.
+fn show_card(key: isize, cell: usize, panel: send::Panel, popup: bool) {
+    let (dpi, monitor) = {
         let app = lock_state();
         if app.shutting_down {
             return;
         }
-        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+        let Some(notch) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
-        (
-            card::content_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now),
-            panel.slot.dpi,
-            panel.bounds,
-        )
+        (notch.slot.dpi, notch.bounds)
     };
     let mut rect = RECT::default();
     if unsafe { GetWindowRect(hwnd_from_key(key), &mut rect) }.is_err() {
         return;
     }
     let s = layout::scale(dpi);
-    let (card_width, _) = render::card_size(&content, dpi);
+    let (card_width, _) = render::card_size(&panel.content, dpi);
     let centre = rect.left + (layout::cell_left(cell, dpi) + layout::RING * s / 2.0) as i32;
     let x = clamp_x(centre - card_width / 2, card_width, monitor);
     let y = rect.bottom + (layout::CARD_GAP * s).round() as i32;
     let Some(card_key) = ensure_card() else {
         return;
     };
-    let Some(canvas) = with_text(|text| render::render_card(&content, dpi, text)) else {
+    let clickable: Vec<bool> = panel.actions.iter().map(Option::is_some).collect();
+    let Some(canvas) = with_text(|text| render::render_card(&panel.content, &clickable, dpi, text))
+    else {
         return;
     };
     let hwnd = hwnd_from_key(card_key);
@@ -1114,26 +1231,12 @@ fn show_card(key: isize, cell: usize) {
         diag::win32_error("SetWindowPos", &error, "card show");
         return;
     }
-    lock_state().ui.card_shown = Some((key, cell, content));
-}
-
-/// Re-renders the visible hover card when its numbers changed.
-fn refresh_card(usage: &[Usage; 2]) {
-    let now = usage::now_secs();
-    let (key, cell, stale) = {
-        let app = lock_state();
-        if app.ui.menu.is_some() {
-            return;
-        }
-        let Some((key, cell, shown)) = &app.ui.card_shown else {
-            return;
-        };
-        let fresh = card::content_for(Cell::ALL[*cell], app.machine.as_ref(), usage, now);
-        (*key, *cell, fresh != *shown)
-    };
-    if stale {
-        show_card(key, cell);
-    }
+    lock_state().ui.card_shown = Some(Shown {
+        key,
+        cell,
+        panel,
+        popup,
+    });
 }
 
 fn arm_leave(hwnd: HWND) {
@@ -1169,13 +1272,40 @@ fn clear_hover(key: isize) {
         }
     };
     if was_hovering {
-        hide_card();
+        sync_card();
     }
+}
+
+/// The pointer left a notch (or the Send card). Over the Send cell the card is interactive, so
+/// give the pointer a moment to reach it before dismissing.
+fn arm_hover_grace() {
+    if let Some(controller) = controller_hwnd() {
+        let _ = unsafe { SetTimer(Some(controller), HOVER_TIMER_ID, HOVER_GRACE_MS, None) };
+    }
+}
+
+fn hover_grace_tick() {
+    if let Some(controller) = controller_hwnd() {
+        let _ = unsafe { KillTimer(Some(controller), HOVER_TIMER_ID) };
+    }
+    let key = {
+        let app = lock_state();
+        match app.ui.hover {
+            Some((key, _)) if !app.ui.card_hover && app.ui.tracking != Some(key) => key,
+            _ => return,
+        }
+    };
+    clear_hover(key);
 }
 
 fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
-    if lock_state().ui.drag.as_ref().is_some_and(|d| d.panel == key) {
+    if lock_state()
+        .ui
+        .drag
+        .as_ref()
+        .is_some_and(|d| d.panel == key)
+    {
         drag_to(hwnd);
         return;
     }
@@ -1195,7 +1325,7 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
                 }
             };
             if changed {
-                show_card(key, cell);
+                sync_card();
             }
         }
         None => clear_hover(key),
@@ -1210,7 +1340,84 @@ fn on_mouse_leave(hwnd: HWND) {
             app.ui.tracking = None;
         }
     }
-    clear_hover(key);
+    let over_send = lock_state().ui.hover == Some((key, SEND_CELL));
+    if over_send {
+        arm_hover_grace();
+    } else {
+        clear_hover(key);
+    }
+}
+
+/// Pointer moved over the card window (only the Send card takes the pointer).
+fn on_card_mouse_move(hwnd: HWND) {
+    let first_popup_hover = {
+        let mut app = lock_state();
+        app.ui.card_hover = true;
+        let popup = app.ui.card_shown.as_ref().is_some_and(|c| c.popup);
+        let first = popup && !app.ui.popup_hover_sent;
+        if first {
+            app.ui.popup_hover_sent = true;
+        }
+        first
+    };
+    if first_popup_hover {
+        send::popup_hover(true);
+    }
+    sync_send_hover();
+    let armed = std::mem::replace(&mut lock_state().ui.card_tracking, true);
+    if !armed {
+        let mut request = TRACKMOUSEEVENT {
+            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+        };
+        if unsafe { TrackMouseEvent(&mut request) }.is_err() {
+            lock_state().ui.card_tracking = false;
+        }
+    }
+}
+
+fn on_card_mouse_leave() {
+    let release = {
+        let mut app = lock_state();
+        app.ui.card_tracking = false;
+        app.ui.card_hover = false;
+        std::mem::take(&mut app.ui.popup_hover_sent)
+    };
+    if release {
+        send::popup_hover(false);
+    }
+    sync_send_hover();
+    arm_hover_grace();
+    sync_card();
+}
+
+/// A click on the Send card: runs the action of the row under the pointer.
+fn on_card_click(y: i32) {
+    let action = {
+        let app = lock_state();
+        let Some(shown) = app.ui.card_shown.as_ref() else {
+            return;
+        };
+        let Some(dpi) = app
+            .panels
+            .iter()
+            .find(|p| p.window.key() == shown.key)
+            .map(|p| p.slot.dpi)
+        else {
+            return;
+        };
+        render::row_at(&shown.panel.content, dpi, y)
+            .and_then(|row| shown.panel.actions.get(row).cloned().flatten())
+    };
+    if let Some(action) = action {
+        send::perform(action);
+        // The card is about to change or go; the pointer re-announces itself on the next one.
+        let mut app = lock_state();
+        app.ui.card_hover = false;
+        app.ui.popup_hover_sent = false;
+    }
 }
 
 fn on_lbutton_down(hwnd: HWND, x: i32, y: i32) {
@@ -1411,6 +1618,7 @@ fn close_menu() {
     lock_state().ui.menu = None;
     stop_menu_timer();
     hide_card();
+    sync_card(); // a sharing popup that waited behind the menu comes back
 }
 
 /// Dismisses the menu when a mouse button goes down anywhere outside it.
@@ -1436,6 +1644,35 @@ fn menu_tick() {
     }
 }
 
+// ---------------------------------------------------------------- nearby sharing
+
+/// `send` reported news: redraw the Send ring on every visible notch and the card.
+fn on_send_changed() {
+    let usage = usage::snapshot();
+    let visible: Vec<isize> = lock_state()
+        .panels
+        .iter()
+        .filter(|p| !p.visibility.applied())
+        .map(|p| p.window.key())
+        .collect();
+    for key in visible {
+        redraw_panel(key, &usage);
+    }
+    sync_card();
+}
+
+/// `WM_DROPFILES` on a notch: files dropped on the Send cell are sent; anywhere else they are
+/// ignored. The drop is always released.
+fn on_drop(hwnd: HWND, hdrop: WPARAM) {
+    let dropped = send::take_drop(hdrop.0 as isize);
+    let Some(dpi) = panel_dpi(hwnd_key(hwnd)) else {
+        return;
+    };
+    if layout::cell_at(dropped.x, dropped.y, dpi) == Some(SEND_CELL) {
+        send::drop_files(dropped.paths);
+    }
+}
+
 // ---------------------------------------------------------------- window procedures
 
 extern "system" fn controller_proc(
@@ -1452,6 +1689,18 @@ extern "system" fn controller_proc(
             }
             WM_TIMER if wparam.0 == MENU_TIMER_ID => {
                 menu_tick();
+                return LRESULT(0);
+            }
+            WM_TIMER if wparam.0 == HOVER_TIMER_ID => {
+                hover_grace_tick();
+                return LRESULT(0);
+            }
+            WM_SEND => {
+                on_send_changed();
+                return LRESULT(0);
+            }
+            WM_HOTKEY if wparam.0 == send::HOTKEY_ID as usize => {
+                send::paste_clipboard();
                 return LRESULT(0);
             }
             WM_DISPLAYCHANGE | WM_DPICHANGED => {
@@ -1474,6 +1723,7 @@ extern "system" fn controller_proc(
             WM_DESTROY => {
                 let _ = KillTimer(Some(hwnd), TIMER_ID);
                 let _ = KillTimer(Some(hwnd), MENU_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), HOVER_TIMER_ID);
                 teardown_panels();
                 PostQuitMessage(0);
                 return LRESULT(0);
@@ -1528,6 +1778,10 @@ extern "system" fn panel_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
                 on_display_change();
                 return LRESULT(0);
             }
+            WM_DROPFILES => {
+                on_drop(hwnd, wparam);
+                return LRESULT(0);
+            }
             _ => {}
         }
         DefWindowProcW(hwnd, message, wparam, lparam)
@@ -1539,9 +1793,18 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
         match message {
             WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
             WM_NCHITTEST => {
-                // Hover cards let the pointer through; the Quit menu takes it.
-                let menu_open = lock_state().ui.menu.is_some();
-                return if menu_open {
+                // Hover cards let the pointer through; the Quit menu and the Send card (its
+                // rows are buttons) take it.
+                let takes_pointer = {
+                    let app = lock_state();
+                    app.ui.menu.is_some()
+                        || app
+                            .ui
+                            .card_shown
+                            .as_ref()
+                            .is_some_and(|c| c.cell == SEND_CELL)
+                };
+                return if takes_pointer {
                     LRESULT(HTCLIENT as isize)
                 } else {
                     LRESULT(HTTRANSPARENT as isize)
@@ -1552,6 +1815,16 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                 let _ = ValidateRect(Some(hwnd), None);
                 return LRESULT(0);
             }
+            WM_MOUSEMOVE => {
+                if lock_state().ui.menu.is_none() {
+                    on_card_mouse_move(hwnd);
+                }
+                return LRESULT(0);
+            }
+            MSG_MOUSELEAVE => {
+                on_card_mouse_leave();
+                return LRESULT(0);
+            }
             WM_LBUTTONUP => {
                 let menu_open = lock_state().ui.menu.is_some();
                 if menu_open {
@@ -1559,6 +1832,9 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                     if let Some(controller) = controller_hwnd() {
                         let _ = PostMessageW(Some(controller), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
+                } else {
+                    let (_, y) = lparam_point(lparam);
+                    on_card_click(y);
                 }
                 return LRESULT(0);
             }

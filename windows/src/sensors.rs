@@ -208,7 +208,12 @@ fn read_drives() -> Vec<Drive> {
         let mut free = 0u64;
         let mut total = 0u64;
         let read = unsafe {
-            GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), Some(&mut total), None)
+            GetDiskFreeSpaceExW(
+                PCWSTR(wide.as_ptr()),
+                Some(&mut free),
+                Some(&mut total),
+                None,
+            )
         };
         if read.is_ok() && total > 0 {
             drives.push(Drive {

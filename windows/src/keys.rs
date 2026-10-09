@@ -36,9 +36,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED, MSG,
-    PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED, MSG, PM_NOREMOVE,
+    PeekMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
 };
 
 const VK_ESCAPE: u32 = 0x1B;
@@ -150,14 +150,16 @@ fn hook_thread(ready: &mpsc::Sender<Option<u32>>) {
         }
     };
     // SAFETY: `hook_proc` has the HOOKPROC signature and lives for the whole process.
-    let hook = match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), Some(module.into()), 0) } {
-        Ok(hook) => hook,
-        Err(error) => {
-            diag::win32_error("SetWindowsHookExW", &error, "keys");
-            let _ = ready.send(None);
-            return;
-        }
-    };
+    let hook =
+        match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), Some(module.into()), 0) }
+        {
+            Ok(hook) => hook,
+            Err(error) => {
+                diag::win32_error("SetWindowsHookExW", &error, "keys");
+                let _ = ready.send(None);
+                return;
+            }
+        };
     let mut message = MSG::default();
     // Forces creation of this thread's message queue before the id is published, so
     // `Keys::drop` can always post WM_QUIT.

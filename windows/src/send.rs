@@ -281,8 +281,15 @@ enum View {
     /// Detail text and the prompt's own buttons.
     Plain,
     /// "Send to…": fingerprint, alias and model of each device.
-    List { rows: Vec<(String, String, String)>, scanning: bool },
-    Transfer { stage: Stage, fraction: Option<f32>, can_cancel: bool },
+    List {
+        rows: Vec<(String, String, String)>,
+        scanning: bool,
+    },
+    Transfer {
+        stage: Stage,
+        fraction: Option<f32>,
+        can_cancel: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -296,46 +303,97 @@ struct Prompt {
 
 impl Prompt {
     fn plain(title: String, detail: String, problem: bool) -> Prompt {
-        Prompt { title, detail, problem, buttons: Vec::new(), view: View::Plain }
+        Prompt {
+            title,
+            detail,
+            problem,
+            buttons: Vec::new(),
+            view: View::Plain,
+        }
     }
 
     fn panel(&self) -> Panel {
         let mut rows = Vec::new();
         let mut actions = Vec::new();
-        let note = |rows: &mut Vec<Row>, actions: &mut Vec<Option<Action>>, row: Row, action: Option<Action>| {
+        let note = |rows: &mut Vec<Row>,
+                    actions: &mut Vec<Option<Action>>,
+                    row: Row,
+                    action: Option<Action>| {
             rows.push(row);
             actions.push(action);
         };
-        let button = |label: &str| Row::Pair { label: label.to_string(), value: String::new() };
+        let button = |label: &str| Row::Pair {
+            label: label.to_string(),
+            value: String::new(),
+        };
         match &self.view {
             View::Plain => {
                 if !self.detail.is_empty() {
-                    note(&mut rows, &mut actions, Row::Note(self.detail.clone()), None);
+                    note(
+                        &mut rows,
+                        &mut actions,
+                        Row::Note(self.detail.clone()),
+                        None,
+                    );
                 }
                 for (label, action) in &self.buttons {
                     note(&mut rows, &mut actions, button(label), Some(action.clone()));
                 }
             }
-            View::List { rows: devices, scanning } => {
+            View::List {
+                rows: devices,
+                scanning,
+            } => {
                 if !self.detail.is_empty() {
-                    note(&mut rows, &mut actions, Row::Note(self.detail.clone()), None);
+                    note(
+                        &mut rows,
+                        &mut actions,
+                        Row::Note(self.detail.clone()),
+                        None,
+                    );
                 }
                 if devices.is_empty() {
-                    note(&mut rows, &mut actions, Row::Note("Waiting for a device to appear…".into()), None);
+                    note(
+                        &mut rows,
+                        &mut actions,
+                        Row::Note("Waiting for a device to appear…".into()),
+                        None,
+                    );
                 }
                 for (fingerprint, alias, model) in devices {
                     note(
                         &mut rows,
                         &mut actions,
-                        Row::Pair { label: alias.clone(), value: model.clone() },
+                        Row::Pair {
+                            label: alias.clone(),
+                            value: model.clone(),
+                        },
                         Some(Action::SendTo(fingerprint.clone())),
                     );
                 }
-                let again = if *scanning { "Looking…" } else { "Look again" };
-                note(&mut rows, &mut actions, button(again), (!*scanning).then_some(Action::Refresh));
-                note(&mut rows, &mut actions, button("Cancel"), Some(Action::Close));
+                let again = if *scanning {
+                    "Looking…"
+                } else {
+                    "Look again"
+                };
+                note(
+                    &mut rows,
+                    &mut actions,
+                    button(again),
+                    (!*scanning).then_some(Action::Refresh),
+                );
+                note(
+                    &mut rows,
+                    &mut actions,
+                    button("Cancel"),
+                    Some(Action::Close),
+                );
             }
-            View::Transfer { stage, fraction, can_cancel } => {
+            View::Transfer {
+                stage,
+                fraction,
+                can_cancel,
+            } => {
                 let value = match (stage, fraction) {
                     (Stage::Active, Some(f)) => percent(*f),
                     (Stage::Done, _) => "100%".to_string(),
@@ -350,22 +408,43 @@ impl Prompt {
                     Some(fraction) => note(
                         &mut rows,
                         &mut actions,
-                        Row::Bar { label: self.detail.clone(), value, fraction },
+                        Row::Bar {
+                            label: self.detail.clone(),
+                            value,
+                            fraction,
+                        },
                         None,
                     ),
-                    None if !self.detail.is_empty() => {
-                        note(&mut rows, &mut actions, Row::Note(self.detail.clone()), None)
-                    }
+                    None if !self.detail.is_empty() => note(
+                        &mut rows,
+                        &mut actions,
+                        Row::Note(self.detail.clone()),
+                        None,
+                    ),
                     None => {}
                 }
                 if *can_cancel {
-                    note(&mut rows, &mut actions, button("Cancel"), Some(Action::Cancel));
+                    note(
+                        &mut rows,
+                        &mut actions,
+                        button("Cancel"),
+                        Some(Action::Cancel),
+                    );
                 }
-                note(&mut rows, &mut actions, button("Close"), Some(Action::Close));
+                note(
+                    &mut rows,
+                    &mut actions,
+                    button("Close"),
+                    Some(Action::Close),
+                );
             }
         }
         Panel {
-            content: CardContent { title: self.title.clone(), accessory: None, rows },
+            content: CardContent {
+                title: self.title.clone(),
+                accessory: None,
+                rows,
+            },
             actions,
         }
     }
@@ -406,7 +485,11 @@ fn kind_of(device: &Device) -> &'static str {
 }
 
 fn files_text(count: usize) -> String {
-    if count == 1 { "1 file".to_string() } else { format!("{count} files") }
+    if count == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{count} files")
+    }
 }
 
 /// The message as a web address, when it is nothing else.
@@ -414,8 +497,11 @@ fn link_in(message: &str) -> Option<String> {
     let trimmed = message.trim();
     let lower = trimmed.to_ascii_lowercase();
     let web = lower.starts_with("http://") || lower.starts_with("https://");
-    (web && trimmed.len() <= 2048 && !trimmed.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"'))
-        .then(|| trimmed.to_string())
+    (web && trimmed.len() <= 2048
+        && !trimmed
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"'))
+    .then(|| trimmed.to_string())
 }
 
 fn folder_name(path: &str) -> String {
@@ -490,12 +576,17 @@ impl Model {
     // -- state in
 
     fn wall_ms() -> f64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as f64)
+            .unwrap_or(0.0)
     }
 
     /// The hub writes at least every four seconds; older than fifteen means it is not running.
     fn fresh(&self) -> Option<&State> {
-        self.state.as_ref().filter(|s| Self::wall_ms() - s.updated_at < FRESH_MS)
+        self.state
+            .as_ref()
+            .filter(|s| Self::wall_ms() - s.updated_at < FRESH_MS)
     }
 
     fn devices(&self) -> Vec<Device> {
@@ -510,7 +601,9 @@ impl Model {
 
     /// Reads `share-state.json` when it changed (or `force`).
     fn read_state(&mut self, force: bool) {
-        let Some(path) = bridge_dir().map(|d| d.join("share-state.json")) else { return };
+        let Some(path) = bridge_dir().map(|d| d.join("share-state.json")) else {
+            return;
+        };
         let stamp = std::fs::metadata(&path)
             .ok()
             .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
@@ -518,7 +611,9 @@ impl Model {
             return;
         }
         self.stamp = stamp;
-        let Some(state) = std::fs::read(&path).ok().and_then(|b| parse_state(&b)) else { return };
+        let Some(state) = std::fs::read(&path).ok().and_then(|b| parse_state(&b)) else {
+            return;
+        };
         self.state = Some(state.clone());
         self.process(&state);
     }
@@ -549,24 +644,30 @@ impl Model {
     }
 
     fn schedule_expiry(&mut self, seconds: f32) {
-        self.expiry = Some((Instant::now() + Duration::from_secs_f32(seconds), self.card.clone()));
+        self.expiry = Some((
+            Instant::now() + Duration::from_secs_f32(seconds),
+            self.card.clone(),
+        ));
     }
 
     fn show_note(&mut self, title: &str, detail: &str, problem: bool) {
-        self.show(Prompt::plain(title.to_string(), detail.to_string(), problem), Card::Note);
+        self.show(
+            Prompt::plain(title.to_string(), detail.to_string(), problem),
+            Card::Note,
+        );
         self.schedule_expiry(if problem { 8.0 } else { 4.0 });
     }
 
     fn tick(&mut self) {
-        if let Some((deadline, card)) = self.expiry.clone() {
-            if Instant::now() >= deadline {
-                self.expiry = None;
-                if self.card == card && !self.card_hovered {
-                    if card == Card::Choose {
-                        self.pending = None;
-                    }
-                    self.clear_card();
+        if let Some((deadline, card)) = self.expiry.clone()
+            && Instant::now() >= deadline
+        {
+            self.expiry = None;
+            if self.card == card && !self.card_hovered {
+                if card == Card::Choose {
+                    self.pending = None;
                 }
+                self.clear_card();
             }
         }
         self.watch_hub();
@@ -610,7 +711,10 @@ impl Model {
             }
             self.hub = None;
         }
-        if self.hub_launched.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) {
+        if self
+            .hub_launched
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(30))
+        {
             return;
         }
         self.hub_launched = Some(Instant::now());
@@ -634,10 +738,10 @@ impl Model {
         if self.card == Card::Sending {
             self.update_sending(new);
         }
-        if let Card::Incoming(id) = &self.card {
-            if !new.incoming.iter().any(|i| &i.id == id) {
-                self.clear_card();
-            }
+        if let Card::Incoming(id) = &self.card
+            && !new.incoming.iter().any(|i| &i.id == id)
+        {
+            self.clear_card();
         }
         if let Some(request) = new.incoming.first() {
             if self.card != Card::Incoming(request.id.clone()) {
@@ -650,11 +754,11 @@ impl Model {
                 self.announce(transfer, new.save_dir.as_deref());
             }
         }
-        if let Some((id, text)) = &new.notice {
-            if *id > self.last_notice {
-                self.last_notice = *id;
-                self.show_note("Couldn't send", text, true);
-            }
+        if let Some((id, text)) = &new.notice
+            && *id > self.last_notice
+        {
+            self.last_notice = *id;
+            self.show_note("Couldn't send", text, true);
         }
         // A sharing service that cannot start (above all: the LocalSend app holds port
         // 53317) is said once, on a card, and stays on the hover card.
@@ -664,7 +768,10 @@ impl Model {
                 self.last_error = Some(error.clone());
                 if self.enabled {
                     let (title, retry) = if new.error_kind.as_deref() == Some("port_in_use") {
-                        ("Nearby sharing can't start", " Pulse tries again every 10 seconds.")
+                        (
+                            "Nearby sharing can't start",
+                            " Pulse tries again every 10 seconds.",
+                        )
                     } else {
                         ("Sharing isn't running", "")
                     };
@@ -688,7 +795,10 @@ impl Model {
             title = if request.file_count == 1 {
                 format!("{} wants to send 1 file ({total})", request.from)
             } else {
-                format!("{} wants to send {} files ({total})", request.from, request.file_count)
+                format!(
+                    "{} wants to send {} files ({total})",
+                    request.from, request.file_count
+                )
             };
             detail = request.first_file.clone().unwrap_or_default();
         }
@@ -699,7 +809,10 @@ impl Model {
         detail.push_str(&format!("Saves to {place}"));
         self.expiry = None;
         let mut prompt = Prompt::plain(title, detail, false);
-        prompt.buttons = vec![("Accept".into(), Action::Accept), ("Decline".into(), Action::Decline)];
+        prompt.buttons = vec![
+            ("Accept".into(), Action::Accept),
+            ("Decline".into(), Action::Decline),
+        ];
         self.show(prompt, Card::Incoming(request.id.clone()));
     }
 
@@ -707,7 +820,11 @@ impl Model {
         match (transfer.direction.as_str(), transfer.state.as_str()) {
             ("receive", "done") if transfer.message.is_some() => {
                 let message = transfer.message.clone().unwrap_or_default();
-                let mut prompt = Prompt::plain(format!("Message from {}", transfer.peer), message.clone(), false);
+                let mut prompt = Prompt::plain(
+                    format!("Message from {}", transfer.peer),
+                    message.clone(),
+                    false,
+                );
                 prompt.buttons = vec![("Copy".into(), Action::Copy)];
                 if link_in(&message).is_some() {
                     prompt.buttons.push(("Open".into(), Action::OpenLink));
@@ -717,26 +834,47 @@ impl Model {
             }
             ("receive", "done") => {
                 let files = transfer.saved_files.clone();
-                let place = folder_name(transfer.saved_to.as_deref().or(folder).unwrap_or("Downloads"));
+                let place = folder_name(
+                    transfer
+                        .saved_to
+                        .as_deref()
+                        .or(folder)
+                        .unwrap_or("Downloads"),
+                );
                 let detail = if files.len() == 1 {
                     folder_name(&files[0])
                 } else {
                     format!("{} from {}", files_text(files.len()), transfer.peer)
                 };
                 let mut prompt = Prompt::plain(format!("Saved to {place}"), detail, false);
-                prompt.buttons = vec![("Show".into(), Action::Show), ("Close".into(), Action::Close)];
+                prompt.buttons = vec![
+                    ("Show".into(), Action::Show),
+                    ("Close".into(), Action::Close),
+                ];
                 self.show(prompt, Card::Saved(files));
                 self.schedule_expiry(8.0);
             }
             ("send", "done") => {
                 let count = transfer.files_total.max(1);
-                self.show_note(&format!("Sent to {}", transfer.peer), &files_text(count), false);
+                self.show_note(
+                    &format!("Sent to {}", transfer.peer),
+                    &files_text(count),
+                    false,
+                );
             }
             (_, "declined") => {
-                self.show_note(&format!("{} declined", transfer.peer), "Nothing was sent.", true);
+                self.show_note(
+                    &format!("{} declined", transfer.peer),
+                    "Nothing was sent.",
+                    true,
+                );
             }
             (_, "failed") => {
-                let title = if transfer.direction == "send" { "Couldn't send" } else { "Couldn't receive" };
+                let title = if transfer.direction == "send" {
+                    "Couldn't send"
+                } else {
+                    "Couldn't receive"
+                };
                 self.show_note(title, transfer.error.as_deref().unwrap_or(""), true);
             }
             _ => {}
@@ -771,7 +909,10 @@ impl Model {
     }
 
     fn deliver(&mut self, paths: Vec<PathBuf>, text: Option<String>, device: &Device) {
-        let list: Vec<String> = paths.iter().map(|p| json_text(&p.to_string_lossy())).collect();
+        let list: Vec<String> = paths
+            .iter()
+            .map(|p| json_text(&p.to_string_lossy()))
+            .collect();
         let mut body = format!(
             "{{\"command\":\"send\",\"to\":{},\"paths\":[{}]",
             json_text(&device.fingerprint),
@@ -788,7 +929,10 @@ impl Model {
     fn summary(paths: &[PathBuf]) -> String {
         match paths {
             [] => "Text".to_string(),
-            [one] => one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            [one] => one
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             many => files_text(many.len()),
         }
     }
@@ -800,7 +944,11 @@ impl Model {
         }
         self.send_peer = Some(device.clone());
         self.send_summary = Self::summary(paths);
-        self.send_baseline = self.state.as_ref().map(|s| s.transfers.iter().map(|t| t.id.clone()).collect()).unwrap_or_default();
+        self.send_baseline = self
+            .state
+            .as_ref()
+            .map(|s| s.transfers.iter().map(|t| t.id.clone()).collect())
+            .unwrap_or_default();
         self.send_transfer = None;
         self.send_finished = false;
         self.expiry = None;
@@ -812,35 +960,63 @@ impl Model {
 
     fn sending_prompt(&self, transfer: Option<&Transfer>, peer: &Device) -> Prompt {
         let summary = &self.send_summary;
-        let make = |title: String, detail: String, stage: Stage, fraction: Option<f32>, cancel: bool| Prompt {
-            title,
-            detail,
-            problem: stage == Stage::Problem,
-            buttons: Vec::new(),
-            view: View::Transfer { stage, fraction, can_cancel: cancel },
-        };
+        let make =
+            |title: String, detail: String, stage: Stage, fraction: Option<f32>, cancel: bool| {
+                Prompt {
+                    title,
+                    detail,
+                    problem: stage == Stage::Problem,
+                    buttons: Vec::new(),
+                    view: View::Transfer {
+                        stage,
+                        fraction,
+                        can_cancel: cancel,
+                    },
+                }
+            };
         let waiting = format!("Waiting for {} to accept…", peer.alias);
         let Some(transfer) = transfer else {
             return make(waiting, summary.clone(), Stage::Waiting, None, false);
         };
         match transfer.state.as_str() {
             "active" => {
-                let mut detail = format!("{} of {}", bytes_text(transfer.done_bytes), bytes_text(transfer.total_bytes));
+                let mut detail = format!(
+                    "{} of {}",
+                    bytes_text(transfer.done_bytes),
+                    bytes_text(transfer.total_bytes)
+                );
                 if transfer.files_total > 1 {
                     detail.push_str(&format!(
                         " · {} of {} files",
                         (transfer.files_done + 1).min(transfer.files_total),
                         transfer.files_total
                     ));
-                } else if let Some(current) = transfer.current.as_deref().filter(|c| !c.is_empty()) {
+                } else if let Some(current) = transfer.current.as_deref().filter(|c| !c.is_empty())
+                {
                     detail = format!("{current} · {detail}");
                 }
-                make(format!("Sending to {}", peer.alias), detail, Stage::Active, Some(transfer.fraction()), true)
+                make(
+                    format!("Sending to {}", peer.alias),
+                    detail,
+                    Stage::Active,
+                    Some(transfer.fraction()),
+                    true,
+                )
             }
             "done" => {
                 let count = transfer.files_total.max(1);
-                let what = if count == 1 { summary.clone() } else { format!("{count} files") };
-                make("Sent".into(), format!("To {} · {what}", peer.alias), Stage::Done, Some(1.0), false)
+                let what = if count == 1 {
+                    summary.clone()
+                } else {
+                    format!("{count} files")
+                };
+                make(
+                    "Sent".into(),
+                    format!("To {} · {what}", peer.alias),
+                    Stage::Done,
+                    Some(1.0),
+                    false,
+                )
             }
             "declined" => make(
                 "Declined".into(),
@@ -862,7 +1038,9 @@ impl Model {
 
     /// Follows the transfer this card started, from "waiting" to its end.
     fn update_sending(&mut self, new: &State) {
-        let Some(peer) = self.send_peer.clone() else { return };
+        let Some(peer) = self.send_peer.clone() else {
+            return;
+        };
         if self.send_transfer.is_none() {
             let started = new
                 .transfers
@@ -873,7 +1051,11 @@ impl Model {
             self.send_transfer = Some(started.id.clone());
             self.expiry = None;
         }
-        let Some(transfer) = new.transfers.iter().find(|t| Some(&t.id) == self.send_transfer.as_ref()) else {
+        let Some(transfer) = new
+            .transfers
+            .iter()
+            .find(|t| Some(&t.id) == self.send_transfer.as_ref())
+        else {
             return;
         };
         match transfer.state.as_str() {
@@ -900,19 +1082,39 @@ impl Model {
         let list = live.map(|s| s.devices.clone()).unwrap_or_default();
         let rows = list
             .iter()
-            .map(|d| (d.fingerprint.clone(), d.alias.clone(), d.device_model.clone().unwrap_or_else(|| kind_of(d).to_string())))
+            .map(|d| {
+                (
+                    d.fingerprint.clone(),
+                    d.alias.clone(),
+                    d.device_model
+                        .clone()
+                        .unwrap_or_else(|| kind_of(d).to_string()),
+                )
+            })
             .collect();
         let (title, detail) = if list.is_empty() {
-            ("Looking for devices…", "Open LocalSend on the other device.".to_string())
+            (
+                "Looking for devices…",
+                "Open LocalSend on the other device.".to_string(),
+            )
         } else {
-            ("Send to…", self.pending.as_ref().map(|p| Self::summary(&p.paths)).unwrap_or_default())
+            (
+                "Send to…",
+                self.pending
+                    .as_ref()
+                    .map(|p| Self::summary(&p.paths))
+                    .unwrap_or_default(),
+            )
         };
         Prompt {
             title: title.to_string(),
             detail,
             problem: false,
             buttons: Vec::new(),
-            view: View::List { rows, scanning: live.is_some_and(|s| s.scanning) },
+            view: View::List {
+                rows,
+                scanning: live.is_some_and(|s| s.scanning),
+            },
         }
     }
 
@@ -944,18 +1146,29 @@ impl Model {
             Action::Refresh => write_command("{\"command\":\"refresh\"}"),
             Action::Accept | Action::Decline => {
                 if let Card::Incoming(id) = self.card.clone() {
-                    let verb = if action == Action::Accept { "accept" } else { "decline" };
-                    write_command(&format!("{{\"command\":\"{verb}\",\"id\":{}}}", json_text(&id)));
+                    let verb = if action == Action::Accept {
+                        "accept"
+                    } else {
+                        "decline"
+                    };
+                    write_command(&format!(
+                        "{{\"command\":\"{verb}\",\"id\":{}}}",
+                        json_text(&id)
+                    ));
                     self.clear_card();
                 }
             }
             Action::Cancel => {
                 if self.card == Card::Sending {
                     let open = self.send_transfer.clone().filter(|id| {
-                        self.fresh().is_some_and(|s| s.transfers.iter().any(|t| &t.id == id && t.is_open()))
+                        self.fresh()
+                            .is_some_and(|s| s.transfers.iter().any(|t| &t.id == id && t.is_open()))
                     });
                     if let Some(id) = open {
-                        write_command(&format!("{{\"command\":\"cancel\",\"id\":{}}}", json_text(&id)));
+                        write_command(&format!(
+                            "{{\"command\":\"cancel\",\"id\":{}}}",
+                            json_text(&id)
+                        ));
                     }
                 }
             }
@@ -977,15 +1190,18 @@ impl Model {
                 if let Card::Message(message) = self.card.clone() {
                     sys::write_text(&message);
                     // A brief "Copied" in place of the card, then it goes.
-                    self.show(Prompt::plain("Copied".into(), String::new(), false), Card::Note);
+                    self.show(
+                        Prompt::plain("Copied".into(), String::new(), false),
+                        Card::Note,
+                    );
                     self.schedule_expiry(1.2);
                 }
             }
             Action::OpenLink => {
-                if let Card::Message(message) = self.card.clone() {
-                    if let Some(url) = link_in(&message) {
-                        open_link(&url);
-                    }
+                if let Card::Message(message) = self.card.clone()
+                    && let Some(url) = link_in(&message)
+                {
+                    open_link(&url);
                 }
                 self.clear_card();
             }
@@ -994,16 +1210,28 @@ impl Model {
 
     /// A click on a device: a paste or drop that was waiting for an answer goes to it at once.
     fn send_to(&mut self, fingerprint: &str) {
-        let device = self.devices().into_iter().find(|d| d.fingerprint == fingerprint);
+        let device = self
+            .devices()
+            .into_iter()
+            .find(|d| d.fingerprint == fingerprint);
         if let (Some(waiting), Some(device)) = (self.pending.take(), device) {
             self.deliver(waiting.paths, waiting.text, &device);
         }
     }
 
     fn cancel_current(&mut self) {
-        let open = self.fresh().and_then(|s| s.transfers.iter().rev().find(|t| t.is_open()).map(|t| t.id.clone()));
+        let open = self.fresh().and_then(|s| {
+            s.transfers
+                .iter()
+                .rev()
+                .find(|t| t.is_open())
+                .map(|t| t.id.clone())
+        });
         if let Some(id) = open {
-            write_command(&format!("{{\"command\":\"cancel\",\"id\":{}}}", json_text(&id)));
+            write_command(&format!(
+                "{{\"command\":\"cancel\",\"id\":{}}}",
+                json_text(&id)
+            ));
         }
     }
 
@@ -1017,7 +1245,11 @@ impl Model {
                 fraction: Some(fraction),
                 active: true,
                 problem: false,
-                label: if transfer.state == "waiting" { "Waiting".to_string() } else { percent(fraction) },
+                label: if transfer.state == "waiting" {
+                    "Waiting".to_string()
+                } else {
+                    percent(fraction)
+                },
             };
         }
         let (label, problem) = if !self.enabled {
@@ -1027,7 +1259,12 @@ impl Model {
         } else {
             ("Starting…", false)
         };
-        Ring { fraction: None, active: false, problem, label: label.to_string() }
+        Ring {
+            fraction: None,
+            active: false,
+            problem,
+            label: label.to_string(),
+        }
     }
 
     fn hover_panel(&self) -> Panel {
@@ -1047,7 +1284,14 @@ impl Model {
             };
             let fraction = transfer.fraction();
             if transfer.state == "waiting" {
-                add(Row::Bar { label, value: String::new(), fraction: None }, None);
+                add(
+                    Row::Bar {
+                        label,
+                        value: String::new(),
+                        fraction: None,
+                    },
+                    None,
+                );
                 add(
                     Row::Note(if transfer.direction == "send" {
                         format!("Waiting for {} to accept", transfer.peer)
@@ -1057,8 +1301,19 @@ impl Model {
                     None,
                 );
             } else {
-                add(Row::Bar { label, value: percent(fraction), fraction: Some(fraction) }, None);
-                let mut detail = format!("{} of {}", bytes_text(transfer.done_bytes), bytes_text(transfer.total_bytes));
+                add(
+                    Row::Bar {
+                        label,
+                        value: percent(fraction),
+                        fraction: Some(fraction),
+                    },
+                    None,
+                );
+                let mut detail = format!(
+                    "{} of {}",
+                    bytes_text(transfer.done_bytes),
+                    bytes_text(transfer.total_bytes)
+                );
                 if transfer.files_total > 1 {
                     detail.push_str(&format!(
                         " · {} of {} files",
@@ -1069,7 +1324,10 @@ impl Model {
                 add(Row::Note(detail), None);
             }
             add(
-                Row::Pair { label: "Cancel".into(), value: String::new() },
+                Row::Pair {
+                    label: "Cancel".into(),
+                    value: String::new(),
+                },
                 Some(Action::Cancel),
             );
         } else {
@@ -1079,9 +1337,16 @@ impl Model {
                 if let Some(error) = &live.error {
                     error.clone()
                 } else if self.drop_targeting && self.target().is_some() {
-                    format!("Release to send to {}", self.target().map(|d| d.alias).unwrap_or_default())
+                    format!(
+                        "Release to send to {}",
+                        self.target().map(|d| d.alias).unwrap_or_default()
+                    )
                 } else if devices.is_empty() {
-                    if live.scanning { "Looking for devices…".to_string() } else { "No devices nearby".to_string() }
+                    if live.scanning {
+                        "Looking for devices…".to_string()
+                    } else {
+                        "No devices nearby".to_string()
+                    }
                 } else {
                     format!("{} nearby", devices.len())
                 }
@@ -1097,27 +1362,43 @@ impl Model {
         }
         for device in &devices {
             add(
-                Row::Pair { label: device.alias.clone(), value: kind_of(device).to_string() },
+                Row::Pair {
+                    label: device.alias.clone(),
+                    value: kind_of(device).to_string(),
+                },
                 Some(Action::SendTo(device.fingerprint.clone())),
             );
         }
         if live.is_some_and(|s| s.running) {
             if !devices.is_empty() {
                 add(
-                    Row::Pair { label: "Paste clipboard".into(), value: "Ctrl+V".into() },
+                    Row::Pair {
+                        label: "Paste clipboard".into(),
+                        value: "Ctrl+V".into(),
+                    },
                     Some(Action::Paste),
                 );
-                add(Row::Note("Ctrl+V sends the clipboard · drop files here".into()), None);
+                add(
+                    Row::Note("Ctrl+V sends the clipboard · drop files here".into()),
+                    None,
+                );
             }
             let scanning = live.is_some_and(|s| s.scanning);
             let again = if scanning { "Looking…" } else { "Look again" };
             add(
-                Row::Pair { label: again.to_string(), value: String::new() },
+                Row::Pair {
+                    label: again.to_string(),
+                    value: String::new(),
+                },
                 (!scanning).then_some(Action::Refresh),
             );
         }
         Panel {
-            content: CardContent { title: "Nearby sharing".into(), accessory: None, rows },
+            content: CardContent {
+                title: "Nearby sharing".into(),
+                accessory: None,
+                rows,
+            },
             actions,
         }
     }
@@ -1164,11 +1445,16 @@ static COMMAND_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Drops one command file for the hub (write, then rename, so it never reads half a file) and
 /// wakes it.
 fn write_command(body: &str) {
-    let Some(dir) = bridge_dir().map(|d| d.join("share-commands")) else { return };
+    let Some(dir) = bridge_dir().map(|d| d.join("share-commands")) else {
+        return;
+    };
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let micros = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros()).unwrap_or(0);
+    let micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros())
+        .unwrap_or(0);
     let stamp = format!(
         "{micros:020}-{:08}-{:04}",
         std::process::id(),
@@ -1192,7 +1478,12 @@ fn locate_hub() -> Option<PathBuf> {
         dir.join("Helpers").join(HUB_EXE),
     ];
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local).join("Programs").join("Pulse").join(HUB_EXE));
+        candidates.push(
+            PathBuf::from(local)
+                .join("Programs")
+                .join("Pulse")
+                .join(HUB_EXE),
+        );
     }
     candidates.into_iter().find(|path| path.is_file())
 }
@@ -1214,7 +1505,10 @@ fn spawn_hub() -> Option<Child> {
     {
         Ok(child) => Some(child),
         Err(error) => {
-            diag::info("share_hub_spawn_failed", &[("reason", error.to_string().as_str())]);
+            diag::info(
+                "share_hub_spawn_failed",
+                &[("reason", error.to_string().as_str())],
+            );
             None
         }
     }
@@ -1222,7 +1516,10 @@ fn spawn_hub() -> Option<Child> {
 
 /// Selects a saved file in Explorer (or opens the folder when several were saved).
 fn reveal(files: &[String]) {
-    let existing: Vec<&String> = files.iter().filter(|f| Path::new(f.as_str()).exists() && !f.contains('"')).collect();
+    let existing: Vec<&String> = files
+        .iter()
+        .filter(|f| Path::new(f.as_str()).exists() && !f.contains('"'))
+        .collect();
     let mut command = Command::new("explorer.exe");
     match existing.as_slice() {
         [] => return,
@@ -1230,7 +1527,9 @@ fn reveal(files: &[String]) {
             command.raw_arg(format!("/select,\"{one}\""));
         }
         [first, ..] => {
-            let Some(parent) = Path::new(first.as_str()).parent() else { return };
+            let Some(parent) = Path::new(first.as_str()).parent() else {
+                return;
+            };
             command.arg(parent);
         }
     }
@@ -1240,7 +1539,10 @@ fn reveal(files: &[String]) {
 /// Opens a web address in the default browser (Explorer hands it to the registered handler).
 /// `url` came through `link_in`: http(s) only, no spaces or quotes.
 fn open_link(url: &str) {
-    let _ = Command::new("explorer.exe").arg(url).creation_flags(CREATE_NO_WINDOW).spawn();
+    let _ = Command::new("explorer.exe")
+        .arg(url)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
 }
 
 // ---- the public face ------------------------------------------------------------------------
@@ -1257,7 +1559,10 @@ fn model() -> MutexGuard<'static, Model> {
 }
 
 fn notify() {
-    sys::post_message(WINDOW.load(Ordering::Relaxed), MESSAGE.load(Ordering::Relaxed));
+    sys::post_message(
+        WINDOW.load(Ordering::Relaxed),
+        MESSAGE.load(Ordering::Relaxed),
+    );
 }
 
 /// Starts nearby sharing's watcher thread. `window` is the key of a window of the UI thread
@@ -1277,9 +1582,14 @@ pub fn start(window: isize, message: u32) {
         model.read_state(true);
         model.tick();
     }
-    let spawned = std::thread::Builder::new().name("pulse-share".into()).spawn(watcher);
+    let spawned = std::thread::Builder::new()
+        .name("pulse-share".into())
+        .spawn(watcher);
     if let Err(error) = spawned {
-        diag::info("share_thread_failed", &[("reason", error.to_string().as_str())]);
+        diag::info(
+            "share_thread_failed",
+            &[("reason", error.to_string().as_str())],
+        );
     }
     notify();
 }
@@ -1359,7 +1669,10 @@ pub fn set_hover(over_send: bool) {
         model.hovering = over_send;
     }
     if over_send {
-        if HOTKEY_WINDOW.load(Ordering::Relaxed) == 0 && window != 0 && sys::register_paste_key(window, HOTKEY_ID) {
+        if HOTKEY_WINDOW.load(Ordering::Relaxed) == 0
+            && window != 0
+            && sys::register_paste_key(window, HOTKEY_ID)
+        {
             HOTKEY_WINDOW.store(window, Ordering::Relaxed);
         }
     } else {
@@ -1411,7 +1724,11 @@ pub fn paste_clipboard() {
         sys::Clip::Files(paths) => model().send(paths, None),
         sys::Clip::Image(path) => model().send(vec![path], None),
         sys::Clip::Text(text) => model().send(Vec::new(), Some(text)),
-        sys::Clip::Empty => model().show_note("Nothing to send", "The clipboard has no files or text.", true),
+        sys::Clip::Empty => model().show_note(
+            "Nothing to send",
+            "The clipboard has no files or text.",
+            true,
+        ),
     }
     notify();
 }

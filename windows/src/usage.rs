@@ -147,7 +147,10 @@ pub fn start(controller_key: isize) {
         .name("usage".into())
         .spawn(move || worker(controller_key));
     if let Err(error) = spawned {
-        diag::info("usage_thread_failed", &[("reason", error.to_string().as_str())]);
+        diag::info(
+            "usage_thread_failed",
+            &[("reason", error.to_string().as_str())],
+        );
     }
 }
 
@@ -547,7 +550,10 @@ fn codex_label(window_seconds: f64, fallback_primary: bool) -> String {
 /// Primary and secondary rate-limit windows. One unreadable window never drops its sibling.
 pub fn codex_windows(root: &Value, now: u64) -> Vec<LimitWindow> {
     let mut windows = Vec::new();
-    for (key, member) in [("primary", "primary_window"), ("secondary", "secondary_window")] {
+    for (key, member) in [
+        ("primary", "primary_window"),
+        ("secondary", "secondary_window"),
+    ] {
         let Some(window) = root.path(&["rate_limit", member]) else {
             continue;
         };
