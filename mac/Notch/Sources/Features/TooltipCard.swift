@@ -287,6 +287,8 @@ private struct TooltipHeader<Mark: View>: View {
     /// Sits on the header's own line, so saying when a reading was taken costs
     /// the card no extra height.
     var note: String?
+    /// Pulse fork: the Claude card's restart-and-sync button, at the far right.
+    var showsClaudeRestart = false
     @ViewBuilder let mark: Mark
     @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
@@ -314,6 +316,10 @@ private struct TooltipHeader<Mark: View>: View {
                         .foregroundStyle(secondaryInk)
                         .lineLimit(1)
                 }
+            }
+            if showsClaudeRestart {
+                Spacer(minLength: 0)
+                ClaudeRestartButton()
             }
         }
     }
@@ -485,6 +491,7 @@ private struct LimitWindowRow: View {
         } else {
             rows
                 .contentShape(Rectangle())
+                .cardRowHover(enabled: nearbyDevice != nil)
                 .onTapGesture {
                     if let device = nearbyDevice {
                         MainActor.assumeIsolated { NearbySharing.shared.select(device) }
@@ -659,7 +666,8 @@ private struct ProviderTooltip: View {
             TooltipHeader(title: snapshot.glyph == .send
                               ? snapshot.displayName : L10n.t("\(snapshot.displayName) Usage"),
                           subtitle: snapshot.plan,
-                          note: snapshot.headerAccessory ?? activityNote ?? readingAge) {
+                          note: snapshot.headerAccessory ?? activityNote ?? readingAge,
+                          showsClaudeRestart: snapshot.glyph == .claude) {
                 ProviderGlyphView(glyph: snapshot.glyph)
                     .foregroundStyle(Palette.textPrimary)
             }

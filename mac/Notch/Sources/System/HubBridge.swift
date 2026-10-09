@@ -287,7 +287,7 @@ final class HubBridge {
                 actions.driveAlert(message)
             }
         case "quitClaude":
-            // The hub's "New Claude account" button: a polite quit, never a force-kill.
+            // The hub's "Restart Claude and sync chats" button: a polite quit, never a force-kill.
             for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop") {
                 _ = app.terminate()
             }

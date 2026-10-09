@@ -131,15 +131,25 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
                 return Err(plain("sync needs exactly one of --dry-run or --apply"));
             }
             let root = root().map_err(fail)?;
+            // Every account on disk, minus any explicitly excluded in the
+            // registry. No registry entry is needed for an account to sync.
+            let registry = registry_override
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(sync::registry_path)
+                .map_err(fail)?;
+            let only = sync::load_registry(&registry)
+                .sync_set(&sync::accounts(&root).map_err(fail)?);
             if dry {
-                let plan = sync::plan(&root).map_err(fail)?;
+                let plan = sync::plan_for(&root, Some(&only)).map_err(fail)?;
                 emit(&json!({"dry_run": true, "plan": plan}), machine);
             } else {
-                let result = sync::apply(
+                let result = sync::apply_for(
                     &root,
                     &backups_dir().map_err(fail)?,
                     &sync::claude_running,
                     sync::now_ms(),
+                    Some(&only),
                 )
                 .map_err(fail)?;
                 emit(&json!({"dry_run": false, "result": result}), machine);

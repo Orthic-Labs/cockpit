@@ -532,7 +532,7 @@ pub fn run() {
             permissions::windows_permissions, permissions::windows_permission_open,
             share::share_state, share::share_devices, share::share_send, share::share_accept, share::share_decline,
             share::share_cancel, share::share_dismiss, share::open_local_network_settings,
-            claude::claude_sync_state, claude::claude_sync_preview, claude::claude_new_account, claude::claude_include, claude::claude_restore
+            claude::claude_sync_state, claude::claude_sync_preview, claude::claude_restart_sync, claude::claude_include, claude::claude_restore
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulse hub");

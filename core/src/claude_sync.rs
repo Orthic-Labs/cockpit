@@ -1319,7 +1319,24 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// The accounts that take part in the sync.
+    /// Every account found on disk takes part in the sync unless the registry
+    /// explicitly excludes it (`pulse claude exclude <id>`). Not being in the
+    /// registry never keeps an account out.
+    pub fn sync_set(&self, found: &[AccountInfo]) -> BTreeSet<String> {
+        let excluded: BTreeSet<&str> = self
+            .accounts
+            .iter()
+            .filter(|a| !a.included)
+            .map(|a| a.id.as_str())
+            .collect();
+        found
+            .iter()
+            .filter(|a| !excluded.contains(a.id.as_str()))
+            .map(|a| a.id.clone())
+            .collect()
+    }
+
+    /// The registered accounts that are not excluded.
     pub fn included(&self) -> BTreeSet<String> {
         self.accounts
             .iter()
@@ -1432,7 +1449,7 @@ pub fn auto_sync(
     if result.claude_running {
         return Ok(result);
     }
-    let only = found.registry.included();
+    let only = found.registry.sync_set(&accounts(root)?);
     match apply_for(root, backups_dir, running, now, Some(&only)) {
         Ok(applied) => {
             if applied.files_changed > 0 {

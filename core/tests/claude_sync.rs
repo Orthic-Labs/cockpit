@@ -340,6 +340,12 @@ fn account_sync_journey() {
     fs::create_dir_all(root.join("local-agent-mode-sessions").join(&acct_f)).unwrap();
     let found = sync::discover(&root, &registry_file, 20).unwrap();
     assert_eq!(found.new_accounts, vec![acct_e.clone(), acct_f.clone()]);
+    // The registry never gates the sync: an empty one still includes everything on disk.
+    assert!(
+        sync::Registry::default()
+            .sync_set(&sync::accounts(&root).unwrap())
+            .contains(&acct_e)
+    );
     assert!(found.registry.accounts.iter().all(|a| a.included));
     assert!(
         sync::discover(&root, &registry_file, 30)
