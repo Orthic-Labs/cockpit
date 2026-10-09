@@ -36,7 +36,7 @@ final class PulseRuntime {
 5. `WorkerPort` client and dashboard channel.
 6. `LauncherPort` only after its first hotkey request.
 
-The registry owns updater, login-item and activation-policy decisions. Codenotch's `AppDelegate`, Vorssaint's `FeatureRuntime` startup and Tinycast's `AppCore.start()` are source references only.
+The registry owns updater, login-item and activation-policy decisions. Vorssaint's `FeatureRuntime` startup and Tinycast's `AppCore.start()` are feature or architecture references only; no code from either is in Pulse.
 
 ## Service boundaries
 
@@ -92,7 +92,7 @@ final class EventTapHub {
 
 ## Launcher isolation
 
-`LauncherPort` is a lazy adapter around an allowlisted subset of Tinycast. It owns no app delegate, menu-bar item, updater, login item, permission prompt, activation policy or independent hotkey. The first accepted launcher event asks `AppIndex` to load; closing launcher releases search-session state while retaining only user settings and ranking data. Launcher actions call Pulse `WorkerPort`, `SettingsStore` or typed open/launch operations; they cannot call raw cleanup or uninstall primitives.
+`LauncherPort` is a lazy adapter over Pulse's own launcher, an independent implementation that used Tinycast's feature list only (no Tinycast code). It owns no app delegate, menu-bar item, updater, login item, permission prompt, activation policy or independent hotkey. The first accepted launcher event asks `AppIndex` to load; closing launcher releases search-session state while retaining only user settings and ranking data. Launcher actions call Pulse `WorkerPort`, `SettingsStore` or typed open/launch operations; they cannot call raw cleanup or uninstall primitives.
 
 The hotkey is registered with `EventTapHub` at one priority. If Mac footprint evidence later requires a process boundary, `LauncherPort` becomes an XPC client without changing its interface; this is a design seam, not runtime evidence.
 
@@ -117,12 +117,12 @@ Worker shutdown is independent: it finishes or journals current job, closes its 
 
 ## Minimum extraction sequence
 
-1. **License gate.** Keep immutable pins and source notices. Preserve Tinycast AGPL-3.0-or-later & Vorssaint GPL-3.0-or-later obligations through extraction & combined distribution. Pearcleaner remains reference-only; do not copy its Commons Clause-covered source. Codenotch is MIT, Petal is MIT; Codenotch's SwiftNIO, Sparkle and vendored zstd notices remain separate obligations. See [`donors.md`](donors.md).
+1. **License gate.** Keep immutable pins and source notices. The Tinycast and Vorssaint checkouts are removed (2026-10-09); no code from either is in Pulse. Pearcleaner remains reference-only; do not copy its Commons Clause-covered source. Codenotch is MIT, Petal is MIT; Codenotch's SwiftNIO, Sparkle and vendored zstd notices remain separate obligations. See [`donors.md`](donors.md).
 2. **Owned seams.** Add registry, permission broker, event hub, usage protocol and launcher port without donor source. Preserve `runtime.md` ownership boundaries.
 3. **Petal algorithms.** Extract MIT filesystem algorithms behind Pulse's provider interface; exclude GPUI `main.rs`, UI and `admin.rs`.
 4. **Codenotch readers/ring references.** Adapt Mac provider readers and Swift ring into registry-owned services; disable Codenotch updater, phone link and independent composition root. Use Windows readers only behind shared core; redraw native Windows ring.
-5. **Vorssaint conveniences.** Extract one module at a time through `EventTapHub` and `MacPermissionBroker`; start with Finder cut/paste, then maximizer, Dock click and Auto Quit. Preserve GPL notices and mark changed files.
-6. **Tinycast launcher.** Only after step 1 permits it, extract allowlisted launcher model/UI pieces behind `LauncherPort`; do not copy `AppCore`, `AppDelegate`, `HotKeyManager`, updater or menu-bar composition. Keep AGPL notices and packaging decision with source receipts.
+5. **Vorssaint conveniences.** Finder cut/paste, maximizer, Dock click and Auto Quit are independent implementations behind `EventTapHub` and `MacPermissionBroker` (feature reference only, no code). Vorssaint is removed; its checkout is gone.
+6. **Tinycast launcher.** Pulse's launcher is an independent implementation behind `LauncherPort`; Tinycast's feature list is the reference only, and no Tinycast code is used.
 7. **Package review.** Reconcile every copied file, transitive package, notice and binary bundle against pinned commits before any build or scheduler is enabled.
 
 ## Evidence versus decisions

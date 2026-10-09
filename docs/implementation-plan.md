@@ -15,8 +15,8 @@ Build one owned tool with native always-on pills, shared Rust core & shared on-d
 | Worker | Rust executable; owns scans, plan/apply & uninstall jobs | Same | Started on demand by notch, dashboard or CLI; exits when idle |
 | Dashboard & settings | Tauri app: Resources (task manager), Storage, Cleanup, Uninstall, Settings | Same Tauri app, same screens | Launched on demand; exits when closed |
 | CLI | Same Rust core; talks to notch/worker | Same | On demand |
-| Mac conveniences | Swift modules inside Mac notch app, reused from Vorssaint | Not needed (native in Windows) | Always |
-| Launcher | Tinycast module inside Mac app | PowerToys Command Palette + this tool's extension | On hotkey |
+| Mac conveniences | Swift modules inside Mac notch app, reimplemented after Vorssaint's behaviour (no code reused) | Not needed (native in Windows) | Always |
+| Launcher | Pulse's own launcher, feature list after Tinycast (no code) | PowerToys Command Palette + this tool's extension | On hotkey |
 
 Why this split: always-on part must be minimal, so it is native on both OSes (no web view running in background). Codenotch's Swift Mac app already exists and is more complete than its Windows port, so Mac keeps Swift. Windows notch is native Rust because Codenotch's Windows notch is Tauri/WebView2, whose background web-view processes cost tens of MB permanently. Everything heavier (charts, tables, settings) is one Tauri app on both OSes, so those screens are identical and only cost memory while open. All numbers come from one Rust core, so both machines and CLI agree.
 
@@ -38,7 +38,7 @@ No application installation, settings changes, public forks or product implement
 - Mac conveniences to replace Vorssaint (owner-selected 2026-10-05): Finder cut/paste (highest priority), window maximizer, Dock click minimize, Auto Quit on last window close. Clipboard history not replaced: owner uses Paste (via Setapp) on Mac, Win+V on Windows. Dropped: audio priority, middle click, notch AI agents, lyrics & queue.
 - CLI for agents covering storage, cleanup, uninstall & processes.
 - Open source first: reuse maintained open-source code wherever it exists; hand-roll only what does not exist or can be done clearly better.
-- Owned updates on both OSes; no dependency on Vorssaint upstream.
+- Owned updates on both OSes; no dependency on Vorssaint or Tinycast upstreams (both removed 2026-10-09).
 - Local metadata only by default; no upload, cloud-placeholder hydration or continuous full-disk scanning.
 
 ## Resource budget (always-on notch)
@@ -73,8 +73,8 @@ Reuse first; hand-roll only gaps.
 | Windows uninstaller & leftovers | Bulk Crap Uninstaller (C#) | Apache-2.0 | Reference for uninstaller discovery & leftover detection; reimplement in Rust |
 | Cleanup detection | Mole (tw93/Mole, shell) | GPL-3.0 | Detection rules & paths reused directly |
 | Fullscreen hide rule | HeardRight `tauri-app-next` (owner's, proprietary) | Owner's call | `pill/state/windows.rs` reused in Windows notch; Mac logic ported to Swift |
-| Mac conveniences | Vorssaint 3.4.0 (Swift) | GPL-3.0-or-later | Reuse Finder cut/paste, Dock minimize, Auto Quit & maximizer code directly |
-| Mac launcher | Tinycast (abue-ammar/tinycast, Swift) | AGPL-3.0-or-later (verified pinned source) | Forked into Mac app; weekly upstream merge |
+| Mac conveniences | Vorssaint 3.4.0 (Swift) | GPL-3.0-or-later | Feature reference only (no code); reimplemented independently; Vorssaint removed 2026-10-09 |
+| Mac launcher | Tinycast (abue-ammar/tinycast, Swift) | AGPL-3.0-or-later | Feature reference only (no code); Pulse's launcher is independent; checkout removed 2026-10-09 |
 | Rust ↔ Swift bridge | UniFFI (Mozilla) | MPL-2.0 | Generates Swift bindings for core |
 
 Hand-rolled because nothing suitable exists or existing code is wrong: clone/hard-link/snapshot-aware reclaim accounting (Petal findings 1–3), developer & agent artefact rule pack with liveness checks, CLI with plan/apply safety contract, native Windows notch, unified findings store shared by pills, dashboard & CLI.
@@ -129,7 +129,7 @@ Windows' style-plus-geometry check is a heuristic (borderless maximized windows 
 
 ## Vorssaint replacement
 
-Modules are Swift inside Mac notch app, taken from Vorssaint and adapted. Vorssaint 3.4.0 settings re-read 2026-10-05 from `com.vorssaint.utils`. Keep it running until each replacement module reaches parity, disabling each Vorssaint feature as its replacement turns on so two apps never handle same shortcut. Uninstall Vorssaint after last module ships.
+Modules are Swift inside the Mac notch app, written independently after Vorssaint's behaviour (no Vorssaint code). Vorssaint 3.4.0 settings re-read 2026-10-05 from `com.vorssaint.utils`. Keep it running until each replacement module reaches parity, disabling each Vorssaint feature as its replacement turns on so two apps never handle same shortcut. Vorssaint was uninstalled and its checkout removed on 2026-10-09.
 
 | Feature | Mac implementation needs | Windows |
 | --- | --- | --- |
@@ -140,7 +140,7 @@ Modules are Swift inside Mac notch app, taken from Vorssaint and adapted. Vorssa
 
 Mac permissions (Accessibility, Input Monitoring, Automation, Full Disk Access) attach to app identity & signature; stable signing is required or permissions reset on every update (see Updates & distribution).
 
-**Absorption is extraction, not wrapping.** Vorssaint, Codenotch & Tinycast are each whole apps with their own composition root: Vorssaint is an executable target whose Finder service depends directly on its shared session, permissions, preferences & feature services; Tinycast's `AppCore` owns stores, input hooks, activation policy, updater & coordinators and starts its app index at launch. So:
+**Absorption is extraction, not wrapping.** (Superseded for Vorssaint and Tinycast: both were removed 2026-10-09, and their features were reimplemented without code. The rest applies to Codenotch.) Vorssaint, Codenotch & Tinycast are each whole apps with their own composition root: Vorssaint is an executable target whose Finder service depends directly on its shared session, permissions, preferences & feature services; Tinycast's `AppCore` owns stores, input hooks, activation policy, updater & coordinators and starts its app index at launch. So:
 
 - Mac app has one AppDelegate and one service registry; donor code is compiled as owned library targets behind it.
 - Donor updaters, login items, permission prompts, activation-policy changes & input hooks are removed; this app owns each once.
@@ -159,12 +159,12 @@ Same key position on both machines.
 
 | | Mac | Windows |
 | --- | --- | --- |
-| Launcher | Tinycast forked & absorbed into Mac app as a module | PowerToys Command Palette (Microsoft) + this tool's extension |
+| Launcher | Pulse's own launcher (independent; Tinycast feature reference only, no code) | PowerToys Command Palette (Microsoft) + this tool's extension |
 | Hotkey | Command+Space (turn off Spotlight's shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight) | Alt+Space (set in PowerToys). Overrides Windows' own Alt+Space window menu, which owner does not use; disable PowerToys Run so it does not also claim Alt+Space |
 | Does | Apps, files & folders, quicklinks (saved URLs, searches, folders), shell commands, calculator, snippets, notes, AI chat (own key) — plus this tool's commands natively | Apps, files & folders, typed URLs & paths (Win+R replacement), commands, calculator, Windows settings, window switching — plus this tool's commands via extension |
 | Clipboard | Paste (Setapp); Tinycast's clipboard module removed | Win+V |
 
-Mac absorption: Tinycast (native Swift, zero third-party dependencies) extracted into Mac app as launcher module (see “Absorption is extraction” above). Launcher's search index loads on first hotkey press, not at login (upstream starts it at launch; this is a deliberate change). Feature allowlist: apps, files, quicklinks, shell commands, calculator, snippets, notes, AI chat. Upstream system actions such as Empty Trash or uninstall are removed or routed through this tool's core plan/apply, so the launcher never bypasses cleanup safety. Add raw typed URL/path opening (Win+R style) if upstream lacks it. This tool's commands (disk status, cleanup findings, quit app, Claude/ChatGPT usage, open dashboard) appear as native launcher entries backed by core.
+Mac launcher: an independent Swift implementation in the Mac app, using Tinycast's feature list only (no Tinycast code; checkout removed 2026-10-09) (see “Absorption is extraction” above). Launcher's search index loads on first hotkey press, not at login (Tinycast starts it at launch; this is a deliberate change). Feature allowlist: apps, files, quicklinks, shell commands, calculator, snippets, notes, AI chat. Upstream system actions such as Empty Trash or uninstall are removed or routed through this tool's core plan/apply, so the launcher never bypasses cleanup safety. Add raw typed URL/path opening (Win+R style) if upstream lacks it. This tool's commands (disk status, cleanup findings, quit app, Claude/ChatGPT usage, open dashboard) appear as native launcher entries backed by core.
 
 Windows: Command Palette cannot be embedded, but Microsoft's Command Palette extension SDK (.NET) lets this tool add its commands to it; thin C# extension calls CLI and shows its JSON results. Build after CLI exists (step 2).
 
@@ -373,13 +373,13 @@ Installed-app inventories are incomplete (portable apps, apps on external drives
 
 Executed by parallel agents with **one integration owner** (a lead agent that owns interfaces, merges lanes & runs acceptance) and explicit file/interface ownership per lane, so parallel agents do not produce incompatible implementations. Owner needed for macOS permission grants, Windows-machine checks & signing credentials.
 
-**Now, no build:** install PowerToys on Windows (Left-Alt shortcut remaps + Command Palette on Alt+Space, PowerToys Run off); install stock Tinycast on Mac on Cmd+Space (Spotlight shortcut off) as stopgap until module ships; keep Vorssaint & CodexBar running.
+**Now, no build:** install PowerToys on Windows (Left-Alt shortcut remaps + Command Palette on Alt+Space, PowerToys Run off); a stock Tinycast stopgap on Mac Cmd+Space (Spotlight shortcut off) was the interim plan until the launcher module shipped; keep CodexBar running (Vorssaint uninstalled 2026-10-09).
 
 **M0 — Feasibility gates (parallel spikes; results decide later design).** Each gate has a written pass/fail result before dependent work starts.
 - Combined repo with four upstream subtrees pinned; weekly sync bot skeleton.
 - Signing & permission identity matrix (bundle IDs, one signing identity, which executable gets which permission); Full Disk Access for worker & Terminal-launched CLI; permissions survive signed upgrade.
 - Fn remap hardware proof on owner's keyboards → event tap or Karabiner.
-- Donor extraction inventory at pinned commits (Vorssaint Finder/conveniences, Codenotch Mac notch & readers, Tinycast `AppCore`); single AppDelegate/service-registry design.
+- Donor extraction inventory at pinned commits (Codenotch Mac notch & readers; Vorssaint and Tinycast removed 2026-10-09, feature reference only); single AppDelegate/service-registry design.
 - Footprint baselines: stripped Codenotch Mac notch; native Windows notch prototype with one ring; Tinycast index loaded vs not. Budgets confirmed or revised.
 - Fullscreen-hide semantics on both OSes against test matrix.
 - Runtime ownership: worker, local channel, store schema, job journal.
@@ -391,7 +391,7 @@ Executed by parallel agents with **one integration owner** (a lead agent that ow
 
 **M3 — Surfaces.** Mac notch rings via UniFFI; Windows notch rings; Tauri dashboard screens (Resources read-only, Storage, Cleanup, Settings). Retire CodexBar.
 
-**M4 — Mac conveniences & launcher.** Central event-tap service; Finder cut/paste + Fn shortcuts → maximizer & Dock click → Auto Quit (per-app opt-in); Tinycast launcher module with allowlist. Disable each Vorssaint feature as replacement passes its tests; retire Vorssaint after last one.
+**M4 — Mac conveniences & launcher.** Central event-tap service; Finder cut/paste + Fn shortcuts → maximizer & Dock click → Auto Quit (per-app opt-in); launcher with allowlist (Tinycast feature reference only). Vorssaint retired and uninstalled 2026-10-09.
 
 **M5 — Uninstall & process actions.** Uninstall flows with install history & ownership confidence; Quit/Force Quit with verified targets; Windows Command Palette extension.
 
@@ -405,9 +405,7 @@ One combined repository for this tool; each donor stays a tracked upstream, re-p
 
 ```
 system-tool/
-  upstream/vorssaint/    git subtree of vorssaint/vorssaint-utils
   upstream/codenotch/    git subtree of vinzdg/codenotch (Swift app + windows/)
-  upstream/tinycast/     git subtree of abue-ammar/tinycast
   upstream/petal/        git subtree of henrydennis/petal
   core/                  shared Rust core + CLI (own code)
   mac/                   Mac app shell: imports upstream modules through adapters
@@ -429,7 +427,7 @@ Weekly bot (scheduled CI, Mac & Windows runners):
 4. Conflict or failure → PR marked failing with log; a coding agent resolves and re-runs.
 5. CI cannot exercise real permissions (TCC), Globe key, fullscreen or signed-in provider accounts. PRs touching those areas are labelled “needs machine check” and wait for a quick check on owner's Mac/Windows before merge.
 
-Not every pull will be clean: Vorssaint, Codenotch & Tinycast are each built as a whole app, so upstream refactors will sometimes conflict with extraction edits. Bot + agent turns that into a reviewed fix instead of a silent break. Stats, Pearcleaner & Mole are referenced for code & rules; copy what is useful and re-check them occasionally rather than tracking as subtrees.
+Not every pull will be clean: Codenotch is built as a whole app (Vorssaint and Tinycast were removed 2026-10-09), so upstream refactors will sometimes conflict with extraction edits. Bot + agent turns that into a reviewed fix instead of a silent break. Stats, Pearcleaner & Mole are referenced for code & rules; copy what is useful and re-check them occasionally rather than tracking as subtrees.
 
 Pin Tauri, UniFFI & plugin versions; upgrade deliberately with Mac/Windows smoke checks.
 
@@ -451,7 +449,7 @@ This task delivers Markdown proposal, adversarial review & revision notes. Futur
 - Trash actions labelled as moves; no “frees” claim until emptied.
 - No cloud-placeholder hydration (fixture with placeholder files shows no materialization).
 - Permission failures visible; tested safe selection; accurate process identity across PID reuse.
-- Each convenience module matches Vorssaint behaviour it replaces before that Vorssaint feature is disabled.
+- Each convenience module matches the Vorssaint behaviour it replaces (Vorssaint removed 2026-10-09).
 - Own updater works on both OSes; Mac permissions survive update.
 
 Recommended next implementation milestone: M0 feasibility gates, then M1 read-only storage CLI.
