@@ -56,7 +56,7 @@
   "qaEvidencePath": "pulse-hub-qa",
   "qaEvidenceRetentionDays": 7,
   "ciAllOs": true,
-  "ciIncremental": true,
+  "ciIncremental": false,
   "devArtifact": {
     "mac": "sign",
     "windows": "unsigned",
