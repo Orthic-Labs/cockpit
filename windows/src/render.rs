@@ -791,7 +791,11 @@ fn flow_row(
         Row::Meter { fraction, .. } => (meter_height(*fraction, m), Vec::new(), Vec::new()),
         Row::Group { rows, .. } => {
             let (_, box_height) = group_tops(rows, m);
-            (m.line + GROUP_TITLE_GAP + box_height, Vec::new(), Vec::new())
+            (
+                m.line + GROUP_TITLE_GAP + box_height,
+                Vec::new(),
+                Vec::new(),
+            )
         }
         Row::Note(value) | Row::Text(value) | Row::Tinted { text: value, .. } => {
             paragraph(text, value, room)
@@ -1381,15 +1385,8 @@ impl Pen<'_> {
         let height = thick * self.s;
         let radius = height / 2.0;
         let width = right - left;
-        self.canvas.fill_round_rect(
-            left,
-            top,
-            width,
-            height,
-            [radius; 4],
-            0xFFFFFF,
-            track,
-        );
+        self.canvas
+            .fill_round_rect(left, top, width, height, [radius; 4], 0xFFFFFF, track);
         let (from, share) = match (fraction, self.phase) {
             (Some(f), _) => (0.0, f.clamp(0.0, 1.0)),
             (None, None) => (0.0, INDETERMINATE),
