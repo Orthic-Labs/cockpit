@@ -46,6 +46,9 @@ final class Updater: ObservableObject {
     private var checkTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
     private var timer: Timer?
+    private var stalenessTimer: Timer?
+    /// The on-disk build the "Pulse was updated" card was last dismissed for.
+    private var dismissedDiskBuild: String?
 
     init(preferences: Preferences) {
         self.preferences = preferences
@@ -72,6 +75,10 @@ final class Updater: ObservableObject {
     /// hour. Each look asks GitHub only if six hours have passed since the last try.
     func start() {
         checkIfDue()
+        checkInstalledCopy()
+        stalenessTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkInstalledCopy() }
+        }
         timer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkIfDue() }
         }
@@ -188,7 +195,53 @@ final class Updater: ObservableObject {
     func respond(_ choice: UpdateChoice) {
         switch choice {
         case .install: install()
-        case .later, .close: prompt = nil
+        case .later, .close:
+            if prompt?.phase == .restart { dismissedDiskBuild = installedBuildKey }
+            prompt = nil
+        case .restart:
+            restartIntoInstalledCopy()
+        }
+    }
+
+    // MARK: - Files replaced underneath
+
+    private static func buildKey(of bundle: URL) -> String? {
+        let plist = bundle.appendingPathComponent("Contents/Info.plist")
+        guard let info = NSDictionary(contentsOf: plist) as? [String: Any],
+              let build = info["CFBundleVersion"] as? String else { return nil }
+        return "\(info["CFBundleShortVersionString"] as? String ?? "")+\(build)"
+    }
+
+    private var runningBuildKey: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        return "\(short)+\(build)"
+    }
+
+    private var installedBuildKey: String? { Self.buildKey(of: UpdateInstaller.installLocation) }
+
+    /// Cheap (one small plist read). When Pulse runs from /Applications/Pulse.app
+    /// and the copy on disk is a different build (the app was dragged over a
+    /// running Pulse), offers a Restart card. Never restarts by itself.
+    private func checkInstalledCopy() {
+        guard Bundle.main.bundleURL.standardizedFileURL.path == UpdateInstaller.installLocation.path,
+              let onDisk = installedBuildKey, onDisk != runningBuildKey,
+              onDisk != dismissedDiskBuild else { return }
+        if let current = prompt, current.phase != .available, current.phase != .restart { return }
+        if prompt?.phase == .restart { return }
+        prompt = UpdatePrompt(version: onDisk.split(separator: "+").first.map(String.init) ?? currentVersion,
+                              notes: "", phase: .restart)
+    }
+
+    /// Restart: the detached relauncher reopens /Applications/Pulse.app once
+    /// this process has gone (the hub helper is stopped on quit).
+    private func restartIntoInstalledCopy() {
+        do {
+            try PulseRelauncher.spawn(swapping: nil, workDirectory: nil)
+            NSApp.terminate(nil)
+        } catch {
+            prompt = nil
+            status = .failed(error.localizedDescription)
         }
     }
 
@@ -279,6 +332,8 @@ struct UpdatePrompt: Equatable {
         case downloading(Double?)
         case extracting(Double)
         case installing
+        /// The copy in /Applications is a newer build than the running one.
+        case restart
     }
 
     var version: String
@@ -298,5 +353,5 @@ struct UpdatePrompt: Equatable {
 
 /// What the notch said to the update it offered.
 enum UpdateChoice: Equatable {
-    case install, later, close
+    case install, later, close, restart
 }

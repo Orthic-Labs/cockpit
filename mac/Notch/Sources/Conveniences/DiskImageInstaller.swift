@@ -48,6 +48,9 @@ final class DiskImageInstaller {
     private var dismissTimer: Timer?
     private var hovering = false
     private var undoable: Installation?
+    /// The copies that were running before the install were frontmost: the
+    /// reopened one then takes focus; otherwise it opens behind.
+    private var reopenActivates = false
 
     private static let resultLife: TimeInterval = 8
     private static let quitPatience: TimeInterval = 10
@@ -322,12 +325,28 @@ final class DiskImageInstaller {
         showWorking(app)
         FinderWindowCloser.closeWindows(forVolume: app.mountURL)
         let trashDownload = preferences.convDiskImageTrashDownload
+        let replacesSelf = Self.replacesRunningPulse(app)
 
         Task { [weak self] in
             guard let self else { return }
-            // Running copies are asked to quit first.
+            if replacesSelf {
+                // Pulse cannot copy over itself: a verified copy is made, then a
+                // detached relauncher swaps it in after Pulse quits and reopens it.
+                let result = await Task.detached {
+                    DiskImageWork.prepareSelfReplacement(app, trashDownload: trashDownload, control: control)
+                }.value
+                if result.stagedSelf != nil {
+                    self.relaunchSelf(app, result, token)
+                } else {
+                    self.finish(app, result, token, replacing, [])
+                }
+                return
+            }
+            // Running copies are asked to quit first. Every one that was running
+            // is reopened from the new copy, whatever the outcome.
             let running = self.runningCopies(of: app)
             let reopen = running.compactMap(\.bundleURL)
+            self.reopenActivates = running.contains { $0.isActive }
             if !running.isEmpty {
                 let allQuit = await self.quit(running, control: control)
                 if control.isCancelled {
@@ -344,6 +363,31 @@ final class DiskImageInstaller {
             }.value
             self.finish(app, result, token, replacing, reopen)
         }
+    }
+
+    /// The image holds the Pulse that is running from the place it would install.
+    private static func replacesRunningPulse(_ app: DiskImageApp) -> Bool {
+        guard let id = app.bundleID, id == Bundle.main.bundleIdentifier else { return false }
+        return Bundle.main.bundleURL.standardizedFileURL.path == app.destinationURL.standardizedFileURL.path
+    }
+
+    /// Starts the detached relauncher with the verified copy, then quits Pulse.
+    private func relaunchSelf(_ app: DiskImageApp, _ result: DiskImageInstallResult, _ token: UUID) {
+        guard jobToken == token, let staged = result.stagedSelf else { return }
+        cancelOffered = false
+        _ = present?(DiskImagePrompt(
+            iconPath: app.appURL.path,
+            title: L10n.t("Installing \(app.name)"),
+            detail: L10n.t("Restarting to finish."),
+            style: .working))
+        do {
+            try PulseRelauncher.spawn(swapping: staged, workDirectory: result.workDirectory)
+        } catch {
+            if let work = result.workDirectory { try? FileManager.default.removeItem(at: work) }
+            finish(app, DiskImageInstallResult(outcome: .failed(.copy)), token, true, [])
+            return
+        }
+        PulseRelauncher.quitSoon()
     }
 
     /// Asks each app to quit and waits up to ten seconds. True if all did.
@@ -458,7 +502,7 @@ final class DiskImageInstaller {
 
     private func reopenApps(_ urls: [URL]) {
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
+        configuration.activates = reopenActivates
         for url in urls {
             NSWorkspace.shared.openApplication(at: url, configuration: configuration)
         }

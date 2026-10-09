@@ -137,6 +137,10 @@ struct DiskImageInstallResult: Sendable {
     var replaced: [DiskImageTrashedCopy] = []
     var ejected = false
     var downloadTrashed = false
+    /// Pulse replacing itself: the verified copy waiting in `workDirectory`
+    /// for the relauncher to swap in once Pulse has quit.
+    var stagedSelf: URL?
+    var workDirectory: URL?
 }
 
 // MARK: - Cancellation
@@ -377,6 +381,47 @@ enum DiskImageWork {
         discard(staging)
 
         var result = DiskImageInstallResult(outcome: .installed, replaced: trashed)
+        result.ejected = eject(app.mountURL)
+        if trashDownload, result.ejected, let id = app.imageID, DiskImageFileID(of: app.imageURL) == id {
+            result.downloadTrashed = (try? fm.trashItem(at: app.imageURL, resultingItemURL: nil)) != nil
+        }
+        return result
+    }
+
+    /// Pulse replacing itself. Pulse cannot copy over the bundle it runs from, so
+    /// this only makes a verified copy in a private temp folder (checked as
+    /// strictly as `install` checks its staged copy), crosses the commit point,
+    /// and ejects the image. The detached relauncher does the swap after Pulse
+    /// exits (`PulseRelauncher`).
+    static func prepareSelfReplacement(_ app: DiskImageApp, trashDownload: Bool,
+                                       control: DiskImageInstallControl) -> DiskImageInstallResult {
+        let fm = FileManager.default
+        if control.isCancelled { return .init(outcome: .cancelled) }
+        let work = fm.temporaryDirectory
+            .appendingPathComponent("dev.orthic.pulse.selfinstall-\(UUID().uuidString)", isDirectory: true)
+        guard (try? fm.createDirectory(at: work, withIntermediateDirectories: true)) != nil else {
+            return .init(outcome: .failed(.copy))
+        }
+        let staged = work.appendingPathComponent(app.destinationURL.lastPathComponent)
+        func abandon(_ outcome: DiskImageOutcome) -> DiskImageInstallResult {
+            try? fm.removeItem(at: work)
+            return .init(outcome: outcome)
+        }
+
+        let copied = run("/usr/bin/ditto", [app.appURL.path, staged.path], control: control)
+        if control.isCancelled { return abandon(.cancelled) }
+        guard copied?.status == 0 else { return abandon(.failed(.copy)) }
+
+        var passes = infoDictionary(of: staged)["CFBundleIdentifier"] as? String == app.bundleID
+        if passes && app.signatureValid { passes = signatureIsValid(staged) }
+        if passes && app.trusted { passes = gatekeeperNotarizes(staged, control: control) }
+        if control.isCancelled { return abandon(.cancelled) }
+        guard passes else { return abandon(.failed(.verification)) }
+        guard control.commit() else { return abandon(.cancelled) }
+
+        var result = DiskImageInstallResult(outcome: .installed)
+        result.stagedSelf = staged
+        result.workDirectory = work
         result.ejected = eject(app.mountURL)
         if trashDownload, result.ejected, let id = app.imageID, DiskImageFileID(of: app.imageURL) == id {
             result.downloadTrashed = (try? fm.trashItem(at: app.imageURL, resultingItemURL: nil)) != nil

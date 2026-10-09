@@ -226,6 +226,9 @@ struct Item {
     /// Where the installed copy lives, to see whether it is running.
     location: Option<String>,
     running: bool,
+    /// Executables that were running when the app was closed for this install; each is
+    /// started again once the new copy is in place.
+    relaunch: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -417,6 +420,7 @@ fn sample_item(kind: Kind, trust: Trust, version: &str, installed: Option<&str>)
         installed: installed.map(str::to_string),
         location: None,
         running: false,
+        relaunch: Vec::new(),
     }
 }
 
@@ -965,6 +969,7 @@ fn analyze(path: &Path) -> Option<Item> {
         installed: None,
         location: None,
         running: false,
+        relaunch: Vec::new(),
     };
     match kind {
         Kind::Exe => {}
@@ -1047,18 +1052,51 @@ pub(crate) fn signer_name(path: &Path) -> Option<String> {
 /// How many processes run from under `location`; with `quit`, asks them to close and waits
 /// up to eight seconds first.
 fn running_count(location: &str, quit: bool) -> u32 {
+    running_processes(location, quit).0
+}
+
+/// Like `running_count`, and also the distinct executables that were running before any
+/// were asked to close, so they can be started again after an install.
+fn running_processes(location: &str, quit: bool) -> (u32, Vec<PathBuf>) {
     const BODY: &str = "$l=$env:PULSE_LOC;if(-not $l){[Console]::Out.Write('0')}else{\
         $p=@(Get-Process -ErrorAction SilentlyContinue|Where-Object{$_.Path -and \
         $_.Path.StartsWith($l,[StringComparison]::OrdinalIgnoreCase)});\
+        $x=@($p|ForEach-Object{$_.Path}|Select-Object -Unique);\
         if($env:PULSE_MODE -eq 'quit'){foreach($q in $p){[void]$q.CloseMainWindow()};\
         for($i=0;$i -lt 16;$i++){Start-Sleep -Milliseconds 500;\
         $p=@($p|Where-Object{-not $_.HasExited});if($p.Count -eq 0){break}}};\
-        [Console]::Out.Write($p.Count)}";
+        [Console]::Out.Write($p.Count);foreach($e in $x){[Console]::Out.Write(\"`n$e\")}}";
     let mode = if quit { "quit" } else { "check" };
-    powershell(BODY, &[("PULSE_LOC", location), ("PULSE_MODE", mode)])
+    let Some(output) = powershell(BODY, &[("PULSE_LOC", location), ("PULSE_MODE", mode)])
         .filter(|o| o.code == 0)
-        .and_then(|o| o.out.trim().parse().ok())
-        .unwrap_or(0)
+    else {
+        return (0, Vec::new());
+    };
+    let mut lines = output.out.lines();
+    let count = lines
+        .next()
+        .and_then(|line| line.trim().parse().ok())
+        .unwrap_or(0);
+    let exes = lines
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    (count, exes)
+}
+
+/// Starts each executable again, detached, so it outlives the notch's own process.
+fn relaunch_apps(exes: &[PathBuf]) {
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    for exe in exes.iter().filter(|exe| exe.is_file()) {
+        let _ = Command::new(exe)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .spawn();
+    }
 }
 
 // ---- installing and undoing -----------------------------------------------------------------
@@ -1085,6 +1123,8 @@ fn install_job(item: Item, grace: bool, cancel: Arc<AtomicBool>) {
     show(card_installing(&item.name, false));
     match do_install(&item) {
         Ok(undo) => {
+            // An app that was running before the install runs again afterwards.
+            relaunch_apps(&item.relaunch);
             let card = card_installed(&item.name, &item.version, item.installed.as_deref());
             model().ctx.undo = Some(undo);
             show(card);
@@ -1173,17 +1213,18 @@ fn do_install(item: &Item) -> Result<Undo, Fail> {
     }
 }
 
-fn quit_job(item: Item, cancel: Arc<AtomicBool>) {
+fn quit_job(mut item: Item, cancel: Arc<AtomicBool>) {
     show(Card::new(
         Style::Working,
         format!("Closing {}", item.name),
         "Waiting for it to quit.".to_string(),
     ));
-    let still_open = item
+    let (left, exes) = item
         .location
         .as_deref()
-        .is_some_and(|location| running_count(location, true) > 0);
-    if still_open {
+        .map_or((0, Vec::new()), |location| running_processes(location, true));
+    item.relaunch = exes;
+    if left > 0 {
         model().ctx.item = Some(item.clone());
         show(card_still_open(&item.name));
         finish();

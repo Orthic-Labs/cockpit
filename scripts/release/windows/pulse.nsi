@@ -29,6 +29,11 @@ UninstPage instfiles
 
 Section "Pulse"
   SetOutPath "$INSTDIR"
+  ; Remember whether Pulse is running (0 = it is): a running Pulse is started again at the
+  ; end, so a reinstall or update always leaves the new code running. Its hub is Pulse's
+  ; child and starts with it.
+  nsExec::Exec '"$SYSDIR\cmd.exe" /c ""$SYSDIR\tasklist.exe" /FI "IMAGENAME eq Pulse.exe" /NH | "$SYSDIR\find.exe" /I "Pulse.exe""'
+  Pop $R9
   ; Upgrade in place: release file locks held by a running notch or hub.
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Pulse.exe /IM pulse-hub.exe'
   Pop $0
@@ -45,6 +50,8 @@ Section "Pulse"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+  StrCmp $R9 "0" 0 +2
+  Exec '"$INSTDIR\Pulse.exe"'
 SectionEnd
 
 Section "Uninstall"

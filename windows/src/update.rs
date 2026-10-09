@@ -555,8 +555,9 @@ fn download_and_launch(release: &Release, part: &Path, file: &Path) -> Result<()
         .spawn()
         .map_err(|_| "cannot_run")?;
     diag::info("update_install", &[("result", "installer_started")]);
-    // The installer replaces the notch's files, so the notch leaves (the installer starts the
-    // new one).
+    // The installer replaces the notch's files, so the notch leaves. The installer ends the
+    // notch and its hub, then starts the new notch again when one was running (see
+    // scripts/release/windows/pulse.nsi), and the new notch starts its own hub.
     std::thread::sleep(Duration::from_secs(1));
     let controller = state().controller;
     // SAFETY: posting to a window handle that may have gone is harmless.

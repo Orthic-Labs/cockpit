@@ -11,6 +11,22 @@ import AppKit
 enum HubLauncher {
     static let bundleID = "dev.orthic.pulse.hub"
     private static var child: Process?
+    private static let processStart = Date()
+    private static var reaped = false
+
+    /// A hub that was already running when this notch started belongs to an
+    /// earlier Pulse (the hub is only ever the notch's child). It would keep
+    /// the old code after an update, so it is stopped once, before this notch
+    /// starts or addresses a hub of its own.
+    private static func reapStaleHubs() {
+        guard !reaped else { return }
+        reaped = true
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        where !app.isTerminated && (app.launchDate ?? .distantPast) < processStart
+            && app.processIdentifier != child?.processIdentifier {
+            app.forceTerminate()
+        }
+    }
 
     static var location: URL? {
         let embedded = Bundle.main.bundleURL
@@ -27,6 +43,7 @@ enum HubLauncher {
     /// Returns false when no hub is installed, so the caller can fall back.
     @discardableResult
     static func open(section: String) -> Bool {
+        reapStaleHubs()
         if hubRunning {
             DarwinNotify.post("dev.orthic.pulse.hub.show.\(section)")
             return true
@@ -61,6 +78,7 @@ enum HubLauncher {
     /// Starts the hub with no window and no Dock icon, so nearby sharing works
     /// while nobody has the hub open. Does nothing when it is already running.
     static func launchInBackground() {
+        reapStaleHubs()
         guard !hubRunning, let url = location else { return }
         let process = Process()
         process.executableURL = url.appendingPathComponent("Contents/MacOS/pulse-hub")
@@ -85,7 +103,12 @@ enum HubLauncher {
 
     /// Asks the hub child to quit (SIGTERM). Called when the notch quits.
     static func terminate() {
-        guard let process = child, process.isRunning else { return }
-        process.terminate()
+        if let process = child, process.isRunning { process.terminate() }
+        // A hub started another way (Launch Services fallback) must not outlive
+        // the notch either.
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        where !app.isTerminated && app.processIdentifier != child?.processIdentifier {
+            app.terminate()
+        }
     }
 }

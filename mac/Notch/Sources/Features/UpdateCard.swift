@@ -70,10 +70,11 @@ struct UpdateCard: View {
 
     // MARK: - Contents
 
-    private var installing: Bool { prompt.phase != .available }
+    private var installing: Bool { prompt.phase != .available && prompt.phase != .restart }
 
     private var title: String {
-        installing ? L10n.t("Installing Pulse \(prompt.version)")
+        if prompt.phase == .restart { return L10n.t("Pulse was updated") }
+        return installing ? L10n.t("Installing Pulse \(prompt.version)")
                    : L10n.t("Pulse \(prompt.version) is available")
     }
 
@@ -88,6 +89,8 @@ struct UpdateCard: View {
             return L10n.t("Preparing…")
         case .installing:
             return L10n.t("Installing…")
+        case .restart:
+            return L10n.t("Restart to use the new version.")
         }
     }
 
@@ -98,6 +101,7 @@ struct UpdateCard: View {
         case .downloading(let share):  return (share ?? 0) * 0.85
         case .extracting(let share):   return 0.85 + min(max(share, 0), 1) * 0.1
         case .installing:              return 1
+        case .restart:                 return 0
         }
     }
 
@@ -155,8 +159,12 @@ struct UpdateCard: View {
 
     private var buttons: some View {
         HStack(spacing: Design.px(14)) {
-            pill(L10n.t("Update"), symbol: "arrow.down.circle") { onChoice?(.install) }
-            pill(L10n.t("Later"), symbol: "clock") { onChoice?(.later) }
+            if prompt.phase == .restart {
+                pill(L10n.t("Restart"), symbol: "arrow.clockwise") { onChoice?(.restart) }
+            } else {
+                pill(L10n.t("Update"), symbol: "arrow.down.circle") { onChoice?(.install) }
+                pill(L10n.t("Later"), symbol: "clock") { onChoice?(.later) }
+            }
             Button { onChoice?(.close) } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))

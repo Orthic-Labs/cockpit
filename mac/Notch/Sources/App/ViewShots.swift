@@ -302,6 +302,7 @@ enum ViewShots {
             case "downloading": phase = .downloading(fx.n("progress"))
             case "extracting": phase = .extracting(fx.n("progress") ?? 0)
             case "installing": phase = .installing
+            case "restart": phase = .restart
             default: phase = .available
             }
             let prompt = UpdatePrompt(version: fx.s("version") ?? "0.0.0",
