@@ -3,12 +3,18 @@
 //!
 //! Inventory: the Uninstall registry keys (HKLM 64-bit and 32-bit views, HKCU).
 //! Uninstall: starts the app's own registered uninstaller, which asks for its own
-//! confirmation and elevation; nothing is moved to the Recycle Bin here.
+//! confirmation and elevation. Selected leftover folders go to the Recycle Bin only
+//! after the uninstaller has removed the app's registration.
 //! Processes: grouped by executable name from the core's process list; Quit sends
 //! the graceful close request (`taskkill`), Force Quit ends the process tree.
 //!
-//! Not available yet, and reported plainly rather than faked: leftover scanning,
-//! app icons, update checks, "last used" and running state of an app.
+//! Leftovers: `apps_windows_leftovers.rs` (AppData and ProgramData folders by
+//! publisher and product; registry keys and startup entries are only listed).
+//! Updates: `apps_windows_updates.rs` (winget). Last used: `apps_windows_usage.rs`
+//! (UserAssist; unknown stays unknown).
+//!
+//! Not available yet, and reported plainly rather than faked: app icons and the
+//! running state of an app.
 
 use std::collections::{HashMap, HashSet};
 use std::os::windows::process::CommandExt;
@@ -22,6 +28,13 @@ use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_3
 use winreg::RegKey;
 
 use crate::cache;
+
+#[path = "apps_windows_leftovers.rs"]
+mod leftovers;
+#[path = "apps_windows_updates.rs"]
+mod updates;
+#[path = "apps_windows_usage.rs"]
+mod usage;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
@@ -53,8 +66,9 @@ impl Drop for Busy {
 // Inventory
 // ---------------------------------------------------------------------------
 
-/// The same fields the macOS page reads. `bundle_id`, `last_used` and `running`
-/// have no Windows source here, so they stay empty/false.
+/// The same fields the macOS page reads. `bundle_id` and `running` have no
+/// Windows source here, so they stay empty/false. `last_used` comes from
+/// UserAssist when it has a record of the app being launched.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppEntry {
     pub name: String,
@@ -73,6 +87,11 @@ pub struct AppEntry {
 struct Installed {
     entry: AppEntry,
     uninstall: Option<String>,
+    /// The Uninstall key's own name (a GUID, or something like `Git_is1`).
+    key_name: String,
+    publisher: Option<String>,
+    /// The install folder, only when exactly one app registered it.
+    folder: Option<String>,
 }
 
 fn read_value(key: &RegKey, name: &str) -> Option<String> {
@@ -139,6 +158,9 @@ fn read_installed() -> Vec<Installed> {
                         protected,
                     },
                     uninstall,
+                    key_name: name.clone(),
+                    publisher: read_value(&key, "Publisher"),
+                    folder: None,
                 },
                 read_value(&key, "InstallLocation").and_then(|raw| install_folder(&raw)),
             ));
@@ -156,13 +178,15 @@ fn read_installed() -> Vec<Installed> {
         .map(|(mut app, folder)| {
             if let Some(folder) = folder {
                 if counts.get(&folder.to_lowercase()) == Some(&1) {
-                    app.entry.path = folder;
+                    app.entry.path = folder.clone();
+                    app.folder = Some(folder);
                 }
             }
             app
         })
         .collect();
     out.sort_by_key(|app| app.entry.name.to_lowercase());
+    usage::apply(&mut out);
     out
 }
 
@@ -248,36 +272,113 @@ pub async fn app_detail(path: String) -> Result<AppDetail, String> {
 }
 
 #[derive(Serialize)]
+pub struct MovedLeftover {
+    path: String,
+    bytes: u64,
+}
+
+#[derive(Serialize)]
+pub struct FailedLeftover {
+    path: String,
+    error: String,
+}
+
+#[derive(Serialize)]
 pub struct UninstallResult {
-    moved: Vec<serde_json::Value>,
-    failed: Vec<serde_json::Value>,
+    moved: Vec<MovedLeftover>,
+    failed: Vec<FailedLeftover>,
     moved_bytes: u64,
     activity_id: Option<String>,
 }
 
-/// Starts the app's own uninstaller (from its Uninstall key) and returns. The
-/// uninstaller shows its own prompts and asks for administrator rights itself.
-/// `items` (leftovers) is ignored: none are offered on Windows.
+/// How long to wait for an uninstaller to remove the app's registration before
+/// leftover folders are left alone.
+const UNINSTALL_WAIT: Duration = Duration::from_secs(300);
+
+/// Starts the app's own uninstaller (from its Uninstall key). The uninstaller
+/// shows its own prompts and asks for administrator rights itself.
+///
+/// With no leftover selected this returns at once. With leftover folders
+/// selected, the folders are first checked against the leftovers Pulse finds for
+/// this app (anything else is refused), the uninstaller is given up to five
+/// minutes to remove the app's registration, and only then are the folders moved
+/// to the Recycle Bin. If the uninstaller fails, is cancelled or is still
+/// running, no leftover is touched. The registry is never modified.
 #[tauri::command]
 pub async fn app_uninstall(
     path: String,
     bundle_id: Option<String>,
     items: Vec<String>,
 ) -> Result<UninstallResult, String> {
-    let _ = (bundle_id, items);
+    let _ = bundle_id;
     blocking(move || {
         let installed = find(&path)?;
-        if let Some(reason) = installed.entry.protected {
+        if let Some(reason) = installed.entry.protected.clone() {
             return Err(reason);
         }
-        let command = installed.uninstall.ok_or_else(|| "This app registered no uninstaller.".to_string())?;
+        let command = installed.uninstall.clone().ok_or_else(|| "This app registered no uninstaller.".to_string())?;
+        // The app's own row stands for the uninstaller itself; only other paths are leftovers.
+        let wanted: Vec<String> = items.into_iter().filter(|item| !item.eq_ignore_ascii_case(&path)).collect();
+        // What counts as this app's leftover is decided before the uninstaller removes its registration.
+        let allowed: Vec<String> = if wanted.is_empty() {
+            Vec::new()
+        } else {
+            leftovers::scan(&installed, &read_installed(), &|_| {})
+        };
         // The registered string is a full command line; cmd runs it as the app's installer wrote it.
-        std::process::Command::new("cmd.exe")
+        let mut child = std::process::Command::new("cmd.exe")
             .raw_arg(format!("/S /C \"{command}\""))
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Could not start the uninstaller: {e}"))?;
-        Ok(UninstallResult { moved: Vec::new(), failed: Vec::new(), moved_bytes: 0, activity_id: None })
+        let mut result = UninstallResult { moved: Vec::new(), failed: Vec::new(), moved_bytes: 0, activity_id: None };
+        if wanted.is_empty() {
+            return Ok(result);
+        }
+        let refuse_all = |result: &mut UninstallResult, why: &str| {
+            for item in &wanted {
+                result.failed.push(FailedLeftover { path: item.clone(), error: why.to_string() });
+            }
+        };
+        let deadline = std::time::Instant::now() + UNINSTALL_WAIT;
+        loop {
+            if find(&path).is_err() {
+                break;
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                if !status.success() {
+                    refuse_all(&mut result, "The uninstaller did not finish; leftovers were not touched.");
+                    return Ok(result);
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                refuse_all(&mut result, "The uninstaller is still running; leftovers were not touched.");
+                return Ok(result);
+            }
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+        // The registration goes near the end of an uninstall; let it finish deleting its files.
+        std::thread::sleep(Duration::from_secs(2));
+        for item in wanted {
+            let target = std::path::PathBuf::from(&item);
+            if !allowed.iter().any(|path| path.eq_ignore_ascii_case(&item)) {
+                result.failed.push(FailedLeftover { path: item, error: "Not a leftover of this app any more.".into() });
+                continue;
+            }
+            if !leftovers::is_plain(&target) {
+                result.failed.push(FailedLeftover { path: item, error: "Already gone, or now a link.".into() });
+                continue;
+            }
+            let bytes = leftovers::size_now(&target);
+            match crate::cleanup::move_to_trash(&target) {
+                Ok(()) => {
+                    result.moved_bytes += bytes;
+                    result.moved.push(MovedLeftover { path: item, bytes });
+                }
+                Err(error) => result.failed.push(FailedLeftover { path: item, error }),
+            }
+        }
+        Ok(result)
     })
     .await
 }
@@ -285,24 +386,36 @@ pub async fn app_uninstall(
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum LeftoversEvent {
+    Part { path: String, part: leftovers::Part },
     Done { path: String, error: Option<String> },
 }
 
-/// Leftover scanning is not built for Windows; the page is told so on `done`.
+/// Streams the app's row and its leftovers as `apps-leftovers` events (the
+/// macOS event shape): the install row, then AppData/ProgramData folders, then
+/// listed-only registry and startup entries, then `done`.
 #[tauri::command]
 pub fn app_leftovers(app: AppHandle, path: String) -> Result<(), String> {
-    let _ = app.emit(
-        "apps-leftovers",
-        LeftoversEvent::Done {
-            path,
-            error: Some("Looking for leftover files is not available on Windows yet.".into()),
-        },
-    );
+    std::thread::spawn(move || {
+        let done = |error: Option<String>| {
+            let _ = app.emit("apps-leftovers", LeftoversEvent::Done { path: path.clone(), error });
+        };
+        let all = read_installed();
+        let Some(installed) = all.iter().find(|candidate| candidate.entry.path.eq_ignore_ascii_case(&path)) else {
+            done(Some("That app is no longer installed.".into()));
+            return;
+        };
+        let emit = |part: leftovers::Part| {
+            let _ = app.emit("apps-leftovers", LeftoversEvent::Part { path: path.clone(), part });
+        };
+        emit(leftovers::bundle_part(installed));
+        leftovers::scan(installed, &all, &emit);
+        done(None);
+    });
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Icons and updates (not available yet)
+// Icons (not available yet) and updates (winget)
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Clone)]
@@ -321,33 +434,21 @@ pub async fn app_icons(app: AppHandle, paths: Vec<String>) -> Result<HashMap<Str
     Ok(HashMap::new())
 }
 
-#[derive(Serialize, Clone)]
-pub struct UpdateReport {
-    checked_at: Option<i64>,
-    apps: Vec<serde_json::Value>,
-}
-
-fn no_updates() -> UpdateReport {
-    UpdateReport { checked_at: None, apps: Vec::new() }
-}
-
 #[tauri::command]
-pub async fn apps_updates_cached() -> Result<UpdateReport, String> {
-    Ok(no_updates())
+pub async fn apps_updates_cached() -> Result<updates::UpdateReport, String> {
+    updates::cached().await
 }
 
-/// Update checks are not built for Windows: finishes at once with an empty report.
+/// Update checks run `winget upgrade` in the background (see `apps_windows_updates.rs`).
 #[tauri::command]
 pub fn apps_updates_refresh(app: AppHandle, force: bool) -> Result<(), String> {
-    let _ = force;
-    let _ = app.emit("apps-updates-done", no_updates());
-    Ok(())
+    updates::refresh(app, force)
 }
 
+/// Upgrades one app with winget in the background; reports as `apps-update-job`.
 #[tauri::command]
 pub async fn app_update(app: AppHandle, path: String) -> Result<String, String> {
-    let _ = (app, path);
-    Err("Updating apps from Pulse is not available on Windows yet.".into())
+    updates::update(app, path).await
 }
 
 // ---------------------------------------------------------------------------
@@ -385,10 +486,13 @@ pub enum QuitOutcome {
     StillRunning,
 }
 
-/// Windows processes that Quit must never be offered for.
-const SYSTEM_NAMES: [&str; 14] = [
+/// Windows processes that Quit must never be offered for: the kernel and session
+/// managers, the shell and its host processes, and the security stack.
+const SYSTEM_NAMES: &[&str] = &[
     "system", "system idle process", "registry", "smss.exe", "csrss.exe", "wininit.exe", "services.exe",
     "lsass.exe", "winlogon.exe", "svchost.exe", "dwm.exe", "fontdrvhost.exe", "memory compression", "explorer.exe",
+    "sihost.exe", "ctfmon.exe", "taskhostw.exe", "audiodg.exe", "spoolsv.exe", "msmpeng.exe", "securityhealthservice.exe",
+    "wudfhost.exe", "lsaiso.exe", "searchindexer.exe",
 ];
 
 fn refusal_for(name: &str, pid: u32) -> Option<String> {

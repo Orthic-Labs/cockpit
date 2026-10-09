@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/** True in the Windows webview: the hub runs one page on both systems and a few strings differ. */
+export const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
 export interface Metric<T> {
   value: T | null;
   capability: string;
@@ -436,7 +439,7 @@ export interface AppUpdate {
   name: string;
   bundle_id: string | null;
   installed_version: string | null;
-  source: "app_store" | "homebrew" | "sparkle" | "none";
+  source: "app_store" | "homebrew" | "sparkle" | "winget" | "none";
   state: "available" | "current" | "app_store" | "unknown" | "unavailable";
   latest_version: string | null;
   cask: string | null;

@@ -5,6 +5,7 @@ import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightki
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
+import { isWindows } from "../api";
 import "./settings.css";
 
 export interface Limit {
@@ -150,6 +151,8 @@ export function Settings({ section, notch, onNavigate }: {
   onNavigate: (section: string) => void;
 }) {
   const { state, error, send } = notch;
+  // Windows reads its Permissions rows from the system; no notch state is needed for them.
+  if (section === "permissions" && isWindows) return <WindowsPermissions />;
   if (!state) {
     return <div className="view ck-settings ck-sub" role="status">{error ?? "Reading the notch's settings…"}</div>;
   }
@@ -651,6 +654,58 @@ function useHubFullDiskAccess(): string | null {
     };
   }, []);
   return hub;
+}
+
+/** What a Windows Permissions row's status says. */
+const windowsStatusText = (id: string, status: Permission["status"]) =>
+  status === "granted" ? (id === "startup" ? "On" : "Allowed")
+  : status === "needsApproval" ? "Blocked"
+  : status === "off" ? "Off" : "Unknown";
+
+/**
+ * The Permissions page on Windows: the rows Windows can answer (notifications, Start with
+ * Windows, and the firewall row for nearby sharing). The Mac-only rows (Full Disk Access,
+ * Accessibility, old grants) do not apply.
+ */
+function WindowsPermissions() {
+  const [rows, setRows] = useState<Permission[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      invoke<Permission[]>("windows_permissions")
+        .then((value) => { if (alive) { setRows(value); setError(null); } })
+        .catch((e) => { if (alive) setError(String(e)); });
+    };
+    load();
+    const timer = window.setInterval(load, 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  return (
+    <div className="view ck-settings">
+      <Group title="Permissions">
+        {error && <div className="error ck-foot" role="alert">{error}</div>}
+        {rows && <PermissionLead permissions={rows} />}
+        {rows?.map((permission) => (
+          <div key={permission.id} className="ck-permrow">
+            <Row label={permission.title} note={permission.why}>
+              <span className="ck-ctls">
+                <span className={`ck-status ck-status-${permission.status}`}>{windowsStatusText(permission.id, permission.status)}</span>
+                <Button size="sm" variant="secondary"
+                  onClick={() => invoke<void>("windows_permission_open", { id: permission.id }).catch((e) => setError(String(e)))}>
+                  Open Settings
+                </Button>
+              </span>
+            </Row>
+          </div>
+        ))}
+        <LocalNetworkRow enabled />
+      </Group>
+    </div>
+  );
 }
 
 function PermissionLead({ permissions }: { permissions: Permission[] }) {

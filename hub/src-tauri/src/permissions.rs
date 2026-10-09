@@ -350,3 +350,128 @@ pub async fn tcc_reset(items: Vec<ResetItem>) -> Result<Vec<ResetOutcome>, Strin
         Ok(Vec::new())
     }
 }
+
+/// One row of the Windows Permissions page (the same shape the notch publishes on
+/// macOS, so the page renders both the same way).
+#[derive(Serialize, Clone)]
+pub struct WindowsPermission {
+    pub id: String,
+    pub title: String,
+    pub why: String,
+    /// "granted", "needsApproval", "off" or "unknown".
+    pub status: &'static str,
+    pub required: bool,
+}
+
+#[cfg(windows)]
+mod win {
+    use super::WindowsPermission;
+    use std::os::windows::process::CommandExt;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+    use winreg::RegKey;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const PUSH_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\PushNotifications";
+    const APP_NOTIFICATIONS: &str = r"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings";
+
+    fn user() -> RegKey {
+        RegKey::predef(HKEY_CURRENT_USER)
+    }
+
+    /// Whether Pulse's own Run value is present (Start with Windows).
+    fn starts_with_windows() -> &'static str {
+        match user().open_subkey_with_flags(RUN_KEY, KEY_READ) {
+            Ok(run) => {
+                if run.get_value::<String, _>("Pulse").is_ok() { "granted" } else { "off" }
+            }
+            Err(_) => "unknown",
+        }
+    }
+
+    /// Toasts are off for the whole account, or off for an entry named Pulse.
+    fn notifications() -> &'static str {
+        let account_off = user()
+            .open_subkey_with_flags(PUSH_KEY, KEY_READ)
+            .ok()
+            .and_then(|key| key.get_value::<u32, _>("ToastEnabled").ok())
+            == Some(0);
+        let app_off = user()
+            .open_subkey_with_flags(APP_NOTIFICATIONS, KEY_READ)
+            .map(|settings| {
+                settings.enum_keys().flatten().any(|name| {
+                    name.to_lowercase().contains("pulse")
+                        && settings
+                            .open_subkey_with_flags(&name, KEY_READ)
+                            .ok()
+                            .and_then(|key| key.get_value::<u32, _>("Enabled").ok())
+                            == Some(0)
+                })
+            })
+            .unwrap_or(false);
+        if account_off || app_off { "needsApproval" } else { "granted" }
+    }
+
+    pub(super) fn rows() -> Vec<WindowsPermission> {
+        vec![
+            WindowsPermission {
+                id: "notifications".into(),
+                title: "Notifications".into(),
+                why: "Lets Pulse show its alerts, such as a full drive, a drive health warning or a finished transfer.".into(),
+                status: notifications(),
+                required: false,
+            },
+            WindowsPermission {
+                id: "startup".into(),
+                title: "Start with Windows".into(),
+                why: "Opens the Pulse notch when you sign in. Windows lists it under Startup apps, where you can turn it off.".into(),
+                status: starts_with_windows(),
+                required: false,
+            },
+        ]
+    }
+
+    /// Opens the Windows Settings page for a row. Changes nothing itself.
+    pub(super) fn open(id: &str) -> Result<(), String> {
+        let uri = match id {
+            "notifications" => "ms-settings:notifications",
+            "startup" => "ms-settings:startupapps",
+            _ => return Err("Unknown permission.".to_string()),
+        };
+        std::process::Command::new("explorer.exe")
+            .arg(uri)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The Windows Permissions rows read from the system (startup entry, notifications).
+/// Nearby sharing's firewall row comes from the sharing state, like the Mac's Local
+/// Network row. Empty off Windows, where the notch publishes the rows.
+#[tauri::command]
+pub async fn windows_permissions() -> Result<Vec<WindowsPermission>, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(win::rows).await.map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+/// Opens the Windows Settings page behind a Permissions row. Windows only.
+#[tauri::command]
+pub fn windows_permission_open(id: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        win::open(&id)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        Err("Not available on this system.".to_string())
+    }
+}

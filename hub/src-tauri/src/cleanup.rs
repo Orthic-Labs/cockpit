@@ -40,7 +40,10 @@ fn run_cleanup_scan() -> Result<cs::Report, String> {
     let _exclusive = crate::scanner::exclusive();
     let started = Instant::now();
     let running = cs::running_process_names();
-    let report = cs::scan(&home(), &running)?;
+    #[allow(unused_mut)]
+    let mut report = cs::scan(&home(), &running)?;
+    #[cfg(windows)]
+    stamp_identities(&mut report);
     let scan_ms = started.elapsed().as_millis();
     let saved = Instant::now();
     if let Err(error) = cache::save(FINDINGS_FILE, FINDINGS_FORMAT, &report) {
@@ -68,11 +71,67 @@ pub async fn cleanup_scan() -> Result<cs::Report, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Windows: the core has no (volume, file) identity off Unix and records "0" and "0".
+/// The hub records the real one at scan time: a hash of the volume serial and a hash of
+/// the NTFS file id (see `files::ids`). A drive that gives none stays "0".
+#[cfg(windows)]
+fn stamp_identities(report: &mut cs::Report) {
+    for finding in &mut report.findings {
+        let path = std::path::Path::new(&finding.path);
+        let Ok(metadata) = std::fs::symlink_metadata(path) else { continue };
+        if let Ok((volume, file)) = crate::files::ids(path, &metadata) {
+            finding.dev = volume.to_string();
+            finding.ino = file.to_string();
+        }
+    }
+}
+
+/// Windows: re-reads each item's volume serial and file id right before the core's own
+/// checks and drops any item that is not the one scanned. Dropped items are reported as
+/// skipped. Kept items are handed on with the core's placeholder identity.
+#[cfg(windows)]
+fn confirm_identities(items: Vec<cs::Request>) -> (Vec<cs::Request>, Vec<cs::Skipped>) {
+    let mut kept = Vec::new();
+    let mut skipped = Vec::new();
+    for mut request in items {
+        let shown = request.path.clone();
+        let skip = |reason: &str| cs::Skipped { path: shown.clone(), reason: reason.to_string() };
+        let wanted = match (request.dev.parse::<u64>(), request.ino.parse::<u64>()) {
+            (Ok(dev), Ok(ino)) if (dev, ino) != (0, 0) => (dev, ino),
+            _ => {
+                skipped.push(skip("This item's identity was not recorded. Scan again."));
+                continue;
+            }
+        };
+        let path = std::path::PathBuf::from(&request.path);
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            skipped.push(skip("Already gone"));
+            continue;
+        };
+        match crate::files::ids(&path, &metadata) {
+            Ok(now) if now == wanted => {
+                request.dev = "0".into();
+                request.ino = "0".into();
+                kept.push(request);
+            }
+            Ok(_) => skipped.push(skip("Changed since the scan")),
+            Err(error) => skipped.push(skip(&error)),
+        }
+    }
+    (kept, skipped)
+}
+
 #[tauri::command]
 pub async fn cleanup_apply(items: Vec<cs::Request>) -> Result<cs::ApplyResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || -> Result<cs::ApplyResult, String> {
         let running = cs::running_process_names();
-        cs::apply(&home(), &items, &running, &mut move_to_trash)
+        #[cfg(windows)]
+        let (items, refused) = confirm_identities(items);
+        #[allow(unused_mut)]
+        let mut result = cs::apply(&home(), &items, &running, &mut move_to_trash)?;
+        #[cfg(windows)]
+        result.skipped.extend(refused);
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?

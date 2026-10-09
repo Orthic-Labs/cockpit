@@ -97,14 +97,24 @@ fn regular_file(path: &Path) -> Result<std::fs::Metadata, String> {
 }
 
 #[cfg(unix)]
-fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+fn same_file(_: &Path, a: &std::fs::Metadata, _: &Path, b: &std::fs::Metadata) -> Result<bool, String> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    Ok(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
-#[cfg(not(unix))]
-fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
-    false
+/// Windows: the same NTFS file id on the same volume serial means one file with two
+/// names (a hard link). A drive that gives no stable file id cannot prove two paths
+/// are different files, so nothing is moved.
+#[cfg(windows)]
+fn same_file(a_path: &Path, a: &std::fs::Metadata, b_path: &Path, b: &std::fs::Metadata) -> Result<bool, String> {
+    let first = crate::files::ids(a_path, a)?;
+    let second = crate::files::ids(b_path, b)?;
+    Ok(first == second)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file(_: &Path, _: &std::fs::Metadata, _: &Path, _: &std::fs::Metadata) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Bytes the extra copy occupies, when it is safe to move it now.
@@ -119,7 +129,7 @@ fn verify(item: &TrashItem) -> Result<u64, String> {
     }
     let extra_metadata = regular_file(extra)?;
     let kept_metadata = regular_file(kept)?;
-    if same_file(&extra_metadata, &kept_metadata) {
+    if same_file(extra, &extra_metadata, kept, &kept_metadata)? {
         return Err("A hard link to the kept copy; moving it frees no space.".into());
     }
     // Identical now, not just at scan time. Core only groups files it can read

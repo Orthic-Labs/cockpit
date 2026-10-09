@@ -7,7 +7,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use pulse_core::drive_health::{self as dh, Alert, Report};
+#[cfg(not(windows))]
+use pulse_core::drive_health as dh;
+use pulse_core::drive_health::{Alert, Report};
+
+/// Windows finds its physical drives itself (the core only maps macOS disks).
+#[cfg(windows)]
+#[path = "health_windows.rs"]
+mod windows_drives;
 
 /// One sampling pass at a time; a second caller waits and then finds the
 /// interval not yet due.
@@ -73,7 +80,14 @@ fn mounts() -> Vec<String> {
 /// Sample when due, returning the alerts this pass produced.
 fn sample(mounts: &[String]) -> Vec<Alert> {
     let _guard = SAMPLING.lock().unwrap_or_else(|e| e.into_inner());
-    dh::refresh(&crate::cache::dir(), &tool_candidates(), mounts, now(), false)
+    #[cfg(windows)]
+    {
+        windows_drives::refresh(&crate::cache::dir(), &tool_candidates(), mounts, now())
+    }
+    #[cfg(not(windows))]
+    {
+        dh::refresh(&crate::cache::dir(), &tool_candidates(), mounts, now(), false)
+    }
 }
 
 /// Asks the notch to peek for one alert. Written the way the hub writes its
@@ -106,7 +120,14 @@ pub async fn drive_health(mounts: Vec<String>) -> Result<Report, String> {
         for alert in sample(&mounts) {
             tell_notch(&alert);
         }
-        Ok(dh::report(&crate::cache::dir(), &tool_candidates(), &mounts, now()))
+        #[cfg(windows)]
+        {
+            Ok(windows_drives::report(&crate::cache::dir(), &mounts, now()))
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(dh::report(&crate::cache::dir(), &tool_candidates(), &mounts, now()))
+        }
     })
     .await
     .map_err(|e| e.to_string())?

@@ -8,6 +8,7 @@ import {
   api,
   appsApi,
   bytes,
+  isWindows,
   type AppEntry,
   type AppUpdate,
   type BackgroundEntry,
@@ -310,7 +311,9 @@ export function Apps() {
         <p>
           Sizes are measured on disk and keep updating while the list refreshes. Unused means not opened for{" "}
           {UNUSED_DAYS}+ days; an unknown last use never counts as unused. Updates show what the last check found. Apps
-          that update themselves open their own updater. Removing an app moves it to the Trash.
+          that update themselves open their own updater. {isWindows
+            ? "Removing an app runs its own uninstaller; leftover folders you pick go to the Recycle Bin. Last used comes from what Windows recorded when you launched the app from Explorer or Start, so many apps show Unknown."
+            : "Removing an app moves it to the Trash."}
         </p>
       </details>
     </div>
@@ -428,7 +431,14 @@ function AppRow({
   );
 }
 
-const LOCATIONS = ["Application", "User Library", "System Library", "Installer receipt"];
+const LOCATIONS = [
+  "Application",
+  "User Library",
+  "System Library",
+  "Your app data",
+  "Shared app data",
+  "Installer receipt",
+];
 const CONFIDENCE: Record<string, string> = {
   exact: "Exact id",
   helper: "Helper id",
@@ -437,6 +447,8 @@ const CONFIDENCE: Record<string, string> = {
   team: "Team id",
   name: "Name",
   receipt: "Receipt",
+  install: "Registered app",
+  publisher: "Publisher and product",
 };
 
 /** The bundle row from the list's facts, shown before the bundle part arrives. */
@@ -669,7 +681,9 @@ function Detail({
       )}
       {result && (
         <div className={`ck-apps-notice ${result.failed.length > 0 ? "ck-apps-notice--warn" : "ck-apps-notice--ok"}`} role="status">
-          Moved {result.moved.length} to Trash · {bytes(result.moved_bytes)} · restore with Put Back in Finder
+          {isWindows
+            ? `Started the uninstaller${result.moved.length > 0 ? ` · moved ${result.moved.length} leftover${result.moved.length === 1 ? "" : "s"} to the Recycle Bin · ${bytes(result.moved_bytes)} · restore from the Recycle Bin` : ""}`
+            : `Moved ${result.moved.length} to Trash · ${bytes(result.moved_bytes)} · restore with Put Back in Finder`}
           {result.failed.length > 0 && <strong> · {result.failed.length} failed and still listed</strong>}
           {result.failed.map((f) => (
             <div key={f.path} className="ck-apps-failed" title={f.path}>
@@ -695,7 +709,9 @@ function Detail({
           <summary>About these numbers</summary>
           <p>
             Sizes are measured on disk. Match shows how the file was tied to the app; items marked for review are left
-            unchecked. Everything goes to the Trash and can be put back.
+            unchecked. {isWindows
+              ? "Leftover folders go to the Recycle Bin and can be restored. Registry and startup entries are listed only; Pulse never removes them."
+              : "Everything goes to the Trash and can be put back."}
           </p>
         </details>
       </div>
@@ -707,7 +723,9 @@ function Detail({
             </strong>
             <span className="ck-apps-sub">
               {adminPicked > 0 && `${adminPicked} need an administrator password · `}
-              {app.running ? "Must quit first · " : ""}Goes to Trash, restore with Put Back
+              {app.running ? "Must quit first · " : ""}{isWindows
+                ? "Runs the app's uninstaller; leftovers go to the Recycle Bin"
+                : "Goes to Trash, restore with Put Back"}
             </span>
           </div>
           <Button
@@ -716,18 +734,20 @@ function Detail({
             disabled={busy || status === "loading" || pickedVisible.length === 0}
             onClick={() => setConfirm(true)}
           >
-            {busy ? "Working…" : "Move to Trash"}
+            {busy ? "Working…" : isWindows ? "Uninstall" : "Move to Trash"}
           </Button>
         </div>
       )}
       {confirm && (
         <ConfirmDialog
           danger
-          title={`Move ${pickedVisible.length} item${pickedVisible.length === 1 ? "" : "s"} to Trash?`}
-          description={`${app.name} and the selected files, ${bytes(total)} in all. Everything goes to the Trash, so it can be put back.${
-            app.running ? " The app will be asked to quit first." : ""
-          }${adminPicked > 0 ? " Root-owned items make Finder ask for your password." : ""}`}
-          confirmLabel="Move to Trash"
+          title={isWindows ? `Uninstall ${app.name}?` : `Move ${pickedVisible.length} item${pickedVisible.length === 1 ? "" : "s"} to Trash?`}
+          description={isWindows
+            ? `${app.name}'s own uninstaller opens and may ask for administrator rights. Once it has finished, any leftover folders you selected go to the Recycle Bin. If the uninstaller is cancelled, none are touched.`
+            : `${app.name} and the selected files, ${bytes(total)} in all. Everything goes to the Trash, so it can be put back.${
+                app.running ? " The app will be asked to quit first." : ""
+              }${adminPicked > 0 ? " Root-owned items make Finder ask for your password." : ""}`}
+          confirmLabel={isWindows ? "Uninstall" : "Move to Trash"}
           onConfirm={run}
           onCancel={() => setConfirm(false)}
         />

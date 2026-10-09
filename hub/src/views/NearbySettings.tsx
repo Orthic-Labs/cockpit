@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Button, Toggle } from "@rightkit/app-shell/react";
+import { isWindows } from "../api";
 
 /** What the sharing service reports (hub/src-tauri/src/share.rs). */
 export interface ShareState {
@@ -145,16 +146,18 @@ export function LocalNetworkRow({ enabled }: { enabled: boolean }) {
     <div className="ck-permrow">
       <div className="ck-set">
         <div className="ck-text">
-          <strong>Local network</strong>
+          <strong>{isWindows ? "Windows Firewall" : "Local network"}</strong>
           <div className="ck-sub">
-            Lets Pulse find and talk to nearby devices for sharing files. macOS asks the first time a device connects.
+            {isWindows
+              ? "Lets Pulse find and talk to nearby devices for sharing files. Windows Firewall must allow Pulse on private networks."
+              : "Lets Pulse find and talk to nearby devices for sharing files. macOS asks the first time a device connects."}
           </div>
         </div>
         <div className="ck-ctl">
           <span className="ck-ctls">
             <span className={`ck-status ck-status-${status}`}>{text}</span>
             <Button size="sm" variant="secondary" disabled={granted}
-              onClick={() => invoke<void>("open_local_network_settings")}>Open Settings</Button>
+              onClick={() => invoke<void>("open_local_network_settings")}>{isWindows ? "Open Firewall" : "Open Settings"}</Button>
           </span>
         </div>
       </div>

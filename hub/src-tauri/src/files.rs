@@ -54,12 +54,12 @@ fn stat(path: &Path) -> Result<std::fs::Metadata, String> {
 /// volume serial and the NTFS file id, kept under 2^53 so they survive the
 /// trip through the page's numbers.
 #[cfg(unix)]
-fn ids(_path: &Path, metadata: &std::fs::Metadata) -> Result<(u64, u64), String> {
+pub(crate) fn ids(_path: &Path, metadata: &std::fs::Metadata) -> Result<(u64, u64), String> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
 #[cfg(windows)]
-fn ids(path: &Path, metadata: &std::fs::Metadata) -> Result<(u64, u64), String> {
+pub(crate) fn ids(path: &Path, metadata: &std::fs::Metadata) -> Result<(u64, u64), String> {
     fn fold(text: &str) -> u64 {
         // FNV-1a, masked to 53 bits.
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;

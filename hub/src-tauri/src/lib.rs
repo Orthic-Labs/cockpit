@@ -522,6 +522,7 @@ pub fn run() {
             health::drive_health, duplicates::duplicates_scan, duplicates::duplicates_trash, duplicates::home_path,
             files::file_identity, files::finder_open, files::file_choose_folder, files::file_move_plan, files::file_move, files::file_trash,
             permissions::fda_status, permissions::fda_request, permissions::tcc_stale_scan, permissions::tcc_reset,
+            permissions::windows_permissions, permissions::windows_permission_open,
             share::share_state, share::share_devices, share::share_send, share::share_accept, share::share_decline,
             share::share_cancel, share::share_dismiss, share::open_local_network_settings
         ])
