@@ -6,6 +6,8 @@ enum DiskImageChoice: Equatable, Sendable {
     case install, replace, quitAndUpdate, undo, openInstaller, showImage, cancel, dismiss
     /// Nearby sharing's device list: send to this device (its fingerprint), or look again.
     case sendTo(String), refresh
+    /// A received message: copy it, or open it when it is a link.
+    case copyText, openLink
 }
 
 /// **A disk image, as the notch shows it**: an app installed on its own (with
@@ -242,6 +244,8 @@ struct DiskImageCard: View {
         case .dismiss:       return "clock"
         case .sendTo:        return "paperplane"
         case .refresh:       return "arrow.clockwise"
+        case .copyText:      return "doc.on.doc"
+        case .openLink:      return "safari"
         }
     }
 

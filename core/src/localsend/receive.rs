@@ -207,7 +207,8 @@ fn prepare_upload(
         known,
     };
 
-    let accepted = if config.accept_known && known {
+    // A message needs no yes: it is shown, as the LocalSend app does.
+    let accepted = if is_message || (config.accept_known && known) {
         true
     } else {
         let pending = Arc::new(Pending {
@@ -250,41 +251,27 @@ fn prepare_upload(
         saved_to: None,
         saved_files: Vec::new(),
         error: None,
+        message: None,
         started: now_ms(),
         finished: None,
     });
 
-    // A text message arrives in the request itself: keep it as a note.
+    // A text message arrives in the request itself: hand it to the notch,
+    // which shows it with Copy. Nothing is written to disk.
     if is_message {
         let text = incoming.preview.clone().unwrap_or_default();
-        let full = parsed
+        let full: String = parsed
             .files
             .values()
             .next()
             .and_then(|f| f.preview.clone())
-            .unwrap_or(text);
-        let name = format!("{} message.txt", proto::sanitize_component(&incoming.from));
-        let saved = proto::reserve_unique(&config.save_dir, &[name])
-            .and_then(|path| std::fs::write(&path, full.as_bytes()).map(|_| path));
-        match saved {
-            Ok(path) => {
-                inner.trust(&parsed.info.fingerprint);
-                inner.update_transfer(&transfer_id, true, |t| {
-                    t.saved_to = Some(config.save_dir.to_string_lossy().into_owned());
-                    t.saved_files = vec![path.to_string_lossy().into_owned()];
-                });
-                inner.end_transfer(&transfer_id, "done", None);
-                return (204, None);
-            }
-            Err(e) => {
-                inner.end_transfer(
-                    &transfer_id,
-                    "failed",
-                    Some(format!("Couldn't save the message: {e}")),
-                );
-                return message(500, "Unknown error by receiver");
-            }
-        }
+            .unwrap_or(text)
+            .chars()
+            .take(64 * 1024)
+            .collect();
+        inner.update_transfer(&transfer_id, true, |t| t.message = Some(full));
+        inner.end_transfer(&transfer_id, "done", None);
+        return (204, None);
     }
 
     let mut files = HashMap::new();

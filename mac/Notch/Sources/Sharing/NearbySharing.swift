@@ -42,6 +42,8 @@ struct ShareTransfer: Decodable, Equatable {
     let savedTo: String?
     let savedFiles: [String]?
     let error: String?
+    /// A received text message, shown with Copy instead of saved as a file.
+    let message: String?
 
     var isOpen: Bool { state == "active" || state == "waiting" }
 }
@@ -103,6 +105,7 @@ final class NearbySharing {
         case none
         case incoming(String)
         case saved([String])
+        case message(String)
         case note
         case choose
         case sending
@@ -453,6 +456,14 @@ final class NearbySharing {
                 if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
             }
             clearCard()
+        case .message(let text):
+            if choice == .copyText {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            } else if choice == .openLink, let url = Self.link(in: text) {
+                NSWorkspace.shared.open(url)
+            }
+            clearCard()
         case .choose:
             switch choice {
             case .sendTo(let fingerprint):
@@ -572,8 +583,25 @@ final class NearbySharing {
              as: .incoming(request.id))
     }
 
+    /// The message as a web address, when it is nothing else.
+    private static func link(in text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(where: \.isWhitespace),
+              let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return url
+    }
+
     private func announce(_ transfer: ShareTransfer, folder: String?) {
         switch (transfer.direction, transfer.state) {
+        case ("receive", "done") where transfer.message != nil:
+            let text = transfer.message ?? ""
+            let link = Self.link(in: text)
+            show(DiskImagePrompt(iconPath: iconPath("/System/Applications/Messages.app"),
+                                 title: L10n.t("Message from \(transfer.peer)"), detail: text, style: .ask,
+                                 primary: .init(choice: .copyText, label: L10n.t("Copy")),
+                                 secondary: link == nil ? nil : .init(choice: .openLink, label: L10n.t("Open"))),
+                 as: .message(text))
         case ("receive", "done"):
             let files = transfer.savedFiles ?? []
             let place = URL(fileURLWithPath: transfer.savedTo ?? folder ?? defaultFolder).lastPathComponent

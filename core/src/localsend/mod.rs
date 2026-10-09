@@ -93,6 +93,9 @@ pub struct Transfer {
     pub saved_to: Option<String>,
     pub saved_files: Vec<String>,
     pub error: Option<String>,
+    /// A received text message, shown with Copy rather than saved as a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub started: u64,
     pub finished: Option<u64>,
 }
@@ -567,6 +570,7 @@ impl Service {
             saved_to: None,
             saved_files: Vec::new(),
             error: None,
+            message: None,
             started: now_ms(),
             finished: None,
         });
