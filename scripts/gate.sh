@@ -48,9 +48,16 @@ node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.tes
 cargo fmt --all
 # A manifest change without a matching lock: resolve it here (CI is the only
 # place Pulse may resolve), print the lock patch for a verbatim commit, fail.
-if ! cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
+if ! metadata_err="$(cargo metadata --locked --format-version 1 2>&1 >/dev/null)"; then
+  echo "cargo metadata --locked failed:" >&2
+  printf '%s\n' "$metadata_err" >&2
   cargo update --workspace
-  echo "Cargo.lock is out of date; commit the PULSE_CARGO_LOCK_PATCH from this log." >&2
+  if git diff --quiet -- Cargo.lock; then
+    echo "Cargo.lock is unchanged by cargo update; the failure above is not a stale lock." >&2
+  else
+    echo "Cargo.lock is out of date; commit this patch verbatim:" >&2
+    echo PULSE_CARGO_LOCK_PATCH_BEGIN; git diff -- Cargo.lock; echo PULSE_CARGO_LOCK_PATCH_END
+  fi
   exit 1
 fi
 cargo test --locked --workspace --no-fail-fast
