@@ -790,7 +790,8 @@ mod tests {
         let (w, h) = layout::body_size(96);
         let b = notch_bounds(M1, slot(POSITION_DEFAULT));
         assert_eq!((b.top, b.width(), b.height()), (0, w, h));
-        assert_eq!(b.left, (1920 - w) / 2);
+        // Centred to within a pixel: an odd width rounds the half-pixel either way.
+        assert!((b.left - (1920 - w) / 2).abs() <= 1, "left {} for width {w}", b.left);
     }
 
     #[test]
