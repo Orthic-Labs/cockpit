@@ -1,79 +1,136 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! Native Windows pill (M0 prototype).
+//! Native Windows notch (M1).
 //!
-//! Ownership: a hidden controller window owns the single sampling timer and receives
-//! WM_DISPLAYCHANGE; per-monitor panels are RAII `OwnedWindow`s stored in `STATE`.
+//! Ownership: a hidden controller window owns the sampling timer and receives
+//! WM_DISPLAYCHANGE and usage updates; per-monitor notch panels (layered, per-pixel alpha,
+//! never activated) are RAII `OwnedWindow`s stored in `STATE`, plus one lazily created card
+//! window shared by the hover card and the Quit menu.
 //! Locking rule: `STATE`/`SAMPLER` guards are only held for plain data access. Any call that
-//! can re-enter a wndproc (SetWindowPos, ShowWindow, InvalidateRect, DestroyWindow,
+//! can re-enter a wndproc (SetWindowPos, UpdateLayeredWindow, ShowWindow, DestroyWindow,
 //! CreateWindowExW, EnumWindows, EnumDisplayMonitors) runs with no guard held, and panels
 //! are removed from `STATE` before they are dropped (destroyed).
 
+mod autostart;
+mod canvas;
+mod card;
 mod diag;
+mod http;
+mod hub;
+mod json;
+mod layout;
 mod lifecycle;
 mod raii;
+mod render;
 mod runtime;
+mod sensors;
 mod settings;
+mod surface;
+mod usage;
 mod visibility;
 
-use diag::{FailureLatch, Transition};
-use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate, cpu_fraction};
-use raii::{
-    ClassGuard, GdiObject, OwnedWindow, PaintScope, SelectScope, TimerGuard, hwnd_from_key,
-    hwnd_key,
-};
+use card::CardContent;
+use layout::{Cell, CellView};
+use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate};
+use raii::{ClassGuard, OwnedWindow, TimerGuard, hwnd_from_key, hwnd_key};
 use runtime::{
-    InstanceError, InstanceLock, Placed, Placement, Retry, RetryReport, anchor_bounds,
-    desired_hidden, interval_ms, plan_placements,
+    InstanceError, InstanceLock, Placed, Placement, Retry, RetryReport, Slot, desired_hidden,
+    interval_ms, notch_bounds, plan_placements,
 };
-use settings::{Anchor, PillSettings};
+use sensors::{Machine, Sampler};
+use settings::PillSettings;
+use std::cell::RefCell;
 use std::mem::size_of;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use surface::{TextPainter, present};
+use usage::Usage;
 use visibility::{Occupancy, classify_window, is_shell_class_name, is_tool_window_ex_style};
 use windows::Win32::Foundation::{
-    COLORREF, ERROR_SUCCESS, FILETIME, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
-    SetLastError, WPARAM,
+    ERROR_SUCCESS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SetLastError,
+    WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
-    Arc, CreatePen, CreateSolidBrush, Ellipse, EnumDisplayMonitors, FillRect, GetMonitorInfoW,
-    HBRUSH, HDC, HMONITOR, InvalidateRect, MONITORINFO, MONITORINFOEXW, PS_SOLID, SetBkMode,
-    SetTextColor, TRANSPARENT, TextOutW,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MONITORINFOEXW, MonitorFromRect, ValidateRect,
 };
-use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-use windows::Win32::System::Threading::GetSystemTimes;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_LBUTTON, VK_MBUTTON, VK_MENU, VK_RBUTTON,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Error, PCWSTR, s, w};
 
-const PANEL_CLASS: PCWSTR = w!("PulseM0NativePill");
-const CONTROLLER_CLASS: PCWSTR = w!("PulseM0Controller");
+const PANEL_CLASS: PCWSTR = w!("PulseM1Notch");
+const CONTROLLER_CLASS: PCWSTR = w!("PulseM1Controller");
+const CARD_CLASS: PCWSTR = w!("PulseM1Card");
 const TIMER_ID: usize = 7;
+const MENU_TIMER_ID: usize = 8;
+const MENU_POLL_MS: u32 = 80;
 static COORDINATES_COMPARABLE: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Copy, PartialEq)]
-struct Reading {
-    cpu: Option<f32>,
-    memory: Option<f32>,
-    disk: Option<f32>,
-}
 
 struct Panel {
     id: String,
     bounds: Bounds, // monitor bounds this panel was placed for (updated only after a move succeeds)
-    anchor: Anchor, // anchor this panel was placed with (updated only after a move succeeds)
+    slot: Slot,     // position/DPI this panel was placed with (updated only after a move succeeds)
     // Last successfully applied hidden state. Created hidden; a failed show/hide leaves it
     // unchanged so the next refresh retries while the panel keeps owning its HWND.
     visibility: Retry<bool>,
+    /// What the layered bitmap currently shows (cell views + DPI); `None` forces a redraw.
+    drawn: Option<(Vec<CellView>, u32)>,
     window: OwnedWindow,
+}
+
+struct Drag {
+    panel: isize,
+    id: String,
+    start_cursor_x: i32,
+    start_left: i32,
+    left: i32,
+    top: i32,
+    width: i32,
+    monitor_left: i32,
+    monitor_right: i32,
+    moved: bool,
+}
+
+struct Interaction {
+    /// Panel and cell currently under the pointer.
+    hover: Option<(isize, usize)>,
+    /// Panel with an armed WM_MOUSELEAVE request.
+    tracking: Option<isize>,
+    /// Panel and cell where a plain left press started (click on release in the same cell).
+    press: Option<(isize, usize)>,
+    drag: Option<Drag>,
+    /// Quit menu: owning panel and its screen rectangle.
+    menu: Option<(isize, RECT)>,
+    /// What the card window shows: panel, cell and content.
+    card_shown: Option<(isize, usize, CardContent)>,
+}
+
+impl Interaction {
+    const fn new() -> Self {
+        Self {
+            hover: None,
+            tracking: None,
+            press: None,
+            drag: None,
+            menu: None,
+            card_shown: None,
+        }
+    }
 }
 
 struct AppState {
     panels: Vec<Panel>,
-    reading: Option<Reading>,
+    machine: Option<Machine>,
+    card: Option<OwnedWindow>,
+    controller: isize,
+    ui: Interaction,
     timer_ms: u32,
     shutting_down: bool,
     reconcile_retry: bool,
@@ -89,7 +146,10 @@ impl AppState {
     const fn new() -> Self {
         Self {
             panels: Vec::new(),
-            reading: None,
+            machine: None,
+            card: None,
+            controller: 0,
+            ui: Interaction::new(),
             timer_ms: 0,
             shutting_down: false,
             reconcile_retry: false,
@@ -107,21 +167,22 @@ fn lock_state() -> MutexGuard<'static, AppState> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Sole sampling owner: only `sample_once`, called only from the controller's WM_TIMER
-/// path (plus the first sample at startup), touches this. Held across plain syscalls only.
-struct Sampler {
-    previous_times: Option<(u64, u64, u64)>,
-    cpu: FailureLatch,
-    memory: FailureLatch,
-    disk: FailureLatch,
+static SAMPLER: Mutex<Sampler> = Mutex::new(Sampler::new());
+
+thread_local! {
+    /// GDI text rasteriser; only ever used on the UI thread.
+    static TEXT: RefCell<Option<TextPainter>> = const { RefCell::new(None) };
 }
 
-static SAMPLER: Mutex<Sampler> = Mutex::new(Sampler {
-    previous_times: None,
-    cpu: FailureLatch::new(),
-    memory: FailureLatch::new(),
-    disk: FailureLatch::new(),
-});
+fn with_text<R>(f: impl FnOnce(&mut TextPainter) -> R) -> Option<R> {
+    TEXT.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = TextPainter::new();
+        }
+        slot.as_mut().map(f)
+    })
+}
 
 fn monitor_info() -> MONITORINFOEXW {
     MONITORINFOEXW {
@@ -165,8 +226,17 @@ fn run() -> Result<(), Error> {
         }
     };
     load_settings();
+    let (launch, writable) = {
+        let app = lock_state();
+        (app.settings.launch_at_login, app.settings_writable)
+    };
+    if writable {
+        autostart::apply(launch);
+    }
     let result = run_pill();
     // run_pill has returned: timer killed, panels destroyed, classes unregistered.
+    usage::stop();
+    hub::terminate();
     persist_settings();
     result
 }
@@ -238,24 +308,27 @@ fn run_pill() -> Result<(), Error> {
     configure_dpi_awareness();
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }?.into();
 
-    // Drop order is reverse of declaration: timer, controller window (tears down panels),
-    // panel class, controller class.
+    // Drop order is reverse of declaration: timer, controller window (tears down panels and
+    // the card), then the classes.
     let _controller_class =
         ClassGuard::register(CONTROLLER_CLASS, Some(controller_proc), instance)?;
     let _panel_class = ClassGuard::register(PANEL_CLASS, Some(panel_proc), instance)?;
+    let _card_class = ClassGuard::register(CARD_CLASS, Some(card_proc), instance)?;
     let controller = OwnedWindow::create(
         WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
         CONTROLLER_CLASS,
-        &wide("Pulse M0 Controller"),
+        &wide("Pulse Notch Controller"),
         WS_POPUP, // never shown; still a top-level window, so it receives WM_DISPLAYCHANGE
         (0, 0, 0, 0),
         instance,
     )?;
+    lock_state().controller = controller.key();
     let _timer = TimerGuard::new(controller.hwnd(), TIMER_ID);
     if !arm_timer(controller.hwnd(), HIDDEN_INTERVAL_MS) {
         return Err(Error::from_win32());
     }
 
+    usage::start(controller.key());
     reconcile_panels();
     let interval = refresh_panels(Some(sample_once()));
     arm_timer(controller.hwnd(), interval);
@@ -341,6 +414,11 @@ fn arm_timer(controller: HWND, ms: u32) -> bool {
     true
 }
 
+fn controller_hwnd() -> Option<HWND> {
+    let key = lock_state().controller;
+    (key != 0).then(|| hwnd_from_key(key))
+}
+
 fn on_timer(controller: HWND) {
     let (down, retry) = {
         let app = lock_state();
@@ -356,100 +434,19 @@ fn on_timer(controller: HWND) {
     arm_timer(controller, interval);
 }
 
-fn sample_once() -> Reading {
-    let mut sampler = SAMPLER.lock().unwrap_or_else(PoisonError::into_inner);
-    let sampler = &mut *sampler;
-    let cpu = match read_cpu_times() {
-        Ok(current) => {
-            note(&mut sampler.cpu, "GetSystemTimes", false, "cpu");
-            let value = cpu_fraction(sampler.previous_times, current);
-            sampler.previous_times = Some(current);
-            value
-        }
-        Err(error) => {
-            if sampler.cpu.observe(true) == Transition::Failed {
-                diag::win32_error("GetSystemTimes", &error, "cpu");
-            }
-            sampler.previous_times = None;
-            None
-        }
-    };
-    let memory = settle(
-        &mut sampler.memory,
-        "GlobalMemoryStatusEx",
-        "memory",
-        read_memory(),
-    );
-    let disk = settle(
-        &mut sampler.disk,
-        "GetDiskFreeSpaceExW",
-        "disk",
-        read_disk(),
-    );
-    Reading {
-        cpu: cpu.map(|v| v.clamp(0.0, 1.0)),
-        memory,
-        disk,
+fn on_display_change() {
+    reconcile_panels();
+    let interval = refresh_panels(None);
+    if let Some(controller) = controller_hwnd() {
+        arm_timer(controller, interval);
     }
 }
 
-fn note(latch: &mut FailureLatch, op: &str, failed: bool, ctx: &str) {
-    if latch.observe(failed) == Transition::Recovered {
-        diag::info("sampler_recovered", &[("op", op), ("ctx", ctx)]);
-    }
-}
-
-fn settle(
-    latch: &mut FailureLatch,
-    op: &str,
-    ctx: &str,
-    result: Result<Option<f32>, Error>,
-) -> Option<f32> {
-    match result {
-        Ok(value) => {
-            note(latch, op, false, ctx);
-            value
-        }
-        Err(error) => {
-            if latch.observe(true) == Transition::Failed {
-                diag::win32_error(op, &error, ctx);
-            }
-            None
-        }
-    }
-}
-
-fn read_cpu_times() -> Result<(u64, u64, u64), Error> {
-    let mut idle = FILETIME::default();
-    let mut kernel = FILETIME::default();
-    let mut user = FILETIME::default();
-    unsafe { GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)) }?;
-    Ok((filetime(idle), filetime(kernel), filetime(user)))
-}
-
-fn read_memory() -> Result<Option<f32>, Error> {
-    let mut memory = MEMORYSTATUSEX {
-        dwLength: size_of::<MEMORYSTATUSEX>() as u32,
-        ..Default::default()
-    };
-    unsafe { GlobalMemoryStatusEx(&mut memory) }?;
-    Ok(Some(
-        (1.0 - (memory.ullAvailPhys as f32 / memory.ullTotalPhys.max(1) as f32)).clamp(0.0, 1.0),
-    ))
-}
-
-fn read_disk() -> Result<Option<f32>, Error> {
-    let mut free = 0u64;
-    let mut total = 0u64;
-    unsafe { GetDiskFreeSpaceExW(PCWSTR::null(), Some(&mut free), Some(&mut total), None) }?;
-    if total == 0 {
-        return Ok(None); // unknown, shown as "--"
-    }
-    Ok(Some((1.0 - free as f32 / total as f32).clamp(0.0, 1.0)))
-}
-
-fn filetime(value: FILETIME) -> u64 {
-    ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64
+fn sample_once() -> Machine {
+    SAMPLER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .sample()
 }
 
 // ---------------------------------------------------------------- monitors / panels
@@ -508,7 +505,7 @@ fn enumerate_monitors() -> Option<Vec<MonitorSpec>> {
 }
 
 /// Rebuild the panel set to match the current monitors (hot-plug / disconnect / reconnect /
-/// resolution or arrangement change). Re-entrant requests coalesce through `ReconcileGate`.
+/// resolution, DPI or arrangement change). Re-entrant requests coalesce through `ReconcileGate`.
 fn reconcile_panels() {
     {
         let mut app = lock_state();
@@ -532,16 +529,29 @@ fn reconcile_panels() {
     }
 }
 
-/// Enabled monitors with their stored anchors (defaults for monitors not in settings).
+/// Effective DPI of the monitor with these bounds (96 when it cannot be read).
+fn monitor_dpi(bounds: Bounds) -> u32 {
+    let rect: RECT = bounds.into();
+    let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) };
+    let (mut x, mut y) = (0u32, 0u32);
+    match unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } {
+        Ok(()) if x > 0 => x,
+        _ => 96,
+    }
+}
+
+/// Enabled monitors with their remembered position and DPI (defaults for unknown monitors).
 fn desired_placements(found: &[MonitorSpec]) -> Vec<Placed> {
     let settings = lock_state().settings.clone();
     found
         .iter()
         .filter_map(|spec| {
-            let setting = settings.monitor(&spec.id);
-            setting.enabled.then(|| Placed {
+            settings.monitor(&spec.id).enabled.then(|| Placed {
                 spec: spec.clone(),
-                anchor: setting.anchor,
+                slot: Slot {
+                    along: settings.position(&spec.id),
+                    dpi: monitor_dpi(spec.bounds),
+                },
             })
         })
         .collect()
@@ -556,7 +566,7 @@ fn apply_monitor_set(desired: &[Placed]) -> bool {
                 id: p.id.clone(),
                 bounds: p.bounds,
             },
-            anchor: p.anchor,
+            slot: p.slot,
         })
         .collect();
     let mut all_ok = true;
@@ -589,7 +599,7 @@ fn apply_monitor_set(desired: &[Placed]) -> bool {
                     .find(|p| p.id == placed.spec.id)
                     .map(|p| p.window.key());
                 if let Some(key) = key {
-                    let target = anchor_bounds(placed.spec.bounds, placed.anchor);
+                    let target = notch_bounds(placed.spec.bounds, placed.slot);
                     let moved = unsafe {
                         SetWindowPos(
                             hwnd_from_key(key),
@@ -609,7 +619,8 @@ fn apply_monitor_set(desired: &[Placed]) -> bool {
                                 .find(|p| p.id == placed.spec.id)
                             {
                                 p.bounds = placed.spec.bounds;
-                                p.anchor = placed.anchor;
+                                p.slot = placed.slot;
+                                p.drawn = None; // size or DPI may have changed
                             }
                         }
                         Err(error) => {
@@ -643,34 +654,37 @@ fn apply_monitor_set(desired: &[Placed]) -> bool {
 fn create_panel(placed: &Placed) -> Result<Panel, Error> {
     let spec = &placed.spec;
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }?.into();
-    let target = anchor_bounds(spec.bounds, placed.anchor);
+    let target = notch_bounds(spec.bounds, placed.slot);
+    // Created hidden and without contents: the first refresh draws, then decides whether to
+    // show it, so it never flashes over a fullscreen app. On error `window` drops and
+    // destroys the half-built panel.
     let window = OwnedWindow::create(
         WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         PANEL_CLASS,
-        &wide(&format!("Pulse M0 {}", spec.id)),
+        &wide(&format!("Pulse Notch {}", spec.id)),
         WS_POPUP,
         (target.left, target.top, target.width(), target.height()),
         instance,
     )?;
-    // On error `window` drops and destroys the half-built panel. Created hidden: the first
-    // refresh decides whether to show it, so it never flashes over a fullscreen app.
-    unsafe { SetLayeredWindowAttributes(window.hwnd(), COLORREF(0), 238, LWA_ALPHA) }?;
     Ok(Panel {
         id: spec.id.clone(),
         bounds: spec.bounds,
-        anchor: placed.anchor,
+        slot: placed.slot,
         visibility: Retry::new(true),
+        drawn: None,
         window,
     })
 }
 
 fn teardown_panels() {
-    let panels = {
+    let (panels, card) = {
         let mut app = lock_state();
         app.shutting_down = true;
-        std::mem::take(&mut app.panels)
+        (std::mem::take(&mut app.panels), app.card.take())
     };
-    drop(panels); // destroys every panel window with no lock held
+    // Destroys every window with no lock held.
+    drop(panels);
+    drop(card);
 }
 
 fn monitor_id(info: &MONITORINFOEXW) -> String {
@@ -684,29 +698,27 @@ fn monitor_id(info: &MONITORINFOEXW) -> String {
 
 // ---------------------------------------------------------------- visibility
 
-/// Re-evaluate occupancy for every panel, show/hide on transitions, invalidate when the
-/// reading or visibility changed. Returns the cadence the timer should use.
-fn refresh_panels(new_reading: Option<Reading>) -> u32 {
-    let (targets, own, reading_changed, settings_visible, cadence) = {
+/// Re-evaluate occupancy for every panel, show/hide on transitions, redraw when what is
+/// shown changed. Returns the cadence the timer should use.
+fn refresh_panels(new_machine: Option<Machine>) -> u32 {
+    let usage = usage::snapshot();
+    let (targets, own, settings_visible, cadence) = {
         let mut app = lock_state();
-        let changed = match new_reading {
-            Some(reading) => {
-                let changed = app.reading != Some(reading);
-                app.reading = Some(reading);
-                changed
-            }
-            None => false,
-        };
+        if let Some(machine) = new_machine {
+            app.machine = Some(machine);
+        }
         let targets: Vec<(isize, Bounds, Retry<bool>)> = app
             .panels
             .iter()
             .map(|p| (p.window.key(), p.bounds, p.visibility))
             .collect();
-        let own: Vec<isize> = targets.iter().map(|t| t.0).collect();
+        let mut own: Vec<isize> = targets.iter().map(|t| t.0).collect();
+        if let Some(card) = &app.card {
+            own.push(card.key());
+        }
         (
             targets,
             own,
-            changed,
             app.settings.visible,
             app.settings.cadence_seconds,
         )
@@ -718,6 +730,11 @@ fn refresh_panels(new_reading: Option<Reading>) -> u32 {
         // Occupancy is only scanned when the pill could be shown at all.
         let suppressed = settings_visible && monitor_has_fullscreen_occupancy(bounds, &own);
         let hidden = desired_hidden(settings_visible, suppressed);
+        if hidden {
+            dismiss_card_for(key);
+        } else {
+            redraw_panel(key, &usage);
+        }
         if visibility.needs(hidden) {
             let result = unsafe { set_panel_hidden(hwnd, hidden) };
             let ok = result.is_ok();
@@ -740,15 +757,6 @@ fn refresh_panels(new_reading: Option<Reading>) -> u32 {
                 ),
                 RetryReport::Applied | RetryReport::StillFailing(_) => {}
             }
-            if ok && !hidden {
-                unsafe {
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                }
-            }
-        } else if reading_changed && !visibility.applied() {
-            unsafe {
-                let _ = InvalidateRect(Some(hwnd), None, false);
-            }
         }
         outcomes.push((key, visibility));
     }
@@ -768,10 +776,47 @@ fn refresh_panels(new_reading: Option<Reading>) -> u32 {
                 .count(),
         )
     };
+    refresh_card(&usage);
     interval_ms(cadence, total, hidden_count)
 }
 
-/// Show (topmost, no activation) or hide a panel through SetWindowPos so failures are
+/// Draws the panel's bitmap when the cells it shows (or its DPI) changed.
+fn redraw_panel(key: isize, usage: &[Usage; 2]) {
+    let (views, dpi) = {
+        let app = lock_state();
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
+        };
+        let views = layout::views(app.machine.as_ref(), usage);
+        let dpi = panel.slot.dpi;
+        if panel
+            .drawn
+            .as_ref()
+            .is_some_and(|(shown, shown_dpi)| *shown == views && *shown_dpi == dpi)
+        {
+            return;
+        }
+        (views, dpi)
+    };
+    let Some(canvas) = with_text(|text| render::render_panel(&views, dpi, text)) else {
+        return;
+    };
+    match present(hwnd_from_key(key), &canvas, None) {
+        Ok(()) => {
+            if let Some(panel) = lock_state()
+                .panels
+                .iter_mut()
+                .find(|p| p.window.key() == key)
+            {
+                panel.drawn = Some((views, dpi));
+            }
+        }
+        // `drawn` stays stale, so the next refresh retries.
+        Err(error) => diag::win32_error("UpdateLayeredWindow", &error, "panel"),
+    }
+}
+
+/// Show (topmost, no activation) or hide a window through SetWindowPos so failures are
 /// observable (ShowWindow only reports prior visibility, never failure).
 unsafe fn set_panel_hidden(hwnd: HWND, hidden: bool) -> Result<(), Error> {
     let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
@@ -913,6 +958,462 @@ fn is_shell_desktop_window(hwnd: HWND) -> Option<bool> {
     Some(is_shell_class_name(&name))
 }
 
+// ---------------------------------------------------------------- hover card, menu, drag
+
+const MSG_MOUSELEAVE: u32 = 0x02A3;
+
+fn lparam_point(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam.0 & 0xFFFF) as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    )
+}
+
+fn alt_down() -> bool {
+    unsafe { GetKeyState(VK_MENU.0 as i32) } < 0
+}
+
+fn panel_dpi(key: isize) -> Option<u32> {
+    lock_state()
+        .panels
+        .iter()
+        .find(|p| p.window.key() == key)
+        .map(|p| p.slot.dpi)
+}
+
+/// Creates the shared card window on first use; returns its key.
+fn ensure_card() -> Option<isize> {
+    let existing = lock_state().card.as_ref().map(OwnedWindow::key);
+    if existing.is_some() {
+        return existing;
+    }
+    if lock_state().shutting_down {
+        return None;
+    }
+    let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }.ok()?.into();
+    let window = match OwnedWindow::create(
+        WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        CARD_CLASS,
+        &wide("Pulse Notch Card"),
+        WS_POPUP,
+        (0, 0, 1, 1),
+        instance,
+    ) {
+        Ok(window) => window,
+        Err(error) => {
+            diag::win32_error("CreateCard", &error, "card");
+            return None;
+        }
+    };
+    let key = window.key();
+    lock_state().card = Some(window);
+    Some(key)
+}
+
+fn hide_card() {
+    let key = {
+        let mut app = lock_state();
+        app.ui.card_shown = None;
+        app.card.as_ref().map(OwnedWindow::key)
+    };
+    if let Some(key) = key {
+        let _ = unsafe { set_panel_hidden(hwnd_from_key(key), true) };
+    }
+}
+
+/// Clears hover/menu/card state that belongs to `key` (the panel was hidden or removed).
+fn dismiss_card_for(key: isize) {
+    let relevant = {
+        let mut app = lock_state();
+        let relevant = app.ui.hover.is_some_and(|h| h.0 == key)
+            || app.ui.menu.is_some_and(|m| m.0 == key)
+            || app.ui.card_shown.as_ref().is_some_and(|c| c.0 == key);
+        if relevant {
+            app.ui.hover = None;
+            app.ui.menu = None;
+        }
+        relevant
+    };
+    if relevant {
+        stop_menu_timer();
+        hide_card();
+    }
+}
+
+fn stop_menu_timer() {
+    if let Some(controller) = controller_hwnd() {
+        let _ = unsafe { KillTimer(Some(controller), MENU_TIMER_ID) };
+    }
+}
+
+fn clamp_x(x: i32, width: i32, monitor: Bounds) -> i32 {
+    x.clamp(monitor.left, (monitor.right - width).max(monitor.left))
+}
+
+/// Shows (or updates) the hover card for `cell` of the notch `key`, below the notch.
+fn show_card(key: isize, cell: usize) {
+    let usage = usage::snapshot();
+    let now = usage::now_secs();
+    let (content, dpi, monitor) = {
+        let app = lock_state();
+        if app.shutting_down {
+            return;
+        }
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
+        };
+        (
+            card::content_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now),
+            panel.slot.dpi,
+            panel.bounds,
+        )
+    };
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd_from_key(key), &mut rect) }.is_err() {
+        return;
+    }
+    let s = layout::scale(dpi);
+    let (card_width, _) = render::card_size(&content, dpi);
+    let centre = rect.left + (layout::cell_left(cell, dpi) + layout::RING * s / 2.0) as i32;
+    let x = clamp_x(centre - card_width / 2, card_width, monitor);
+    let y = rect.bottom + (layout::CARD_GAP * s).round() as i32;
+    let Some(card_key) = ensure_card() else {
+        return;
+    };
+    let Some(canvas) = with_text(|text| render::render_card(&content, dpi, text)) else {
+        return;
+    };
+    let hwnd = hwnd_from_key(card_key);
+    if let Err(error) = present(hwnd, &canvas, Some((x, y))) {
+        diag::win32_error("UpdateLayeredWindow", &error, "card");
+        return;
+    }
+    if let Err(error) = unsafe { set_panel_hidden(hwnd, false) } {
+        diag::win32_error("SetWindowPos", &error, "card show");
+        return;
+    }
+    lock_state().ui.card_shown = Some((key, cell, content));
+}
+
+/// Re-renders the visible hover card when its numbers changed.
+fn refresh_card(usage: &[Usage; 2]) {
+    let now = usage::now_secs();
+    let (key, cell, stale) = {
+        let app = lock_state();
+        if app.ui.menu.is_some() {
+            return;
+        }
+        let Some((key, cell, shown)) = &app.ui.card_shown else {
+            return;
+        };
+        let fresh = card::content_for(Cell::ALL[*cell], app.machine.as_ref(), usage, now);
+        (*key, *cell, fresh != *shown)
+    };
+    if stale {
+        show_card(key, cell);
+    }
+}
+
+fn arm_leave(hwnd: HWND) {
+    let key = hwnd_key(hwnd);
+    {
+        let mut app = lock_state();
+        if app.ui.tracking == Some(key) {
+            return;
+        }
+        app.ui.tracking = Some(key);
+    }
+    let mut request = TRACKMOUSEEVENT {
+        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    if unsafe { TrackMouseEvent(&mut request) }.is_err() {
+        lock_state().ui.tracking = None;
+    }
+}
+
+fn clear_hover(key: isize) {
+    let was_hovering = {
+        let mut app = lock_state();
+        if app.ui.menu.is_some() || app.ui.drag.is_some() {
+            false
+        } else if app.ui.hover.is_some_and(|h| h.0 == key) {
+            app.ui.hover = None;
+            true
+        } else {
+            false
+        }
+    };
+    if was_hovering {
+        hide_card();
+    }
+}
+
+fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
+    let key = hwnd_key(hwnd);
+    if lock_state().ui.drag.as_ref().is_some_and(|d| d.panel == key) {
+        drag_to(hwnd);
+        return;
+    }
+    arm_leave(hwnd);
+    let Some(dpi) = panel_dpi(key) else {
+        return;
+    };
+    match layout::cell_at(x, y, dpi) {
+        Some(cell) => {
+            let changed = {
+                let mut app = lock_state();
+                if app.ui.menu.is_some() || app.ui.hover == Some((key, cell)) {
+                    false
+                } else {
+                    app.ui.hover = Some((key, cell));
+                    true
+                }
+            };
+            if changed {
+                show_card(key, cell);
+            }
+        }
+        None => clear_hover(key),
+    }
+}
+
+fn on_mouse_leave(hwnd: HWND) {
+    let key = hwnd_key(hwnd);
+    {
+        let mut app = lock_state();
+        if app.ui.tracking == Some(key) {
+            app.ui.tracking = None;
+        }
+    }
+    clear_hover(key);
+}
+
+fn on_lbutton_down(hwnd: HWND, x: i32, y: i32) {
+    let key = hwnd_key(hwnd);
+    if alt_down() {
+        begin_drag(hwnd);
+        return;
+    }
+    let Some(dpi) = panel_dpi(key) else {
+        return;
+    };
+    if let Some(cell) = layout::cell_at(x, y, dpi) {
+        lock_state().ui.press = Some((key, cell));
+    }
+}
+
+fn on_lbutton_up(hwnd: HWND, x: i32, y: i32) {
+    let key = hwnd_key(hwnd);
+    let (drag, press) = {
+        let mut app = lock_state();
+        (app.ui.drag.take(), app.ui.press.take())
+    };
+    if let Some(drag) = drag {
+        let _ = unsafe { ReleaseCapture() };
+        finish_drag(drag);
+        return;
+    }
+    let Some((press_key, press_cell)) = press else {
+        return;
+    };
+    let Some(dpi) = panel_dpi(key) else {
+        return;
+    };
+    if press_key == key && layout::cell_at(x, y, dpi) == Some(press_cell) {
+        let section = Cell::ALL[press_cell].section();
+        if !hub::open(section) {
+            diag::info("hub_unavailable", &[("section", section)]);
+        }
+    }
+}
+
+fn on_capture_lost() {
+    let drag = lock_state().ui.drag.take();
+    if let Some(drag) = drag {
+        finish_drag(drag);
+    }
+}
+
+/// Alt-drag along the top edge: captures the pointer and moves the notch horizontally,
+/// clamped to its own monitor.
+fn begin_drag(hwnd: HWND) {
+    let key = hwnd_key(hwnd);
+    let mut cursor = POINT::default();
+    let mut rect = RECT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err()
+        || unsafe { GetWindowRect(hwnd, &mut rect) }.is_err()
+    {
+        return;
+    }
+    let drag = {
+        let app = lock_state();
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
+        };
+        Drag {
+            panel: key,
+            id: panel.id.clone(),
+            start_cursor_x: cursor.x,
+            start_left: rect.left,
+            left: rect.left,
+            top: rect.top,
+            width: rect.right - rect.left,
+            monitor_left: panel.bounds.left,
+            monitor_right: panel.bounds.right,
+            moved: false,
+        }
+    };
+    {
+        let mut app = lock_state();
+        app.ui.hover = None;
+        app.ui.press = None;
+    }
+    hide_card();
+    lock_state().ui.drag = Some(drag);
+    let _ = unsafe { SetCapture(hwnd) };
+}
+
+fn drag_to(hwnd: HWND) {
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return;
+    }
+    let target = {
+        let mut app = lock_state();
+        let Some(drag) = app.ui.drag.as_mut() else {
+            return;
+        };
+        let wanted = drag.start_left + (cursor.x - drag.start_cursor_x);
+        let max_left = (drag.monitor_right - drag.width).max(drag.monitor_left);
+        let left = wanted.clamp(drag.monitor_left, max_left);
+        if left == drag.left {
+            return;
+        }
+        drag.left = left;
+        drag.moved = true;
+        (left, drag.top)
+    };
+    let moved = unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            target.0,
+            target.1,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    if let Err(error) = moved {
+        diag::win32_error("SetWindowPos", &error, "drag");
+    }
+}
+
+/// Remembers the dropped position for the monitor and writes it atomically.
+fn finish_drag(drag: Drag) {
+    if !drag.moved {
+        return;
+    }
+    let along = layout::along_for_left(
+        drag.monitor_left,
+        drag.monitor_right - drag.monitor_left,
+        drag.width,
+        drag.left,
+    );
+    {
+        let mut app = lock_state();
+        app.settings.set_position(&drag.id, along);
+        if let Some(panel) = app.panels.iter_mut().find(|p| p.id == drag.id) {
+            panel.slot.along = along;
+        }
+    }
+    persist_settings();
+}
+
+/// Right-click: a single "Quit" item, drawn as a non-activating card so focus never moves.
+fn open_menu(hwnd: HWND) {
+    let key = hwnd_key(hwnd);
+    let (dpi, monitor) = {
+        let app = lock_state();
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
+        };
+        (panel.slot.dpi, panel.bounds)
+    };
+    let mut cursor = POINT::default();
+    let mut rect = RECT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err()
+        || unsafe { GetWindowRect(hwnd, &mut rect) }.is_err()
+    {
+        return;
+    }
+    let (menu_width, menu_height) = render::menu_size(dpi);
+    let x = clamp_x(cursor.x - menu_width / 2, menu_width, monitor);
+    let y = rect.bottom + (layout::CARD_GAP * layout::scale(dpi)).round() as i32;
+    let Some(card_key) = ensure_card() else {
+        return;
+    };
+    let Some(canvas) = with_text(|text| render::render_menu(dpi, text)) else {
+        return;
+    };
+    {
+        let mut app = lock_state();
+        app.ui.hover = None;
+        app.ui.card_shown = None;
+        app.ui.menu = Some((
+            key,
+            RECT {
+                left: x,
+                top: y,
+                right: x + menu_width,
+                bottom: y + menu_height,
+            },
+        ));
+    }
+    let card = hwnd_from_key(card_key);
+    if let Err(error) = present(card, &canvas, Some((x, y))) {
+        diag::win32_error("UpdateLayeredWindow", &error, "menu");
+        lock_state().ui.menu = None;
+        return;
+    }
+    let _ = unsafe { set_panel_hidden(card, false) };
+    if let Some(controller) = controller_hwnd() {
+        let _ = unsafe { SetTimer(Some(controller), MENU_TIMER_ID, MENU_POLL_MS, None) };
+    }
+}
+
+fn close_menu() {
+    lock_state().ui.menu = None;
+    stop_menu_timer();
+    hide_card();
+}
+
+/// Dismisses the menu when a mouse button goes down anywhere outside it.
+fn menu_tick() {
+    let menu = lock_state().ui.menu;
+    let Some((_, rect)) = menu else {
+        stop_menu_timer();
+        return;
+    };
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return;
+    }
+    let pressed = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .iter()
+        .any(|button| unsafe { GetAsyncKeyState(button.0 as i32) } < 0);
+    let inside = cursor.x >= rect.left
+        && cursor.x < rect.right
+        && cursor.y >= rect.top
+        && cursor.y < rect.bottom;
+    if pressed && !inside {
+        close_menu();
+    }
+}
+
 // ---------------------------------------------------------------- window procedures
 
 extern "system" fn controller_proc(
@@ -927,8 +1428,15 @@ extern "system" fn controller_proc(
                 on_timer(hwnd);
                 return LRESULT(0);
             }
+            WM_TIMER if wparam.0 == MENU_TIMER_ID => {
+                menu_tick();
+                return LRESULT(0);
+            }
             WM_DISPLAYCHANGE | WM_DPICHANGED => {
-                reconcile_panels();
+                on_display_change();
+                return LRESULT(0);
+            }
+            usage::MSG_USAGE_UPDATED => {
                 let interval = refresh_panels(None);
                 arm_timer(hwnd, interval);
                 return LRESULT(0);
@@ -943,6 +1451,7 @@ extern "system" fn controller_proc(
             }
             WM_DESTROY => {
                 let _ = KillTimer(Some(hwnd), TIMER_ID);
+                let _ = KillTimer(Some(hwnd), MENU_TIMER_ID);
                 teardown_panels();
                 PostQuitMessage(0);
                 return LRESULT(0);
@@ -957,13 +1466,44 @@ extern "system" fn panel_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
     unsafe {
         match message {
             WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
-            WM_NCHITTEST => return LRESULT(HTTRANSPARENT as isize),
+            WM_NCHITTEST => return LRESULT(HTCLIENT as isize),
             WM_ERASEBKGND => return LRESULT(1),
             WM_PAINT => {
-                let reading = lock_state().reading; // guard dropped before any GDI call
-                if let Some(scope) = PaintScope::begin(hwnd) {
-                    paint_panel(scope.hdc(), hwnd, reading);
+                // Contents come from UpdateLayeredWindow; just validate.
+                let _ = ValidateRect(Some(hwnd), None);
+                return LRESULT(0);
+            }
+            WM_MOUSEMOVE => {
+                let (x, y) = lparam_point(lparam);
+                on_mouse_move(hwnd, x, y);
+                return LRESULT(0);
+            }
+            MSG_MOUSELEAVE => {
+                on_mouse_leave(hwnd);
+                return LRESULT(0);
+            }
+            WM_LBUTTONDOWN => {
+                let (x, y) = lparam_point(lparam);
+                on_lbutton_down(hwnd, x, y);
+                return LRESULT(0);
+            }
+            WM_LBUTTONUP => {
+                let (x, y) = lparam_point(lparam);
+                on_lbutton_up(hwnd, x, y);
+                return LRESULT(0);
+            }
+            WM_CAPTURECHANGED => {
+                on_capture_lost();
+                return LRESULT(0);
+            }
+            WM_RBUTTONUP => {
+                if !alt_down() {
+                    open_menu(hwnd);
                 }
+                return LRESULT(0);
+            }
+            WM_DPICHANGED => {
+                on_display_change();
                 return LRESULT(0);
             }
             _ => {}
@@ -972,76 +1512,37 @@ extern "system" fn panel_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
-// ---------------------------------------------------------------- rendering
-
-fn percent_text(value: Option<f32>) -> String {
-    value
-        .map(|v| format!("{:>3}%", (v * 100.0) as u32))
-        .unwrap_or_else(|| " --%".into())
-}
-
-fn paint_panel(hdc: HDC, hwnd: HWND, reading: Option<Reading>) {
-    // Every GDI object below is an RAII guard; selection scopes drop before their objects.
+extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let mut rect = RECT::default();
-        if GetClientRect(hwnd, &mut rect).is_err() {
-            diag::last_error("GetClientRect", "paint");
+        match message {
+            WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
+            WM_NCHITTEST => {
+                // Hover cards let the pointer through; the Quit menu takes it.
+                let menu_open = lock_state().ui.menu.is_some();
+                return if menu_open {
+                    LRESULT(HTCLIENT as isize)
+                } else {
+                    LRESULT(HTTRANSPARENT as isize)
+                };
+            }
+            WM_ERASEBKGND => return LRESULT(1),
+            WM_PAINT => {
+                let _ = ValidateRect(Some(hwnd), None);
+                return LRESULT(0);
+            }
+            WM_LBUTTONUP => {
+                let menu_open = lock_state().ui.menu.is_some();
+                if menu_open {
+                    close_menu();
+                    if let Some(controller) = controller_hwnd() {
+                        let _ = PostMessageW(Some(controller), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                }
+                return LRESULT(0);
+            }
+            _ => {}
         }
-        if let Some(background) =
-            GdiObject::<HBRUSH>::new(CreateSolidBrush(COLORREF(0x00151515)), "CreateSolidBrush")
-        {
-            FillRect(hdc, &rect, background.get());
-        }
-        let ring = RECT {
-            left: 12,
-            top: 12,
-            right: 62,
-            bottom: 62,
-        };
-        if let Some(track) =
-            GdiObject::new(CreatePen(PS_SOLID, 4, COLORREF(0x00555555)), "CreatePen")
-            && let Some(_selected) = SelectScope::select(hdc, track.get().into(), "SelectObject")
-        {
-            let _ = Ellipse(hdc, ring.left, ring.top, ring.right, ring.bottom);
-        }
-        if let Some(value) = reading.and_then(|r| r.cpu)
-            && let Some(arc) =
-                GdiObject::new(CreatePen(PS_SOLID, 4, COLORREF(0x0000cc66)), "CreatePen")
-            && let Some(_selected) = SelectScope::select(hdc, arc.get().into(), "SelectObject")
-        {
-            let angle = value.clamp(0.0, 1.0) * std::f32::consts::TAU;
-            let center_x = (ring.left + ring.right) as f32 / 2.0;
-            let center_y = (ring.top + ring.bottom) as f32 / 2.0;
-            let radius_x = (ring.right - ring.left) as f32 / 2.0;
-            let radius_y = (ring.bottom - ring.top) as f32 / 2.0;
-            let end_x = (center_x + radius_x * angle.cos()) as i32;
-            let end_y = (center_y - radius_y * angle.sin()) as i32;
-            let _ = Arc(
-                hdc,
-                ring.left,
-                ring.top,
-                ring.right,
-                ring.bottom,
-                ring.right,
-                ring.top + 25,
-                end_x,
-                end_y,
-            );
-        }
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, COLORREF(0x00ffffff));
-        let cpu: Vec<u16> = format!("CPU {}", percent_text(reading.and_then(|r| r.cpu)))
-            .encode_utf16()
-            .collect();
-        let _ = TextOutW(hdc, 70, 19, &cpu);
-        let details: Vec<u16> = format!(
-            "M {}  D {}",
-            percent_text(reading.and_then(|r| r.memory)),
-            percent_text(reading.and_then(|r| r.disk))
-        )
-        .encode_utf16()
-        .collect();
-        let _ = TextOutW(hdc, 8, 62, &details);
+        DefWindowProcW(hwnd, message, wparam, lparam)
     }
 }
 
@@ -1075,11 +1576,6 @@ mod tests {
     #[test]
     fn captioned_window_is_not_borderless() {
         assert!(!is_borderless_style(WS_CAPTION.0));
-    }
-    #[test]
-    fn percent_text_formats_known_and_unknown() {
-        assert_eq!(percent_text(Some(0.5)), " 50%");
-        assert_eq!(percent_text(None), " --%");
     }
     #[test]
     fn production_sampling_cadence_matches_helper() {

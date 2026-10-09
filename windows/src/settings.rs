@@ -4,6 +4,9 @@
 //! Schema (shared with the Mac pill), schema_version 1:
 //! `{"schema_version":1,"visible":true,"cadence_seconds":2,
 //!   "monitors":{"<monitor-key>":{"enabled":true,"anchor":"top-right"}}}`
+//! Optional additions (omitted while at their defaults, ignored by older readers):
+//! `"launch_at_login":false` and `"positions":{"<monitor-key>":<per-mille>}`, the Alt-drag
+//! position of the notch's centre along that monitor's top edge (0..=1000, default 500).
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -27,6 +30,8 @@ pub const CADENCE_MAX: u32 = 10;
 pub const CADENCE_DEFAULT: u32 = 2;
 pub const MAX_MONITORS: usize = 64;
 pub const MAX_KEY_BYTES: usize = 256;
+pub const POSITION_DEFAULT: u16 = 500;
+pub const POSITION_MAX: u16 = 1000;
 const MAX_DEPTH: usize = 8;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const DIR_NAME: &str = "Pulse";
@@ -78,6 +83,10 @@ pub struct PillSettings {
     pub visible: bool,
     pub cadence_seconds: u32,
     pub monitors: BTreeMap<String, MonitorSetting>,
+    /// Start with Windows (HKCU Run entry). On by default.
+    pub launch_at_login: bool,
+    /// Per-monitor notch position along the top edge, per mille of the monitor width.
+    pub positions: BTreeMap<String, u16>,
 }
 
 impl PillSettings {
@@ -86,7 +95,28 @@ impl PillSettings {
             visible: true,
             cadence_seconds: CADENCE_DEFAULT,
             monitors: BTreeMap::new(),
+            launch_at_login: true,
+            positions: BTreeMap::new(),
         }
+    }
+    /// Remembered position for a monitor; unknown monitors are centred.
+    pub fn position(&self, key: &str) -> u16 {
+        self.positions.get(key).copied().unwrap_or(POSITION_DEFAULT)
+    }
+    /// Remembers a position (clamped to 0..=1000). False when unchanged or the key is
+    /// unusable or the monitor table is full.
+    pub fn set_position(&mut self, key: &str, per_mille: u16) -> bool {
+        let value = per_mille.min(POSITION_MAX);
+        if key.is_empty() || key.len() > MAX_KEY_BYTES {
+            return false;
+        }
+        if !self.positions.contains_key(key) && self.positions.len() >= MAX_MONITORS {
+            return false;
+        }
+        if value == POSITION_DEFAULT && !self.positions.contains_key(key) {
+            return false;
+        }
+        self.positions.insert(key.to_string(), value) != Some(value)
     }
     /// Setting for a monitor; unknown monitors get the defaults (enabled, top-right).
     pub fn monitor(&self, key: &str) -> MonitorSetting {
@@ -444,6 +474,30 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         }
         Some(_) => return Err(ParseError::Malformed),
     }
+    match member(&root, "launch_at_login") {
+        None | Some(Json::Null) => {}
+        Some(Json::Bool(value)) => settings.launch_at_login = *value,
+        Some(_) => return Err(ParseError::Malformed),
+    }
+    match member(&root, "positions") {
+        None | Some(Json::Null) => {}
+        Some(Json::Object(entries)) => {
+            if entries.len() > MAX_MONITORS {
+                return Err(ParseError::Malformed);
+            }
+            for (key, entry) in entries {
+                if key.is_empty() || key.len() > MAX_KEY_BYTES {
+                    return Err(ParseError::Malformed);
+                }
+                let value = integer(entry)?;
+                if !(0..=POSITION_MAX as i64).contains(&value) {
+                    return Err(ParseError::Malformed);
+                }
+                settings.positions.insert(key.clone(), value as u16);
+            }
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
     Ok(settings)
 }
 
@@ -481,8 +535,26 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
             setting.anchor.as_str()
         ));
     }
-    out.push_str("}}\n");
-    if out.len() > MAX_FILE_BYTES || settings.monitors.len() > MAX_MONITORS {
+    out.push('}');
+    if !settings.launch_at_login {
+        out.push_str(",\"launch_at_login\":false");
+    }
+    if !settings.positions.is_empty() {
+        out.push_str(",\"positions\":{");
+        for (index, (key, value)) in settings.positions.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            push_json_string(&mut out, key);
+            out.push_str(&format!(":{}", (*value).min(POSITION_MAX)));
+        }
+        out.push('}');
+    }
+    out.push_str("}\n");
+    if out.len() > MAX_FILE_BYTES
+        || settings.monitors.len() > MAX_MONITORS
+        || settings.positions.len() > MAX_MONITORS
+    {
         return Err(ParseError::Oversized);
     }
     Ok(out)

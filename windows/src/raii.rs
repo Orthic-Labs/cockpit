@@ -5,7 +5,7 @@ use crate::diag;
 use std::ffi::c_void;
 use windows::Win32::Foundation::{HINSTANCE, HWND};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, DeleteObject, EndPaint, HDC, HGDIOBJ, PAINTSTRUCT, SelectObject, ValidateRect,
+    DeleteObject, HDC, HGDIOBJ, SelectObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, IDC_ARROW, IsWindow, KillTimer, LoadCursorW, RegisterClassW,
@@ -194,36 +194,5 @@ impl SelectScope {
 impl Drop for SelectScope {
     fn drop(&mut self) {
         unsafe { SelectObject(self.hdc, self.old) };
-    }
-}
-
-/// BeginPaint/EndPaint pair for WM_PAINT. The HDC is owned by the paint cycle (released by
-/// EndPaint, never ReleaseDC). On BeginPaint failure the region is validated so the window
-/// does not receive WM_PAINT in a loop.
-pub struct PaintScope {
-    hwnd: HWND,
-    paint: PAINTSTRUCT,
-    hdc: HDC,
-}
-
-impl PaintScope {
-    pub fn begin(hwnd: HWND) -> Option<Self> {
-        let mut paint = PAINTSTRUCT::default();
-        let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
-        if hdc.0.is_null() {
-            diag::last_error("BeginPaint", "wm_paint");
-            let _ = unsafe { ValidateRect(Some(hwnd), None) };
-            return None;
-        }
-        Some(Self { hwnd, paint, hdc })
-    }
-    pub fn hdc(&self) -> HDC {
-        self.hdc
-    }
-}
-
-impl Drop for PaintScope {
-    fn drop(&mut self) {
-        let _ = unsafe { EndPaint(self.hwnd, &self.paint) };
     }
 }

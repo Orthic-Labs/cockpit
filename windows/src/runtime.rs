@@ -1,12 +1,12 @@
-//! Runtime policy helpers that need no window state: anchor placement math, placement
-//! planning (monitor set + anchors), the retry state machine for show/hide, cadence, and the
+//! Runtime policy helpers that need no window state: notch placement math, placement
+//! planning (monitor set + slots), the retry state machine for show/hide, cadence, and the
 //! single-instance mutex. Production code in main.rs and the tests call the same functions.
 
+use crate::layout;
 use crate::lifecycle::{
-    Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, PILL_HEIGHT, PILL_MARGIN, PILL_WIDTH, PanelAction,
-    plan_panels, sampling_interval_ms,
+    Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, PanelAction, plan_panels, sampling_interval_ms,
 };
-use crate::settings::Anchor;
+use crate::settings::POSITION_DEFAULT;
 use std::ffi::c_void;
 use std::path::Path;
 use windows::Win32::Foundation::{
@@ -149,41 +149,40 @@ pub(crate) mod winsec {
 
 // ------------------------------------------------------------------ placement
 
-/// Pill rectangle inside `monitor` for `anchor`, inset by `PILL_MARGIN`. The origin is
-/// clamped into `[monitor.left, monitor.right - PILL_WIDTH]` (same for the vertical axis),
-/// so the pill stays fully inside the monitor whenever it fits; on a monitor smaller than
-/// the pill the lower bound wins and the pill hugs the monitor's top-left. Both bounds are
-/// plain comparisons, so negative virtual-screen origins (monitors left of / above the
-/// primary) clamp correctly.
-pub fn anchor_bounds(monitor: Bounds, anchor: Anchor) -> Bounds {
-    let right_edge = monitor.right - PILL_WIDTH - PILL_MARGIN;
-    let left_edge = monitor.left + PILL_MARGIN;
-    let top_edge = monitor.top + PILL_MARGIN;
-    let bottom_edge = monitor.bottom - PILL_HEIGHT - PILL_MARGIN;
-    let (left, top) = match anchor {
-        Anchor::TopLeft => (left_edge, top_edge),
-        Anchor::TopRight => (right_edge, top_edge),
-        Anchor::BottomLeft => (left_edge, bottom_edge),
-        Anchor::BottomRight => (right_edge, bottom_edge),
+/// Where one monitor's notch sits: `along` is the per-mille position of the notch's centre
+/// across the monitor's top edge (Alt-drag remembers it); `dpi` sizes the notch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Slot {
+    pub along: u16,
+    pub dpi: u32,
+}
+
+impl Slot {
+    pub const DEFAULT: Self = Self {
+        along: POSITION_DEFAULT,
+        dpi: 96,
     };
-    // Upper bound may sit below the lower bound on a monitor smaller than the pill; take
-    // max() so clamp() never sees min > max (which would panic).
-    let max_left = (monitor.right - PILL_WIDTH).max(monitor.left);
-    let max_top = (monitor.bottom - PILL_HEIGHT).max(monitor.top);
-    let left = left.clamp(monitor.left, max_left);
-    let top = top.clamp(monitor.top, max_top);
+}
+
+/// Notch rectangle for `monitor`: flush with the top edge, centred on `slot.along` and
+/// clamped to stay fully inside the monitor whenever it fits. Plain comparisons keep this
+/// correct for negative virtual-screen origins; on a monitor narrower than the notch the
+/// notch hugs the monitor's left edge.
+pub fn notch_bounds(monitor: Bounds, slot: Slot) -> Bounds {
+    let (width, height) = layout::body_size(slot.dpi);
+    let left = layout::left_for_along(monitor.left, monitor.width(), width, slot.along);
     Bounds {
         left,
-        top,
-        right: left + PILL_WIDTH,
-        bottom: top + PILL_HEIGHT,
+        top: monitor.top,
+        right: left + width,
+        bottom: monitor.top + height,
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placed {
     pub spec: MonitorSpec,
-    pub anchor: Anchor,
+    pub slot: Slot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,51 +193,48 @@ pub enum Placement {
 }
 
 /// Diff existing panels against the desired (enabled) monitors. Monitor-set changes come from
-/// `lifecycle::plan_panels`; an anchor change on an otherwise unchanged monitor adds a Move.
-/// A move that failed leaves the panel's recorded placement unchanged, so the next plan
-/// contains the same Move again (retry without losing the window handle).
+/// `lifecycle::plan_panels`; a slot change (position or DPI) on an otherwise unchanged
+/// monitor adds a Move. A move that failed leaves the panel's recorded placement unchanged,
+/// so the next plan contains the same Move again (retry without losing the window handle).
 pub fn plan_placements(existing: &[Placed], desired: &[Placed]) -> Vec<Placement> {
     let existing_specs: Vec<MonitorSpec> = existing.iter().map(|p| p.spec.clone()).collect();
     let desired_specs: Vec<MonitorSpec> = desired.iter().map(|p| p.spec.clone()).collect();
-    let anchor_for = |id: &str| {
+    let slot_for = |id: &str| {
         desired
             .iter()
             .find(|p| p.spec.id == id)
-            .map(|p| p.anchor)
-            .unwrap_or(Anchor::TopRight)
+            .map(|p| p.slot)
+            .unwrap_or(Slot::DEFAULT)
     };
     let mut plan: Vec<Placement> = plan_panels(&existing_specs, &desired_specs)
         .into_iter()
         .map(|action| match action {
             PanelAction::Destroy(id) => Placement::Destroy(id),
             PanelAction::Move(spec) => {
-                let anchor = anchor_for(&spec.id);
-                Placement::Move(Placed { spec, anchor })
+                let slot = slot_for(&spec.id);
+                Placement::Move(Placed { spec, slot })
             }
             PanelAction::Create(spec) => {
-                let anchor = anchor_for(&spec.id);
-                Placement::Create(Placed { spec, anchor })
+                let slot = slot_for(&spec.id);
+                Placement::Create(Placed { spec, slot })
             }
         })
         .collect();
     for old in existing {
-        let wanted = anchor_for(&old.spec.id);
+        let wanted = slot_for(&old.spec.id);
         let present = desired.iter().any(|d| d.spec.id == old.spec.id);
         let already = plan.iter().any(|p| match p {
             Placement::Move(m) => m.spec.id == old.spec.id,
             Placement::Destroy(id) => *id == old.spec.id,
             Placement::Create(_) => false,
         });
-        if present && !already && wanted != old.anchor {
+        if present && !already && wanted != old.slot {
             let spec = desired
                 .iter()
                 .find(|d| d.spec.id == old.spec.id)
                 .map(|d| d.spec.clone())
                 .unwrap_or_else(|| old.spec.clone());
-            plan.push(Placement::Move(Placed {
-                spec,
-                anchor: wanted,
-            }));
+            plan.push(Placement::Move(Placed { spec, slot: wanted }));
         }
     }
     plan
@@ -762,118 +758,116 @@ mod tests {
         bottom: 880,
     };
 
-    fn placed(id: &str, bounds: Bounds, anchor: Anchor) -> Placed {
+    fn slot(along: u16) -> Slot {
+        Slot { along, dpi: 96 }
+    }
+
+    fn placed(id: &str, bounds: Bounds, along: u16) -> Placed {
         Placed {
             spec: MonitorSpec {
                 id: id.into(),
                 bounds,
             },
-            anchor,
+            slot: slot(along),
         }
     }
 
     #[test]
-    fn anchor_math_on_primary() {
-        let m = PILL_MARGIN;
-        let tr = anchor_bounds(M1, Anchor::TopRight);
-        assert_eq!((tr.left, tr.top), (1920 - PILL_WIDTH - m, m));
-        assert_eq!((tr.width(), tr.height()), (PILL_WIDTH, PILL_HEIGHT));
-        let tl = anchor_bounds(M1, Anchor::TopLeft);
-        assert_eq!((tl.left, tl.top), (m, m));
-        let bl = anchor_bounds(M1, Anchor::BottomLeft);
-        assert_eq!((bl.left, bl.top), (m, 1080 - PILL_HEIGHT - m));
-        let br = anchor_bounds(M1, Anchor::BottomRight);
-        assert_eq!(
-            (br.right, br.bottom),
-            (1920 - m, 1080 - m),
-            "pill hugs the corner inset"
-        );
+    fn notch_is_flush_with_the_top_edge_and_centred_by_default() {
+        let (w, h) = layout::body_size(96);
+        let b = notch_bounds(M1, slot(POSITION_DEFAULT));
+        assert_eq!((b.top, b.width(), b.height()), (0, w, h));
+        assert_eq!(b.left, (1920 - w) / 2);
     }
 
     #[test]
-    fn anchor_math_on_negative_origin_monitor() {
-        let tl = anchor_bounds(NEG, Anchor::TopLeft);
-        assert_eq!((tl.left, tl.top), (-1920 + PILL_MARGIN, -200 + PILL_MARGIN));
-        let br = anchor_bounds(NEG, Anchor::BottomRight);
-        assert_eq!((br.right, br.bottom), (-PILL_MARGIN, 880 - PILL_MARGIN));
+    fn notch_on_negative_origin_monitor_stays_inside() {
+        let (w, _) = layout::body_size(96);
+        let far_left = notch_bounds(NEG, slot(0));
+        assert_eq!((far_left.left, far_left.top), (NEG.left, NEG.top));
+        let far_right = notch_bounds(NEG, slot(1000));
+        assert_eq!(far_right.right, NEG.right);
+        assert_eq!(far_right.left, NEG.right - w);
     }
 
     #[test]
-    fn anchor_math_never_leaves_origin_on_tiny_monitor() {
+    fn notch_never_leaves_origin_on_tiny_monitor() {
         let tiny = Bounds {
             left: 100,
             top: 50,
             right: 150,
             bottom: 90,
         };
-        for a in [Anchor::TopRight, Anchor::BottomRight, Anchor::BottomLeft] {
-            let b = anchor_bounds(tiny, a);
-            assert!(b.left >= tiny.left && b.top >= tiny.top);
+        for along in [0, 500, 1000] {
+            let b = notch_bounds(tiny, slot(along));
+            assert_eq!((b.left, b.top), (tiny.left, tiny.top));
         }
     }
 
     #[test]
-    fn startup_creates_with_stored_anchor() {
-        let desired = [placed("A", M1, Anchor::BottomLeft)];
+    fn startup_creates_with_stored_slot() {
+        let desired = [placed("A", M1, 800)];
         assert_eq!(
             plan_placements(&[], &desired),
-            vec![Placement::Create(placed("A", M1, Anchor::BottomLeft))]
+            vec![Placement::Create(placed("A", M1, 800))]
         );
     }
 
     #[test]
     fn unchanged_placement_plans_nothing() {
-        let set = [placed("A", M1, Anchor::TopRight)];
+        let set = [placed("A", M1, 500)];
         assert!(plan_placements(&set, &set).is_empty());
     }
 
     #[test]
-    fn anchor_change_on_same_bounds_moves() {
-        let existing = [placed("A", M1, Anchor::TopRight)];
-        let desired = [placed("A", M1, Anchor::BottomRight)];
+    fn slot_change_on_same_bounds_moves() {
+        let existing = [placed("A", M1, 500)];
+        let desired = [placed("A", M1, 900)];
         assert_eq!(
             plan_placements(&existing, &desired),
-            vec![Placement::Move(placed("A", M1, Anchor::BottomRight))]
+            vec![Placement::Move(placed("A", M1, 900))]
         );
+        let dpi_change = [Placed {
+            slot: Slot { along: 500, dpi: 144 },
+            ..placed("A", M1, 500)
+        }];
+        assert_eq!(plan_placements(&existing, &dpi_change).len(), 1);
     }
 
     #[test]
-    fn bounds_and_anchor_change_yields_single_move() {
+    fn bounds_and_slot_change_yields_single_move() {
         let big = Bounds {
             right: 2560,
             bottom: 1440,
             ..M1
         };
-        let existing = [placed("A", M1, Anchor::TopRight)];
-        let desired = [placed("A", big, Anchor::TopLeft)];
+        let existing = [placed("A", M1, 500)];
+        let desired = [placed("A", big, 100)];
         assert_eq!(
             plan_placements(&existing, &desired),
-            vec![Placement::Move(placed("A", big, Anchor::TopLeft))]
+            vec![Placement::Move(placed("A", big, 100))]
         );
     }
 
     #[test]
     fn disabled_or_unplugged_monitor_is_destroyed_and_reconnect_recreates() {
-        let existing = [
-            placed("A", M1, Anchor::TopRight),
-            placed("B", NEG, Anchor::TopLeft),
-        ];
-        let desired = [placed("A", M1, Anchor::TopRight)];
+        let existing = [placed("A", M1, 500), placed("B", NEG, 200)];
+        let desired = [placed("A", M1, 500)];
         assert_eq!(
             plan_placements(&existing, &desired),
             vec![Placement::Destroy("B".into())]
         );
         assert_eq!(
             plan_placements(&desired, &existing),
-            vec![Placement::Create(placed("B", NEG, Anchor::TopLeft))]
+            vec![Placement::Create(placed("B", NEG, 200))]
         );
     }
 
     #[test]
     fn failed_move_is_replanned_until_applied() {
         // Panel keeps its old recorded placement while SetWindowPos fails: same plan again.
-        let existing = [placed("A", M1, Anchor::TopRight)];
-        let desired = [placed("A", M1, Anchor::TopLeft)];
+        let existing = [placed("A", M1, 500)];
+        let desired = [placed("A", M1, 100)];
         assert_eq!(
             plan_placements(&existing, &desired),
             plan_placements(&existing, &desired)
@@ -926,48 +920,6 @@ mod tests {
         assert_eq!(interval_ms(5, 0, 0), HIDDEN_INTERVAL_MS);
         assert_eq!(interval_ms(0, 1, 0), 2_000, "clamped up");
         assert_eq!(interval_ms(99, 1, 0), 10_000, "clamped down");
-    }
-
-    #[test]
-    fn clamp_keeps_pill_inside_negative_origin_monitor() {
-        // Wide monitor left of and above the primary (negative virtual-screen origin).
-        let m = Bounds {
-            left: -2600,
-            top: -700,
-            right: -680,
-            bottom: 380,
-        };
-        for a in [
-            Anchor::TopLeft,
-            Anchor::TopRight,
-            Anchor::BottomLeft,
-            Anchor::BottomRight,
-        ] {
-            let b = anchor_bounds(m, a);
-            assert!(b.left >= m.left && b.right <= m.right, "{a:?} {b:?}");
-            assert!(b.top >= m.top && b.bottom <= m.bottom, "{a:?} {b:?}");
-        }
-    }
-
-    #[test]
-    fn clamp_on_tiny_negative_origin_monitor_hugs_origin() {
-        // Smaller than the pill in both axes and entirely in negative space:
-        // clamping must not produce min > max or move the pill off the origin.
-        let tiny = Bounds {
-            left: -100,
-            top: -50,
-            right: -60,
-            bottom: -10,
-        };
-        for a in [
-            Anchor::TopLeft,
-            Anchor::TopRight,
-            Anchor::BottomLeft,
-            Anchor::BottomRight,
-        ] {
-            let b = anchor_bounds(tiny, a);
-            assert_eq!((b.left, b.top), (tiny.left, tiny.top), "{a:?}");
-        }
     }
 
     #[test]

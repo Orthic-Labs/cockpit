@@ -3,9 +3,6 @@
 
 use windows::Win32::Foundation::RECT;
 
-pub const PILL_WIDTH: i32 = 132;
-pub const PILL_HEIGHT: i32 = 76;
-pub const PILL_MARGIN: i32 = 12;
 pub const VISIBLE_INTERVAL_MS: u32 = 2_000;
 pub const HIDDEN_INTERVAL_MS: u32 = 10_000;
 
@@ -52,18 +49,6 @@ impl Bounds {
 pub struct MonitorSpec {
     pub id: String,
     pub bounds: Bounds,
-}
-
-/// Pill rectangle for a monitor: right edge, vertically centred.
-pub fn pill_bounds(monitor: Bounds) -> Bounds {
-    let left = monitor.right - PILL_WIDTH - PILL_MARGIN;
-    let top = monitor.top + (monitor.height() - PILL_HEIGHT) / 2;
-    Bounds {
-        left,
-        top,
-        right: left + PILL_WIDTH,
-        bottom: top + PILL_HEIGHT,
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,30 +176,6 @@ mod tests {
         right: 3840,
         bottom: 1080,
     };
-    const NEG: Bounds = Bounds {
-        left: -1920,
-        top: -200,
-        right: 0,
-        bottom: 880,
-    };
-
-    #[test]
-    fn pill_is_right_edge_vertically_centred() {
-        let p = pill_bounds(M1);
-        assert_eq!(
-            (p.right, p.left),
-            (1920 - PILL_MARGIN, 1920 - PILL_MARGIN - PILL_WIDTH)
-        );
-        assert_eq!(p.top, (1080 - PILL_HEIGHT) / 2);
-        assert_eq!((p.width(), p.height()), (PILL_WIDTH, PILL_HEIGHT));
-    }
-
-    #[test]
-    fn pill_on_negative_origin_monitor() {
-        let p = pill_bounds(NEG);
-        assert_eq!(p.right, -PILL_MARGIN);
-        assert_eq!(p.top, -200 + (1080 - PILL_HEIGHT) / 2);
-    }
 
     #[test]
     fn unchanged_set_plans_nothing() {
