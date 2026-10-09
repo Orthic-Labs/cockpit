@@ -364,6 +364,12 @@ export function Storage() {
     [report],
   );
   const others = (report?.findings ?? []).filter((f) => !f.eligible && f.bytes > 0).sort((a, b) => b.bytes - a.bytes);
+  // With nothing to clear, open on the folders instead of an empty list (once,
+  // so a pane the user picked is never taken away).
+  const pickedPane = useRef(false);
+  useEffect(() => {
+    if (!pickedPane.current && report && eligible.length === 0) setPane("folders");
+  }, [report, eligible.length]);
   const safeItems = eligible.filter((f) => f.risk === "safe");
   const freeable = report ? report.safe_bytes + report.review_bytes : 0;
   const groups = useMemo(() => groupFindings(eligible), [eligible]);
@@ -427,7 +433,10 @@ export function Storage() {
         { value: "changes", label: "Changes" },
         { value: "duplicates", label: "Duplicates" },
       ]}
-      onChange={(value) => setPane(value as Pane)}
+      onChange={(value) => {
+        pickedPane.current = true;
+        setPane(value as Pane);
+      }}
     />
   );
 

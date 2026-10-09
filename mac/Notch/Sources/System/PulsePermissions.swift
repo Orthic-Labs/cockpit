@@ -40,7 +40,9 @@ final class PulsePermissions {
         let helper = PrivilegedHelper.state
         let accessibilityRequired = preferences.convFnCommand || preferences.convFinderCutPaste
             || preferences.convWindowMaximizer || preferences.convDockClickMinimize || preferences.convAutoQuit
-        let finderRequired = preferences.convFinderCutPaste
+        // Cut and paste uses Finder's own Copy and Move Item Here keys, so no
+        // Apple Events (Automation of Finder) are needed any more.
+        let finderRequired = false
         var rows = [
             Entry(id: "helper", title: "Background helper",
                   why: "Moves root-owned apps to Trash without an administrator password.",
@@ -57,7 +59,7 @@ final class PulsePermissions {
                   status: entries.first { $0.id == "fullDiskAccess" }?.status ?? .unknown,
                   required: false),
             Entry(id: "finderMenu", title: "Finder menu",
-                  why: "Adds Copy Path and Open in Terminal to Finder's right-click menu. Optional.",
+                  why: "Adds Cut, Copy Path and Open in Terminal to Finder's right-click menu. Optional.",
                   status: entries.first { $0.id == "finderMenu" }?.status ?? .unknown,
                   required: false),
         ]

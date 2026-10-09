@@ -269,6 +269,7 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
                 <div className="overview-spark">
                   <Sparkline
                     label="Network"
+                    minTop={100_000}
                     series={[
                       { label: "Down", color: "var(--rk-accent)", values: recent.map((r) => r.netDown) },
                       { label: "Up", color: "var(--rk-ink-2)", values: recent.map((r) => r.netUp), dashed: true },

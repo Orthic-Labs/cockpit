@@ -88,13 +88,15 @@ pub struct ProcessInfo {
 
 /// One cheap reading of CPU, memory and swap. No process walk and no disk
 /// list, so it can run every couple of seconds.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LiveReading {
     pub cpu_percent: f32,
     pub memory_used_bytes: u64,
     pub memory_total_bytes: u64,
     pub swap_used_bytes: u64,
     pub swap_total_bytes: u64,
+    /// "Normal", "Elevated" or "Critical"; `None` where it is not read.
+    pub memory_pressure: Option<String>,
 }
 
 /// Keeps a `System` between readings: sysinfo computes CPU deltas between
@@ -126,6 +128,7 @@ impl LiveSampler {
             memory_total_bytes: self.system.total_memory(),
             swap_used_bytes: self.system.used_swap(),
             swap_total_bytes: self.system.total_swap(),
+            memory_pressure: memory_pressure(),
         }
     }
 }
@@ -224,6 +227,36 @@ pub fn procs() -> Vec<ProcessInfo> {
     processes
 }
 
+/// macOS reports memory pressure as 1 (normal), 2 (warning) or 4 (critical).
+#[cfg(target_os = "macos")]
+fn read_memory_pressure() -> Option<String> {
+    let mut level: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    let rc = unsafe {
+        libc::sysctlbyname(
+            c"kern.memorystatus_vm_pressure_level".as_ptr(),
+            (&mut level as *mut libc::c_int).cast::<libc::c_void>(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    match level {
+        1 => Some("Normal".into()),
+        2 => Some("Elevated".into()),
+        4 => Some("Critical".into()),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_memory_pressure() -> Option<String> {
+    None
+}
+
 fn memory_pressure_metric() -> Metric<String> {
     #[cfg(target_os = "macos")]
     let label = "macOS memory pressure";
@@ -231,9 +264,14 @@ fn memory_pressure_metric() -> Metric<String> {
     let label = "Windows commit pressure";
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let label = "platform memory pressure";
+    let value = read_memory_pressure();
     Metric {
-        value: None,
-        capability: Capability::Unavailable,
+        capability: if value.is_some() {
+            Capability::Available
+        } else {
+            Capability::Unavailable
+        },
+        value,
         label: label.into(),
     }
 }

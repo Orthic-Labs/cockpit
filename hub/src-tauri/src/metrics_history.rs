@@ -62,7 +62,7 @@ pub fn start_background() {
                 mem_total: reading.memory_total_bytes,
                 swap_used: reading.swap_used_bytes,
                 swap_total: reading.swap_total_bytes,
-                pressure: pulse_core::memory_pressure(),
+                pressure: reading.memory_pressure,
                 net_down: rates.map(|r| r.received_bytes_per_second),
                 net_up: rates.map(|r| r.transmitted_bytes_per_second),
             };

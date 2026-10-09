@@ -67,6 +67,7 @@ export function Sparkline({
   label,
   series,
   max,
+  minTop = 0,
   height = 28,
   format = (v) => `${Math.round(v)}`,
   minutes = 10,
@@ -75,13 +76,15 @@ export function Sparkline({
   series: Series[];
   /** Top of the scale. Omitted: the largest value, rounded up. */
   max?: number;
+  /** Smallest top of an automatic scale. */
+  minTop?: number;
   height?: number;
   format?: (v: number) => string;
   /** Only for the accessible summary. */
   minutes?: number;
 }) {
   const W = 200;
-  const top = max ?? niceMax(Math.max(0, ...known(series)));
+  const top = max ?? niceMax(Math.max(minTop, ...known(series)));
   const n = Math.max(0, ...series.map((s) => s.values.length));
   const x = (i: number) => (n <= 1 ? W : (i / (n - 1)) * W);
   const y = (v: number) => 1.5 + (1 - Math.min(Math.max(v / top, 0), 1)) * (height - 3);
@@ -107,8 +110,8 @@ export function Sparkline({
   );
 }
 
-const timeText = (t: number) =>
-  new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
+const timeText = (t: number, seconds = true) =>
+  new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) });
 
 /**
  * Time on x (the last `rangeMs` ending at the newest sample), value on y.
@@ -120,6 +123,7 @@ export function AreaChart({
   series,
   rangeMs,
   max,
+  minTop = 0,
   format,
   height = 120,
 }: {
@@ -130,18 +134,23 @@ export function AreaChart({
   rangeMs: number;
   /** Fixed top of the scale (100 for percentages). Omitted: the largest value, rounded up. */
   max?: number;
+  /** Smallest top of an automatic scale. */
+  minTop?: number;
   format: (v: number) => string;
   height?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const W = 600;
   const end = times.length ? times[times.length - 1] : 0;
-  const start = end - rangeMs;
-  const from = Math.max(0, times.findIndex((t) => t >= start));
+  const from = Math.max(0, times.findIndex((t) => t >= end - rangeMs));
   const visible = times.slice(from);
+  // With less history than the range, the samples we have fill the whole width.
+  const short = times.length > 0 && times[0] > end - rangeMs;
+  const start = short ? times[0] : end - rangeMs;
+  const span = Math.max(end - start, 1);
   const shown = series.map((s) => ({ ...s, values: s.values.slice(from) }));
-  const top = max ?? niceMax(Math.max(0, ...known(shown)));
-  const x = (t: number) => ((t - start) / rangeMs) * W;
+  const top = max ?? niceMax(Math.max(minTop, ...known(shown)));
+  const x = (t: number) => ((t - start) / span) * W;
   const y = (v: number) => 1.5 + (1 - Math.min(Math.max(v / top, 0), 1)) * (height - 3);
   const minutes = Math.round(rangeMs / 60_000);
 
@@ -149,7 +158,7 @@ export function AreaChart({
     if (visible.length === 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const t = start + ((e.clientX - rect.left) / rect.width) * rangeMs;
+    const t = start + ((e.clientX - rect.left) / rect.width) * span;
     let best = 0;
     for (let i = 1; i < visible.length; i++) {
       if (Math.abs(visible[i] - t) < Math.abs(visible[best] - t)) best = i;
@@ -158,11 +167,16 @@ export function AreaChart({
   };
 
   const at = hover != null && hover < visible.length ? hover : null;
-  const frac = at == null ? 0 : (visible[at] - start) / rangeMs;
+  const frac = at == null ? 0 : (visible[at] - start) / span;
   const tipStyle: CSSProperties = { left: `${frac * 100}%`, transform: frac > 0.6 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" };
 
   return (
     <div className="chart">
+      <div className="chart-row">
+        <div className="chart-yaxis" style={{ height }} aria-hidden="true">
+          <span>{format(top)}</span>
+          <span>{format(0)}</span>
+        </div>
       <div className="chart-plot" style={{ height }} onPointerMove={move} onPointerLeave={() => setHover(null)} onPointerCancel={() => setHover(null)}>
         <svg
           className="chart-svg"
@@ -184,7 +198,6 @@ export function AreaChart({
             ));
           })}
         </svg>
-        <span className="chart-ymax" aria-hidden="true">{format(top)}</span>
         {at != null && (
           <>
             <div className="chart-rule" style={{ left: `${frac * 100}%` }} aria-hidden="true" />
@@ -203,8 +216,9 @@ export function AreaChart({
           </>
         )}
       </div>
+      </div>
       <div className="chart-axis" aria-hidden="true">
-        <span>{minutes} min ago</span>
+        <span>{short ? `since ${timeText(times[0], false)}` : `${minutes} min ago`}</span>
         <span>now</span>
       </div>
     </div>

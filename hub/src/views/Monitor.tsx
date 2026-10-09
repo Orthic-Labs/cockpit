@@ -138,7 +138,9 @@ export function Monitor() {
   const cpuRaw = status.cpu_usage_percent.value;
   const swapUsed = status.swap_used_bytes.value;
   const swapTotal = status.swap_total_bytes.value;
-  const pressure = status.memory_pressure.value;
+  const pressure = status.memory_pressure.value ? capitalize(status.memory_pressure.value) : null;
+  // Only an elevated or critical reading earns a box; normal and unknown stay one calm line.
+  const calm = !pressure || pressureLevel(pressure) === "ok";
   const leader = [...procs].sort(comparator(sort === "name" ? "memory" : sort))[0];
   const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "Memory";
 
@@ -147,8 +149,11 @@ export function Monitor() {
 
   return (
     <div className="view monitor-view">
-      <div className={`monitor-notice ${pressure ? pressureLevel(pressure) : "warn"}`} role="status">
-        <h2>{pressure ? `Memory pressure ${pressure.toLowerCase()}` : "Memory pressure unknown"}</h2>
+      <div className={`monitor-notice ${calm ? "calm" : pressureLevel(pressure ?? "")}`} role="status">
+        <h2>
+          Memory pressure:{" "}
+          {pressure ? <span className={pressureLevel(pressure)}>{pressure}</span> : "not reported"}
+        </h2>
         <p>
           {leader
             ? `${leader.name} · ${sort === "cpu" ? `${Math.round(leader.cpu_usage_percent)}% CPU` : `${bytes(leader.memory_bytes)} memory`}`
@@ -365,6 +370,8 @@ function batteryText(b: NonNullable<SystemReadings["battery"]>): string {
   return parts.filter(Boolean).join(" · ");
 }
 
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
 const RANGES = [5, 15, 30];
 
 /** CPU, memory with swap, and network over the last 5, 15 or 30 minutes. The hub keeps the history while its window is closed. */
@@ -394,7 +401,7 @@ function MonitorCharts({
     { label: "Up", color: "var(--rk-ink-2)", values: column((s) => s.netUp), dashed: true },
   ];
   const rate = (v: number) => `${bytes(v)}/s`;
-  const memTop = Math.max(latest?.memTotal ?? 0, ...samples.map((s) => s.swapUsed));
+  const memTop = latest?.memTotal ?? 0;
 
   return (
     <section className="monitor-charts" aria-label="History">
@@ -429,7 +436,7 @@ function MonitorCharts({
             legend={network}
             extra={latest?.netUp != null ? `↑ ${rate(latest.netUp)}` : net ? `↑ ${rate(net.up)} · ${net.kind}` : notchDown ? "Notch not running" : "No active interface"}
           >
-            <AreaChart label="Network" times={times} series={network} rangeMs={minutes * 60_000} format={rate} height={96} />
+            <AreaChart label="Network" times={times} series={network} rangeMs={minutes * 60_000} minTop={100_000} format={rate} height={96} />
           </ChartCard>
         </div>
       )}
