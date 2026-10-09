@@ -189,7 +189,7 @@ fn use_interface(socket: &UdpSocket, ip: Ipv4Addr) {
 #[cfg(windows)]
 fn use_interface(socket: &UdpSocket, ip: Ipv4Addr) {
     use std::os::windows::io::AsRawSocket;
-    use winsock::*;
+    use winsock::{setsockopt, Socket, IPPROTO_IP, IP_MULTICAST_IF};
     let octets = ip.octets();
     // SAFETY: the option value is a live 4-byte in_addr (network byte order).
     unsafe {

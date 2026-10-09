@@ -132,11 +132,13 @@ pub fn sanitize_component(raw: &str) -> String {
 fn is_windows_device(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or("").trim_end();
     let upper = stem.to_ascii_uppercase();
-    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
-        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
-            && upper.len() == 4
-            && upper.as_bytes()[3].is_ascii_digit()
-            && upper.as_bytes()[3] != b'0')
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+        && upper.len() == 4
+        && upper.as_bytes()[3].is_ascii_digit()
+        && upper.as_bytes()[3] != b'0')
 }
 
 /// A sender's `fileName` as safe components below the save folder. `..`, `.`,
