@@ -249,7 +249,14 @@ pub fn connect(
     fingerprint: &str,
     read_timeout: Duration,
 ) -> io::Result<Wire> {
-    connect_within(ip, port, https, fingerprint, Duration::from_secs(5), read_timeout)
+    connect_within(
+        ip,
+        port,
+        https,
+        fingerprint,
+        Duration::from_secs(5),
+        read_timeout,
+    )
 }
 
 /// `connect` with its own limit on how long the TCP connection may take.

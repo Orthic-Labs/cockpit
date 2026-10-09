@@ -125,7 +125,13 @@ fn hub_sections_render_without_errors() {
                 wait_text(&ctl, NO_NOTCH, Duration::from_secs(15), &format!("{} did not show the notch-not-running state", sec.title));
             } else {
                 if sec.id == "storage" {
-                    // "Rescan" is on screen before the scan starts, so wait for the fixture row itself.
+                    // Folders is one pane of Storage's workspace; open it, then
+                    // wait for the fixture row itself ("Rescan" shows before the scan starts).
+                    ctl.wait_eval(
+                        "const b=[...document.querySelectorAll('button,[role=radio],[role=tab]')].find(e=>e.textContent.trim()==='Folders'); if(!b) return false; b.click(); return true;",
+                        Duration::from_secs(30),
+                    )
+                    .unwrap_or_else(|e| panic!("Storage has no Folders control: {}", e.0));
                     if let Err(e) = ctl.wait_for_text(None, FIXTURE, Duration::from_secs(60)) {
                         let text = body_text(&ctl);
                         panic!(
