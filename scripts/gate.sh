@@ -59,7 +59,7 @@ native_path() {
 # tiny folder and writes the notch's published state where the hub reads it (~/Library/Application
 # Support/Pulse on the Mac, %LOCALAPPDATA%\Pulse on Windows, which rightkit-qa points at its own
 # data dir). macOS UI tests must run from the user's login session (`open` needs a GUI session),
-# the same reason tools/rightkit/scripts/run-ui-tests.sh builds through the broker and then runs the
+# the same reason rightkit/scripts/run-ui-tests.sh builds through the broker and then runs the
 # binary itself. That script needs the `rightkit` CLI, which this runner does not have, so we do the
 # equivalent directly: plain `cargo build` of the qa-native bin, then `cargo test` of hub/qa-e2e
 # here (not in a wrapper). hub/qa-e2e is its own cargo workspace: rightkit-qa's exact pins clash
