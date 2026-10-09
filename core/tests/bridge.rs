@@ -113,10 +113,6 @@ fn fake_chat(_b: &std::path::Path) -> (String, std::sync::mpsc::Receiver<String>
     use windows::core::PCWSTR;
 
     struct Pipe(HANDLE);
-
-    // SAFETY: a pipe handle is just an opaque kernel object id; the test moves it between threads.
-
-    unsafe impl Send for Pipe {}
     // SAFETY: a kernel handle moved to the one thread that uses it.
     unsafe impl Send for Pipe {}
 
