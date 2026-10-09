@@ -195,14 +195,16 @@ fn fake_ssh(a: &std::path::Path, b: &std::path::Path, socket: &str) -> std::path
 #[cfg(windows)]
 fn fake_ssh(a: &std::path::Path, b: &std::path::Path, _socket: &str) -> std::path::PathBuf {
     // `for /f` strips the host argument and runs the rest verbatim (`%*`, unlike `%2`,
-    // keeps the `=` of a base64 envelope).
+    // keeps the `=` of a base64 envelope). Rust quotes every argument it hands a batch
+    // file, so the rest starts with a quote; `call` keeps cmd from reading the whole
+    // line as one command name.
     let script = a.join("fake-ssh.cmd");
     std::fs::write(
         &script,
         format!(
             "@echo off\r\nset \"USERPROFILE={b}\"\r\nset \"LOCALAPPDATA={b}\\local\"\r\n\
              set \"APPDATA={b}\\roaming\"\r\nset \"CLAUDE_CONFIG_DIR={b}\\.claude\"\r\n\
-             for /f \"usebackq tokens=1,* delims= \" %%a in ('%*') do %%b\r\n",
+             for /f \"usebackq tokens=1,* delims= \" %%a in ('%*') do call %%b\r\n",
             b = b.display()
         ),
     )
