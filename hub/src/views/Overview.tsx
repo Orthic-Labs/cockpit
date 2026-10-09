@@ -153,7 +153,12 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
   const notchDown = notch.error != null;
   const accounts = notch.state?.accounts.filter((a) => a.connected) ?? [];
   const missing = notch.state?.permissions?.filter((p) => p.required && p.status !== "granted").length ?? 0;
-  const network = systemReadings(notch.state)?.network ?? null;
+  // The Mac notch publishes network in its `system` readings; the Windows notch does not, so fall back to
+  // the hub's own history. Both are bytes per second, and that history has no interface name, so `kind` may be absent.
+  const sampled = [...recent].reverse().find((r) => r.netDown != null && r.netUp != null);
+  const network: { down: number; up: number; kind?: string } | null =
+    systemReadings(notch.state)?.network ??
+    (sampled && sampled.netDown != null && sampled.netUp != null ? { down: sampled.netDown, up: sampled.netUp } : null);
 
   const memLevel = maxLevel(levelFor(memFraction), pressure ? pressureLevel(pressure) : "ok");
   const cpuLevel = levelFor((cpu ?? 0) / 100);
@@ -299,7 +304,7 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
               </b>
               {swapTotal != null && swapTotal > 0 && " in use"}
             </span>
-            {network && <span className="ov-note">{network.kind}</span>}
+            {network?.kind && <span className="ov-note">{network.kind}</span>}
           </div>
         </OvCard>
 

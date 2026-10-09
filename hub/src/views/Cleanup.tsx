@@ -138,6 +138,9 @@ export function Cleanup() {
   const [note, setNote] = useState<Note | null>(null);
   const [restoreIssue, setRestoreIssue] = useState<Record<string, string>>({});
   const seeded = useRef(false);
+  // One findings scan at a time; a request made while one runs asks for another after it.
+  const scanning = useRef(false);
+  const again = useRef(false);
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -152,28 +155,43 @@ export function Cleanup() {
   };
 
   // Preselected items are chosen once; later scans keep only what is still movable.
+  // A move waiting on confirmation keeps the items that are still offered.
   const show = (next: Report) => {
     const first = !seeded.current;
     seeded.current = true;
     setReport(next);
-    setSelected((prev) => {
-      const now = next.findings.filter(movable);
-      return first
+    const now = next.findings.filter(movable);
+    setSelected((prev) =>
+      first
         ? new Set(now.filter((f) => f.preselected).map((f) => f.id))
-        : new Set(now.filter((f) => prev.has(f.id)).map((f) => f.id));
+        : new Set(now.filter((f) => prev.has(f.id)).map((f) => f.id)),
+    );
+    setPending((prev) => {
+      const kept = prev ? now.filter((f) => prev.some((p) => p.id === f.id)) : [];
+      return kept.length ? kept : null;
     });
-    setPending(null);
   };
 
-  // A rescan runs behind the page, which stays usable while it runs.
+  // A rescan runs behind the page, which stays usable while it runs: the saved
+  // findings can be selected and moved meanwhile, since every item is checked
+  // again when it moves.
   const refresh = async () => {
+    if (scanning.current) {
+      again.current = true;
+      return;
+    }
+    scanning.current = true;
     setRefreshing(true);
     setError(null);
     try {
-      show(await cleanup.scan());
+      do {
+        again.current = false;
+        show(await cleanup.scan());
+      } while (again.current);
     } catch (e) {
       setError(String(e));
     } finally {
+      scanning.current = false;
       setRefreshing(false);
     }
   };
@@ -196,7 +214,6 @@ export function Cleanup() {
   const review = eligible.filter((f) => f.risk === "review");
   const held = all.filter((f) => !movable(f));
   const chosen = useMemo(() => eligible.filter((f) => selected.has(f.id)), [report, selected]);
-  const locked = busy || refreshing;
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -216,9 +233,8 @@ export function Cleanup() {
   const move = (picked: Finding[]) => {
     setPending(null);
     return run(async () => {
-      const result = await cleanup.apply(
-        picked.filter(movable).map((f) => ({ rule_id: f.rule_id, path: f.path, dev: f.dev, ino: f.ino })),
-      );
+      const sent = picked.filter(movable);
+      const result = await cleanup.apply(sent.map((f) => ({ rule_id: f.rule_id, path: f.path, dev: f.dev, ino: f.ino })));
       const detail = result.skipped.map((s) => `${shortPath(s.path)}: ${s.reason}`).join("\n");
       setNote(
         result.skipped.length
@@ -229,8 +245,13 @@ export function Cleanup() {
             }
           : { tone: "ok", text: `Moved to the Trash: ${bytes(result.moved_bytes)} (${items(result.moved_items)}).` },
       );
-      show(await cleanup.scan());
+      // What moved leaves the list at once; the rescan behind it confirms.
+      const left = new Set(result.skipped.map((s) => s.path));
+      const gone = new Set(sent.filter((f) => !left.has(f.path)).map((f) => f.id));
+      setReport((prev) => (prev ? { ...prev, findings: prev.findings.filter((f) => !gone.has(f.id)) } : prev));
+      setSelected((prev) => new Set([...prev].filter((id) => !gone.has(id))));
       setHistory(await cleanup.history());
+      void refresh();
     });
   };
 
@@ -250,13 +271,13 @@ export function Cleanup() {
           : { tone: "ok", text: `Restored: ${bytes(result.restored_bytes)} (${items(result.restored_items)}).` },
       );
       setHistory(await cleanup.history());
-      show(await cleanup.scan());
+      void refresh();
     });
 
   const Group = ({ title, xs }: { title: string; xs: Finding[] }) =>
     xs.length === 0 ? null : (
       <section className="ck-group">
-        <GroupHead title={title} xs={xs} selected={selected} onToggle={(on) => toggleGroup(xs, on)} disabled={locked} />
+        <GroupHead title={title} xs={xs} selected={selected} onToggle={(on) => toggleGroup(xs, on)} disabled={busy} />
         {xs.map((f) => (
           <div key={f.id} className="ck-row">
             <span className="ck-check">
@@ -265,7 +286,7 @@ export function Cleanup() {
                 aria-label={`Select ${f.name}`}
                 checked={selected.has(f.id)}
                 onChange={() => toggle(f.id)}
-                disabled={locked}
+                disabled={busy}
               />
             </span>
             <details className="ck-detail">
@@ -325,7 +346,7 @@ export function Cleanup() {
                 </p>
               )}
             </div>
-            <Button size="sm" variant="secondary" onClick={() => restore(a.id)} disabled={locked || !canRestore}>
+            <Button size="sm" variant="secondary" onClick={() => restore(a.id)} disabled={busy || !canRestore}>
               {issue ? "Retry restore" : left.length === 0 ? "Restored" : "Restore"}
             </Button>
           </div>
@@ -352,7 +373,7 @@ export function Cleanup() {
             </p>
           )}
         </div>
-        <Button size="sm" variant="secondary" onClick={refresh} disabled={locked}>
+        <Button size="sm" variant="secondary" onClick={refresh} disabled={busy || refreshing}>
           {refreshing ? "Refreshing…" : "Rescan"}
         </Button>
       </div>
@@ -445,7 +466,7 @@ export function Cleanup() {
             </strong>
             <span className="muted"> to move to the Trash</span>
           </div>
-          <Button onClick={() => setPending(chosen)} disabled={locked || chosen.length === 0}>
+          <Button onClick={() => setPending(chosen)} disabled={busy || chosen.length === 0}>
             Move {chosen.length} to Trash
           </Button>
         </div>

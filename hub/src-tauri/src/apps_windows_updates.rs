@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -91,8 +92,22 @@ pub(super) async fn cached() -> Result<UpdateReport, String> {
 // Running winget
 // ---------------------------------------------------------------------------
 
+/// The App Installer alias of winget in %LOCALAPPDATA%\Microsoft\WindowsApps when it is
+/// there (that folder is often missing from the PATH of a Store-installed winget), else
+/// `winget.exe` from PATH. The alias is an app-execution-alias reparse point, which
+/// `Path::exists` can report as missing, so it is checked with `symlink_metadata`.
+fn winget_path() -> PathBuf {
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let alias = PathBuf::from(local).join("Microsoft").join("WindowsApps").join("winget.exe");
+        if std::fs::symlink_metadata(&alias).is_ok() {
+            return alias;
+        }
+    }
+    PathBuf::from("winget.exe")
+}
+
 fn winget_command() -> Command {
-    let mut command = Command::new("winget.exe");
+    let mut command = Command::new(winget_path());
     command.stdin(Stdio::null()).stderr(Stdio::null()).creation_flags(CREATE_NO_WINDOW);
     command
 }

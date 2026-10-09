@@ -10,7 +10,7 @@ Five rings with the Mac notch's metrics and colour bands (green under 70%, orang
 - Click opens the hub (`monitor` for CPU/memory, `storage` for disk, `accounts` for AI), see `src/hub.rs`.
 - Right-click shows only Quit, drawn as a non-activating card (no focus change). Clicking elsewhere dismisses it.
 - Alt-drag moves the notch along its monitor's top edge. The position is stored per monitor (per mille of the monitor width) and written atomically (write-then-rename, restricted DACL).
-- Launch at login: `HKCU\...\Run\Pulse`, on by default; set `"launch_at_login": false` in the settings file to turn it off.
+- Launch at login: `HKCU\...\Run\Pulse`, off by default (pre-install audit, 8f09e6a); turn it on with hub General › Open Pulse at login, or `"launch_at_login": true` in the settings file.
 - Hidden whenever the topmost visible window on the notch's monitor is a borderless full-monitor window (not foreground-only). Sampling slows to 10 s while hidden and nothing is drawn.
 
 ## Keyboard layer (`src/keys.rs`, `src/shot.rs`)

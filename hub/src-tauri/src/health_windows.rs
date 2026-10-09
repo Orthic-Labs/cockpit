@@ -11,13 +11,18 @@
 //!  1. `smartctl.exe -a -j /dev/pdN` (smartmontools addresses `\\.\PhysicalDriveN` as
 //!     `pdN`), run hidden. smartctl needs an elevated process to open a physical
 //!     drive, so for the usual unelevated hub it reports a permission error.
-//!  2. Storage Management's reliability counters (`MSFT_StorageReliabilityCounter`:
+//!  2. For NVMe, the SMART / Health Information log page through
+//!     `IOCTL_STORAGE_QUERY_PROPERTY` on a handle opened with no access rights. That
+//!     needs no administrator and gives temperature, wear, data written, power-on hours,
+//!     media errors and the critical-warning flags (no self-test log).
+//!  3. Storage Management's reliability counters (`MSFT_StorageReliabilityCounter`:
 //!     temperature, wear, power-on hours, uncorrected errors) and the disk's health
 //!     status, read through PowerShell's `Get-PhysicalDisk | Get-StorageReliabilityCounter`
-//!     (hidden). This works without elevation on most drives, but has no written-bytes
-//!     counter, self-test log or critical-warning flags, and some drivers return nothing.
-//! When both fail the drive is "unavailable through this connection" and keeps its last
-//! good reading, exactly like the Mac.
+//!     (hidden). That is a CIM call and is refused without elevation on many machines; it
+//!     has no written-bytes counter, self-test log or critical-warning flags.
+//!  4. Just the temperature (`StorageDeviceTemperatureProperty`, also unelevated).
+//! When all fail the drive is "unavailable through this connection" and keeps its last
+//! good reading, exactly like the Mac. SATA SMART attributes need an elevated smartctl.
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -39,6 +44,7 @@ const MAX_ALERTS: usize = 100;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
 const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x0056_0000;
+const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
 const OPEN_EXISTING: u32 = 3;
 const FILE_SHARE_READ_WRITE: u32 = 0x0000_0003;
 const INVALID_HANDLE_VALUE: isize = -1;
@@ -239,6 +245,151 @@ fn storage_counters(number: u32, at: u64) -> Option<Outcome> {
     })
 }
 
+/// Opens `\\.\PhysicalDriveN` with no access rights (`dwDesiredAccess = 0`). Windows allows
+/// that unelevated, and it is enough for `IOCTL_STORAGE_QUERY_PROPERTY`. The caller closes it.
+fn open_physical(number: u32) -> Option<*mut c_void> {
+    let name: Vec<u16> = format!(r"\\.\PhysicalDrive{number}").encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: NUL-terminated name; access 0 asks only for the handle.
+    let handle = unsafe {
+        CreateFileW(name.as_ptr(), 0, FILE_SHARE_READ_WRITE, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut())
+    };
+    (!handle.is_null() && handle as isize != INVALID_HANDLE_VALUE).then_some(handle)
+}
+
+/// One `IOCTL_STORAGE_QUERY_PROPERTY`; returns how many bytes of `output` were filled.
+fn storage_query(handle: *mut c_void, input: &[u8], output: &mut [u8]) -> Option<usize> {
+    let mut returned = 0u32;
+    // SAFETY: `input` and `output` are live slices of the sizes passed and `returned` a live
+    // u32; the handle is open. The query is read-only and has no overlapped I/O.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            input.as_ptr().cast(),
+            input.len() as u32,
+            output.as_mut_ptr().cast(),
+            output.len() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some((returned as usize).min(output.len()))
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// The low 64 bits of a little-endian 128-bit NVMe counter (the high half is ignored; a
+/// counter that large is not real).
+fn le_u64(bytes: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
+}
+
+/// The NVMe SMART / Health Information log page (0x02) through the storage stack, with no
+/// elevation. The query is a `STORAGE_PROPERTY_QUERY` (PropertyId u32, QueryType u32) followed
+/// by a 40-byte `STORAGE_PROTOCOL_SPECIFIC_DATA`; the answer is a `STORAGE_PROTOCOL_DATA_DESCRIPTOR`
+/// (Version u32, Size u32) holding that same structure, then the 512-byte log at
+/// `ProtocolDataOffset` from the start of the structure. Built as plain bytes, so no packing
+/// or alignment can go wrong. `None` for a drive that is not NVMe or refuses the query.
+fn native_nvme(number: u32, at: u64) -> Option<Reading> {
+    const PROTOCOL_DATA: usize = 8; // where the specific-data structure starts in both buffers
+    const SPECIFIC_DATA_SIZE: u32 = 40;
+    const LOG_SIZE: u32 = 512;
+    let mut query = [0u8; PROTOCOL_DATA + SPECIFIC_DATA_SIZE as usize];
+    let fields: [u32; 8] = [
+        50,                 // PropertyId: StorageDeviceProtocolSpecificProperty
+        0,                  // QueryType: PropertyStandardQuery
+        3,                  // ProtocolType: ProtocolTypeNvme
+        2,                  // DataType: NVMeDataTypeLogPage
+        2,                  // ProtocolDataRequestValue: log page 0x02 (SMART / Health)
+        0,                  // ProtocolDataRequestSubValue
+        SPECIFIC_DATA_SIZE, // ProtocolDataOffset: the log follows the structure
+        LOG_SIZE,           // ProtocolDataLength
+    ];
+    for (index, field) in fields.iter().enumerate() {
+        query[index * 4..index * 4 + 4].copy_from_slice(&field.to_le_bytes());
+    }
+    let mut output = [0u8; PROTOCOL_DATA + SPECIFIC_DATA_SIZE as usize + LOG_SIZE as usize];
+    let handle = open_physical(number)?;
+    let filled = storage_query(handle, &query, &mut output);
+    // SAFETY: the handle came from CreateFileW above and is closed once.
+    unsafe { CloseHandle(handle) };
+    let filled = filled?;
+    let log = PROTOCOL_DATA + le_u32(&output, PROTOCOL_DATA + 16)? as usize;
+    // Through "media and data integrity errors" (bytes 160..176) must be present.
+    if filled < log + 176 || le_u32(&output, PROTOCOL_DATA)? != 3 || le_u32(&output, PROTOCOL_DATA + 4)? != 2 {
+        return None;
+    }
+    let log = &output[log..filled];
+    let critical = u32::from(log[0]);
+    let kelvin = le_u16(log, 1)?;
+    // NVMe counts data units of 1000 512-byte blocks.
+    let written_bytes = le_u64(log, 48)?.checked_mul(512_000);
+    Some(Reading {
+        at,
+        passed: Some(critical == 0),
+        // 0 means "not reported"; the field is a composite temperature in Kelvin.
+        temperature_c: (kelvin > 273).then(|| f64::from(kelvin) - 273.0).filter(|c| *c < 150.0),
+        wear_percent: Some(u32::from(log[5])),
+        written_bytes,
+        power_on_hours: le_u64(log, 128),
+        critical_warning: Some(critical),
+        media_errors: le_u64(log, 160),
+        self_tests: Vec::new(),
+    })
+}
+
+/// The temperature, in Celsius, from `StorageDeviceTemperatureProperty` (PropertyId 52): works
+/// unelevated for any drive whose driver reports it, NVMe or not. A `STORAGE_TEMPERATURE_DATA_
+/// DESCRIPTOR` is 24 bytes (Version, Size, Critical i16, Warning i16, InfoCount u16, padding)
+/// followed by 16-byte infos (Index u16, Temperature i16, ...); the first info is the one wanted.
+fn native_temperature(number: u32) -> Option<f64> {
+    let mut query = [0u8; 12]; // STORAGE_PROPERTY_QUERY with its one byte of parameters, padded
+    query[0..4].copy_from_slice(&52u32.to_le_bytes());
+    let mut output = [0u8; 256];
+    let handle = open_physical(number)?;
+    let filled = storage_query(handle, &query, &mut output);
+    // SAFETY: the handle came from CreateFileW above and is closed once.
+    unsafe { CloseHandle(handle) };
+    let filled = filled?;
+    if filled < 40 || le_u16(&output, 12)? == 0 {
+        return None;
+    }
+    let celsius = f64::from(i16::from_le_bytes(output[26..28].try_into().ok()?));
+    (celsius > 0.0 && celsius < 150.0).then_some(celsius)
+}
+
+/// The drive's product name from `StorageDeviceProperty` (a `STORAGE_DEVICE_DESCRIPTOR` whose
+/// vendor and product strings are NUL-terminated ASCII at the stated offsets).
+fn native_model(number: u32) -> Option<String> {
+    let query = [0u8; 12]; // PropertyId 0 (StorageDeviceProperty), standard query
+    let mut output = [0u8; 1024];
+    let handle = open_physical(number)?;
+    let filled = storage_query(handle, &query, &mut output);
+    // SAFETY: the handle came from CreateFileW above and is closed once.
+    unsafe { CloseHandle(handle) };
+    let filled = filled?;
+    let text = |offset: usize| -> String {
+        if offset == 0 || offset >= filled {
+            return String::new();
+        }
+        let end = output[offset..filled].iter().position(|b| *b == 0).map_or(filled, |n| offset + n);
+        String::from_utf8_lossy(&output[offset..end]).trim().to_string()
+    };
+    let vendor = text(le_u32(&output, 12)? as usize);
+    let product = text(le_u32(&output, 16)? as usize);
+    let name = match vendor.as_str() {
+        "" | "NVMe" | "ATA" => product,
+        _ => format!("{vendor} {product}").trim().to_string(),
+    };
+    (!name.is_empty()).then_some(name)
+}
+
 fn sample_drive(tool: Option<&Path>, number: u32, at: u64) -> Outcome {
     let mut model = None;
     if let Some(tool) = tool {
@@ -247,9 +398,40 @@ fn sample_drive(tool: Option<&Path>, number: u32, at: u64) -> Outcome {
             Outcome::Unavailable { model: found } => model = found,
         }
     }
+    // NVMe's own log page: temperature, wear, writes, hours and errors with no elevation.
+    if let Some(reading) = native_nvme(number, at) {
+        return Outcome::Read { reading, model: model.or_else(|| native_model(number)) };
+    }
     match storage_counters(number, at) {
-        Some(Outcome::Read { reading, model: found }) => Outcome::Read { reading, model: found.or(model) },
-        Some(Outcome::Unavailable { model: found }) => Outcome::Unavailable { model: found.or(model) },
+        Some(Outcome::Read { mut reading, model: found }) => {
+            if reading.temperature_c.is_none() {
+                reading.temperature_c = native_temperature(number);
+            }
+            Outcome::Read { reading, model: found.or(model) }
+        }
+        Some(Outcome::Unavailable { model: found }) => unavailable_or_temperature(number, at, found.or(model)),
+        None => unavailable_or_temperature(number, at, model),
+    }
+}
+
+/// The last resort: a reading holding only the temperature, if the driver gives that much.
+fn unavailable_or_temperature(number: u32, at: u64, model: Option<String>) -> Outcome {
+    let model = model.or_else(|| native_model(number));
+    match native_temperature(number) {
+        Some(celsius) => Outcome::Read {
+            reading: Reading {
+                at,
+                passed: None,
+                temperature_c: Some(celsius),
+                wear_percent: None,
+                written_bytes: None,
+                power_on_hours: None,
+                critical_warning: None,
+                media_errors: None,
+                self_tests: Vec::new(),
+            },
+            model,
+        },
         None => Outcome::Unavailable { model },
     }
 }

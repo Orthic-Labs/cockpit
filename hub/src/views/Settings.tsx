@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
@@ -92,6 +92,8 @@ interface WindowManagementState {
 }
 
 export interface NotchState {
+  /** "windows" from the Windows notch; the Mac notch does not say. */
+  platform?: string;
   permissions?: Permission[];
   permissionErrors?: Record<string, string>;
   conveniences?: Conveniences;
@@ -121,7 +123,9 @@ export interface UpdateState {
   progress?: number;
 }
 
-function updateLine(u: UpdateState): string {
+function updateLine(u: UpdateState): string | undefined {
+  // The Windows notch reports no status; saying "Not checked yet" would be a guess.
+  if (!u.status) return undefined;
   switch (u.status) {
     case "checking": return "Checking for updates…";
     case "upToDate": return "Pulse is up to date.";
@@ -169,6 +173,8 @@ export function useNotch() {
   return { state, error, send };
 }
 
+const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
 /** "darkGlass" → "Dark glass". */
 const label = (raw: string) =>
   raw.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()).replace(/ ([A-Z])/g, (_, c) => ` ${c.toLowerCase()}`);
@@ -185,14 +191,19 @@ export function Settings({ section, notch, onNavigate }: {
     return <div className="view ck-settings ck-sub" role="status">{error ?? "Reading the notch's settings…"}</div>;
   }
   const s = state.settings;
+  const windows = isWindows || state.platform === "windows";
+  // The Windows notch publishes and accepts only part of the Mac's settings: a control shows
+  // only when the notch published its key (a picker, when it published options for it).
+  const has = (key: string) => key in s;
   const set = (key: string, value: unknown) => send({ command: "set", key, value });
-  const bool = (key: string, text: string, note?: string) => (
+  const bool = (key: string, text: string, note?: string) => !has(key) ? null : (
     <Row label={text} note={note}>
       <Toggle checked={Boolean(s[key])} onChange={(v) => set(key, v)} label={text} />
     </Row>
   );
   const choice = (key: string, text: string, segmented = true) => {
     const options = state.options[key] ?? [];
+    if (options.length === 0) return null;
     return (
       <Row label={text}>
         {segmented && options.length <= 4 ? (
@@ -212,7 +223,7 @@ export function Settings({ section, notch, onNavigate }: {
       </Row>
     );
   };
-  const slider = (key: string, text: string, min: number, max: number, step: number, percent = false) => (
+  const slider = (key: string, text: string, min: number, max: number, step: number, percent = false) => !isFiniteNumber(s[key]) ? null : (
     <Row label={text}>
       <span className="ck-slider">
         <input type="range" min={min} max={max} step={step} value={Number(s[key])} aria-label={text}
@@ -244,25 +255,30 @@ export function Settings({ section, notch, onNavigate }: {
         <>
           <Group title="Placement">
             {choice("notchEdge", "Edge")}
-            <div className="ck-sub ck-foot">
-              {isWindows ? "Alt-drag the notch to slide it along its edge, or towards another edge to dock there." : "Option-drag the notch to slide it along its edge, or towards another edge to dock there."}
-            </div>
+            {(state.options.notchEdge ?? []).length > 0 && (
+              <div className="ck-sub ck-foot">
+                {windows ? "Alt-drag the notch to slide it along its edge, or towards another edge to dock there." : "Option-drag the notch to slide it along its edge, or towards another edge to dock there."}
+              </div>
+            )}
             {choice("notchScope", "Displays")}
-            <Row label="Display">
-              <select className="ck-select" aria-label="Display" value={String(s.displayPreference)}
-                onChange={(e) => set("displayPreference", e.target.value)}>
-                <option value="followActiveWindow">Follow active window</option>
-                {state.displays.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </Row>
+            {has("displayPreference") && (
+              <Row label="Display">
+                <select className="ck-select" aria-label="Display" value={String(s.displayPreference)}
+                  onChange={(e) => set("displayPreference", e.target.value)}>
+                  <option value="followActiveWindow">Follow active window</option>
+                  {state.displays.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </Row>
+            )}
             {choice("notchVisibility", "Show")}
             {bool("foldsForFullScreen", "Fold for full-screen apps")}
+            {bool("folds", "Fold to a pill when the pointer leaves")}
             <Row label="Position"><Button size="sm" variant="secondary" onClick={() => send({ command: "resetPosition" })}>Reset position</Button></Row>
           </Group>
           <Group title="Size and surface">
             {choice("notchSize", "Size")}
             {bool("usesCustomNotchScale", "Custom size")}
-            {s.usesCustomNotchScale ? slider("customNotchScale", "Scale", 0.5, 1.5, 0.05) : null}
+            {has("usesCustomNotchScale") && s.usesCustomNotchScale ? slider("customNotchScale", "Scale", 0.5, 1.5, 0.05) : null}
             {choice("notchSurfaceStyle", "Surface")}
           </Group>
           <Group title="Rings">
@@ -303,14 +319,20 @@ export function Settings({ section, notch, onNavigate }: {
             {bool("announceWeeklyLimitReached", "When the weekly limit is reached")}
             {bool("limitReachedSound", "Play a sound at a limit")}
           </Group>
-          <Group title="Try them">
-            <div className="ck-line">
-              <Button size="sm" variant="secondary" onClick={() => send({ command: "sendTestNotification" })}>Send a test</Button>
-              <Button size="sm" variant="secondary" onClick={() => send({ command: "previewResetAlert" })}>Preview reset</Button>
-              <Button size="sm" variant="secondary" onClick={() => send({ command: "previewSessionLimitAlert" })}>Preview session limit</Button>
-              <Button size="sm" variant="secondary" onClick={() => send({ command: "previewWeeklyLimitAlert" })}>Preview weekly limit</Button>
-            </div>
+          <Group title="Mute alerts">
+            {bool("mute_claude_alerts", "Mute Claude alerts", "No notch cards for Claude's limits.")}
+            {bool("mute_codex_alerts", "Mute Codex alerts", "No notch cards for Codex's limits.")}
           </Group>
+          {!windows && (
+            <Group title="Try them">
+              <div className="ck-line">
+                <Button size="sm" variant="secondary" onClick={() => send({ command: "sendTestNotification" })}>Send a test</Button>
+                <Button size="sm" variant="secondary" onClick={() => send({ command: "previewResetAlert" })}>Preview reset</Button>
+                <Button size="sm" variant="secondary" onClick={() => send({ command: "previewSessionLimitAlert" })}>Preview session limit</Button>
+                <Button size="sm" variant="secondary" onClick={() => send({ command: "previewWeeklyLimitAlert" })}>Preview weekly limit</Button>
+              </div>
+            </Group>
+          )}
         </>
       )}
 
@@ -318,6 +340,18 @@ export function Settings({ section, notch, onNavigate }: {
         <>
           <Group title="Startup">{bool("launchAtLogin", "Open Pulse at login")}</Group>
           <NearbyGroup s={s} set={set} />
+          <Group title="Keyboard shortcuts">
+            {bool("mac_shortcuts", "Mac-style editing",
+              "Alt+A, C, V, X and Z act as Ctrl+A, C, V, X and Z; Alt+Shift+Z redoes.")}
+            {bool("screenshot_shortcuts", "Screenshot shortcuts",
+              "Alt+Shift+4 drags a region; Alt+Shift+5 opens the screenshot toolbar.")}
+            {bool("screenshot_to_desktop", "Save screenshots to the Desktop",
+              "Off keeps them on the clipboard only. The Alt+Shift+5 toolbar changes this too.")}
+          </Group>
+          <Group title="Installers">
+            {bool("installer_auto", "Install signed installers automatically",
+              "Watches Downloads and installs signed MSIX and MSI packages, with Undo. Unsigned ones always ask.")}
+          </Group>
           <Group title="Updates">
             {state.updates ? (
               <>
@@ -346,33 +380,35 @@ export function Settings({ section, notch, onNavigate }: {
             {bool("autoUpdateCheck", "Automatically check",
               "Looks for a new release at most every six hours. Nothing installs until you choose Update.")}
           </Group>
-          <Group title="Uninstalling">
-            <Row
-              label="Uninstall without password"
-              note="Lets Pulse move root-owned apps and their files to the Trash with no administrator password. Approve once in System Settings."
-            >
-              <Toggle
-                checked={state.helper === "enabled" || state.helper === "requiresApproval"}
-                onChange={(v) => send({ command: v ? "helperEnable" : "helperDisable" })}
+          {!windows && (
+            <Group title="Uninstalling">
+              <Row
                 label="Uninstall without password"
-              />
-            </Row>
-            <div className={`ck-sub ck-foot ck-tone-${state.helper === "enabled" ? "ok" : state.helper === "requiresApproval" || state.helper === "needsReenable" ? "warn" : "off"}`} role="status">
-              {state.helper === "enabled"
-                ? "On. Root-owned items go to the Trash without a password."
-                : state.helper === "requiresApproval"
-                  ? "Waiting for your approval in System Settings."
-                  : state.helper === "notFound"
-                    ? "This build of Pulse does not include the helper."
-                    : state.helper === "needsReenable"
-                      ? "Off after rename. Re-enable in Permissions, then approve Pulse in Login Items."
-                      : "Off. Root-owned items ask for an administrator password in Finder."}
-            </div>
-            <div className="ck-line ck-foot">
-              <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>
-            </div>
-            {state.helperError ? <div className="error ck-foot" role="alert">{state.helperError}</div> : null}
-          </Group>
+                note="Lets Pulse move root-owned apps and their files to the Trash with no administrator password. Approve once in System Settings."
+              >
+                <Toggle
+                  checked={state.helper === "enabled" || state.helper === "requiresApproval"}
+                  onChange={(v) => send({ command: v ? "helperEnable" : "helperDisable" })}
+                  label="Uninstall without password"
+                />
+              </Row>
+              <div className={`ck-sub ck-foot ck-tone-${state.helper === "enabled" ? "ok" : state.helper === "requiresApproval" || state.helper === "needsReenable" ? "warn" : "off"}`} role="status">
+                {state.helper === "enabled"
+                  ? "On. Root-owned items go to the Trash without a password."
+                  : state.helper === "requiresApproval"
+                    ? "Waiting for your approval in System Settings."
+                    : state.helper === "notFound"
+                      ? "This build of Pulse does not include the helper."
+                      : state.helper === "needsReenable"
+                        ? "Off after rename. Re-enable in Permissions, then approve Pulse in Login Items."
+                        : "Off. Root-owned items ask for an administrator password in Finder."}
+              </div>
+              <div className="ck-line ck-foot">
+                <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>
+              </div>
+              {state.helperError ? <div className="error ck-foot" role="alert">{state.helperError}</div> : null}
+            </Group>
+          )}
           <Group title="Launcher">
             {bool("launcherEnabled", "Enable the launcher",
               "Search apps, files and Pulse commands, and calculate. Off by default.")}
@@ -425,7 +461,9 @@ export function Settings({ section, notch, onNavigate }: {
             <WindowManagementGroup w={state.conveniences.windowManagement} accessibility={state.conveniences.accessibility}
               s={s} set={set} />
           )}
-          <div className="ck-sub ck-about">Pulse notch {state.version} · built on Codenotch (MIT)</div>
+          <div className="ck-sub ck-about">
+            {windows ? `Pulse notch ${state.version}` : `Pulse notch ${state.version} · built on Codenotch (MIT)`}
+          </div>
         </>
       )}
     </div>
@@ -774,7 +812,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
               {a.usesKeychain && a.refusedAccess && (
                 <Button size="sm" variant="secondary" onClick={() => send({ command: "allowAccess", provider: a.id })}>Allow access…</Button>
               )}
-              {a.summary && (
+              {a.summary && !isWindows && (
                 <Button size="sm" variant="ghost" onClick={() => send({ command: "signOut", provider: a.id })}
                   title={`Clears what Pulse read. You stay signed in to ${a.name.split(" ")[0]} itself.`}>Forget reading</Button>
               )}
@@ -1044,7 +1082,9 @@ function StaleGrants() {
   );
 }
 
+/** A card with a heading; nothing at all when every control in it was left out. */
 function Group({ title, children }: { title: string; children: ReactNode }) {
+  if (Children.toArray(children).length === 0) return null;
   return (
     <section className="ck-sgroup">
       <h2>{title}</h2>

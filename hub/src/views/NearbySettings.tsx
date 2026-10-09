@@ -167,17 +167,17 @@ export function NearbyGroup({ s, set }: {
     <Group title="Nearby sharing">
       <Row
         label="Send and receive files nearby"
-        note="Works with the LocalSend app on iPhone, Android, Windows and Linux. Pulse can be found on your network while this is on."
+        note={`Works with the LocalSend app on iPhone, Android, ${isWindows ? "Mac" : "Windows"} and Linux. Pulse can be found on your network while this is on.`}
       >
         <Toggle checked={enabled} onChange={(v) => set("nearbyEnabled", v)} label="Nearby sharing" />
       </Row>
       {enabled && (
         <>
-          <Row label="Device name" note="How other devices list this Mac. Empty uses the Mac's name.">
+          <Row label="Device name" note={isWindows ? "How other devices list this PC. Empty uses the PC's name." : "How other devices list this Mac. Empty uses the Mac's name."}>
             <input
               className="ck-input ck-input-name"
               value={alias}
-              placeholder={share?.alias ?? "Mac (Pulse)"}
+              placeholder={share?.alias ?? (isWindows ? "PC (Pulse)" : "Mac (Pulse)")}
               onChange={(e) => setAlias(e.target.value)}
               onBlur={commitAlias}
               onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}

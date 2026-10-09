@@ -1,5 +1,5 @@
 import { Badge } from "@rightkit/app-shell/react";
-import { bytes, type DriveCard, type HealthAlert, type HealthReading } from "../api";
+import { bytes, isWindows, type DriveCard, type HealthAlert, type HealthReading } from "../api";
 import "./health.css";
 
 const day = (secs: number) =>
@@ -9,6 +9,20 @@ const celsius = (value: number | null) => (value == null ? null : `${Math.round(
 /** Warning as the notch counts it: failed self-assessment, a critical warning, or media errors. */
 export function isWarning(reading: HealthReading): boolean {
   return reading.passed === false || (reading.critical_warning ?? 0) !== 0 || (reading.media_errors ?? 0) > 0;
+}
+
+const NEEDS_ADMIN = "Temperature and wear need Pulse to run as administrator on Windows";
+
+/** Windows only: the drive answered, but not one metric came with it (the unelevated paths gave nothing). */
+function lacksMetrics(reading: HealthReading): boolean {
+  return (
+    isWindows &&
+    reading.temperature_c == null &&
+    reading.wear_percent == null &&
+    reading.written_bytes == null &&
+    reading.power_on_hours == null &&
+    reading.media_errors == null
+  );
 }
 
 /** Temperature, wear and writes, for whichever of them the drive reports. */
@@ -53,6 +67,7 @@ export function DriveHealthLine({ card, toolAvailable }: { card: DriveCard | und
           {part}
         </span>
       ))}
+      {lacksMetrics(card.latest) && <span className="muted">{NEEDS_ADMIN}</span>}
     </span>
   );
 }
@@ -138,6 +153,7 @@ export function DriveHealthPanel({
           {latest && <span className="muted">Last good reading: {day(latest.at)}</span>}
         </div>
       )}
+      {latest && lacksMetrics(latest) && <div className="muted small">{NEEDS_ADMIN}.</div>}
       {latest && (
         <div className="health-grid">
           <Metric label="Health" value={isWarning(latest) ? "Warning" : "OK"} />

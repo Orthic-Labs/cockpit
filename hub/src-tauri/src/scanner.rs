@@ -1050,6 +1050,9 @@ pub struct Status {
     root: Option<PathBuf>,
     scanned_at: Option<u64>,
     from_snapshot: bool,
+    /// Whether the index is kept current while the hub runs (a change journal
+    /// feeds `watch`). Where it is not, a saved scan only gets older.
+    live_refresh: bool,
 }
 
 /// The scan's state. Reads what the Storage page shows, never loads the index.
@@ -1064,6 +1067,8 @@ pub fn scan_status() -> Status {
         root: shown.as_ref().map(|s| s.root.clone()),
         scanned_at: shown.as_ref().map(|s| s.scanned_at),
         from_snapshot: shown.as_ref().is_some_and(|s| s.from_snapshot),
+        // FSEvents is the only change journal `watch` has; see its fallback module.
+        live_refresh: cfg!(target_os = "macos"),
     }
 }
 

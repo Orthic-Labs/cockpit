@@ -44,6 +44,10 @@ interface Group {
 /** Findings survive leaving and returning to Storage; they are only rescanned on demand. */
 let cachedReport: CleanupReport | null = null;
 
+/** Without a live refresh, a saved scan younger than this is shown as it is on open. */
+const SNAPSHOT_SECS = 6 * 60 * 60;
+const isOld = (secs: number) => Date.now() / 1000 - secs > SNAPSHOT_SECS;
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -308,12 +312,15 @@ export function Storage() {
       }
       // The saved view opens at once. A rescan runs behind it only when the
       // saved one is old; with no saved view at all, the first scan starts now.
+      // Without a live refresh a walk of the whole folder is long and nothing
+      // keeps the view current, so a recent saved scan waits for Rescan.
       const saved = await api.lastScan().catch(() => null);
       if (!alive.current) return;
       setOpening(false);
       if (saved) {
         show(saved, list);
-        if (isStale(saved.scanned_at)) scanVolume(mountFor(saved.root, list), list);
+        const old = status?.live_refresh === false ? isOld(saved.scanned_at) : isStale(saved.scanned_at);
+        if (old) scanVolume(mountFor(saved.root, list), list);
       } else {
         scanVolume("/", list);
       }

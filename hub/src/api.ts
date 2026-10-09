@@ -107,6 +107,8 @@ export interface ScanStatus {
   root: string | null;
   scanned_at: number | null;
   from_snapshot: boolean;
+  /** The index is kept current while the hub runs; without it a saved scan only gets older. */
+  live_refresh: boolean;
 }
 
 export interface Volume {
