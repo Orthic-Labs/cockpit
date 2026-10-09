@@ -339,7 +339,7 @@ fn list_with_class(
             let name = buffer
                 .get(start..start.checked_add(name_bytes).ok_or_else(malformed)?)
                 .ok_or_else(malformed)?;
-            if name_bytes % 2 != 0 {
+            if !name_bytes.is_multiple_of(2) {
                 return Err(malformed());
             }
             let units: Vec<u16> = name

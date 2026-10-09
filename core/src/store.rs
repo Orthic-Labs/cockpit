@@ -1098,7 +1098,7 @@ mod pinned {
             let mut status_block = IO_STATUS_BLOCK::default();
             let status = unsafe {
                 NtSetInformationFile(
-                    HANDLE(src.file.as_raw_handle() as *mut core::ffi::c_void),
+                    HANDLE(src.file.as_raw_handle()),
                     &mut status_block,
                     link as *const core::ffi::c_void,
                     storage_len as u32,
@@ -1146,7 +1146,7 @@ mod pinned {
             let mut status_block = IO_STATUS_BLOCK::default();
             let status = unsafe {
                 NtSetInformationFile(
-                    HANDLE(v.file.as_raw_handle() as *mut core::ffi::c_void),
+                    HANDLE(v.file.as_raw_handle()),
                     &mut status_block,
                     &disposition as *const NtFileDispositionInformation as *const core::ffi::c_void,
                     std::mem::size_of::<NtFileDispositionInformation>() as u32,
@@ -1217,7 +1217,7 @@ mod pinned {
                         || offset
                             .checked_add(record_len)
                             .is_none_or(|end| end > buf.len())
-                        || name_bytes % 2 != 0
+                        || !name_bytes.is_multiple_of(2)
                         || name_bytes > record_len - name_at
                         || (next != 0 && (next < name_at || next & 7 != 0))
                     {
