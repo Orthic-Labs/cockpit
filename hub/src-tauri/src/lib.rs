@@ -27,6 +27,9 @@ mod share;
 
 mod watch;
 
+#[cfg(target_os = "windows")]
+mod win_bridge;
+
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -34,6 +37,7 @@ use tauri::{Emitter, Manager};
 
 // The notch's settings bridge (see mac/Notch/Sources/System/HubBridge.swift).
 // Darwin notifications through libSystem; no payloads.
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn notify_post(name: *const std::ffi::c_char) -> u32;
     fn notify_register_check(name: *const std::ffi::c_char, token: *mut i32) -> u32;
@@ -44,11 +48,22 @@ fn bridge_dir() -> PathBuf {
     home().join("Library/Application Support/Pulse")
 }
 
+/// Sections the hub understands for `--section` and the show/select events.
+const SECTIONS: [&str; 11] = [
+    "overview", "settings", "storage", "monitor", "cleanup", "apps", "accounts", "appearance",
+    "notifications", "general", "permissions",
+];
+
+#[cfg(target_os = "macos")]
 fn post(name: &str) {
     if let Ok(name) = std::ffi::CString::new(name) {
         unsafe { notify_post(name.as_ptr()) };
     }
 }
+
+/// Darwin notifications do not exist off macOS; the Windows bridge uses named events.
+#[cfg(not(target_os = "macos"))]
+fn post(_name: &str) {}
 
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
@@ -127,22 +142,14 @@ fn initial_app() -> Option<String> {
 
 /// Watch for the notch asking a running hub to show a section, and for new
 /// notch state; forward both to the page as events.
+#[cfg(target_os = "macos")]
 fn watch_notch(app: tauri::AppHandle) {
     std::thread::spawn(move || {
-        let names = [
-            ("dev.orthic.pulse.hub.show.overview", "show-section", "overview"),
-            ("dev.orthic.pulse.hub.show.settings", "show-section", "settings"),
-            ("dev.orthic.pulse.hub.show.storage", "show-section", "storage"),
-            ("dev.orthic.pulse.hub.show.monitor", "show-section", "monitor"),
-            ("dev.orthic.pulse.hub.show.cleanup", "show-section", "cleanup"),
-            ("dev.orthic.pulse.hub.show.apps", "show-section", "apps"),
-            ("dev.orthic.pulse.hub.show.accounts", "show-section", "accounts"),
-            ("dev.orthic.pulse.hub.show.appearance", "show-section", "appearance"),
-            ("dev.orthic.pulse.hub.show.notifications", "show-section", "notifications"),
-            ("dev.orthic.pulse.hub.show.general", "show-section", "general"),
-            ("dev.orthic.pulse.hub.show.permissions", "show-section", "permissions"),
-            ("dev.orthic.pulse.notch.state", "notch-state", ""),
-        ];
+        let mut names: Vec<(String, &str, &str)> = SECTIONS
+            .iter()
+            .map(|section| (format!("dev.orthic.pulse.hub.show.{section}"), "show-section", *section))
+            .collect();
+        names.push(("dev.orthic.pulse.notch.state".to_string(), "notch-state", ""));
         // `hub.select.<section>` switches the page without showing or focusing
         // the window, so checks can look at a page while someone else works.
         let quiet: Vec<(String, &str, &str)> = names
@@ -151,7 +158,7 @@ fn watch_notch(app: tauri::AppHandle) {
             .map(|(name, _, payload)| (name.replace(".hub.show.", ".hub.select."), "select-section", *payload))
             .collect();
         let mut tokens = Vec::new();
-        for (name, event, payload) in names.iter().map(|(n, e, p)| (n.to_string(), *e, *p)).chain(quiet) {
+        for (name, event, payload) in names.iter().map(|(n, e, p)| (n.clone(), *e, *p)).chain(quiet) {
             let Ok(cname) = std::ffi::CString::new(name) else { continue };
             let mut token = 0i32;
             if unsafe { notify_register_check(cname.as_ptr(), &mut token) } == 0 {
@@ -367,6 +374,11 @@ pub fn run() {
         eprintln!("Pulse could not migrate existing state: {error}");
         return;
     }
+    // One hub per user: a second launch asks the first to show its section, then exits.
+    #[cfg(target_os = "windows")]
+    if !win_bridge::claim_instance() {
+        return;
+    }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     // Env-gated by the rightkit-qa launcher: inert in normal launches.
@@ -402,7 +414,10 @@ pub fn run() {
             } else {
                 show_in_dock(app.handle());
             }
+            #[cfg(target_os = "macos")]
             watch_notch(app.handle().clone());
+            #[cfg(target_os = "windows")]
+            win_bridge::watch(app.handle().clone());
             health::start_background();
             metrics_history::start_background();
             disk_index::start_background();
