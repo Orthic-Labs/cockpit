@@ -8,10 +8,19 @@ use pulse_core::{
 };
 use std::fs;
 
+/// Fixture paths are written unix-style; on Windows they need a drive to be absolute.
+fn abs_path(path: &str) -> std::path::PathBuf {
+    if cfg!(windows) {
+        std::path::PathBuf::from(format!("C:{path}"))
+    } else {
+        std::path::PathBuf::from(path)
+    }
+}
+
 fn item(path: &str, id: &str) -> CleanupItem {
     let volume = VolumeIdentity::new("volume-a");
     CleanupItem {
-        path: path.into(),
+        path: abs_path(path),
         volume: volume.clone(),
         identity: FileIdentity {
             volume,
