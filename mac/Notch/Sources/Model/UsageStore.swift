@@ -56,9 +56,12 @@ final class UsageStore: ObservableObject {
     private func claudeAccountName() -> String? {
         guard let book = claudeAccountBook else { return nil }
         let profile = ClaudeProfile.default()
-        guard let id = profile.accountID(),
+        // The account Desktop is signed into while it runs, else Claude Code's.
+        guard let id = ClaudeOAuthProvider.trackedAccountID(profile: profile),
               fetchedClaudeAccount[ClaudeProfile.defaultID] == id else { return nil }
-        return book.activeName(id: id, email: profile.signedInAddress())
+        // The address in `~/.claude.json` belongs to Claude Code's account only.
+        let email = id == profile.accountID() ? profile.signedInAddress() : nil
+        return book.activeName(id: id, email: email) ?? ClaudeAccountBook.defaultName(id: id)
     }
 
     /// Names chosen in Settings, by provider id. Applied to every snapshot the
@@ -796,25 +799,32 @@ final class UsageStore: ObservableObject {
         if let claude = provider as? ClaudeOAuthProvider, claude.profile.slug == nil {
             claudeProfile = claude.profile
         }
-        let accountBefore = claudeProfile?.accountID()
+        let accountBefore = claudeProfile.flatMap { ClaudeOAuthProvider.trackedAccountID(profile: $0) }
         do {
             let fresh = try await provider.fetchSnapshot(freshness: freshness)
             guard acceptsResult(from: provider, generation: generation) else { return nil }
-            if let claudeProfile, let accountBefore, let book = claudeAccountBook,
-               case .ok = fresh.status, claudeProfile.accountID() == accountBefore {
-                // Claude Desktop signed into a different account than Claude
-                // Code's file says: the cache could be that account's, so the
-                // reading is not saved under either.
-                let desktop = ClaudeAccountWatcher.desktopAccountUUID()
-                if desktop == nil || desktop == accountBefore {
-                    book.record(id: accountBefore, email: claudeProfile.signedInAddress(),
-                                plan: fresh.plan, windows: fresh.windows)
-                    fetchedClaudeAccount[provider.id] = accountBefore
+            var noReading = false
+            if let claudeProfile, let accountBefore,
+               ClaudeOAuthProvider.trackedAccountID(profile: claudeProfile) == accountBefore {
+                // The reading is for the tracked account (Desktop's while it
+                // runs, else Claude Code's), so it is saved under that id and
+                // the card names that account. The previous account's last
+                // reading stays in the book under its own id.
+                fetchedClaudeAccount[provider.id] = accountBefore
+                noReading = fresh.windows.isEmpty
+                if let book = claudeAccountBook, case .ok = fresh.status {
+                    let email = accountBefore == claudeProfile.accountID() ? claudeProfile.signedInAddress() : nil
+                    book.record(id: accountBefore, email: email, plan: fresh.plan, windows: fresh.windows)
                 }
             }
             // Model residency becomes untrue as soon as a server stops. It must
             // never use quota's last-good cache or survive an app relaunch.
-            if provider.kind == .usage {
+            if noReading {
+                // No reading for the tracked account: nothing to remember, and
+                // an older one must not be re-shown in its place.
+                lastGood[provider.id] = nil
+                archive.save(lastGood)
+            } else if provider.kind == .usage {
                 lastGood[provider.id] = (fresh, Date())
                 archive.save(lastGood)
             }

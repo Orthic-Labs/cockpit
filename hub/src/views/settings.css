@@ -18,11 +18,29 @@
 .ck-settings .error { color: var(--rk-bad); font-size: 12px; overflow-wrap: anywhere; }
 .ck-settings > .error { padding: 8px 12px; border-radius: 8px; background: var(--rk-bad-soft); }
 
-/* Claude accounts under the Claude row */
-.ck-settings .ck-claude-list { flex: 1 0 100%; display: flex; flex-direction: column; gap: 10px; padding-top: 8px; border-top: 1px solid var(--rk-hairline); }
-.ck-settings .ck-claude-account { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.ck-settings .ck-claude-win { display: grid; grid-template-columns: 4.5em minmax(0, 1fr) 3.2em minmax(0, 11em); align-items: center; column-gap: 12px; }
-.ck-settings .ck-claude-value { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--rk-ink); white-space: nowrap; }
+/* Claude accounts under the Claude row: one compact hairline-separated list, a row per account */
+.ck-settings .ck-claude-list { flex: 1 0 100%; display: flex; flex-direction: column; margin: 0 -14px -8px; border-top: 1px solid var(--rk-hairline); }
+.ck-settings .ck-claude-account { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; min-height: 42px; padding: 3px 14px; }
+.ck-settings .ck-claude-account + .ck-claude-account { border-top: 1px solid var(--rk-hairline); }
+.ck-settings .ck-claude-account .ck-account-name { flex: 1 1 auto; flex-wrap: nowrap; min-width: 0; gap: 8px; }
+.ck-settings .ck-claude-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: 6px; background: none; color: var(--rk-ink); font: inherit; font-weight: 600; cursor: text; }
+.ck-settings .ck-claude-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-settings .ck-claude-name svg { flex: none; opacity: 0; color: var(--rk-ink-3); }
+.ck-settings .ck-claude-account:hover .ck-claude-name svg,
+.ck-settings .ck-claude-name:focus-visible svg { opacity: 1; }
+.ck-settings .ck-claude-name:hover { background: var(--rk-fill-2); }
+.ck-settings .ck-claude-edit { width: 200px; min-height: 28px; padding: 2px 8px; font-weight: 600; }
+.ck-settings .ck-claude-plan, .ck-settings .ck-claude-asof { white-space: nowrap; }
+.ck-settings .ck-forget { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--rk-ink-3); cursor: pointer; opacity: 0; }
+.ck-settings .ck-claude-account:hover .ck-forget,
+.ck-settings .ck-forget:focus-visible { opacity: 1; }
+.ck-settings .ck-forget:hover { background: var(--rk-fill-2); color: var(--rk-bad); }
+.ck-settings .ck-claude-meters { flex: none; display: flex; flex-direction: column; justify-content: center; gap: 2px; width: 300px; max-width: 55%; }
+.ck-settings .ck-claude-none { text-align: right; }
+.ck-settings .ck-claude-win { display: grid; grid-template-columns: 3.8em minmax(0, 1fr) 2.8em 7.5em; align-items: center; column-gap: 8px; line-height: 16px; }
+.ck-settings .ck-claude-win .ck-sub { line-height: 16px; white-space: nowrap; }
+.ck-settings .ck-claude-eta { text-align: right; }
+.ck-settings .ck-claude-value { text-align: right; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--rk-ink); white-space: nowrap; }
 
 /* Rows */
 .ck-settings .ck-set,

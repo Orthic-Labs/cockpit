@@ -179,7 +179,7 @@ final class ClaudeAccountBook: ObservableObject {
     }
 
     /// A canonical 8-4-4-4-12 hex id; anything else in those folders is not an account.
-    nonisolated private static func isAccountID(_ name: String) -> Bool {
+    nonisolated static func isAccountID(_ name: String) -> Bool {
         let parts = name.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.map(\.count) == [8, 4, 4, 4, 12] else { return false }
         return parts.allSatisfy { $0.allSatisfy(\.isHexDigit) }

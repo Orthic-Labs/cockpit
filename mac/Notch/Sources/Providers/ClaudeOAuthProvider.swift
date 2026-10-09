@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 
@@ -80,6 +81,9 @@ actor ClaudeOAuthProvider: UsageProvider {
     /// re-shows the last good reading, undimmed for its own fifteen minutes and
     /// dimmed and dated after that. Nothing here has to re-implement any of it.
     private let desktopFreshness: TimeInterval
+    /// Pulse fork: the account the previous fetch was for (Desktop's when it is
+    /// running, else Claude Code's). A change drops everything held.
+    private var lastTrackedAccount: String?
     /// Pulse fork: the last cache reading, kept through rescan waits.
     private var lastDesktopReading: ClaudeDesktopUsageCache.Reading?
     /// What a `.live` fetch will accept instead.
@@ -190,6 +194,7 @@ actor ClaudeOAuthProvider: UsageProvider {
     /// the cache reading, the rescan throttle, the CLI answer and its lock-out.
     /// The 429 back-off is deliberately kept; it belongs to the endpoint.
     func forgetAccountState() {
+        lastTrackedAccount = nil
         lastDesktopReading = nil
         lastDesktopMiss = nil
         lastCLIWindows = nil
@@ -206,6 +211,18 @@ actor ClaudeOAuthProvider: UsageProvider {
     /// reading that was already old, never about asking Anthropic more often
     /// than the 429 it hands back says we may.
     func fetchSnapshot(freshness: UsageFreshness) async throws -> ProviderSnapshot {
+        // Pulse fork: whose usage this is. The account Claude Desktop is signed
+        // into while it runs, else Claude Code's. A change drops held readings.
+        let desktopAccount = profile.slug == nil ? Self.desktopSignedInAccount() : nil
+        let tracked = desktopAccount ?? profile.accountID()
+        if let lastTrackedAccount, lastTrackedAccount != tracked { forgetAccountState() }
+        lastTrackedAccount = tracked
+        // Claude Code is signed into another account: the keychain, the CLI and
+        // the endpoint all describe that one, so only Desktop's own cache may
+        // answer, and when it cannot there is no reading.
+        if let desktopAccount, desktopAccount != profile.accountID() {
+            return await desktopOnlySnapshot(account: desktopAccount, freshness: freshness)
+        }
         let desktopAllowance: TimeInterval
         let cliAllowance: TimeInterval
         switch freshness {
@@ -439,6 +456,68 @@ actor ClaudeOAuthProvider: UsageProvider {
         lastDesktopReading = reading
         Log.usage.debug("\(self.id, privacy: .public): read \(reading.windows.count) windows from the claude desktop cache entry \(reading.entry.lastPathComponent, privacy: .public)")
         return reading
+    }
+
+    /// Pulse fork: Claude Desktop's signed-in account while Desktop is running,
+    /// else nil. Not consulted under test.
+    nonisolated static func desktopSignedInAccount() -> String? {
+        guard !Runtime.isUnderTest,
+              !NSRunningApplication.runningApplications(
+                withBundleIdentifier: "com.anthropic.claudefordesktop").isEmpty
+        else { return nil }
+        return ClaudeAccountWatcher.desktopAccountUUID()
+    }
+
+    /// Pulse fork: the account a default-profile reading is for.
+    nonisolated static func trackedAccountID(profile: ClaudeProfile) -> String? {
+        (profile.slug == nil ? desktopSignedInAccount() : nil) ?? profile.accountID()
+    }
+
+    /// Pulse fork: the organizations Claude Desktop filed under an account (the
+    /// folder names under its session directories; nothing inside is read).
+    nonisolated static func desktopOrganizations(account: String) -> [String] {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude", isDirectory: true)
+        var found: [String] = []
+        for parent in ["claude-code-sessions", "local-agent-mode-sessions"] {
+            let dir = root.appendingPathComponent(parent, isDirectory: true)
+                .appendingPathComponent(account, isDirectory: true)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in names where ClaudeAccountBook.isAccountID(name) && !found.contains(name) {
+                found.append(name)
+            }
+        }
+        return found
+    }
+
+    /// Pulse fork: the reading for an account Claude Code is not signed into.
+    /// Only Desktop's cache for that account's organizations, and only while
+    /// fresh and not past a reset; otherwise an empty snapshot (the ring's
+    /// unknown state). Never another account's numbers, and no endpoint call,
+    /// so the 429 back-off is untouched.
+    private func desktopOnlySnapshot(account: String,
+                                     freshness: UsageFreshness) async -> ProviderSnapshot {
+        let none = ProviderSnapshot(id: id, displayName: displayName, glyph: glyph,
+                                    fidelity: .official, status: .stale(since: .distantPast),
+                                    windows: [])
+        guard let desktopCache else { return none }
+        let organizations = Self.desktopOrganizations(account: account)
+        guard !organizations.isEmpty else { return none }
+        let reading: ClaudeDesktopUsageCache.Reading? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let newest = organizations
+                    .compactMap { desktopCache.read(organization: $0) }
+                    .max { $0.capturedAt < $1.capturedAt }
+                continuation.resume(returning: newest)
+            }
+        }
+        let now = Date()
+        let allowance = freshness == .live ? min(liveDesktopFreshness, desktopFreshness)
+                                           : desktopFreshness
+        guard let reading, reading.isFresh(at: now, within: allowance),
+              !Self.hasExpiredWindow(reading.windows, at: now) else { return none }
+        return snapshot(windows: reading.windows, plan: nil,
+                        resetCredits: reading.resets?.credits(at: now))
     }
 
     /// Whether any window in a reading names a reset time that has already

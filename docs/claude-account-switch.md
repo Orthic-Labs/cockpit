@@ -49,3 +49,16 @@ Nothing detects accounts. Every account folder present under `claude-code-sessio
 ## Limits
 
 Windows compiles but reports "not supported yet" unless `%APPDATA%\Claude\claude-code-sessions` exists; its layout is unverified. Only Claude Desktop Code sessions are merged; local-agent-mode sessions hold no session records here. Verification is the fixture journey `core/tests/claude_sync.rs` (CI only); nothing was run locally.
+
+## Which account the notch shows, and where its usage comes from
+
+Claude Desktop caches usage in Chromium's HTTP cache, `~/Library/Application Support/Claude/Cache/Cache_Data/*_0` (Simple Cache entries): the zstd body of `GET https://claude.ai/api/organizations/<orgUUID>/usage[?skip_spend=1|cedar_ember=1]` (`five_hour`, `seven_day`, `utilization`, `resets_at`, ...), dated by the response `Date:` header. The key carries the **organization** uuid, not the account uuid. `plan-usage-history.json` holds only `{t, org, u}` samples (also by organization). Desktop's own account is `lastKnownAccountUuid` in `config.json`; the organizations of an account are the folder names under `claude-code-sessions/<accountUUID>/` and `local-agent-mode-sessions/<accountUUID>/`. That folder-to-organization link is how a cache entry is tied to an account.
+
+Tracked account (`ClaudeOAuthProvider.trackedAccountID`): `lastKnownAccountUuid` while Claude Desktop is running, otherwise Claude Code's `oauthAccount.accountUuid` in `~/.claude.json`. The ring, card and hub all follow it.
+
+Source chain for the default Claude ring:
+
+1. Desktop running and its account differs from Claude Code's: only Desktop's cache for that account's organizations (newest entry), and only if fresh (30 min, 2 min for live) and no window past its reset. Keychain, `claude /usage` and the usage endpoint are never used, because they describe the Claude Code account. No such reading: the ring shows the dim unknown state and the card says "No reading for <name> yet". Another account's numbers are never shown.
+2. Desktop not running, or running with the same account as Claude Code: unchanged chain: Desktop cache (Claude Code's organization), then `claude /usage`, then the keychain token against the usage endpoint. The endpoint's 429 back-off still applies (it belongs to the endpoint; the Desktop-only path makes no request).
+
+On a Desktop account switch (`lastKnownAccountUuid` change, or Desktop starting or quitting) the displayed reading and the last-good copy are dropped at once, held provider state is cleared, and usage is refetched `.fromSource`. The account book keeps each account's last reading under its own id; the old account still shows in the hub with its time. A reading is saved under the tracked account's id only; the card name is the chosen name, else the address (Claude Code's account only), else `Claude <first 8 of id>`. Nothing is written to Claude's files and no token is read.

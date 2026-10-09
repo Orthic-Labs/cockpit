@@ -197,7 +197,7 @@ final class HubBridge {
                     let profile = ClaudeProfile.default()
                     let code = profile.accountID()
                     row["claudeAccounts"] = book.published(
-                        activeID: ClaudeAccountWatcher.desktopAccountUUID() ?? code,
+                        activeID: ClaudeOAuthProvider.trackedAccountID(profile: profile),
                         codeID: code, codeEmail: profile.signedInAddress())
                 }
                 if let title = summary.signIn.actionTitle { row["signInTitle"] = title }
@@ -280,7 +280,7 @@ final class HubBridge {
             if let id = command["id"] as? String {
                 store.claudeAccountBook?.forget(
                     id: id,
-                    keepingActive: ClaudeAccountWatcher.desktopAccountUUID() ?? ClaudeProfile.default().accountID())
+                    keepingActive: ClaudeOAuthProvider.trackedAccountID(profile: ClaudeProfile.default()))
             }
         case "refresh": actions.refresh()
         case "resetPosition": actions.resetPosition()

@@ -253,16 +253,16 @@ fn claude_accounts_fail(ctl: &Control, shots: &Path, rows: &[Value], why: &str) 
 fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
     let js = r#"
         const rows = [...document.querySelectorAll('.ck-claude-account')].map((r) => ({
-            name: r.querySelector('input')?.value ?? '',
+            name: r.querySelector('.ck-claude-name-text')?.textContent ?? '',
             active: /\bActive\b/.test(r.querySelector('.ck-account-name')?.innerText ?? ''),
-            forget: !!r.querySelector('.ck-account-name button'),
+            forget: !!r.querySelector('.ck-forget'),
             wins: [...r.querySelectorAll('.ck-claude-win')].map((w) => ({
                 state: w.dataset.state, value: w.querySelector('.ck-claude-value')?.textContent.trim(),
                 text: w.innerText.replace(/\s+/g, ' '),
             })),
             asOf: /as of /.test(r.innerText),
             noReading: /No reading yet/.test(r.innerText),
-            renamable: !!r.querySelector('input') && !r.querySelector('input').disabled,
+            renamable: !!r.querySelector('.ck-claude-name') && !r.querySelector('.ck-claude-name').disabled,
         }));
         return rows;
     "#;
@@ -302,15 +302,17 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
         fail("the folder-only account should read \"Claude 5e6f7a8b\", \"No reading yet\", have its rename enabled, no windows, no \"as of\" line and no Forget".into());
     }
 
-    // Rename an account in its field, as a person would; the hub must leave the notch a
+    // Rename an account as a person would: click its name, type in the inline field, press away; the hub must leave the notch a
     // command (nothing runs a notch here, so it stays in hub-commands). The folder-only
     // account is named before it was ever read.
     let commands = bridge.join("hub-commands");
     for (id, name) in [("qa-cached", "Old Pro"), ("5e6f7a8b-0000-4000-8000-000000000001", "Spare")] {
         let rename = format!(
             r#"
-            const input = document.querySelector('.ck-claude-account[data-account="{id}"] input');
-            if (!input) return false;
+            const row = document.querySelector('.ck-claude-account[data-account="{id}"]');
+            if (!row) return false;
+            const input = row.querySelector('input');
+            if (!input) {{ row.querySelector('.ck-claude-name')?.click(); return false; }}
             input.focus();
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '{name}');
             input.dispatchEvent(new Event('input', {{ bubbles: true }}));

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
 import { isWindows, tone } from "../api";
@@ -639,49 +639,69 @@ function asOf(secs: number): string {
 }
 
 function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Send }) {
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.name);
-  useEffect(() => setDraft(account.name), [account.name]);
+  const cancelled = useRef(false);
+  useEffect(() => { if (!editing) setDraft(account.name); }, [account.name, editing]);
   const commit = () => {
+    if (cancelled.current) { cancelled.current = false; return; }
     const next = draft.trim();
     if (next !== account.name) send({ command: "renameClaudeAccount", id: account.id, name: next });
-    if (next === "") setDraft(account.name);
+    setEditing(false);
   };
   const rows = claudeWindows(account.windows);
+  const cached = !account.active && account.capturedAt != null;
   return (
     <div className="ck-claude-account" data-account={account.id}>
       <div className="ck-account-name">
-        <input
-          className="ck-input ck-input-name"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-          aria-label={`Name for ${account.name}`}
-          title="Rename this account (empty restores the default name)"
-        />
+        {editing ? (
+          <input
+            className="ck-input ck-claude-edit"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") { cancelled.current = true; setDraft(account.name); setEditing(false); }
+            }}
+            aria-label={`Name for ${account.name}`}
+            title="Enter saves, Escape cancels, empty restores the default name"
+          />
+        ) : (
+          <button type="button" className="ck-claude-name" onClick={() => setEditing(true)}
+            aria-label={`Rename ${account.name}`} title="Rename this account">
+            <span className="ck-claude-name-text">{account.name}</span>
+            <Pencil size={12} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        )}
         {account.active && <span className="ck-status ck-status-granted">Active</span>}
-        {account.plan && <span className="ck-sub">{account.plan}</span>}
+        {account.plan && <span className="ck-sub ck-claude-plan">{account.plan}</span>}
+        {cached && <span className="ck-sub ck-claude-asof">as of {asOf(account.capturedAt as number)}</span>}
         {!account.active && account.onDisk === false && (
-          <Button size="sm" variant="ghost" onClick={() => send({ command: "forgetClaudeAccount", id: account.id })}
-            title="Its folder is gone. Removes this account from the list; it returns if you sign in to it again.">Forget</Button>
+          <button type="button" className="ck-forget" aria-label={`Forget ${account.name}`}
+            onClick={() => send({ command: "forgetClaudeAccount", id: account.id })}
+            title="Its folder is gone. Removes this account from the list; it returns if you sign in to it again.">
+            <X size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
         )}
       </div>
-      {rows.length === 0 && <div className="ck-sub">No reading yet</div>}
-      {rows.map(({ title, window: w }) => {
-        const left = resetsIn(w.resetsAt);
-        const pct = Math.round(Math.min(Math.max(w.usedFraction, 0), 1) * 100);
-        return (
-          <div className="ck-claude-win" key={`${title}-${w.label}`} data-state={left ? "live" : "reset"}>
-            <span className="ck-sub">{title}</span>
-            {left ? <Bar fraction={w.usedFraction} color={tone(w.usedFraction)} /> : <span />}
-            <span className="ck-claude-value">{left ? `${pct}%` : "Reset"}</span>
-            <span className="ck-sub">{left ? `resets in ${left}` : "new value not known yet"}</span>
-          </div>
-        );
-      })}
-      {!account.active && account.capturedAt != null && (
-        <div className="ck-sub">as of {asOf(account.capturedAt)}</div>
-      )}
+      <div className="ck-claude-meters">
+        {rows.length === 0 && <span className="ck-sub ck-claude-none">No reading yet</span>}
+        {rows.map(({ title, window: w }) => {
+          const left = resetsIn(w.resetsAt);
+          const pct = Math.round(Math.min(Math.max(w.usedFraction, 0), 1) * 100);
+          return (
+            <div className="ck-claude-win" key={`${title}-${w.label}`} data-state={left ? "live" : "reset"}>
+              <span className="ck-sub">{title}</span>
+              {left ? <Bar fraction={w.usedFraction} color={tone(w.usedFraction)} height={4} /> : <span />}
+              <span className="ck-claude-value">{left ? `${pct}%` : "Reset"}</span>
+              <span className="ck-sub ck-claude-eta">{left ? `resets in ${left}` : ""}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

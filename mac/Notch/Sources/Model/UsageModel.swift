@@ -475,7 +475,11 @@ struct ProviderSnapshot: Identifiable, Equatable {
             return L10n.t("macOS refused Pulse access to \(displayName)'s saved login. Use Allow access… in Settings to ask again.", locale: locale)
         case .unsupported(let why): return why
         case .error(let why): return L10n.t("Couldn't read usage — \(why)", locale: locale)
-        case .stale, .ok:     return L10n.t("Waiting for the first reading…", locale: locale)
+        case .stale, .ok:
+            if let name = accountName, !name.isEmpty {
+                return L10n.t("No reading for \(name) yet", locale: locale)
+            }
+            return L10n.t("Waiting for the first reading…", locale: locale)
         }
     }
 }
