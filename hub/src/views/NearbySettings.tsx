@@ -39,21 +39,21 @@ export function useShareState(): ShareState | null {
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="group">
-      <div className="section">{title}</div>
-      <div className="group-body">{children}</div>
+    <section className="ck-sgroup">
+      <h2>{title}</h2>
+      <div className="ck-card">{children}</div>
     </section>
   );
 }
 
 function Row({ label, note, children }: { label: string; note?: string; children: ReactNode }) {
   return (
-    <div className="setting">
-      <div>
-        <div>{label}</div>
-        {note && <div className="muted small">{note}</div>}
+    <div className="ck-set">
+      <div className="ck-text">
+        <strong>{label}</strong>
+        {note && <div className="ck-sub">{note}</div>}
       </div>
-      <div className="setting-control">{children}</div>
+      <div className="ck-ctl">{children}</div>
     </div>
   );
 }
@@ -100,8 +100,7 @@ export function NearbyGroup({ s, set }: {
         <>
           <Row label="Device name" note="How other devices list this Mac. Empty uses the Mac's name.">
             <input
-              className="input"
-              style={{ width: 220 }}
+              className="ck-input ck-input-name"
               value={alias}
               placeholder={share?.alias ?? "Mac (Pulse)"}
               onChange={(e) => setAlias(e.target.value)}
@@ -111,7 +110,7 @@ export function NearbyGroup({ s, set }: {
             />
           </Row>
           <Row label="Save received files to" note={folder || "Downloads"}>
-            <span className="permission-controls">
+            <span className="ck-ctls">
               <Button size="sm" variant="secondary" onClick={chooseFolder}>Choose…</Button>
               {folder && <Button size="sm" variant="ghost" onClick={() => set("nearbySaveFolder", "")}>Use Downloads</Button>}
             </span>
@@ -125,8 +124,8 @@ export function NearbyGroup({ s, set }: {
           </Row>
         </>
       )}
-      <div className={share?.error ? "error" : "muted small"}>{status}</div>
-      {enabled && share?.warnings.map((w) => <div key={w} className="muted small">{w}</div>)}
+      <div className={share?.error ? "error" : "ck-sub ck-foot"} role={share?.error ? "alert" : "status"}>{status}</div>
+      {enabled && share?.warnings.map((w) => <div key={w} className="ck-sub ck-foot">{w}</div>)}
     </Group>
   );
 }
@@ -143,17 +142,17 @@ export function LocalNetworkRow({ enabled }: { enabled: boolean }) {
   const status = blocked ? "needsApproval" : granted ? "granted" : "unknown";
   const text = blocked ? "Needs approval" : granted ? "Granted" : "Checking…";
   return (
-    <div className="permission-row">
-      <div className="setting">
-        <div>
-          <div>Local network</div>
-          <div className="muted small">
+    <div className="ck-permrow">
+      <div className="ck-set">
+        <div className="ck-text">
+          <strong>Local network</strong>
+          <div className="ck-sub">
             Lets Pulse find and talk to nearby devices for sharing files. macOS asks the first time a device connects.
           </div>
         </div>
-        <div className="setting-control">
-          <span className="permission-controls">
-            <span className={`permission-status ${status}`}>{text}</span>
+        <div className="ck-ctl">
+          <span className="ck-ctls">
+            <span className={`ck-status ck-status-${status}`}>{text}</span>
             <Button size="sm" variant="secondary" disabled={granted}
               onClick={() => invoke<void>("open_local_network_settings")}>Open Settings</Button>
           </span>

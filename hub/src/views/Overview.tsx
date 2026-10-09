@@ -16,6 +16,8 @@ import {
 import { ago, api, appsApi, bytes, type CachedApps, type CleanupReport, type Status, type UpdateReport, type Volume } from "../api";
 import type { Account, Limit, NotchState } from "./Settings";
 import { systemReadings } from "./Monitor";
+import { Sparkline, levelColor } from "../components/Chart";
+import { lastMinutes, memPercent, useMetrics } from "../metrics";
 
 type Level = "ok" | "warn" | "bad";
 
@@ -52,6 +54,7 @@ export interface NotchView {
  */
 export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: (section: string) => void }) {
   const [status, setStatus] = useState<Status | null>(null);
+  const recent = lastMinutes(useMetrics().samples, 10);
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
   // `undefined` while reading; `null` when nothing is saved.
   const [cleanup, setCleanup] = useState<CleanupReport | null | undefined>(undefined);
@@ -207,7 +210,18 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
       <div className="ov-row ov-row--2">
         <OvCard icon={<Gauge size={16} strokeWidth={1.75} />} title="Performance" go="Monitor" onOpen={() => onNavigate("monitor")}>
           <div className="ov-meters ov-meters--two">
-            <Meter label="CPU" value={cpu == null ? "—" : `${Math.round(cpu)}`} unit="%" fraction={(cpu ?? 0) / 100} measured={cpu != null} />
+            <Meter label="CPU" value={cpu == null ? "—" : `${Math.round(cpu)}`} unit="%" fraction={(cpu ?? 0) / 100} measured={cpu != null}
+              spark={
+                recent.length > 1 && (
+                  <Sparkline
+                    label="CPU"
+                    max={100}
+                    series={[{ label: "CPU", color: levelColor(recent[recent.length - 1].cpu), values: recent.map((r) => r.cpu) }]}
+                    format={(v) => `${Math.round(v)}%`}
+                  />
+                )
+              }
+            />
             <Meter
               label="Memory"
               value={memUsed == null ? "—" : bytes(memUsed)}
@@ -215,6 +229,16 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
               measured={memUsed != null}
               level={memLevel}
               note={memUsed == null ? undefined : `of ${bytes(memTotal)} · ${percent(memFraction)}${pressure ? ` · ${pressure}` : ""}`}
+              spark={
+                recent.length > 1 && (
+                  <Sparkline
+                    label="Memory"
+                    max={100}
+                    series={[{ label: "Memory", color: levelColor(memPercent(recent[recent.length - 1])), values: recent.map(memPercent) }]}
+                    format={(v) => `${Math.round(v)}%`}
+                  />
+                )
+              }
             />
             <div className="ov-stat">
               <span className="ov-label">Swap</span>
@@ -241,6 +265,18 @@ export function Overview({ notch, onNavigate }: { notch: NotchView; onNavigate: 
                   <small>Not available</small>
                 )}
               </span>
+              {recent.some((r) => r.netDown != null) && (
+                <div className="overview-spark">
+                  <Sparkline
+                    label="Network"
+                    series={[
+                      { label: "Down", color: "var(--rk-accent)", values: recent.map((r) => r.netDown) },
+                      { label: "Up", color: "var(--rk-ink-2)", values: recent.map((r) => r.netUp), dashed: true },
+                    ]}
+                    format={(v) => `${bytes(v)}/s`}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </OvCard>
@@ -521,6 +557,7 @@ function Meter({
   fraction,
   level,
   note,
+  spark,
   measured = true,
 }: {
   label: string;
@@ -529,6 +566,8 @@ function Meter({
   fraction: number;
   level?: Level;
   note?: string;
+  /** A sparkline of the last few minutes, under the bar. */
+  spark?: ReactNode;
   measured?: boolean;
 }) {
   const lv = level ?? levelFor(clamp(fraction));
@@ -547,6 +586,7 @@ function Meter({
         </span>
       </div>
       <Bar fraction={fraction} level={lv} label={label} />
+      {spark ? <div className="overview-spark">{spark}</div> : null}
       {note != null ? (
         <span className="ov-note">{note}</span>
       ) : (

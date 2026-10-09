@@ -3,7 +3,9 @@ import { Button, ConfirmDialog } from "@rightkit/app-shell/react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { api, bytes, type ProcessRow, type Status } from "../api";
 import { useNotch, type NotchState } from "./Settings";
-import { Bar } from "./Storage";
+import { AreaChart, levelColor, type Series } from "../components/Chart";
+import { memPercent, useMetrics, type Sample } from "../metrics";
+import "./monitor.css";
 
 type Level = "ok" | "warn" | "bad";
 type SortKey = "memory" | "cpu" | "name";
@@ -30,19 +32,6 @@ export interface SystemReadings {
 /** The System readings from the notch's state, or null while the notch has none. */
 export function systemReadings(state: NotchState | null): SystemReadings | null {
   return (state as (NotchState & { system?: SystemReadings }) | null)?.system ?? null;
-}
-
-const LEVEL_COLOR: Record<Level, string> = {
-  ok: "var(--rk-ok)",
-  warn: "var(--rk-warn)",
-  bad: "var(--rk-bad)",
-};
-
-/** Usage thresholds: 0–70% ok, 70–90% warn, 90–100% bad. */
-function levelFor(fraction: number): Level {
-  if (fraction >= 0.9) return "bad";
-  if (fraction >= 0.7) return "warn";
-  return "ok";
 }
 
 function pressureLevel(pressure: string): Level {
@@ -147,53 +136,32 @@ export function Monitor() {
   if (!status) return <div className="view muted">Reading…</div>;
 
   const cpuRaw = status.cpu_usage_percent.value;
-  const cpuFraction = (cpuRaw ?? 0) / 100;
-  const memUsed = status.memory_used_bytes.value;
-  const memTotal = status.memory_total_bytes.value;
-  const memFraction = memUsed != null && memTotal ? memUsed / memTotal : 0;
   const swapUsed = status.swap_used_bytes.value;
   const swapTotal = status.swap_total_bytes.value;
-  const swapFraction = swapUsed != null && swapTotal ? swapUsed / swapTotal : 0;
   const pressure = status.memory_pressure.value;
+  const leader = [...procs].sort(comparator(sort === "name" ? "memory" : sort))[0];
   const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "Memory";
 
   const network = system?.network;
   const sensorCount = (system?.fans?.length ?? 0) + (system?.temperatures?.length ?? 0) + (system?.battery ? 1 : 0);
 
   return (
-    <div className="view">
-      <div className="mon-summary mon-summary--four">
-        <SummaryCard
-          label="CPU"
-          value={cpuRaw == null ? "—" : `${Math.round(cpuRaw)}%`}
-          sub="Across all cores"
-          fraction={cpuFraction}
-        />
-        <SummaryCard
-          label="Memory"
-          aside={pressure ? <Pill level={pressureLevel(pressure)}>{pressure}</Pill> : null}
-          value={memUsed == null ? "—" : bytes(memUsed)}
-          sub={memTotal == null ? "Total unknown" : `of ${bytes(memTotal)} used`}
-          fraction={memFraction}
-        />
-        <SummaryCard
-          label="Swap"
-          value={swapTotal == null ? "—" : swapTotal === 0 ? "None" : bytes(swapUsed)}
-          sub={swapTotal == null ? "Unknown" : swapTotal === 0 ? "No swap space" : `of ${bytes(swapTotal)} used`}
-          fraction={swapFraction}
-        />
-        <SummaryCard
-          label="Network"
-          value={network ? `↓ ${bytes(network.down)}/s` : "—"}
-          sub={
-            network
-              ? `↑ ${bytes(network.up)}/s · ${network.kind}`
-              : notch.error
-                ? "Notch not running"
-                : "No active interface"
-          }
-        />
+    <div className="view monitor-view">
+      <div className={`monitor-notice ${pressure ? pressureLevel(pressure) : "warn"}`} role="status">
+        <h2>{pressure ? `Memory pressure ${pressure.toLowerCase()}` : "Memory pressure unknown"}</h2>
+        <p>
+          {leader
+            ? `${leader.name} · ${sort === "cpu" ? `${Math.round(leader.cpu_usage_percent)}% CPU` : `${bytes(leader.memory_bytes)} memory`}`
+            : "No process rows reported."}
+        </p>
       </div>
+
+      <MonitorCharts
+        cpu={cpuRaw}
+        swapText={swapTotal == null ? "Swap unknown" : swapTotal === 0 ? "No swap space" : `Swap ${bytes(swapUsed)} of ${bytes(swapTotal)}`}
+        network={network ? { down: network.down, up: network.up, kind: network.kind } : null}
+        notchDown={notch.error != null}
+      />
 
       {sensorCount > 0 && system && (
         <div className="mon-sensors">
@@ -259,6 +227,7 @@ export function Monitor() {
       </div>
 
       <div className="mon-section">
+        <h2 className="monitor-h2">Top consumers</h2>
         <span>
           {trimmed
             ? `${visible.length} matching “${trimmed}”`
@@ -313,7 +282,6 @@ export function Monitor() {
                     >
                       {expanded ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
                       <span className="mon-label">{p.name}</span>
-                      <span className="muted small">{p.members.length} processes</span>
                     </button>
                   ) : (
                     <span className="mon-label" title={title}>
@@ -321,6 +289,9 @@ export function Monitor() {
                     </span>
                   )}
                   {system && <span className="mon-pill">System</span>}
+                  <span className="muted small monitor-meta">
+                    {p.members.length} process{p.members.length === 1 ? "" : "es"} · {system ? "Protected system process" : "Running"}
+                  </span>
                 </div>
                 <span className="mon-num">{Math.round(p.cpu_usage_percent)}%</span>
                 <span className="mon-num">{bytes(p.memory_bytes)}</span>
@@ -362,6 +333,8 @@ export function Monitor() {
         })}
       </div>
 
+      <p className="caption muted small">CPU: 100% = one core. System CPU above is 0–100% across all cores.</p>
+
       {forcing && (
         <ConfirmDialog
           danger
@@ -373,33 +346,6 @@ export function Monitor() {
         />
       )}
     </div>
-  );
-}
-
-function SummaryCard({
-  label,
-  aside,
-  value,
-  sub,
-  fraction,
-}: {
-  label: string;
-  aside?: ReactNode;
-  value: string;
-  sub: string;
-  /** Omitted for a rate, which has no capacity to fill a bar against. */
-  fraction?: number;
-}) {
-  return (
-    <section className="mon-card" aria-label={label}>
-      <div className="mon-card-head">
-        <span>{label}</span>
-        {aside}
-      </div>
-      <div className="mon-card-value">{value}</div>
-      {fraction !== undefined && <Bar fraction={fraction} color={LEVEL_COLOR[levelFor(fraction)]} />}
-      <div className="mon-card-sub muted small">{sub}</div>
-    </section>
   );
 }
 
@@ -419,6 +365,109 @@ function batteryText(b: NonNullable<SystemReadings["battery"]>): string {
   return parts.filter(Boolean).join(" · ");
 }
 
-function Pill({ level, children }: { level: Level; children: ReactNode }) {
-  return <span className={`mon-pill ${level}`}>{children}</span>;
+const RANGES = [5, 15, 30];
+
+/** CPU, memory with swap, and network over the last 5, 15 or 30 minutes. The hub keeps the history while its window is closed. */
+function MonitorCharts({
+  cpu: cpuNow,
+  swapText,
+  network: net,
+  notchDown,
+}: {
+  cpu: number | null;
+  swapText: string;
+  network: { down: number; up: number; kind: string } | null;
+  notchDown: boolean;
+}) {
+  const { samples, latest } = useMetrics();
+  const [minutes, setMinutes] = useState(15);
+  const times = useMemo(() => samples.map((s) => s.ts), [samples]);
+  const column = (pick: (s: Sample) => number | null): (number | null)[] => samples.map(pick);
+
+  const cpu: Series[] = [{ label: "CPU", color: levelColor(latest?.cpu ?? 0), values: column((s) => s.cpu) }];
+  const memory: Series[] = [
+    { label: "Memory", color: levelColor(latest ? memPercent(latest) : 0), values: column((s) => s.memUsed) },
+    { label: "Swap", color: "var(--rk-ink-2)", values: column((s) => s.swapUsed), dashed: true },
+  ];
+  const network: Series[] = [
+    { label: "Down", color: "var(--rk-accent)", values: column((s) => s.netDown) },
+    { label: "Up", color: "var(--rk-ink-2)", values: column((s) => s.netUp), dashed: true },
+  ];
+  const rate = (v: number) => `${bytes(v)}/s`;
+  const memTop = Math.max(latest?.memTotal ?? 0, ...samples.map((s) => s.swapUsed));
+
+  return (
+    <section className="monitor-charts" aria-label="History">
+      <div className="monitor-charts-head">
+        <h2 className="monitor-h2">History, last {minutes} minutes</h2>
+        <div className="mon-seg" role="group" aria-label="Time range">
+          {RANGES.map((m) => (
+            <button key={m} type="button" aria-pressed={minutes === m} onClick={() => setMinutes(m)}>
+              {m} min
+            </button>
+          ))}
+        </div>
+      </div>
+      {samples.length < 2 ? (
+        <div className="monitor-waiting muted">Collecting readings…</div>
+      ) : (
+        <div className="monitor-charts-grid">
+          <ChartCard title="System CPU" now={cpuNow != null ? `${Math.round(cpuNow)}%` : latest ? `${Math.round(latest.cpu)}%` : "—"} extra="All cores, 0–100%">
+            <AreaChart label="CPU" times={times} series={cpu} rangeMs={minutes * 60_000} max={100} format={(v) => `${Math.round(v)}%`} height={96} />
+          </ChartCard>
+          <ChartCard
+            title="Memory used"
+            now={latest ? `${bytes(latest.memUsed)} / ${bytes(latest.memTotal)}` : "—"}
+            legend={memory}
+            extra={swapText}
+          >
+            <AreaChart label="Memory" times={times} series={memory} rangeMs={minutes * 60_000} max={memTop || undefined} format={(v) => bytes(v)} height={96} />
+          </ChartCard>
+          <ChartCard
+            title="Network"
+            now={latest?.netDown != null ? `↓ ${rate(latest.netDown)}` : net ? `↓ ${rate(net.down)}` : "—"}
+            legend={network}
+            extra={latest?.netUp != null ? `↑ ${rate(latest.netUp)}` : net ? `↑ ${rate(net.up)} · ${net.kind}` : notchDown ? "Notch not running" : "No active interface"}
+          >
+            <AreaChart label="Network" times={times} series={network} rangeMs={minutes * 60_000} format={rate} height={96} />
+          </ChartCard>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ChartCard({
+  title,
+  now,
+  extra,
+  legend,
+  children,
+}: {
+  title: string;
+  now: string;
+  extra?: string;
+  legend?: Series[];
+  children: ReactNode;
+}) {
+  return (
+    <div className="monitor-chart-card">
+      <div className="monitor-chart-head">
+        <span>{title}</span>
+        <span className="monitor-chart-now">{now}</span>
+        {extra && <span>{extra}</span>}
+      </div>
+      {children}
+      {legend && (
+        <div className="monitor-legend" aria-hidden="true">
+          {legend.map((s) => (
+            <span key={s.label}>
+              <i className={s.dashed ? "dashed" : undefined} style={{ borderTopColor: s.color }} />
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

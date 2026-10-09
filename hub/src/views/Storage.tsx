@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { Badge, Button, ConfirmDialog, EmptyState, SegmentedControl, useContextMenu } from "@rightkit/app-shell/react";
-import { Activity, ChevronDown, ChevronRight, Copy, File, Folder as FolderIcon, FolderInput, FolderOpen, HardDrive, Info, RefreshCw, ShieldCheck, Terminal, Trash2, Undo2, Usb } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, Copy, File, Folder as FolderIcon, FolderInput, FolderOpen, HardDrive, Info, MoreHorizontal, RefreshCw, ShieldCheck, Terminal, Trash2, Undo2, Usb } from "lucide-react";
 import {
   api,
   ago,
@@ -22,10 +22,13 @@ import { ChromeSnapshotsLine } from "./ChromeSnapshots";
 import { DriveHealthLine, DriveHealthPanel } from "./DriveHealth";
 import { Duplicates } from "./Duplicates";
 import "./health.css";
+import "./storage.css";
 
 const shortPath = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
 const VISIBLE_GROUPS = 6;
 const VISIBLE_NOTES = 3;
+
+type Pane = "findings" | "folders" | "changes" | "duplicates";
 
 interface Group {
   key: string;
@@ -89,8 +92,8 @@ export function Storage() {
   const [report, setReport] = useState<CleanupReport | null>(cachedReport);
   const [showAll, setShowAll] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
-  // Space is the scan view; Duplicates is the exact-content copy finder.
-  const [tab, setTab] = useState<"space" | "duplicates">("space");
+  // One workspace at a time; Duplicates is the exact-content copy finder.
+  const [pane, setPane] = useState<Pane>("findings");
   const [health, setHealth] = useState<HealthReport | null>(null);
   // The volume whose drive-health panel is open, by mount point.
   const [healthOpen, setHealthOpen] = useState<string | null>(null);
@@ -414,23 +417,27 @@ export function Storage() {
     api.volumes().then(setVolumes).catch(() => {});
   };
 
-  const tabBar = (
+  const segments = (
     <SegmentedControl
       label="Storage view"
-      value={tab}
+      value={pane}
       options={[
-        { value: "space", label: "Space" },
+        { value: "findings", label: "Findings" },
+        { value: "folders", label: "Folders" },
+        { value: "changes", label: "Changes" },
         { value: "duplicates", label: "Duplicates" },
       ]}
-      onChange={(value) => setTab(value as "space" | "duplicates")}
+      onChange={(value) => setPane(value as Pane)}
     />
   );
 
-  if (tab === "duplicates") {
+  if (pane === "duplicates") {
     return (
-      <div className="view storage">
-        {tabBar}
-        <Duplicates />
+      <div className="view st">
+        <div className="st-bar">{segments}</div>
+        <div className="st-scroll" tabIndex={0} aria-label="Duplicates">
+          <Duplicates />
+        </div>
       </div>
     );
   }
@@ -439,221 +446,106 @@ export function Storage() {
   const largest = Math.max(1, ...rows.map((r) => r.bytes));
   const total = Math.max(1, rows.reduce((sum, r) => sum + r.bytes, 0));
 
+  const volumeList = volumes.filter((v) => !v.disk_image);
+  const activeVolume = volumeList.find((v) => v.mount_point === active);
+  const ActiveIcon = activeVolume && !activeVolume.internal ? Usb : HardDrive;
+  const card = health?.drives.find((d) => d.mount === active);
+  const healthShown = healthOpen === active;
+  const toolAvailable = health?.tool_available ?? true;
+  const scanText =
+    folder && scanning
+      ? `Updated ${ago(folder.scanned_at)} · Refreshing…`
+      : scanning
+        ? "Scanning…"
+        : folder
+          ? `Updated ${ago(folder.scanned_at)}${folder.from_snapshot ? " (saved)" : ""}`
+          : "";
+  const scopeText = internalActive ? "Home folder" : "Whole drive";
+  const changes = growth?.available ? [...growth.grown, ...growth.shrunk] : [];
+  const openFromChange = (path: string) => {
+    setPane("folders");
+    open(path);
+  };
+  const headline = !report ? "Looking for what is safe to clear…" : freeable > 0 ? `${bytes(freeable)} eligible to move` : "Nothing obvious to clear";
+
   return (
-    <div className="view storage">
-      {tabBar}
-      <div className="volumes">
-        {volumes.filter((v) => !v.disk_image).map((v) => {
-          const Icon = v.internal ? HardDrive : Usb;
-          const card = health?.drives.find((d) => d.mount === v.mount_point);
-          const open = healthOpen === v.mount_point;
-          return (
-            <div className="volume-cell" key={v.mount_point}>
-              <button
-                className={`volume-card${v.mount_point === active ? " active" : ""}`}
-                onClick={() => (scanning && v.mount_point === active ? undefined : scanVolume(v.mount_point))}
-                disabled={busy}
-                title={v.mount_point}
-              >
-                <span className="volume-card-head">
-                  <Icon size={15} strokeWidth={1.75} />
-                  <span className="strong name">{v.name}</span>
-                </span>
-                <Bar fraction={1 - v.available_bytes / v.total_bytes} height={5} />
-                <span className="muted small">
-                  {bytes(v.available_bytes)} free of {bytes(v.total_bytes)}
-                </span>
-                <DriveHealthLine card={card} toolAvailable={health?.tool_available ?? true} />
-              </button>
-              {card && (
-                <button
-                  className="crumb health-toggle small"
-                  onClick={() => setHealthOpen(open ? null : v.mount_point)}
-                  aria-expanded={open}
-                >
-                  {open ? "Hide drive health" : "Drive health"}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {healthOpen && (
-        <DriveHealthPanel
-          card={health?.drives.find((d) => d.mount === healthOpen)}
-          alerts={health?.alerts ?? []}
-          toolAvailable={health?.tool_available ?? true}
-        />
-      )}
-
-      {installers.length > 0 && (
-        <div className="installers muted small">
-          <span>Mounted installers</span>
-          {installers.map((v) => (
-            <span className="installer-chip" key={v.mount_point} title={v.mount_point}>
-              <span className="name">{v.name}</span>
-              <span>{bytes(v.total_bytes)}</span>
-              <Button size="sm" variant="ghost" onClick={() => eject(v)} disabled={ejecting === v.mount_point}>
-                Eject
-              </Button>
-            </span>
-          ))}
-          {ejectError && <span className="error">{ejectError}</span>}
-        </div>
-      )}
-
-      {internalActive && (
-        <section className="card-block">
-          <div className="block-head">
-            <span className="strong headline">
-              <ShieldCheck size={15} strokeWidth={1.75} />
-              {!report ? "Looking for what is safe to clear…" : freeable > 0 ? `You can free ${bytes(freeable)}` : "Nothing obvious to clear"}
-              {report && findingsBusy && <span className="muted small"> · Refreshing…</span>}
-            </span>
-            {safeItems.length > 1 && (
-              <Button size="sm" onClick={() => setPending({ label: "Safe items", items: safeItems })} disabled={busy}>
-                Clear all safe ({bytes(report?.safe_bytes ?? 0)})
-              </Button>
-            )}
-          </div>
-          <ChromeSnapshotsLine info={report?.chrome_snapshots} />
-          {undo && (
-            <div className="notice small">
-              <span>{undo.text}</span>
-              <Button size="sm" variant="ghost" onClick={undoMove} disabled={busy}>
-                <Undo2 size={12} /> Undo
-              </Button>
-            </div>
+    <div className="view st">
+      <section className="st-volume" aria-label="Volume">
+        <div className="st-volume-line">
+          <ActiveIcon size={15} strokeWidth={1.75} className="st-volume-icon" aria-hidden="true" />
+          {volumeList.length > 0 ? (
+            <select
+              className="select st-select"
+              aria-label="Volume"
+              title={activeVolume?.mount_point}
+              value={active}
+              disabled={busy}
+              onChange={(e) => scanVolume(e.target.value)}
+            >
+              {volumeList.map((v) => (
+                <option key={v.mount_point} value={v.mount_point}>
+                  {v.internal ? `${v.name} · Startup` : v.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="strong">No volumes</span>
           )}
-          <div className="findings-scroll">
-            {shown.map((g) => {
-              const expanded = openGroups.has(g.key);
-              const count = groupCount(g);
-              const single = g.items.length === 1;
-              return (
-                <div key={g.key} className="finding-group">
-                  <div className="finding" title={single ? g.items[0].path : undefined}>
-                    <button
-                      className="chev"
-                      onClick={() => toggleGroup(g.key)}
-                      disabled={single}
-                      aria-label={expanded ? "Hide items" : "Show items"}
-                      aria-expanded={expanded}
-                    >
-                      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                    </button>
-                    <div className="finding-main">
-                      <span className="name">
-                        {g.label}
-                        {count && <span className="muted"> · {count}</span>}{" "}
-                        <Badge tone={g.risk === "safe" ? "ok" : "warn"}>{g.risk === "safe" ? "Safe" : "Review"}</Badge>
-                      </span>
-                      <span className="muted small finding-reason">{g.reason}</span>
-                    </div>
-                    <span className="size strong">
-                      {g.partial ? "≥ " : ""}
-                      {bytes(g.bytes)}
-                    </span>
-                    <Button size="sm" onClick={() => setPending({ label: g.label, items: g.items })} disabled={busy}>
-                      Move to Trash
-                    </Button>
-                  </div>
-                  {expanded &&
-                    g.items.map((f) => (
-                      <div key={f.id} className="finding sub" title={f.path}>
-                        <span />
-                        <span className="name small">{f.name}</span>
-                        <span className="size small">
-                          {f.partial ? "≥ " : ""}
-                          {bytes(f.bytes)}
-                        </span>
-                        <Button size="sm" variant="ghost" onClick={() => setPending({ label: f.name, items: [f] })} disabled={busy}>
-                          Move to Trash
-                        </Button>
-                      </div>
-                    ))}
-                </div>
-              );
-            })}
-            {groups.length > VISIBLE_GROUPS && (
-              <button className="crumb more" onClick={() => setShowAll(!showAll)}>
-                {showAll ? "Show fewer" : `Show ${groups.length - VISIBLE_GROUPS} more`}
+          {activeVolume && (
+            <span className="st-free">
+              <span className="strong">{bytes(activeVolume.available_bytes)} free</span>
+              <span className="muted">of {bytes(activeVolume.total_bytes)}</span>
+            </span>
+          )}
+          <Button size="sm" onClick={() => scanVolume(active)} disabled={busy || scanning}>
+            <RefreshCw size={12} /> Rescan
+          </Button>
+        </div>
+        {activeVolume && activeVolume.total_bytes > 0 && <Bar fraction={1 - activeVolume.available_bytes / activeVolume.total_bytes} height={6} />}
+        {(card || health) && (
+          <div className="st-volume-foot">
+            <DriveHealthLine card={card} toolAvailable={toolAvailable} />
+            {card && (
+              <button className="st-link" onClick={() => setHealthOpen(healthShown ? null : active)} aria-expanded={healthShown}>
+                {healthShown ? "Hide drive health" : "Drive health"}
               </button>
-            )}
-            {others.length > 0 && (
-              <div className="notes">
-                <div className="notes-head muted small">Notes</div>
-                {notes.map((f) => {
-                  const Icon = noteIcon(f);
-                  return (
-                    <div key={f.id} className="note muted small" title={f.path}>
-                      <Icon size={12} strokeWidth={1.75} />
-                      <span className="note-text">
-                        {f.rule_name || f.name} · {f.reason}
-                      </span>
-                      <span className="note-size">{bytes(f.bytes)}</span>
-                    </div>
-                  );
-                })}
-                {others.length > VISIBLE_NOTES && (
-                  <button className="crumb more" onClick={() => setShowNotes(!showNotes)}>
-                    {showNotes ? "Show fewer notes" : `Show ${others.length - VISIBLE_NOTES} more notes`}
-                  </button>
-                )}
-              </div>
             )}
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
-      {internalActive && growth?.available && (growth.grown.length > 0 || growth.shrunk.length > 0) && (
-        <div className="growth-line small">
-          <span className="muted">
-            Since last scan
-            {growth.since ? ` (${new Date(growth.since * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })})` : ""}:
+      <div className="st-meta">
+        <span className="st-meta-text">{[scopeText, scanText].filter(Boolean).join(" · ")}</span>
+        {installers.length > 0 && <span className="st-meta-text">Mounted installers</span>}
+        {installers.map((v) => (
+          <span className="st-chip" key={v.mount_point} title={v.mount_point}>
+            <span className="st-chip-name">{v.name}</span>
+            <span>{bytes(v.total_bytes)}</span>
+            <Button size="sm" variant="ghost" onClick={() => eject(v)} disabled={ejecting === v.mount_point}>
+              Eject
+            </Button>
           </span>
-          {[...growth.grown, ...growth.shrunk].slice(0, 4).map((c) => (
-            <button key={c.path} className="chip" onClick={() => open(c.path)} disabled={busy} title={c.path}>
-              {c.path.split("/").pop()}{" "}
-              <span style={{ color: c.bytes > 0 ? "var(--rk-warn)" : "var(--rk-ok)" }}>{signedBytes(c.bytes)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="toolbar">
-        <input className="search" placeholder="Search files" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <span className="muted small">
-          {folder && scanning
-            ? `Updated ${ago(folder.scanned_at)} · Refreshing…`
-            : scanning
-              ? "Scanning…"
-              : folder
-                ? `Updated ${ago(folder.scanned_at)}${folder.from_snapshot ? " (saved)" : ""} ·`
-                : ""}
-        </span>
-        <Button size="sm" onClick={() => scanVolume(active)} disabled={busy || scanning}>
-          <RefreshCw size={12} /> Rescan
-        </Button>
+        ))}
+        {ejectError && <span className="error">{ejectError}</span>}
       </div>
 
-      {results ? (
-        <div className="muted small">{results.length} matches</div>
-      ) : (
-        <div className="crumbs">
-          {crumbs.map((c, i) => (
-            <span key={c.path}>
-              {i > 0 && <ChevronRight size={11} className="muted crumb-sep" />}
-              <button className="crumb" onClick={() => open(c.path)} disabled={busy}>
-                {c.name}
-              </button>
-            </span>
-          ))}
+      <div className="st-bar">{segments}</div>
+
+      {error && (
+        <div className="st-notice st-notice--bad" role="alert">
+          {error}
         </div>
       )}
-
+      {undo && (
+        <div className="st-notice" role="status">
+          <span>{undo.text}</span>
+          <Button size="sm" variant="ghost" onClick={undoMove} disabled={busy}>
+            <Undo2 size={12} /> Undo
+          </Button>
+        </div>
+      )}
       {folder?.needs_access && !results && (
-        <div className="notice small">
+        <div className="st-notice st-notice--warn" role="status">
           <span>Some folders couldn't be read. Grant Full Disk Access to include them.</span>
           <Button size="sm" onClick={() => api.openFullDiskAccess()}>
             Open Full Disk Access
@@ -661,47 +553,236 @@ export function Storage() {
         </div>
       )}
       {folder && !folder.needs_access && folder.limited && !results && (
-        <div className="muted small">This is a very large folder, so sizes may be a little low.</div>
-      )}
-      {error && <div className="error" style={{ whiteSpace: "pre-wrap" }}>{error}</div>}
-      {!folder && (opening ? <div className="muted">Loading…</div> : scanning && <div className="muted">Scanning…</div>)}
-      {folder && rows.length === 0 && !busy && !scanning && (
-        <EmptyState icon={<FolderIcon size={22} />} title={results ? "No matches" : "This folder is empty"} />
+        <div className="st-sub">This is a very large folder, so sizes may be a little low.</div>
       )}
 
-      {rows.length > 0 && (
-        <div className="explorer">
-          <div className="list">
-            {rows.map((r) => {
-              // A click with detail > 1 is the second click of a double-click: it must not drill in again.
-              const kind = KINDS[kindOf(r.path, r.is_dir)];
-              const pct = (r.bytes / total) * 100;
-              return (
-                <div
-                  key={r.path}
-                  className={`row folder-row${r.is_dir && !results ? " clickable" : ""}`}
-                  tabIndex={actionable(r) ? 0 : undefined}
-                  onClick={(e) => (r.is_dir && !results && e.detail < 2 ? open(r.path) : undefined)}
-                  onDoubleClick={() => (actionable(r) ? showInFinder(r.path) : undefined)}
-                  onKeyDown={(e) => onRowKey(e, r)}
-                  onContextMenu={(e) => (actionable(r) ? itemMenu.open(e, r) : e.preventDefault())}
-                  title={`${r.path}\n${kind.label}`}
-                >
-                  <span className="name">
-                    <i className="kind-dot" style={{ background: kind.color }} />
-                    {r.is_dir ? <FolderIcon size={12} className="muted" /> : <File size={12} className="muted" />}{" "}
-                    {results ? shortPath(r.path) : r.name}
-                  </span>
-                  <Bar fraction={r.bytes / largest} color={kind.color} />
-                  <span className="pct muted small">{pct >= 1 ? `${Math.round(pct)}%` : "<1%"}</span>
-                  <span className="size">{bytes(r.bytes)}</span>
+      <div className="st-scroll" tabIndex={0} aria-label="Storage content">
+        {healthShown && (
+          <DriveHealthPanel card={card} alerts={health?.alerts ?? []} toolAvailable={toolAvailable} />
+        )}
+
+        {pane === "findings" &&
+          (internalActive ? (
+            <section className="st-card" aria-label="Findings">
+              <div className="st-card-head">
+                <div>
+                  <h2 className="st-h">
+                    <ShieldCheck size={15} strokeWidth={1.75} aria-hidden="true" />
+                    {headline}
+                  </h2>
+                  <p className="st-sub">
+                    Home{report ? ` · scanned ${ago(report.scanned_at)}` : ""}
+                    {report && findingsBusy ? " · Refreshing…" : ""}
+                  </p>
                 </div>
-              );
-            })}
-          </div>
-          {!results && <Treemap rows={rows} open={open} finder={showInFinder} menu={itemMenu.open} />}
-        </div>
-      )}
+                {safeItems.length > 1 && (
+                  <Button size="sm" variant="primary" onClick={() => setPending({ label: "Safe items", items: safeItems })} disabled={busy}>
+                    Clear all safe ({bytes(report?.safe_bytes ?? 0)})
+                  </Button>
+                )}
+              </div>
+              <ChromeSnapshotsLine info={report?.chrome_snapshots} />
+              {shown.map((g) => {
+                const expanded = openGroups.has(g.key);
+                const count = groupCount(g);
+                return (
+                  <div key={g.key} className="st-finding">
+                    <button className="st-disclose" onClick={() => toggleGroup(g.key)} aria-expanded={expanded}>
+                      {expanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                      <span className="st-finding-text">
+                        <span className="st-finding-title">
+                          <span className="strong">
+                            {g.label}
+                            {count && <span className="muted"> · {count}</span>}
+                          </span>
+                          <Badge tone={g.risk === "safe" ? "ok" : "warn"}>{g.risk === "safe" ? "Safe" : "Review"}</Badge>
+                        </span>
+                        <span className="st-reason">{g.reason}</span>
+                      </span>
+                    </button>
+                    <span className="st-measure">
+                      <span className="st-size">
+                        {g.partial ? "≥ " : ""}
+                        {bytes(g.bytes)}
+                      </span>
+                      <Button size="sm" onClick={() => setPending({ label: g.label, items: g.items })} disabled={busy}>
+                        Move to Trash
+                      </Button>
+                    </span>
+                    {expanded && (
+                      <div className="st-sub-items">
+                        {g.items.map((f) => (
+                          <div key={f.id} className="st-sub-item">
+                            <span>
+                              {g.items.length > 1 && <span>{f.name}</span>}
+                              <span className="st-path" style={{ display: "block" }}>
+                                {shortPath(f.path)}
+                              </span>
+                            </span>
+                            <span className="st-size">
+                              {f.partial ? "≥ " : ""}
+                              {bytes(f.bytes)}
+                            </span>
+                            <Button size="sm" variant="ghost" onClick={() => setPending({ label: f.name, items: [f] })} disabled={busy}>
+                              Move to Trash
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {groups.length > VISIBLE_GROUPS && (
+                <button className="st-more-btn" onClick={() => setShowAll(!showAll)}>
+                  {showAll ? "Show fewer" : `Show ${groups.length - VISIBLE_GROUPS} more`}
+                </button>
+              )}
+              {others.length > 0 && (
+                <div className="st-notes">
+                  <div className="st-notes-head">Notes</div>
+                  {notes.map((f) => {
+                    const Icon = noteIcon(f);
+                    return (
+                      <div key={f.id} className="st-note" title={f.path}>
+                        <Icon size={12} strokeWidth={1.75} aria-hidden="true" />
+                        <span className="st-note-text">
+                          {f.rule_name || f.name} · {f.reason}
+                        </span>
+                        <span className="st-note-size">{bytes(f.bytes)}</span>
+                      </div>
+                    );
+                  })}
+                  {others.length > VISIBLE_NOTES && (
+                    <button className="st-more-btn" onClick={() => setShowNotes(!showNotes)}>
+                      {showNotes ? "Show fewer notes" : `Show ${others.length - VISIBLE_NOTES} more notes`}
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
+          ) : (
+            <EmptyState
+              icon={<ShieldCheck size={22} />}
+              title="Findings cover your home folder"
+              action={
+                <Button size="sm" onClick={() => setPane("folders")}>
+                  Browse this drive
+                </Button>
+              }
+            />
+          ))}
+
+        {pane === "folders" && (
+          <section className="st-card" aria-label="Folders">
+            {results ? (
+              <div className="st-sub">{plural(results.length, "match")}</div>
+            ) : (
+              <nav className="st-crumbs" aria-label="Folder path">
+                {crumbs.map((c, i) => (
+                  <span key={c.path}>
+                    {i > 0 && <ChevronRight size={11} className="st-crumb-sep" aria-hidden="true" />}
+                    <button className="st-crumb" onClick={() => open(c.path)} disabled={busy} aria-current={i === crumbs.length - 1 ? "page" : undefined}>
+                      {c.name}
+                    </button>
+                  </span>
+                ))}
+              </nav>
+            )}
+            <input
+              className="search st-search"
+              type="search"
+              placeholder="Search files"
+              aria-label="Search files"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {!folder && (opening ? <div className="muted">Loading…</div> : scanning && <div className="muted">Scanning…</div>)}
+            {folder && rows.length === 0 && !busy && !scanning && (
+              <EmptyState icon={<FolderIcon size={22} />} title={results ? "No matches" : "This folder is empty"} />
+            )}
+            {rows.length > 0 && (
+              <>
+                {!results && <Treemap rows={rows} open={open} finder={showInFinder} menu={itemMenu.open} />}
+                <div className="st-list">
+                  {rows.map((r) => {
+                    // A click with detail > 1 is the second click of a double-click: it must not drill in again.
+                    const kind = KINDS[kindOf(r.path, r.is_dir)];
+                    const pct = (r.bytes / total) * 100;
+                    return (
+                      <div
+                        key={r.path}
+                        className={`st-row${r.is_dir && !results ? " clickable" : ""}`}
+                        tabIndex={actionable(r) ? 0 : undefined}
+                        onClick={(e) => (r.is_dir && !results && e.detail < 2 ? open(r.path) : undefined)}
+                        onDoubleClick={() => (actionable(r) ? showInFinder(r.path) : undefined)}
+                        onKeyDown={(e) => onRowKey(e, r)}
+                        onContextMenu={(e) => (actionable(r) ? itemMenu.open(e, r) : e.preventDefault())}
+                        title={`${r.path}\n${kind.label}`}
+                      >
+                        <span className="st-name">
+                          <i className="st-dot" style={{ background: kind.color }} />
+                          {r.is_dir ? <FolderIcon size={13} aria-hidden="true" /> : <File size={13} aria-hidden="true" />}
+                          <span>{results ? shortPath(r.path) : r.name}</span>
+                        </span>
+                        <Bar fraction={r.bytes / largest} color={kind.color} />
+                        <span className="st-pct">{pct >= 1 ? `${Math.round(pct)}%` : "<1%"}</span>
+                        <span className="st-size">{bytes(r.bytes)}</span>
+                        {actionable(r) ? (
+                          <button
+                            className="st-row-more"
+                            aria-label={`Actions for ${r.name}`}
+                            aria-haspopup="menu"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              itemMenu.open(e, r);
+                            }}
+                            onKeyDown={(e) => e.stopPropagation()}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                          >
+                            <MoreHorizontal size={15} aria-hidden="true" />
+                          </button>
+                        ) : (
+                          <span />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
+        {pane === "changes" &&
+          (!internalActive ? (
+            <EmptyState icon={<Info size={22} />} title="Changes are tracked for your home folder" />
+          ) : changes.length === 0 ? (
+            <EmptyState icon={<Info size={22} />} title={growth?.available ? "No changes since the last scan" : "No comparison yet"}>
+              {growth?.available ? null : (growth?.reason ?? "Changes appear after a second scan.")}
+            </EmptyState>
+          ) : (
+            <section className="st-card" aria-label="Changes">
+              <div className="st-card-head">
+                <div>
+                  <h2 className="st-h">Home changes</h2>
+                  <p className="st-sub">
+                    Since last scan
+                    {growth?.since ? ` (${new Date(growth.since * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })})` : ""}
+                  </p>
+                </div>
+              </div>
+              <div className="st-changes">
+                {changes.map((c) => (
+                  <button key={c.path} className="st-change" onClick={() => openFromChange(c.path)} disabled={busy} title={c.path}>
+                    <span>{shortPath(c.path)}</span>
+                    <span className={`st-delta ${c.bytes > 0 ? "up" : "down"}`}>{signedBytes(c.bytes)}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+      </div>
 
       {itemMenu.element}
 
@@ -738,8 +819,8 @@ export function Storage() {
   );
 }
 
-const W = 300;
-const H = 240;
+const W = 600;
+const H = 96;
 
 /**
  * The current folder as one level of tiles, coloured by kind. Click a folder
@@ -760,11 +841,11 @@ function Treemap({
   if (items.length === 0) return null;
   const tiles = squarify(items.map((r) => r.bytes), W, H);
   return (
-    <svg className="treemap" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Folder contents by size">
+    <svg className="st-treemap" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Folder contents by size">
       {items.map((r, i) => {
         const t = tiles[i];
         const kind = KINDS[kindOf(r.path, r.is_dir)];
-        const chars = Math.floor((t.w - 8) / 5.6);
+        const chars = Math.floor((t.w - 8) / 6.4);
         // A click with detail > 1 is the second click of a double-click: it must not drill in again.
         return (
           <g
@@ -781,7 +862,7 @@ function Treemap({
             <title>{`${r.name}: ${bytes(r.bytes)}`}</title>
             <rect x={t.x + 0.5} y={t.y + 0.5} width={Math.max(t.w - 1, 0)} height={Math.max(t.h - 1, 0)} rx={2} fill={kind.color} opacity={0.88} />
             {t.w > 46 && t.h > 16 && chars > 3 && (
-              <text x={t.x + 4} y={t.y + 12} fontSize={9.5} fill="#fff" style={{ pointerEvents: "none" }}>
+              <text x={t.x + 4} y={t.y + 13} fontSize={11} fill="#fff" style={{ pointerEvents: "none" }}>
                 {r.name.length > chars ? r.name.slice(0, chars - 1) + "…" : r.name}
               </text>
             )}

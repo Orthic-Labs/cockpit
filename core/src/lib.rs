@@ -86,16 +86,65 @@ pub struct ProcessInfo {
     pub gpu_usage_percent: Metric<f32>,
 }
 
+/// One cheap reading of CPU, memory and swap. No process walk and no disk
+/// list, so it can run every couple of seconds.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveReading {
+    pub cpu_percent: f32,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+    pub swap_used_bytes: u64,
+    pub swap_total_bytes: u64,
+}
+
+/// Keeps a `System` between readings: sysinfo computes CPU deltas between
+/// refreshes, so the first reading after `new` is not a measurement.
+pub struct LiveSampler {
+    system: System,
+}
+
+impl Default for LiveSampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LiveSampler {
+    pub fn new() -> Self {
+        let mut system = System::new();
+        system.refresh_cpu_usage();
+        system.refresh_memory();
+        Self { system }
+    }
+
+    pub fn sample(&mut self) -> LiveReading {
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        LiveReading {
+            cpu_percent: self.system.global_cpu_usage(),
+            memory_used_bytes: self.system.used_memory(),
+            memory_total_bytes: self.system.total_memory(),
+            swap_used_bytes: self.system.used_swap(),
+            swap_total_bytes: self.system.total_swap(),
+        }
+    }
+}
+
+/// The platform's memory pressure, or `None` where it is not read.
+pub fn memory_pressure() -> Option<String> {
+    memory_pressure_metric().value
+}
+
 pub fn system_status() -> SystemStatus {
-    let mut system = System::new_all();
+    let mut sampler = LiveSampler::new();
     // sysinfo computes CPU deltas between refreshes. Keep this bounded and
     // avoid publishing an immediate zero as a reading.
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-    system.refresh_cpu_usage();
-    let cpu = system.global_cpu_usage();
+    let reading = sampler.sample();
+    let cpu = reading.cpu_percent;
     let memory_label = "OS-reported system memory";
-    let swap_total = system.total_swap();
-    let swap_used = system.used_swap();
+    let swap_total = reading.swap_total_bytes;
+    let swap_used = reading.swap_used_bytes;
     let disks = Disks::new_with_refreshed_list();
     let disks = disks
         .list()
@@ -115,12 +164,12 @@ pub fn system_status() -> SystemStatus {
             label: "total CPU usage".into(),
         },
         memory_used_bytes: Metric {
-            value: Some(system.used_memory()),
+            value: Some(reading.memory_used_bytes),
             capability: Capability::Available,
             label: memory_label.into(),
         },
         memory_total_bytes: Metric {
-            value: Some(system.total_memory()),
+            value: Some(reading.memory_total_bytes),
             capability: Capability::Available,
             label: memory_label.into(),
         },

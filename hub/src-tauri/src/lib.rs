@@ -16,6 +16,8 @@ mod growth;
 
 mod health;
 
+mod metrics_history;
+
 mod permissions;
 
 mod scanner;
@@ -391,6 +393,7 @@ pub fn run() {
             }
             watch_notch(app.handle().clone());
             health::start_background();
+            metrics_history::start_background();
             share::start_background(app.handle().clone());
             Ok(())
         })
@@ -402,7 +405,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            status, processes, apps::apps_list, apps::app_detail, apps::app_uninstall,
+            status, processes, metrics_history::metrics_history, apps::apps_list, apps::app_detail, apps::app_uninstall,
             apps::apps_cached, apps::apps_refresh, apps::app_summary, apps::app_leftovers, apps::app_icons,
             apps::apps_updates_cached, apps::apps_updates_refresh, apps::app_update,
             apps::process_rows, apps::process_quit, apps::process_force_quit, scanner::scan, scanner::scan_status, scanner::last_scan, growth::growth, scanner::children, scanner::search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,

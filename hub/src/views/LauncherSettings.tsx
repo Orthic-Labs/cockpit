@@ -47,9 +47,10 @@ function AddLine({ placeholder, onAdd }: { placeholder: string; onAdd: (value: s
     setText("");
   };
   return (
-    <div className="buttons">
+    <div className="ck-line">
       <input
-        className="input"
+        className="ck-input"
+        aria-label={placeholder}
         value={text}
         placeholder={placeholder}
         onChange={(e) => setText(e.target.value)}
@@ -62,12 +63,12 @@ function AddLine({ placeholder, onAdd }: { placeholder: string; onAdd: (value: s
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <div className="setting">
-      <div>
-        <div>{title}</div>
-        {note && <div className="muted small">{note}</div>}
+    <div className="ck-set ck-stack">
+      <div className="ck-text">
+        <strong>{title}</strong>
+        {note && <div className="ck-sub">{note}</div>}
       </div>
-      <div className="setting-control" style={{ display: "grid", gap: 6, minWidth: 0 }}>{children}</div>
+      <div className="ck-list">{children}</div>
     </div>
   );
 }
@@ -94,10 +95,11 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
   };
   const input = (value: string, placeholder: string, onChange: (value: string) => void, flex = 1) => (
     <input
-      className="input"
+      className="ck-input"
+      aria-label={placeholder}
       value={value}
       placeholder={placeholder}
-      style={{ flex, minWidth: 0 }}
+      style={{ flex: `${flex} 1 ${flex * 110}px` }}
       onChange={(e) => onChange(e.target.value)}
     />
   );
@@ -108,8 +110,8 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
     <>
       <Section title="Folders for file search" note="Spotlight searches file names only inside these folders. Empty turns file search off.">
         {draft.fileFolders.map((path, i) => (
-          <div key={`folder-${i}`} className="buttons">
-            <span className="muted small">{path}</span>
+          <div key={`folder-${i}`} className="ck-line">
+            <span className="ck-sub ck-path">{path}</span>
             <Button size="sm" variant="ghost" onClick={() => edit({ ...draft, fileFolders: removeAt(draft.fileFolders, i) })}>Remove</Button>
           </div>
         ))}
@@ -118,8 +120,8 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
 
       <Section title="Pinned apps" note="Pin an app in the launcher with Command-P. Pinned apps show first when nothing is typed.">
         {draft.pinnedApps.map((path, i) => (
-          <div key={`pin-${i}`} className="buttons">
-            <span className="muted small">{path}</span>
+          <div key={`pin-${i}`} className="ck-line">
+            <span className="ck-sub ck-path">{path}</span>
             <Button size="sm" variant="ghost" onClick={() => edit({ ...draft, pinnedApps: removeAt(draft.pinnedApps, i) })}>Remove</Button>
           </div>
         ))}
@@ -128,7 +130,7 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
 
       <Section title="App hotkeys" note={`Press to show the app, or hide it when it is in front. ${hotkeyNote}`}>
         {draft.appHotkeys.map((item, i) => (
-          <div key={`app-hotkey-${i}`} className="buttons">
+          <div key={`app-hotkey-${i}`} className="ck-line">
             {input(item.path, "/Applications/Safari.app", (v) => {
               const next = [...draft.appHotkeys];
               next[i] = { ...item, path: v };
@@ -148,7 +150,7 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
 
       <Section title="Quicklinks" note="{query} is replaced by the text after the keyword. {clipboard} and {date} are also filled in.">
         {draft.quicklinks.map((item, i) => (
-          <div key={`quicklink-${i}`} className="buttons">
+          <div key={`quicklink-${i}`} className="ck-line">
             {input(item.name, "Name", (v) => {
               const next = [...draft.quicklinks];
               next[i] = { ...item, name: v };
@@ -173,8 +175,8 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
 
       <Section title="Snippets" note="Markdown text pasted into the app you were using. {date}, {clipboard} and {argument} are filled in.">
         {draft.snippets.map((item, i) => (
-          <div key={`snippet-${i}`} style={{ display: "grid", gap: 6 }}>
-            <div className="buttons">
+          <div key={`snippet-${i}`} className="ck-list">
+            <div className="ck-line">
               {input(item.name, "Name", (v) => {
                 const next = [...draft.snippets];
                 next[i] = { ...item, name: v };
@@ -188,7 +190,8 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
               <Button size="sm" variant="ghost" onClick={() => edit({ ...draft, snippets: removeAt(draft.snippets, i) })}>Remove</Button>
             </div>
             <textarea
-              className="input"
+              className="ck-input"
+              aria-label="Snippet text"
               rows={4}
               value={item.body}
               placeholder={"Thanks,\n{clipboard}"}
@@ -206,7 +209,7 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
 
       <Section title="Custom commands" note="Run with /bin/zsh -lc; the output shows in the launcher. Optional hotkey runs it from anywhere.">
         {draft.commands.map((item, i) => (
-          <div key={`command-${i}`} className="buttons">
+          <div key={`command-${i}`} className="ck-line">
             {input(item.name, "Name", (v) => {
               const next = [...draft.commands];
               next[i] = { ...item, name: v };
@@ -234,9 +237,9 @@ export function LauncherLists({ raw, onSave }: { raw: unknown; onSave: (next: La
           onClick={() => edit({ ...draft, commands: [...draft.commands, { name: "", keyword: "", command: "", hotkey: "" }] })}>Add a command</Button>
       </Section>
 
-      <div className="buttons">
+      <div className="ck-set ck-savebar">
+        <span className="ck-sub" role="status">{dirty ? "Not saved yet." : "Launcher lists are saved."}</span>
         <Button size="sm" variant="secondary" disabled={!dirty} onClick={() => onSave(draft)}>Save launcher lists</Button>
-        {dirty ? <span className="muted small">Not saved yet.</span> : null}
       </div>
     </>
   );

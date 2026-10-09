@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, ConfirmDialog, SegmentedControl } from "@rightkit/app-shell/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AppWindow } from "lucide-react";
+import { AppWindow, ChevronLeft, Search } from "lucide-react";
 import {
   ago,
   api,
@@ -18,6 +18,7 @@ import {
   type UpdateJob,
   type UpdateReport,
 } from "../api";
+import "./apps.css";
 
 const DAY = 86_400;
 const UNUSED_DAYS = 90;
@@ -44,6 +45,11 @@ function byPath(apps: AppUpdate[]): Record<string, AppUpdate> {
   return Object.fromEntries(apps.map((a): [string, AppUpdate] => [a.path, a]));
 }
 
+interface Retained {
+  picked: Set<string>;
+  touched: Set<string>;
+}
+
 function upsertApp(list: AppEntry[], row: AppEntry): AppEntry[] {
   const index = list.findIndex((a) => a.path === row.path);
   if (index < 0) return [...list, row];
@@ -66,6 +72,8 @@ export function Apps() {
   const [open, setOpen] = useState<AppEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
   const iconsAsked = useRef(new Set<string>());
+  // Per-app leftover choices survive Back and reopening.
+  const retained = useRef(new Map<string, Retained>());
 
   const refreshList = () => {
     setRefreshing(true);
@@ -192,6 +200,7 @@ export function Apps() {
         app={open}
         update={updates[open.path]}
         job={jobs[open.path]}
+        retained={retained.current}
         onStartUpdate={() => startUpdate(open.path)}
         onBack={() => {
           setOpen(null);
@@ -202,11 +211,29 @@ export function Apps() {
   }
 
   const largest = Math.max(1, ...shown.map((a) => a.size_bytes));
+  const filtered = query.trim() !== "" || filter !== "all";
 
   return (
-    <div className="view">
-      <div className="toolbar">
-        <input className="search" placeholder="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} />
+    <div className="view ck-apps">
+      <div className="ck-apps-tools">
+        <label className="ck-apps-search">
+          <Search size={15} strokeWidth={1.75} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search apps"
+            placeholder="Search apps by name or bundle id"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+        <Button size="sm" variant="secondary" disabled={refreshing} onClick={refreshList}>
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </Button>
+        <Button size="sm" variant="secondary" disabled={checking} onClick={() => checkUpdates(true)}>
+          {checking ? "Checking…" : "Check updates"}
+        </Button>
+      </div>
+      <div className="ck-apps-filters">
         <SegmentedControl
           label="Show apps"
           value={filter}
@@ -217,28 +244,54 @@ export function Apps() {
           ]}
           onChange={(v) => setFilter(v as AppFilter)}
         />
-        <Button size="sm" variant="secondary" disabled={refreshing} onClick={refreshList}>
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={checking} onClick={() => checkUpdates(true)}>
-          {checking ? "Checking…" : "Check updates"}
-        </Button>
+        {apps.length > 0 && (
+          <span className="ck-apps-summary" role="status">
+            {shown.length} of {apps.length} apps · {bytes(shown.reduce((n, a) => n + a.size_bytes, 0))} · largest first
+            {refreshing ? " · sizes updating…" : ""}
+            {checking
+              ? " · checking for updates…"
+              : updatesAt != null
+                ? ` · updates checked ${ago(updatesAt)}`
+                : ""}
+          </span>
+        )}
       </div>
-      {error && <div className="error">{error}</div>}
-      {apps.length === 0 && (refreshing || !loaded) && <div className="muted">Reading your applications…</div>}
-      {apps.length === 0 && loaded && !refreshing && <div className="muted">No applications found.</div>}
-      {apps.length > 0 && (
-        <div className="muted small">
-          {shown.length} of {apps.length} apps · {bytes(shown.reduce((n, a) => n + a.size_bytes, 0))}
-          {refreshing ? " · sizes updating…" : ""}
-          {checking
-            ? " · checking for updates…"
-            : updatesAt != null
-              ? ` · updates checked ${ago(updatesAt)}`
-              : ""}
+      {error && (
+        <div className="ck-apps-error" role="alert">
+          {error}
         </div>
       )}
-      <div className="list">
+      <div className="ck-apps-card" tabIndex={0} aria-label="Installed apps">
+        {apps.length === 0 && (refreshing || !loaded) && (
+          <div className="ck-apps-state" role="status">
+            <strong>Reading your applications…</strong>
+            <span>Checking sizes and last use</span>
+          </div>
+        )}
+        {apps.length === 0 && loaded && !refreshing && (
+          <div className="ck-apps-state">
+            <strong>No applications found</strong>
+            <span>Refresh to read them again.</span>
+          </div>
+        )}
+        {apps.length > 0 && shown.length === 0 && (
+          <div className="ck-apps-state">
+            <strong>No matching apps</strong>
+            <span>Clear the search or filter, or refresh the list.</span>
+            {filtered && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setQuery("");
+                  setFilter("all");
+                }}
+              >
+                Clear filters
+              </Button>
+            )}
+          </div>
+        )}
         {shown.map((a) => (
           <AppRow
             key={a.path}
@@ -252,20 +305,28 @@ export function Apps() {
           />
         ))}
       </div>
+      <details className="ck-apps-about">
+        <summary>About these numbers</summary>
+        <p>
+          Sizes are measured on disk and keep updating while the list refreshes. Unused means not opened for{" "}
+          {UNUSED_DAYS}+ days; an unknown last use never counts as unused. Updates show what the last check found. Apps
+          that update themselves open their own updater. Removing an app moves it to the Trash.
+        </p>
+      </details>
     </div>
   );
 }
 
 function AppIcon({ src }: { src: string | null | undefined }) {
-  if (src) return <img className="apps-icon" src={src} alt="" />;
+  if (src) return <img className="ck-apps-icon" src={src} alt="" />;
   return (
-    <span className="apps-icon apps-icon--fallback" aria-hidden="true">
-      <AppWindow size={15} strokeWidth={1.8} />
+    <span className="ck-apps-icon ck-apps-icon--fallback" aria-hidden="true">
+      <AppWindow size={16} strokeWidth={1.75} />
     </span>
   );
 }
 
-/** The update badge and action for one app. Clicks here never open the app. */
+/** The update badge and action for one app. It sits beside the open button, never inside it. */
 function UpdateControl({
   update,
   job,
@@ -275,18 +336,17 @@ function UpdateControl({
   job: UpdateJob | undefined;
   onUpdate: () => void;
 }) {
-  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   if (job?.state === "running") {
     return (
-      <span className="apps-update" onClick={stop}>
-        <span className="apps-status">{job.message}</span>
+      <span className="ck-apps-update" role="status">
+        <span className="ck-apps-status">{job.message}</span>
       </span>
     );
   }
   if (job?.state === "failed") {
     return (
-      <span className="apps-update" onClick={stop}>
-        <span className="apps-status apps-status--bad" title={job.message}>
+      <span className="ck-apps-update" role="alert">
+        <span className="ck-apps-status ck-apps-status--bad" title={job.message}>
           Update failed
         </span>
       </span>
@@ -294,8 +354,8 @@ function UpdateControl({
   }
   if (job?.state === "done") {
     return (
-      <span className="apps-update" onClick={stop}>
-        <span className="apps-status apps-status--ok" title={job.message}>
+      <span className="ck-apps-update" role="status">
+        <span className="ck-apps-status ck-apps-status--ok" title={job.message}>
           {job.message}
         </span>
       </span>
@@ -303,8 +363,8 @@ function UpdateControl({
   }
   if (update?.state === "available") {
     return (
-      <span className="apps-update" onClick={stop}>
-        <span className="apps-badge">
+      <span className="ck-apps-update">
+        <span className="ck-apps-badge ck-apps-badge--accent">
           Update available{update.latest_version ? ` ${update.latest_version}` : ""}
         </span>
         <Button size="sm" variant="secondary" onClick={onUpdate}>
@@ -315,7 +375,7 @@ function UpdateControl({
   }
   if (update?.state === "app_store") {
     return (
-      <span className="apps-update" onClick={stop}>
+      <span className="ck-apps-update">
         <Button size="sm" variant="secondary" onClick={onUpdate}>
           Open in App Store
         </Button>
@@ -343,23 +403,27 @@ function AppRow({
   onUpdate: () => void;
 }) {
   return (
-    <div className="row apps clickable" onClick={onOpen} title={app.path}>
-      <span className="name apps-name">
+    <div className="ck-apps-row">
+      <button type="button" className="ck-apps-open" onClick={onOpen} title={app.path}>
         <AppIcon src={icon} />
-        <span className="apps-title">
-          {app.running && <span className="dot" title="Running" />}
-          {app.name}
-          <span className="muted small">
-            {" "}
-            {app.version ?? ""} · {lastUsedText(app.last_used)}
+        <span className="ck-apps-text">
+          <span className="ck-apps-name">
+            {app.name}
+            {app.running && <span className="ck-apps-badge ck-apps-badge--ok">Running</span>}
+            {app.protected && <span className="ck-apps-badge">Protected</span>}
+          </span>
+          <span className="ck-apps-sub">
+            {app.version ? `${app.version} · ` : ""}Last used: {lastUsedText(app.last_used)}
           </span>
         </span>
-        <UpdateControl update={update} job={job} onUpdate={onUpdate} />
+      </button>
+      <UpdateControl update={update} job={job} onUpdate={onUpdate} />
+      <span className="ck-apps-size">
+        {bytes(app.size_bytes)}
+        <span className="ck-apps-bar" aria-hidden="true">
+          <i style={{ width: `${(app.size_bytes / largest) * 100}%` }} />
+        </span>
       </span>
-      <span className="bar" style={{ height: 4 }}>
-        <i style={{ width: `${(app.size_bytes / largest) * 100}%`, background: "var(--rk-accent)" }} />
-      </span>
-      <span className="size">{bytes(app.size_bytes)}</span>
     </div>
   );
 }
@@ -402,26 +466,29 @@ function mergeBackground(prev: BackgroundEntry[], more: BackgroundEntry[]): Back
   }
   return out;
 }
-
 function Detail({
   app,
   update,
   job,
+  retained,
   onStartUpdate,
   onBack,
 }: {
   app: AppEntry;
   update: AppUpdate | undefined;
   job: UpdateJob | undefined;
+  retained: Map<string, Retained>;
   onStartUpdate: () => void;
   onBack: () => void;
 }) {
   const [items, setItems] = useState<Map<string, RelatedItem>>(() => new Map([[app.path, bundleRow(app)]]));
   const [background, setBackground] = useState<BackgroundEntry[]>([]);
   const [receipts, setReceipts] = useState<string[]>([]);
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(app.protected == null ? [app.path] : []));
+  const [picked, setPicked] = useState<Set<string>>(
+    () => new Set(retained.get(app.path)?.picked ?? (app.protected == null ? [app.path] : [])),
+  );
   // Paths the user has changed: leftovers arriving later never overrule them.
-  const touched = useRef(new Set<string>());
+  const touched = useRef(new Set<string>(retained.get(app.path)?.touched));
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [leftoverError, setLeftoverError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
@@ -516,101 +583,133 @@ function Detail({
     }
   };
 
+  useEffect(() => {
+    retained.set(app.path, { picked, touched: touched.current });
+  }, [picked]);
+
+
   const group = (location: string) => {
     const rows = visible.filter((i) => i.location === location);
     if (rows.length === 0) return null;
     const paths = rows.map((i) => i.path);
     const allOn = paths.every((p) => picked.has(p));
     return (
-      <div key={location}>
-        <div className="section-row">
-          <span className="section">
+      <section key={location} className="ck-apps-group" aria-label={location}>
+        <div className="ck-apps-group-head">
+          <span>
             {location} <span className="muted">· {rows.length} · {bytes(rows.reduce((n, i) => n + i.size_bytes, 0))}</span>
           </span>
           {rows.length > 1 && (
             <Button size="sm" variant="secondary" disabled={busy} onClick={() => set(paths, !allOn)}>
-              {allOn ? "Clear" : "Select all"}
+              {allOn ? "Deselect group" : "Select group"}
             </Button>
           )}
         </div>
         {rows.map((i) => (
-          <label key={i.path} className="row items" title={`${i.path}\n${i.reason}`}>
+          <label key={i.path} className="ck-apps-item" title={i.path}>
             <input
               type="checkbox"
               checked={picked.has(i.path)}
               disabled={busy}
               onChange={(e) => set([i.path], e.target.checked)}
             />
-            <span className="name">
-              {i.path.replace(/^\/Users\/[^/]+/, "~")}
-              <span className="muted small">
-                {" "}
-                {i.label} · {CONFIDENCE[i.confidence] ?? i.confidence}
-                {i.admin ? " · admin" : ""}
-                {i.preselected ? "" : " · review"}
+            <span className="ck-apps-item-main">
+              <span className="ck-apps-path">{i.path.replace(/^\/Users\/[^/]+/, "~")}</span>
+              <span className="ck-apps-sub">{i.reason}</span>
+              <span className="ck-apps-tags">
+                <span className="ck-apps-badge">Match: {CONFIDENCE[i.confidence] ?? i.confidence}</span>
+                {i.admin && <span className="ck-apps-badge ck-apps-badge--warn">Admin required</span>}
+                {!i.preselected && <span className="ck-apps-badge ck-apps-badge--warn">Review before moving</span>}
               </span>
             </span>
-            <span className="size">{bytes(i.size_bytes)}</span>
+            <span className="ck-apps-size">{bytes(i.size_bytes)}</span>
           </label>
         ))}
-      </div>
+      </section>
     );
   };
 
   return (
-    <div className="view">
-      <div className="apps-header">
-        <span className="apps-header-title">
-          <span className="strong">{app.name}</span>{" "}
-          <span className="muted small">
-            {app.version ?? ""} {app.bundle_id ?? ""}
+    <div className="view ck-apps">
+      <div className="ck-apps-head">
+        <Button size="sm" variant="secondary" onClick={onBack}>
+          <span className="ck-apps-back">
+            <ChevronLeft size={14} strokeWidth={1.75} aria-hidden="true" />
+            Back to apps
           </span>
-        </span>
-        <span className="apps-header-side">
-          <UpdateControl update={update} job={job} onUpdate={onStartUpdate} />
-          <Button size="sm" variant="secondary" onClick={onBack}>
-            Back
-          </Button>
-        </span>
-      </div>
-      {app.protected && <div className="note">{app.protected} Uninstall is not offered.</div>}
-      {app.running && !app.protected && (
-        <div className="note">Running. Pulse will ask it to quit first, and will not remove anything if it stays open.</div>
-      )}
-      {status === "loading" && <div className="apps-progress">Finding leftovers…</div>}
-      {leftoverError && <div className="error">{leftoverError}</div>}
-      {error && <div className="error">{error}</div>}
-      {result && (
-        <div className="result">
-          <div className="ok-note">
-            Moved {result.moved.length} to Trash · freed {bytes(result.moved_bytes)}
-            {result.failed.length > 0 && <span className="error"> · {result.failed.length} failed</span>}
+        </Button>
+        <div className="ck-apps-head-title">
+          <h2>{app.name}</h2>
+          <div className="ck-apps-sub">
+            {[app.version, app.bundle_id, `Last used: ${lastUsedText(app.last_used)}`].filter(Boolean).join(" · ")}
           </div>
+        </div>
+        <UpdateControl update={update} job={job} onUpdate={onStartUpdate} />
+      </div>
+      {app.protected && <div className="ck-apps-notice ck-apps-notice--warn">{app.protected} Uninstall is not offered.</div>}
+      {app.running && !app.protected && (
+        <div className="ck-apps-notice ck-apps-notice--warn">
+          Running. Pulse will ask it to quit first, and will not remove anything if it stays open.
+        </div>
+      )}
+      {status === "loading" && (
+        <div className="ck-apps-notice" role="status">
+          Finding leftovers…
+        </div>
+      )}
+      {leftoverError && (
+        <div className="ck-apps-error" role="alert">
+          {leftoverError}
+        </div>
+      )}
+      {error && (
+        <div className="ck-apps-error" role="alert">
+          {error}
+        </div>
+      )}
+      {result && (
+        <div className={`ck-apps-notice ${result.failed.length > 0 ? "ck-apps-notice--warn" : "ck-apps-notice--ok"}`} role="status">
+          Moved {result.moved.length} to Trash · {bytes(result.moved_bytes)} · restore with Put Back in Finder
+          {result.failed.length > 0 && <strong> · {result.failed.length} failed and still listed</strong>}
           {result.failed.map((f) => (
-            <div key={f.path} className="error small" title={f.path}>
+            <div key={f.path} className="ck-apps-failed" title={f.path}>
               {f.path.replace(/^\/Users\/[^/]+/, "~")}: {f.error}
             </div>
           ))}
         </div>
       )}
-      <div className="list">{LOCATIONS.map(group)}</div>
-      {background.length > 0 && (
-        <div className="note">
-          <div className="section">Login and background items</div>
-          {background.map((b) => (
-            <div key={`${b.kind}:${b.label}`} className="small muted" title={b.path ?? ""}>
-              {b.kind} · {b.label}
-            </div>
-          ))}
-        </div>
-      )}
-      {receipts.length > 0 && <div className="small muted">Installer packages: {receipts.join(", ")}</div>}
+      <div className="ck-apps-card" tabIndex={0} aria-label="Associated files">
+        {LOCATIONS.map(group)}
+        {background.length > 0 && (
+          <div className="ck-apps-extra">
+            <h3>Login and background items</h3>
+            {background.map((b) => (
+              <div key={`${b.kind}:${b.label}`} title={b.path ?? ""}>
+                {b.kind} · {b.label}
+              </div>
+            ))}
+          </div>
+        )}
+        {receipts.length > 0 && <div className="ck-apps-extra">Installer packages: {receipts.join(", ")}</div>}
+        <details className="ck-apps-about">
+          <summary>About these numbers</summary>
+          <p>
+            Sizes are measured on disk. Match shows how the file was tied to the app; items marked for review are left
+            unchecked. Everything goes to the Trash and can be put back.
+          </p>
+        </details>
+      </div>
       {!app.protected && (
-        <div className="section-row">
-          <span className="muted small">
-            {pickedVisible.length} selected · {bytes(total)}
-            {adminPicked > 0 && ` · ${adminPicked} need an administrator password`}
-          </span>
+        <div className="ck-apps-foot">
+          <div className="ck-apps-foot-copy">
+            <strong>
+              {pickedVisible.length} selected · {bytes(total)}
+            </strong>
+            <span className="ck-apps-sub">
+              {adminPicked > 0 && `${adminPicked} need an administrator password · `}
+              {app.running ? "Must quit first · " : ""}Goes to Trash, restore with Put Back
+            </span>
+          </div>
           <Button
             size="sm"
             variant="danger"

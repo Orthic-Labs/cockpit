@@ -1,0 +1,84 @@
+/* Apps page (v2.1). Tokens come from styles.css and the app-shell. */
+.ck-apps { gap: 8px; }
+.ck-apps > * { min-width: 0; }
+.ck-apps :focus-visible { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 2px; }
+
+.ck-apps-tools { display: flex; align-items: center; gap: 8px; flex: none; }
+.ck-apps-search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--ck-control-line, var(--rk-hairline)); background: var(--rk-fill-2); color: var(--rk-ink-3); }
+.ck-apps-search:focus-within { border-color: var(--rk-accent); }
+.ck-apps-search svg { flex: none; }
+.ck-apps-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; color: var(--rk-ink); font: inherit; outline: none; }
+.ck-apps-search input::placeholder { color: var(--rk-ink-3); }
+.ck-apps-search:has(input:focus-visible) { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 2px; }
+.ck-apps-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; flex: none; }
+.ck-apps-summary { font-size: 12px; color: var(--rk-ink-2); overflow-wrap: anywhere; }
+
+.ck-apps-about { flex: none; font-size: 12px; color: var(--rk-ink-2); }
+.ck-apps-about > summary { display: inline-block; min-height: 24px; padding: 3px 0; cursor: pointer; }
+.ck-apps-about p { margin: 4px 0 0; max-width: 560px; }
+
+.ck-apps-card { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-fill-2); padding: 0 12px; scroll-padding: 10px; }
+.ck-apps-card:focus-visible { outline-offset: -2px; }
+
+.ck-apps-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 84px; align-items: center; gap: 10px; padding: 2px 0; border-bottom: 1px solid var(--rk-hairline); }
+.ck-apps-row:last-child { border-bottom: 0; }
+.ck-apps-open { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 48px; padding: 4px 6px 4px 0; border: 0; border-radius: 8px; background: none; color: var(--rk-ink); font: inherit; text-align: left; cursor: pointer; }
+.ck-apps-open:hover { background: var(--rk-plane); }
+.ck-apps-text { display: flex; flex-direction: column; min-width: 0; }
+.ck-apps-name { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 600; overflow-wrap: anywhere; }
+.ck-apps-sub { font-size: 12px; color: var(--rk-ink-2); overflow-wrap: anywhere; }
+.ck-apps-icon { flex: none; width: 28px; height: 28px; border-radius: 6px; object-fit: contain; }
+.ck-apps-icon--fallback { display: inline-flex; align-items: center; justify-content: center; background: var(--rk-plane); color: var(--rk-ink-3); }
+.ck-apps-size { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-variant-numeric: tabular-nums; color: var(--rk-ink-2); white-space: nowrap; }
+.ck-apps-bar { display: block; width: 100%; height: 4px; border-radius: 2px; background: var(--rk-plane); overflow: hidden; }
+.ck-apps-bar i { display: block; height: 100%; background: var(--rk-accent); }
+
+.ck-apps-update { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; max-width: 260px; }
+.ck-apps-badge { display: inline-block; max-width: 100%; padding: 1px 7px; border-radius: 6px; font-size: 12px; line-height: 1.5; background: var(--rk-plane); color: var(--rk-ink-2); overflow-wrap: anywhere; }
+.ck-apps-badge--warn { background: var(--rk-warn-soft, var(--rk-plane)); color: var(--rk-warn); }
+.ck-apps-badge--ok { background: var(--rk-ok-soft, var(--rk-plane)); color: var(--rk-ok); }
+.ck-apps-badge--bad { background: var(--rk-bad-soft, var(--rk-plane)); color: var(--rk-bad); }
+.ck-apps-badge--accent { color: var(--rk-accent); }
+.ck-apps-status { font-size: 12px; color: var(--rk-ink-2); overflow-wrap: anywhere; text-align: right; }
+.ck-apps-status--ok { color: var(--rk-ok); }
+.ck-apps-status--bad { color: var(--rk-bad); }
+
+.ck-apps-state { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 18px 4px; color: var(--rk-ink-2); }
+.ck-apps-state strong { color: var(--rk-ink); font-size: 14px; }
+.ck-apps-error { flex: none; padding: 8px 12px; border-radius: 8px; background: var(--rk-bad-soft, var(--rk-fill-2)); color: var(--rk-bad); font-size: 12px; overflow-wrap: anywhere; }
+.ck-apps-notice { flex: none; padding: 8px 12px; border-radius: 8px; background: var(--rk-fill-2); color: var(--rk-ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.ck-apps-notice--warn { background: var(--rk-warn-soft, var(--rk-fill-2)); color: var(--rk-warn); }
+.ck-apps-notice--ok { background: var(--rk-ok-soft, var(--rk-fill-2)); color: var(--rk-ok); }
+.ck-apps-failed { margin-top: 4px; color: var(--rk-bad); }
+
+/* Detail */
+.ck-apps-head { display: flex; align-items: center; gap: 10px; flex: none; }
+.ck-apps-head-title { flex: 1; min-width: 0; }
+.ck-apps-head-title h2 { margin: 0; font-size: 15px; line-height: 1.35; font-weight: 650; color: var(--rk-ink); overflow-wrap: anywhere; }
+.ck-apps-back { display: inline-flex; align-items: center; gap: 2px; }
+.ck-apps-group + .ck-apps-group { margin-top: 6px; }
+.ck-apps-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; font-weight: 600; }
+.ck-apps-group-head span { min-width: 0; overflow-wrap: anywhere; }
+.ck-apps-group-head .muted { font-weight: 400; }
+.ck-apps-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 6px 0; border-top: 1px solid var(--rk-hairline); cursor: pointer; }
+.ck-apps-item input { width: 18px; height: 18px; margin: 7px; accent-color: var(--rk-accent); cursor: pointer; }
+.ck-apps-item input:focus-visible { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 2px; }
+.ck-apps-path { display: block; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; }
+.ck-apps-item-main { min-width: 0; padding-top: 5px; }
+.ck-apps-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.ck-apps-item .ck-apps-size { padding-top: 5px; }
+.ck-apps-extra { margin: 8px 0; font-size: 12px; color: var(--rk-ink-2); overflow-wrap: anywhere; }
+.ck-apps-extra h3 { margin: 0 0 2px; font-size: 12px; font-weight: 650; color: var(--rk-ink); }
+.ck-apps-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; flex: none; padding-top: 8px; border-top: 1px solid var(--rk-hairline); }
+.ck-apps-foot-copy { flex: 1 1 240px; min-width: 0; }
+.ck-apps-foot-copy strong { font-variant-numeric: tabular-nums; color: var(--rk-ink); }
+.ck-apps-foot-copy .ck-apps-sub { display: block; }
+
+@media (max-width: 860px) {
+  .ck-apps { gap: 6px; padding: 10px 12px; }
+  .ck-apps-open { min-height: 44px; }
+}
+@media (forced-colors: active) {
+  .ck-apps-card, .ck-apps-badge, .ck-apps-notice { border: 1px solid CanvasText; }
+  .ck-apps-bar i { background: Highlight; }
+}

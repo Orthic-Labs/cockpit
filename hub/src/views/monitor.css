@@ -1,0 +1,49 @@
+/* Graphs on Overview and Monitor. Tokens come from styles.css and the shell. */
+.chart-spark { display: block; width: 100%; overflow: visible; }
+.chart-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.chart-dashed { stroke-dasharray: 4 3; }
+.chart-fill { fill: currentColor; fill-opacity: 0.14; stroke: none; }
+.chart-grid { stroke: var(--rk-hairline); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-base { stroke: var(--rk-ink-3); stroke-opacity: 0.5; }
+
+.chart { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.chart-plot { position: relative; min-width: 0; touch-action: pan-y; }
+.chart-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chart-ymax { position: absolute; top: 3px; left: 0; padding: 0 4px 0 0; font-size: 11px; line-height: 1.2; color: var(--rk-ink-3); font-variant-numeric: tabular-nums; pointer-events: none; background: var(--rk-fill-2); }
+.chart-rule { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; background: var(--rk-ink-2); pointer-events: none; }
+.chart-tip { position: absolute; top: 4px; z-index: 2; display: flex; flex-direction: column; gap: 1px; padding: 4px 8px; border: 1px solid var(--rk-hairline); border-radius: 6px; background: var(--rk-plane); color: var(--rk-ink); font-size: 12px; line-height: 1.35; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums; }
+.chart-tip-time { color: var(--rk-ink-2); }
+.chart-tip-row { display: inline-flex; align-items: center; gap: 6px; }
+.chart-tip-row i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.chart-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--rk-ink-3); }
+
+.monitor-charts { display: flex; flex-direction: column; gap: 10px; flex: none; }
+.monitor-charts-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-width: 0; font-size: 11px; color: var(--rk-ink-3); }
+.monitor-charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; min-width: 0; }
+.monitor-chart-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-panel, var(--rk-fill-2)); }
+.monitor-chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; min-width: 0; font-size: 12px; color: var(--rk-ink-2); }
+.monitor-chart-now { color: var(--rk-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.monitor-legend { display: inline-flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--rk-ink-2); }
+.monitor-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.monitor-legend i { display: inline-block; width: 12px; height: 0; border-top: 2px solid; }
+.monitor-legend i.dashed { border-top-style: dashed; }
+.monitor-waiting { padding: 8px 0; font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-rule, .chart-tip { transition: none; animation: none; }
+}
+
+/* The page scrolls as a whole once charts sit above the process table. */
+.monitor-view { overflow: auto; flex-wrap: nowrap; }
+.monitor-view .mon-list { flex: none; overflow: visible; }
+
+.monitor-notice { display: flex; flex-direction: column; gap: 2px; flex: none; padding: 10px 12px; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-panel, var(--rk-fill-2)); }
+.monitor-notice.warn { border-color: var(--rk-warn); }
+.monitor-notice.bad { border-color: var(--rk-bad); }
+.monitor-notice p { margin: 0; font-size: 12px; color: var(--rk-ink-2); overflow-wrap: anywhere; }
+.monitor-h2 { margin: 0; font-size: 15px; line-height: 1.35; font-weight: 650; color: var(--rk-ink); }
+.monitor-charts-head .monitor-h2 { font-size: 15px; }
+.monitor-notice h2 { margin: 0; font-size: 15px; font-weight: 650; color: var(--rk-ink); }
+.monitor-meta { flex: 0 1 auto; white-space: normal; }
+.monitor-view .mon-section { flex-wrap: wrap; }
+.monitor-view .caption { flex: none; margin: 0; }

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
+import "./settings.css";
 
 export interface Limit {
   label: string;
@@ -149,7 +151,7 @@ export function Settings({ section, notch, onNavigate }: {
 }) {
   const { state, error, send } = notch;
   if (!state) {
-    return <div className="view muted">{error ?? "Reading the notch's settings…"}</div>;
+    return <div className="view ck-settings ck-sub" role="status">{error ?? "Reading the notch's settings…"}</div>;
   }
   const s = state.settings;
   const set = (key: string, value: unknown) => send({ command: "set", key, value });
@@ -170,7 +172,7 @@ export function Settings({ section, notch, onNavigate }: {
             onChange={(v) => set(key, v)}
           />
         ) : (
-          <select className="select" value={String(s[key])} onChange={(e) => set(key, e.target.value)}>
+          <select className="ck-select" aria-label={text} value={String(s[key])} onChange={(e) => set(key, e.target.value)}>
             {options.map((o) => (
               <option key={o} value={o}>{label(o)}</option>
             ))}
@@ -181,10 +183,10 @@ export function Settings({ section, notch, onNavigate }: {
   };
   const slider = (key: string, text: string, min: number, max: number, step: number, percent = false) => (
     <Row label={text}>
-      <span className="slider">
-        <input type="range" min={min} max={max} step={step} value={Number(s[key])}
+      <span className="ck-slider">
+        <input type="range" min={min} max={max} step={step} value={Number(s[key])} aria-label={text}
           onChange={(e) => set(key, Number(e.target.value))} />
-        <span className="muted small num">
+        <span className="ck-sub ck-num">
           {percent ? `${Math.round(Number(s[key]) * 100)}%` : `${Number(s[key]).toFixed(2)}×`}
         </span>
       </span>
@@ -192,12 +194,13 @@ export function Settings({ section, notch, onNavigate }: {
   );
 
   return (
-    <div className="view settings">
-      {error && <div className="error">{error}</div>}
+    <div className="view ck-settings">
+      {error && <div className="error" role="alert">{error}</div>}
 
       {section === "permissions" && (
         <Group title="Permissions">
-          {!state.permissions ? <div className="muted small">Waiting for permission status from Pulse notch…</div> : (
+          {state.permissions ? <PermissionLead permissions={state.permissions} /> : null}
+          {!state.permissions ? <div className="ck-set ck-sub" role="status">Waiting for permission status from Pulse notch…</div> : (
             <PermissionRows permissions={state.permissions} errors={state.permissionErrors} send={send}
               nearbyOn={s.nearbyEnabled !== false} />
           )}
@@ -212,7 +215,7 @@ export function Settings({ section, notch, onNavigate }: {
             {choice("notchEdge", "Edge")}
             {choice("notchScope", "Displays")}
             <Row label="Display">
-              <select className="select" value={String(s.displayPreference)}
+              <select className="ck-select" aria-label="Display" value={String(s.displayPreference)}
                 onChange={(e) => set("displayPreference", e.target.value)}>
                 <option value="followActiveWindow">Follow active window</option>
                 {state.displays.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -267,7 +270,7 @@ export function Settings({ section, notch, onNavigate }: {
             {bool("limitReachedSound", "Play a sound at a limit")}
           </Group>
           <Group title="Try them">
-            <div className="buttons">
+            <div className="ck-line">
               <Button size="sm" variant="secondary" onClick={() => send({ command: "sendTestNotification" })}>Send a test</Button>
               <Button size="sm" variant="secondary" onClick={() => send({ command: "previewResetAlert" })}>Preview reset</Button>
               <Button size="sm" variant="secondary" onClick={() => send({ command: "previewSessionLimitAlert" })}>Preview session limit</Button>
@@ -304,7 +307,7 @@ export function Settings({ section, notch, onNavigate }: {
                 ) : null}
               </>
             ) : (
-              <div className="muted small">Waiting for the notch to report its version.</div>
+              <div className="ck-set ck-sub" role="status">Waiting for the notch to report its version.</div>
             )}
             {bool("autoUpdateCheck", "Automatically check",
               "Looks for a new release at most every six hours. Nothing installs until you choose Update.")}
@@ -320,7 +323,7 @@ export function Settings({ section, notch, onNavigate }: {
                 label="Uninstall without password"
               />
             </Row>
-            <div className="muted small">
+            <div className={`ck-sub ck-foot ck-tone-${state.helper === "enabled" ? "ok" : state.helper === "requiresApproval" || state.helper === "needsReenable" ? "warn" : "off"}`} role="status">
               {state.helper === "enabled"
                 ? "On. Root-owned items go to the Trash without a password."
                 : state.helper === "requiresApproval"
@@ -331,8 +334,10 @@ export function Settings({ section, notch, onNavigate }: {
                       ? "Off after rename. Re-enable in Permissions, then approve Pulse in Login Items."
                       : "Off. Root-owned items ask for an administrator password in Finder."}
             </div>
-            <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>
-            {state.helperError ? <div className="error">{state.helperError}</div> : null}
+            <div className="ck-line ck-foot">
+              <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>
+            </div>
+            {state.helperError ? <div className="error ck-foot" role="alert">{state.helperError}</div> : null}
           </Group>
           <Group title="Launcher">
             {bool("launcherEnabled", "Enable the launcher",
@@ -340,10 +345,10 @@ export function Settings({ section, notch, onNavigate }: {
             {s.launcherEnabled ? (
               <>
                 {choice("launcherHotkey", "Shortcut")}
-                <div className="muted small">
+                <div className="ck-sub ck-foot">
                   Command space only works after Spotlight's shortcut is turned off in System Settings.
                 </div>
-                {state.launcherStatus ? <div className="error">{state.launcherStatus}</div> : null}
+                {state.launcherStatus ? <div className="error ck-foot" role="alert">{state.launcherStatus}</div> : null}
                 {bool("launcherDictionary", "Dictionary", "“define word” looks words up in the Mac's dictionaries.")}
                 {bool("launcherShortcuts", "Apple Shortcuts", "Search and run the shortcuts in the Shortcuts app.")}
                 {bool("launcherClipboard", "Clipboard history",
@@ -360,7 +365,7 @@ export function Settings({ section, notch, onNavigate }: {
           <Group title="Keyboard">
             {bool("convFnCommand", "Fn works as Command", "Fn+C/V/X/A/Z/S/F/T/W; Fn+arrows move by word")}
             {Boolean(s.convFnCommand) && state.conveniences && (
-              <div className="muted small">
+              <div className={`ck-sub ck-foot ck-tone-${state.conveniences.fnStatus === "running" ? "ok" : state.conveniences.fnStatus === "needsAccessibility" ? "warn" : "bad"}`} role="status">
                 {state.conveniences.fnStatus === "running"
                   ? "Running."
                   : state.conveniences.fnStatus === "needsAccessibility"
@@ -368,7 +373,11 @@ export function Settings({ section, notch, onNavigate }: {
                     : `Failed: ${state.conveniences.fnDetail || "unknown reason"}.`}
               </div>
             )}
-            {Boolean(s.convFnCommand) && <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>}
+            {Boolean(s.convFnCommand) && (
+              <div className="ck-line ck-foot">
+                <Button size="sm" variant="ghost" onClick={() => onNavigate("permissions")}>Manage permissions</Button>
+              </div>
+            )}
           </Group>
           <Group title="Readings">
             {bool("asksProviderOnLook", "Ask the provider every time you look",
@@ -382,7 +391,7 @@ export function Settings({ section, notch, onNavigate }: {
             <WindowManagementGroup w={state.conveniences.windowManagement} accessibility={state.conveniences.accessibility}
               s={s} set={set} />
           )}
-          <div className="muted small">Pulse notch {state.version} · built on Codenotch (MIT)</div>
+          <div className="ck-sub ck-about">Pulse notch {state.version} · built on Codenotch (MIT)</div>
         </>
       )}
     </div>
@@ -416,12 +425,12 @@ function ConveniencesGroup({ c, s, set, onNavigate }: {
       {toggle("convFinderCutPaste", "Cut and paste in Finder",
         "⌘X (or Fn X) marks the selected items; ⌘V in a Finder window moves them there. Finder asks before replacing anything.")}
       {Boolean(s.convFinderCutPaste) && c.accessibility && !c.inputMonitoring && (
-        <div className="muted small">
+        <div className="ck-sub ck-foot ck-tone-warn" role="status">
           Key shortcuts may also need Input Monitoring (System Settings, Privacy and Security).
         </div>
       )}
       {c.cutPasteResults.length > 0 && (
-        <div className="muted small">
+        <div className="ck-sub ck-foot" role="status">
           Last paste: {c.cutPasteResults.map((r) => `${r.name} — ${r.ok ? r.detail : `failed: ${r.detail}`}`).join("; ")}
         </div>
       )}
@@ -448,8 +457,8 @@ function ConveniencesGroup({ c, s, set, onNavigate }: {
             </Row>
           ))}
           <Row label="Add a running app">
-            <span className="buttons">
-              <select className="select" value={pick} onChange={(e) => setPick(e.target.value)}>
+            <span className="ck-line ck-inline">
+              <select className="ck-select" aria-label="Running app to add" value={pick} onChange={(e) => setPick(e.target.value)}>
                 <option value="">Choose…</option>
                 {addable.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
@@ -530,15 +539,15 @@ function WindowManagementGroup({ w, accessibility, s, set }: {
           label="Move windows with shortcuts" />
       </Row>
       {Boolean(s.windowManagementEnabled) && !accessibility && (
-        <div className="muted small">Shortcuts do nothing until Pulse has Accessibility permission.</div>
+        <div className="ck-sub ck-foot ck-tone-warn" role="status">Shortcuts do nothing until Pulse has Accessibility permission.</div>
       )}
       {Boolean(s.windowManagementEnabled) && [...groups.entries()].map(([id, group]) => (
-        <div key={id}>
-          <div className="muted small">{group.title}</div>
+        <div key={id} className="ck-subgroup">
+          <div className="ck-subhead">{group.title}</div>
           {group.items.map((action) => (
             <Row key={action.id} label={action.title}>
-              <span className="buttons">
-                <span className="muted small num">
+              <span className="ck-line ck-inline">
+                <span className="ck-sub ck-num ck-keys">
                   {recording === action.id ? "Press a shortcut…" : action.display || "None"}
                 </span>
                 <Toggle checked={action.shortcut !== ""} label={`${action.title} shortcut`}
@@ -552,7 +561,7 @@ function WindowManagementGroup({ w, accessibility, s, set }: {
                   {recording === action.id ? "Cancel" : "Change"}
                 </Button>
               </span>
-              {action.error && <div className="error">{action.error}</div>}
+              {action.error && <div className="error" role="alert">{action.error}</div>}
             </Row>
           ))}
         </div>
@@ -584,15 +593,16 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
   return (
     <Group title="Logins Pulse reads (it never signs in itself)">
       {accounts.map((a, i) => (
-        <div key={a.id} className="account">
-          <div className="account-main">
-            <div className="account-name">
-              {a.name}
+        <div key={a.id} className="ck-account">
+          <div className="ck-text">
+            <div className="ck-account-name">
+              <strong>{a.name}</strong>
+              <span className={`ck-status ck-status-${a.connected ? "granted" : "off"}`}>{a.connected ? "Shown" : "Hidden"}</span>
               {a.refusedAccess && <Badge tone="warn">Access refused</Badge>}
               {a.needsRenewal && <Badge tone="warn">Sign-in needed</Badge>}
             </div>
-            <div className="muted small">{a.summary ?? a.signInExplanation}</div>
-            <div className="buttons">
+            <div className="ck-sub">{a.summary ?? a.signInExplanation}</div>
+            <div className="ck-line ck-account-actions">
               {!a.summary && a.signInTitle && (
                 <Button size="sm" variant="secondary" onClick={() => send({ command: "signIn", provider: a.id })}>{a.signInTitle}</Button>
               )}
@@ -605,10 +615,12 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
               )}
             </div>
           </div>
-          <div className="account-side">
-            <span className="order">
-              <button className="mini" disabled={i === 0} onClick={() => move(a.id, -1)} aria-label="Move up">↑</button>
-              <button className="mini" disabled={i === accounts.length - 1} onClick={() => move(a.id, 1)} aria-label="Move down">↓</button>
+          <div className="ck-ctl">
+            <span className="ck-order">
+              <button type="button" className="ck-mini" disabled={i === 0} onClick={() => move(a.id, -1)}
+                aria-label={`Move ${a.name} up`} title="Move up"><ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" /></button>
+              <button type="button" className="ck-mini" disabled={i === accounts.length - 1} onClick={() => move(a.id, 1)}
+                aria-label={`Move ${a.name} down`} title="Move down"><ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" /></button>
             </span>
             <Toggle checked={a.connected} onChange={(v) => send({ command: "connect", provider: a.id, value: v })} label={`Show ${a.name}`} />
           </div>
@@ -641,6 +653,17 @@ function useHubFullDiskAccess(): string | null {
   return hub;
 }
 
+function PermissionLead({ permissions }: { permissions: Permission[] }) {
+  const missing = permissions.filter((p) => p.required && p.status !== "granted").length;
+  return (
+    <div className={`ck-lead ck-tone-${missing > 0 ? "warn" : "ok"}`} role="status">
+      {missing > 0
+        ? `${missing} required permission${missing === 1 ? "" : "s"} still need${missing === 1 ? "s" : ""} approval.`
+        : "Every required permission is granted."}
+    </div>
+  );
+}
+
 /**
  * Permission rows from the notch. The hub runs as the notch's child process, so
  * the notch's Full Disk Access covers it; the hub's own probe only confirms.
@@ -666,10 +689,10 @@ function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
           : status === "off" ? "Off" : "Unknown";
         const opensSettings = fda || status === "needsApproval";
         return (
-          <div key={permission.id} className="permission-row">
+          <div key={permission.id} className="ck-permrow">
             <Row label={permission.title} note={permission.why}>
-              <span className="permission-controls">
-                <span className={`permission-status ${status}`}>{text}</span>
+              <span className="ck-ctls">
+                <span className={`ck-status ck-status-${status}`}>{text}</span>
                 <Button size="sm" variant="secondary" disabled={status === "granted"}
                   onClick={() => fda
                     ? invoke<void>("fda_request")
@@ -678,7 +701,7 @@ function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
                 </Button>
               </span>
             </Row>
-            {errors?.[permission.id] && <div className="error">{errors[permission.id]}</div>}
+            {errors?.[permission.id] && <div className="error ck-foot" role="alert">{errors[permission.id]}</div>}
           </div>
         );
       })}
@@ -745,20 +768,20 @@ function StaleGrants() {
   const failed = results?.filter((r) => !r.ok) ?? [];
 
   return (
-    <div className="permission-row">
+    <div className="ck-permrow">
       <Row label="Clean up old apps"
         note="Finds permissions still granted to apps that are no longer installed. Needs Full Disk Access to look.">
         <Button size="sm" variant="secondary" disabled={busy} onClick={scan}>
           {busy ? "Working…" : "Find old permissions"}
         </Button>
       </Row>
-      {error && <div className="error">{error}</div>}
-      {apps && apps.length === 0 && <div className="muted small">No permissions from removed apps were found.</div>}
+      {error && <div className="error ck-foot" role="alert">{error}</div>}
+      {apps && apps.length === 0 && <div className="ck-sub ck-foot" role="status">No permissions from removed apps were found.</div>}
       {bundles.map((a) => (
-        <div key={a.id} className="small">
-          <div><strong>{a.id}</strong></div>
+        <div key={a.id} className="ck-stale">
+          <strong>{a.id}</strong>
           {a.services.map((s) => (
-            <label key={s.service} style={{ display: "block", marginLeft: 12 }}>
+            <label key={s.service} className="ck-check">
               <input type="checkbox" checked={picked.has(key(a.id, s.service))}
                 onChange={() => toggle(key(a.id, s.service))} /> {s.label}
             </label>
@@ -766,22 +789,22 @@ function StaleGrants() {
         </div>
       ))}
       {bundles.length > 0 && (
-        <div className="buttons">
+        <div className="ck-line ck-foot">
           <Button size="sm" variant="secondary" disabled={busy || count === 0} onClick={() => setConfirm(true)}>
             Clear {count} selected
           </Button>
         </div>
       )}
       {paths.length > 0 && (
-        <div className="muted small">
+        <div className="ck-sub ck-foot">
           <div>These were added by file path, which macOS will not let Pulse remove. Remove each with − in the matching System Settings list:</div>
           {paths.map((a) => (
-            <div key={a.id} style={{ marginLeft: 12 }}>{a.id}: {a.services.map((s) => s.label).join(", ")}</div>
+            <div key={a.id} className="ck-indent">{a.id}: {a.services.map((s) => s.label).join(", ")}</div>
           ))}
         </div>
       )}
       {results && (
-        <div className="small">
+        <div className="ck-foot" role="status">
           <div>{cleared} cleared{failed.length > 0 ? `, ${failed.length} failed` : ""}.</div>
           {failed.map((r) => (
             <div key={key(r.id, r.service)} className="error">{r.id} ({r.service}): {r.message}</div>
@@ -803,21 +826,21 @@ function StaleGrants() {
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="group">
-      <div className="section">{title}</div>
-      <div className="group-body">{children}</div>
+    <section className="ck-sgroup">
+      <h2>{title}</h2>
+      <div className="ck-card">{children}</div>
     </section>
   );
 }
 
 function Row({ label: text, note, children }: { label: string; note?: string; children: ReactNode }) {
   return (
-    <div className="setting">
-      <div>
-        <div>{text}</div>
-        {note && <div className="muted small">{note}</div>}
+    <div className="ck-set">
+      <div className="ck-text">
+        <strong>{text}</strong>
+        {note && <div className="ck-sub">{note}</div>}
       </div>
-      <div className="setting-control">{children}</div>
+      <div className="ck-ctl">{children}</div>
     </div>
   );
 }

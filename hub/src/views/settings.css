@@ -1,0 +1,100 @@
+/* Settings pages (v2.1): grouped cards, one row per setting, local status beside the control.
+   Tokens come from the app shell and styles.css. Every class here is scoped under .ck-settings. */
+.ck-settings { overflow: auto; gap: 14px; padding: 14px 18px 18px; scroll-padding: 12px; }
+.ck-settings > * { flex: none; }
+.ck-settings :focus-visible { outline: 2px solid var(--rk-focus, var(--rk-accent)); outline-offset: 2px; border-radius: 6px; }
+
+.ck-settings .ck-sgroup { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ck-settings .ck-sgroup > h2 { margin: 0 0 0 2px; font-size: 13px; font-weight: 600; color: var(--rk-ink); }
+.ck-settings .ck-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--rk-hairline); border-radius: 12px; background: var(--rk-panel, var(--rk-fill-2)); }
+.ck-settings .ck-card > * + * { border-top: 1px solid var(--rk-hairline); }
+.ck-settings .ck-card > .ck-foot { border-top: 0; margin-top: -6px; padding: 0 14px 10px; }
+.ck-settings .ck-card > .ck-foot + .ck-set,
+.ck-settings .ck-card > .ck-foot + .ck-account,
+.ck-settings .ck-card > .ck-foot + .ck-permrow { border-top: 1px solid var(--rk-hairline); }
+
+.ck-settings .ck-sub { color: var(--rk-ink-2); font-size: 12px; line-height: 1.45; }
+.ck-settings .ck-num { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+.ck-settings .error { color: var(--rk-bad); font-size: 12px; overflow-wrap: anywhere; }
+.ck-settings > .error { padding: 8px 12px; border-radius: 8px; background: var(--rk-bad-soft); }
+
+/* Rows */
+.ck-settings .ck-set,
+.ck-settings .ck-account { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 48px; padding: 8px 14px; }
+.ck-settings .ck-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.ck-settings .ck-text > strong { font-weight: 500; color: var(--rk-ink); }
+.ck-settings .ck-ctl { flex: 0 1 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; }
+.ck-settings .ck-ctl .error { flex-basis: 100%; text-align: right; }
+.ck-settings .ck-ctl button,
+.ck-settings .ck-line button,
+.ck-settings .ck-savebar button { min-height: 32px; }
+.ck-settings .ck-ctls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.ck-settings .ck-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.ck-settings .ck-line.ck-inline { justify-content: flex-end; }
+.ck-settings .ck-line > .ck-input { flex: 1 1 140px; }
+.ck-settings .ck-line > .ck-path { flex: 1 1 200px; overflow-wrap: anywhere; }
+.ck-settings .ck-foot.ck-line { align-items: center; }
+.ck-settings .ck-stack { flex-direction: column; align-items: stretch; }
+.ck-settings .ck-stack > .ck-text { flex: none; }
+.ck-settings .ck-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ck-settings .ck-savebar { flex-wrap: nowrap; justify-content: space-between; }
+.ck-settings .ck-subgroup { display: flex; flex-direction: column; }
+.ck-settings .ck-subgroup > .ck-set { border-top: 1px solid var(--rk-hairline); }
+.ck-settings .ck-subhead { padding: 8px 14px 0; font-size: 12px; font-weight: 600; color: var(--rk-ink-2); }
+.ck-settings .ck-keys { min-width: 96px; }
+.ck-settings .ck-indent { margin-left: 12px; overflow-wrap: anywhere; }
+.ck-settings .ck-about { padding: 0 2px; }
+.ck-settings .ck-lead { padding: 8px 12px; border-radius: 8px; font-size: 12px; background: var(--rk-fill-2); color: var(--rk-ink-2); }
+.ck-settings .ck-card > .ck-lead { margin: 10px 14px; border-top: 0; }
+.ck-settings .ck-card > .ck-lead + .ck-permrow { border-top: 0; }
+.ck-settings .ck-lead.ck-tone-ok { background: var(--rk-ok-soft); color: var(--rk-ok); }
+.ck-settings .ck-lead.ck-tone-warn { background: var(--rk-warn-soft); color: var(--rk-warn); }
+.ck-settings .ck-tone-ok { color: var(--rk-ok); }
+.ck-settings .ck-tone-warn { color: var(--rk-warn); }
+.ck-settings .ck-tone-bad { color: var(--rk-bad); }
+.ck-settings .ck-lead.ck-tone-ok, .ck-settings .ck-lead.ck-tone-warn { font-weight: 500; }
+
+/* Permissions: the row's own border replaces the group's */
+.ck-settings .ck-permrow > .ck-set { border-top: 0; }
+.ck-settings .ck-permrow > .ck-foot { padding: 0 14px 10px; }
+.ck-settings .ck-stale { display: flex; flex-direction: column; gap: 2px; padding: 4px 14px; }
+.ck-settings .ck-check { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-left: 12px; cursor: pointer; }
+.ck-settings .ck-check input { width: 16px; height: 16px; accent-color: var(--rk-accent); }
+
+/* Status: always text, colour only reinforces it */
+.ck-settings .ck-status { display: inline-block; border-radius: 6px; padding: 2px 8px; font-size: 12px; line-height: 1.4; white-space: nowrap; background: var(--rk-fill-2); color: var(--rk-ink-2); border: 1px solid var(--rk-hairline); }
+.ck-settings .ck-status-granted { background: var(--rk-ok-soft); color: var(--rk-ok); border-color: transparent; }
+.ck-settings .ck-status-needsApproval { background: var(--rk-warn-soft); color: var(--rk-warn); border-color: transparent; }
+
+/* Accounts */
+.ck-settings .ck-account-name { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ck-settings .ck-account-name > strong { font-weight: 600; color: var(--rk-ink); }
+.ck-settings .ck-account-actions { margin-top: 6px; }
+.ck-settings .ck-account .ck-ctl { flex-wrap: nowrap; gap: 12px; }
+.ck-settings .ck-order { display: flex; gap: 4px; }
+.ck-settings .ck-mini { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--ck-control-line, var(--rk-hairline)); border-radius: 8px; background: var(--rk-plane); color: var(--rk-ink); cursor: pointer; }
+.ck-settings .ck-mini:hover:not(:disabled) { background: var(--rk-fill-2); }
+.ck-settings .ck-mini:disabled { opacity: 0.4; cursor: default; }
+
+/* Inputs */
+.ck-settings .ck-select,
+.ck-settings .ck-input { min-height: 32px; min-width: 0; padding: 4px 10px; border: 1px solid var(--ck-control-line, var(--rk-hairline)); border-radius: 8px; background: var(--rk-plane); color: var(--rk-ink); font: inherit; }
+.ck-settings .ck-select { min-width: 120px; max-width: 100%; padding-right: 6px; }
+.ck-settings .ck-input::placeholder { color: var(--rk-ink-3); }
+.ck-settings .ck-input-name { width: 220px; max-width: 100%; }
+.ck-settings textarea.ck-input { width: 100%; resize: vertical; line-height: 1.4; }
+.ck-settings .ck-input:focus-visible,
+.ck-settings .ck-select:focus-visible { border-color: var(--rk-accent); }
+.ck-settings .ck-slider { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.ck-settings .ck-slider input { width: 140px; accent-color: var(--rk-accent); }
+
+@media (max-width: 860px) {
+  .ck-settings { padding: 12px 14px 16px; gap: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ck-settings * { transition: none !important; animation: none !important; }
+}
+@media (forced-colors: active) {
+  .ck-settings .ck-card, .ck-settings .ck-status, .ck-settings .ck-select, .ck-settings .ck-input, .ck-settings .ck-mini { border: 1px solid CanvasText; }
+  .ck-settings :focus-visible { outline: 2px solid Highlight; }
+}

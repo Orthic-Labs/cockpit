@@ -154,14 +154,32 @@ impl NetworkRateSampler {
     }
 }
 
+/// Loopback and virtual interfaces carry traffic that a physical interface
+/// already counted (tunnels, AirDrop, bridges) or that never leaves the Mac.
+fn is_virtual_interface(name: &str) -> bool {
+    const PREFIXES: [&str; 7] = ["lo", "utun", "awdl", "llw", "bridge", "anpi", "ap"];
+    PREFIXES.iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// Aggregate sysinfo's per-interface counters without allowing integer wrap.
+/// Loopback and virtual interfaces are left out so traffic is not counted twice.
 pub fn read_network_counters() -> Observation<NetworkCounters> {
     let networks = Networks::new_with_refreshed_list();
-    if networks.list().is_empty() {
-        return Observation::unavailable("OS reported no network interfaces");
+    if networks
+        .list()
+        .keys()
+        .all(|name| is_virtual_interface(name))
+    {
+        return Observation::unavailable("OS reported no physical network interfaces");
     }
     let mut counters = NetworkCounters::default();
-    for (_name, data) in &networks {
+    for (name, data) in &networks {
+        if is_virtual_interface(name) {
+            continue;
+        }
         // `received`/`transmitted` are refresh deltas. Lifetime totals are
         // required here because this function creates a fresh Networks view.
         let Some(received) = counters.received_bytes.checked_add(data.total_received()) else {
