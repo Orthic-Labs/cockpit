@@ -44,14 +44,38 @@ fn identity() -> DeviceInfo {
     }
 }
 
+/// The fingerprint of this computer's own sharing certificate (the one the hub
+/// announces with), read from the state folder the hub keeps it in. None when
+/// the hub has never run here, in which case nothing of ours is on the network.
+fn own_fingerprint() -> Option<String> {
+    #[cfg(windows)]
+    let state = std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Pulse"));
+    #[cfg(not(windows))]
+    let state = std::env::var_os("HOME")
+        .map(|p| PathBuf::from(p).join("Library/Application Support/Pulse"));
+    let cert = std::fs::read(state?.join("localsend").join("cert.der")).ok()?;
+    Some(pulse_core::localsend::net::sha256_hex(&cert))
+}
+
 fn nearby(me: &DeviceInfo) -> Result<Vec<(Peer, DeviceInfo)>, String> {
+    // This computer's own hub answers the announcement like any device. It is
+    // dropped by identity (certificate fingerprint), not by address, so a
+    // separate LocalSend app on the same computer still shows.
+    let own = own_fingerprint();
+    let others = |h: &discovery::Heard| {
+        !own.as_deref()
+            .is_some_and(|own| own.eq_ignore_ascii_case(&h.info.fingerprint))
+    };
     let mut heard = discovery::scan(me, Duration::from_millis(2500))
         .map_err(|e| format!("Couldn't look for nearby devices: {e}"))?;
+    heard.retain(others);
     if heard.is_empty() {
         // Multicast can be lost on busy networks; ask the local hosts directly.
         let found = std::sync::Mutex::new(Vec::new());
         discovery::sweep(me, &std::sync::atomic::AtomicBool::new(false), &|device| {
-            if let Ok(mut list) = found.lock() {
+            if others(&device)
+                && let Ok(mut list) = found.lock()
+            {
                 list.push(device);
             }
         });

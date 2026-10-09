@@ -4,12 +4,21 @@
 //! never logged. A background thread polls every five minutes with back-off after a 429;
 //! unavailable readings stay unavailable (`--`), never zero. Parsing is pure and shared
 //! with nothing Win32 so it can be reasoned about on its own.
+//!
+//! The Claude ring follows the account Claude Desktop is signed into while Desktop runs
+//! (Claude Code's account otherwise). An account other than Claude Code's takes its numbers
+//! only from Desktop's own cached usage response (`desktop`), never from the Claude Code
+//! login, which describes the other account; with no fresh cached reading the ring is empty
+//! and the card says so.
 
+use crate::claude_accounts;
+use crate::desktop;
 use crate::diag;
 use crate::http;
 use crate::json::{self, Value};
 use crate::raii::hwnd_from_key;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
@@ -24,6 +33,8 @@ const CREDENTIAL_MAX_BYTES: usize = 64 * 1024;
 const RESPONSE_MAX_BYTES: usize = 512 * 1024;
 const BACKOFF_FLOOR_SECONDS: u64 = 60;
 const BACKOFF_CEILING_SECONDS: u64 = 15 * 60;
+/// `~/.claude.json` carries project history and can be large; only its `oauthAccount` is read.
+const CLAUDE_CONFIG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
@@ -62,6 +73,8 @@ pub enum Status {
     Unavailable,
     /// The saved login exists but Windows refused Pulse access to read it.
     AccessDenied,
+    /// Claude Desktop is signed into an account whose usage Desktop has not cached lately.
+    NoReading,
 }
 
 impl Status {
@@ -74,6 +87,7 @@ impl Status {
             Status::RateLimited => "Rate limited; retrying later",
             Status::Unavailable => "Unavailable",
             Status::AccessDenied => "Windows refused access to the saved login",
+            Status::NoReading => "No reading yet",
         }
     }
 }
@@ -101,6 +115,28 @@ pub struct Usage {
     pub updated: Option<u64>,
     /// Set while a limit is spent: the account is paused until `resets_at`.
     pub block: Option<Block>,
+    /// The account's name when the reading is not simply Claude Code's (Claude Desktop's).
+    pub account: Option<String>,
+    pub extras: Extras,
+}
+
+/// Codex's extra card content beyond its rate-limit windows (the Mac's "Available credits",
+/// "Plan active until" and unused-resets rows).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Extras {
+    /// The prepaid credit balance as card text: "Unlimited" or a number.
+    pub credits: Option<String>,
+    /// When the paid plan runs to (unix seconds), from the sign-in's identity token.
+    pub plan_until: Option<u64>,
+    pub resets: Option<ResetCredits>,
+}
+
+/// Unused rate-limit resets on a Codex account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResetCredits {
+    pub available: u32,
+    /// The soonest expiry still ahead (unix seconds).
+    pub next_expiry: Option<u64>,
 }
 
 /// A spent limit that pauses the account.
@@ -133,6 +169,20 @@ impl Usage {
             windows: Vec::new(),
             updated: None,
             block: None,
+            account: None,
+            extras: Extras {
+                credits: None,
+                plan_until: None,
+                resets: None,
+            },
+        }
+    }
+
+    /// One line saying where the reading stands, for the hub's account row.
+    pub fn summary(&self) -> String {
+        match (&self.account, self.status) {
+            (Some(name), Status::NoReading) => format!("No reading for {name} yet"),
+            (_, status) => status.text().to_string(),
         }
     }
 
@@ -140,7 +190,7 @@ impl Usage {
     pub fn headline(&self) -> Option<&LimitWindow> {
         self.windows
             .iter()
-            .find(|w| w.key == "session" || w.key == "primary")
+            .find(|w| w.key == "session" || w.key == "primary" || w.key == "credits")
     }
 
     /// The thin inner ring: the all-models weekly / secondary window.
@@ -158,6 +208,62 @@ impl Usage {
 
 static USAGE: Mutex<[Usage; 2]> = Mutex::new([Usage::waiting(), Usage::waiting()]);
 static STOP: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// The controller window to notify, set by `start`.
+static CONTROLLER: AtomicIsize = AtomicIsize::new(0);
+/// Until when (unix seconds) Desktop's account is watched every second instead of every three.
+static FAST_UNTIL: AtomicU64 = AtomicU64::new(0);
+/// A Claude reading is wanted now rather than at the next poll.
+static REFETCH: AtomicBool = AtomicBool::new(false);
+/// How often Desktop's account is looked at between polls, and for how long after a restart
+/// the quicker pace applies.
+const WATCH_SECONDS: u64 = 3;
+const WATCH_FAST_SECONDS: u64 = 1;
+const FAST_WINDOW_SECONDS: u64 = 60;
+
+/// The accounts the Claude reading and the hub's account list are about.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClaudeIds {
+    /// The tracked account: Desktop's while it runs, else Claude Code's.
+    pub active: Option<String>,
+    /// Claude Code's own account and the address it is signed in with.
+    pub code: Option<String>,
+    pub email: Option<String>,
+}
+
+static CLAUDE_IDS: Mutex<ClaudeIds> = Mutex::new(ClaudeIds {
+    active: None,
+    code: None,
+    email: None,
+});
+
+pub fn claude_ids() -> ClaudeIds {
+    CLAUDE_IDS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// Asks the notch to redraw from the current readings (cards included).
+pub fn notify() {
+    let key = CONTROLLER.load(Ordering::Relaxed);
+    if key != 0 {
+        let _ = unsafe {
+            PostMessageW(
+                Some(hwnd_from_key(key)),
+                MSG_USAGE_UPDATED,
+                WPARAM(0),
+                LPARAM(0),
+            )
+        };
+    }
+}
+
+/// After Claude was reopened: read the Claude usage at once, and look at Desktop's account
+/// every second for a minute (the owner may be signing in to another account).
+pub fn refetch_claude_soon() {
+    FAST_UNTIL.store(now_secs() + FAST_WINDOW_SECONDS, Ordering::Relaxed);
+    REFETCH.store(true, Ordering::Relaxed);
+}
 
 pub fn snapshot() -> [Usage; 2] {
     USAGE.lock().unwrap_or_else(PoisonError::into_inner).clone()
@@ -174,6 +280,7 @@ pub fn now_secs() -> u64 {
 
 /// Starts the polling thread. `controller_key` is the controller window to notify.
 pub fn start(controller_key: isize) {
+    CONTROLLER.store(controller_key, Ordering::Relaxed);
     let spawned = std::thread::Builder::new()
         .name("usage".into())
         .spawn(move || worker(controller_key));
@@ -204,21 +311,77 @@ fn wait(seconds: u64) -> bool {
 struct Tracker {
     consecutive_rate_limits: u32,
     backoff_until: u64,
+    /// Claude: the account the last poll was for (Desktop's while it runs, else Claude
+    /// Code's), when it was first seen to be that (unix seconds, 0 at start-up), and whether
+    /// the reading held for the previous account must be dropped by the next outcome.
+    account: Option<String>,
+    account_since: u64,
+    account_seen: bool,
+    account_changed: bool,
+    /// Claude: the last Desktop cache result that was logged, so a repeat is not.
+    note: &'static str,
+}
+
+/// What ends the wait between polls.
+enum Pause {
+    Stopped,
+    /// The poll interval ran out: every provider.
+    Due,
+    /// Claude Desktop started, quit or changed account: the Claude reading only.
+    Claude,
+}
+
+/// Waits for the next poll. Between polls Desktop's account (and whether Desktop runs) is
+/// looked at every few seconds, quicker for a minute after a restart, so a switch of account
+/// is read at once instead of at the next poll.
+fn pause() -> Pause {
+    let deadline = now_secs() + POLL_SECONDS;
+    let mut seen = desktop::signed_in_account();
+    loop {
+        let fast = now_secs() < FAST_UNTIL.load(Ordering::Relaxed);
+        if !wait(if fast {
+            WATCH_FAST_SECONDS
+        } else {
+            WATCH_SECONDS
+        }) {
+            return Pause::Stopped;
+        }
+        if REFETCH.swap(false, Ordering::Relaxed) {
+            return Pause::Claude;
+        }
+        let account = desktop::signed_in_account();
+        if account != seen {
+            return Pause::Claude;
+        }
+        seen = account;
+        if now_secs() >= deadline {
+            return Pause::Due;
+        }
+    }
 }
 
 fn worker(controller_key: isize) {
     let mut trackers = [Tracker::default(), Tracker::default()];
+    let mut only_claude = false;
     loop {
         let now = now_secs();
         let mut changed = false;
         for provider in Provider::ALL {
+            if only_claude && provider != Provider::Claude {
+                continue;
+            }
             let tracker = &mut trackers[provider.index()];
-            if now < tracker.backoff_until {
+            // Claude's back-off belongs to the usage endpoint only (`poll_claude` honours
+            // it there); Desktop's cache is local and is read regardless.
+            if now < tracker.backoff_until && provider != Provider::Claude {
                 continue;
             }
             let outcome = match provider {
-                Provider::Claude => poll_claude(now),
-                Provider::Codex => poll_codex(now),
+                Provider::Claude => poll_claude(now, tracker),
+                Provider::Codex => Some(poll_codex(now)),
+            };
+            let Some(outcome) = outcome else {
+                continue;
             };
             let next = apply_outcome(provider, tracker, outcome, now);
             let mut all = USAGE.lock().unwrap_or_else(PoisonError::into_inner);
@@ -245,8 +408,10 @@ fn worker(controller_key: isize) {
                 )
             };
         }
-        if !wait(POLL_SECONDS) {
-            return;
+        match pause() {
+            Pause::Stopped => return,
+            Pause::Due => only_claude = false,
+            Pause::Claude => only_claude = true,
         }
     }
 }
@@ -255,29 +420,68 @@ enum Outcome {
     Fresh {
         windows: Vec<LimitWindow>,
         plan: Option<String>,
+        /// Unix seconds the numbers were true.
+        updated: u64,
+        /// The account's name when it is not Claude Code's own.
+        account: Option<String>,
+        /// Whether the usage endpoint answered; its back-off state is reset only then.
+        endpoint: bool,
+        extras: Extras,
     },
     Failed(Status),
+    /// Claude Desktop's account has no usable cached reading: no windows, and never another
+    /// account's.
+    NoReading { account: String },
 }
 
 /// Folds one poll into the published reading: fresh data replaces it; a failure keeps the
-/// last good windows (dimmed by the UI) unless their reset time has passed.
+/// last good windows (dimmed by the UI) unless their reset time has passed, or unless the
+/// poll was for a different account than the last one.
 fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, now: u64) -> Usage {
-    let previous = USAGE.lock().unwrap_or_else(PoisonError::into_inner)[provider.index()].clone();
+    let changed = std::mem::take(&mut tracker.account_changed);
+    let previous = if changed {
+        Usage::waiting()
+    } else {
+        USAGE.lock().unwrap_or_else(PoisonError::into_inner)[provider.index()].clone()
+    };
     match outcome {
-        Outcome::Fresh { windows, plan } => {
-            tracker.consecutive_rate_limits = 0;
-            tracker.backoff_until = 0;
+        Outcome::Fresh {
+            windows,
+            plan,
+            updated,
+            account,
+            endpoint,
+            extras,
+        } => {
+            if endpoint {
+                tracker.consecutive_rate_limits = 0;
+                tracker.backoff_until = 0;
+            }
             let block = block_of(&windows);
             Usage {
                 status: Status::Ok,
-                plan,
+                // A cached reading carries no plan; the one already known stays.
+                plan: if endpoint { plan } else { plan.or(previous.plan) },
                 windows,
-                updated: Some(now),
+                updated: Some(updated),
                 block,
+                account,
+                extras,
             }
         }
+        Outcome::NoReading { account } => Usage {
+            status: Status::NoReading,
+            plan: None,
+            windows: Vec::new(),
+            updated: None,
+            block: None,
+            account: Some(account),
+            extras: Extras::default(),
+        },
         Outcome::Failed(status) => {
-            if status == Status::RateLimited {
+            // A 429 starts or extends the back-off. The same status passed on from inside a
+            // back-off (to drop an old account's reading) is not a new 429.
+            if status == Status::RateLimited && now >= tracker.backoff_until {
                 tracker.consecutive_rate_limits = tracker.consecutive_rate_limits.saturating_add(1);
                 tracker.backoff_until = now + backoff_seconds(tracker.consecutive_rate_limits);
             }
@@ -291,6 +495,8 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
                     .collect(),
                 updated: previous.updated,
                 block: None,
+                account: previous.account,
+                extras: previous.extras,
             }
         }
     }
@@ -366,6 +572,10 @@ fn claude_login(now: u64) -> Result<ClaudeLogin, Status> {
 struct CodexLogin {
     token: String,
     account: String,
+    /// The plan named by the identity token, used when the usage payload names none.
+    plan: Option<String>,
+    /// When the paid plan runs to (unix seconds), if that is still ahead.
+    plan_until: Option<u64>,
 }
 
 fn codex_login(now: u64) -> Result<CodexLogin, Status> {
@@ -387,12 +597,176 @@ fn codex_login(now: u64) -> Result<CodexLogin, Status> {
     if jwt_expiry(&token).is_some_and(|exp| exp <= now) {
         return Err(Status::Expired);
     }
-    Ok(CodexLogin { token, account })
+    // Identity claims (the plan and when it runs to) are labels only; the server decides access.
+    let claims = text("id_token").and_then(|id| jwt_claims(&id));
+    let auth = claims
+        .as_ref()
+        .and_then(|claims| claims.get("https://api.openai.com/auth"));
+    let plan = auth
+        .and_then(|auth| auth.get("chatgpt_plan_type"))
+        .and_then(Value::as_str)
+        .map(capitalize);
+    let plan_until = auth
+        .and_then(|auth| auth.get("chatgpt_subscription_active_until"))
+        .and_then(Value::as_str)
+        .and_then(parse_iso8601)
+        .filter(|until| *until > now);
+    Ok(CodexLogin {
+        token,
+        account,
+        plan,
+        plan_until,
+    })
 }
 
 // ------------------------------------------------------------------ polling
 
-fn poll_claude(now: u64) -> Outcome {
+/// Claude Code's own account: its id and the address it is signed in with, from the
+/// `oauthAccount` member of its global config. Only that member is scanned out of the file;
+/// nothing else in it is parsed.
+#[derive(Default)]
+struct CliAccount {
+    id: Option<String>,
+    email: Option<String>,
+}
+
+fn claude_cli_account() -> CliAccount {
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(home);
+    let found = dir.and_then(|dir| {
+        let bytes = desktop::read_bounded(&dir.join(".claude.json"), CLAUDE_CONFIG_MAX_BYTES)?;
+        let account = desktop::object_member(&bytes, "oauthAccount")?;
+        json::parse(account, CREDENTIAL_MAX_BYTES)
+    });
+    let Some(root) = found else {
+        return CliAccount::default();
+    };
+    let id = root
+        .get("accountUuid")
+        .and_then(Value::as_str)
+        .map(|id| id.trim().to_ascii_lowercase())
+        .filter(|id| desktop::is_account_id(id));
+    let email = root
+        .get("emailAddress")
+        .and_then(Value::as_str)
+        .map(|email| email.trim().to_string())
+        .filter(|email| !email.is_empty());
+    CliAccount { id, email }
+}
+
+/// What the card calls a Desktop account Claude Code is not signed into: the name chosen in
+/// the hub, else the start of its id.
+fn account_label(id: &str) -> String {
+    claude_accounts::label(id, None)
+}
+
+/// The Claude reading. The account tracked is the one Claude Desktop is signed into while it
+/// runs, else Claude Code's. When Desktop's differs from Claude Code's, the login, the usage
+/// endpoint and its back-off all describe the other account, so only Desktop's own cache can
+/// answer. `None` leaves the published reading as it is (inside the endpoint's back-off).
+fn poll_claude(now: u64, tracker: &mut Tracker) -> Option<Outcome> {
+    let cli = claude_cli_account();
+    let outcome = poll_claude_for(now, tracker, &cli)?;
+    // A fresh reading is remembered under the tracked account's own id, so the hub can show
+    // each account's last reading and the one before it is never overwritten by another's.
+    if let Outcome::Fresh {
+        windows,
+        plan,
+        updated,
+        ..
+    } = &outcome
+        && let Some(id) = tracker.account.as_deref()
+    {
+        let email = if cli.id.as_deref() == Some(id) {
+            cli.email.as_deref()
+        } else {
+            None
+        };
+        claude_accounts::record(id, email, plan.as_deref(), windows, *updated);
+    }
+    Some(outcome)
+}
+
+fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<Outcome> {
+    let desktop_account = desktop::signed_in_account();
+    let tracked = desktop_account.clone().or_else(|| cli.id.clone());
+    *CLAUDE_IDS.lock().unwrap_or_else(PoisonError::into_inner) = ClaudeIds {
+        active: tracked.clone(),
+        code: cli.id.clone(),
+        email: cli.email.clone(),
+    };
+    if !tracker.account_seen || tracker.account != tracked {
+        // Readings cached before this moment may belong to the previous account, and
+        // organizations can be shared between accounts.
+        tracker.account_since = if tracker.account_seen { now } else { 0 };
+        tracker.account_seen = true;
+        tracker.account = tracked;
+        tracker.account_changed = true;
+    }
+    if let Some(id) = desktop_account.as_deref()
+        && cli.id.as_deref() != Some(id)
+    {
+        return Some(desktop_only(id, now, tracker));
+    }
+    if now < tracker.backoff_until {
+        return tracker
+            .account_changed
+            .then_some(Outcome::Failed(Status::RateLimited));
+    }
+    let mut outcome = poll_claude_endpoint(now);
+    // Desktop runs as the same account Claude Code is signed into but the login cannot answer
+    // (typically an expired token): Desktop's cache for that account still can.
+    if let Some(id) = desktop_account.as_deref()
+        && matches!(
+            outcome,
+            Outcome::Failed(Status::Expired | Status::SignIn | Status::Unavailable)
+        )
+    {
+        let organizations = desktop::organizations(id);
+        if let Ok(reading) = desktop::cached_usage(&organizations, now, tracker.account_since) {
+            outcome = Outcome::Fresh {
+                windows: reading.windows,
+                plan: None,
+                updated: reading.captured.min(now),
+                account: None,
+                endpoint: false,
+                extras: Extras::default(),
+            };
+        }
+    }
+    Some(outcome)
+}
+
+/// The reading for a Desktop account Claude Code is not signed into: Desktop's cache or
+/// nothing, and the reason for nothing goes to the log once.
+fn desktop_only(id: &str, now: u64, tracker: &mut Tracker) -> Outcome {
+    let account = account_label(id);
+    let organizations = desktop::organizations(id);
+    match desktop::cached_usage(&organizations, now, tracker.account_since) {
+        Ok(reading) => {
+            tracker.note = "";
+            Outcome::Fresh {
+                windows: reading.windows,
+                plan: None,
+                updated: reading.captured.min(now),
+                account: Some(account),
+                endpoint: false,
+                extras: Extras::default(),
+            }
+        }
+        Err(why) => {
+            if tracker.note != why {
+                tracker.note = why;
+                diag::info("claude_desktop_cache", &[("result", why)]);
+            }
+            Outcome::NoReading { account }
+        }
+    }
+}
+
+fn poll_claude_endpoint(now: u64) -> Outcome {
     let login = match claude_login(now) {
         Ok(login) => login,
         Err(status) => return Outcome::Failed(status),
@@ -412,6 +786,10 @@ fn poll_claude(now: u64) -> Outcome {
         Ok(windows) => Outcome::Fresh {
             windows,
             plan: login.plan,
+            updated: now,
+            account: None,
+            endpoint: true,
+            extras: Extras::default(),
         },
         Err(status) => Outcome::Failed(status),
     }
@@ -434,17 +812,55 @@ fn poll_codex(now: u64) -> Outcome {
         REQUEST_TIMEOUT_MS,
     );
     let mut plan = None;
+    let mut extras = Extras {
+        credits: None,
+        plan_until: login.plan_until,
+        resets: None,
+    };
     let result = classify(response, |root| {
         plan = root
             .get("plan_type")
             .and_then(Value::as_str)
             .map(capitalize);
+        extras.credits = codex_credits_text(root);
         codex_windows(root, now)
     });
     match result {
-        Ok(windows) => Outcome::Fresh { windows, plan },
+        Ok(windows) => {
+            // Unused resets are a separate call; it is best effort and never fails the reading.
+            extras.resets = codex_reset_credits(&login, &bearer, now);
+            Outcome::Fresh {
+                windows,
+                plan: plan.or(login.plan),
+                updated: now,
+                account: None,
+                endpoint: true,
+                extras,
+            }
+        }
         Err(status) => Outcome::Failed(status),
     }
+}
+
+/// The account's unused rate-limit resets, from the same backend and sign-in as the usage.
+fn codex_reset_credits(login: &CodexLogin, bearer: &str, now: u64) -> Option<ResetCredits> {
+    let response = http::get(
+        "chatgpt.com",
+        "/backend-api/wham/rate-limit-reset-credits",
+        &[
+            ("Authorization", bearer),
+            ("ChatGPT-Account-Id", login.account.as_str()),
+            ("Accept", "application/json"),
+            ("OpenAI-Beta", "codex-1"),
+        ],
+        REQUEST_TIMEOUT_MS,
+    )
+    .ok()?;
+    if !(200..300).contains(&response.status) {
+        return None;
+    }
+    let root = json::parse(&response.body, RESPONSE_MAX_BYTES)?;
+    Some(codex_resets(&root, now))
 }
 
 /// Maps an HTTP result to windows or a status. Empty window lists are "unavailable", never
@@ -677,7 +1093,92 @@ pub fn codex_windows(root: &Value, now: u64) -> Vec<LimitWindow> {
         let keys = ("code-review", "code-review-secondary");
         push_codex_pair(&mut windows, limit, keys, Some("Code review"), now);
     }
+    // No rolling windows at all: a credit-based (Business or Team) seat, whose spend cap is
+    // the only allowance it can show.
+    if windows.is_empty()
+        && let Some(window) = codex_credit_cap(root)
+    {
+        windows.push(window);
+    }
     windows
+}
+
+/// A number the backend sends either as a JSON number or as a decimal string ("374.92").
+fn json_number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .filter(|number| number.is_finite())
+}
+
+/// The workspace spend control's cap as one window.
+fn codex_credit_cap(root: &Value) -> Option<LimitWindow> {
+    let limit = root.path(&["spend_control", "individual_limit"])?;
+    let percent = limit.get("used_percent").and_then(json_number)?;
+    Some(LimitWindow {
+        key: "credits".to_string(),
+        group: None,
+        label: "Credits".to_string(),
+        fraction: percent_to_fraction(percent),
+        resets_at: limit
+            .get("reset_at")
+            .and_then(json_number)
+            .map(|at| at as u64),
+    })
+}
+
+/// The prepaid balance as card text: "Unlimited", or the number when there is a balance (or
+/// the account says it has credits). `None` when the payload carries none.
+pub fn codex_credits_text(root: &Value) -> Option<String> {
+    let credits = root.get("credits")?;
+    if credits.get("unlimited").and_then(Value::as_bool) == Some(true) {
+        return Some("Unlimited".to_string());
+    }
+    let balance = credits.get("balance").and_then(json_number)?;
+    let has_credits = credits.get("has_credits").and_then(Value::as_bool) == Some(true);
+    if balance <= 0.0 && !has_credits {
+        return None;
+    }
+    let text = format!("{balance:.2}");
+    Some(text.trim_end_matches('0').trim_end_matches('.').to_string())
+}
+
+/// Unused resets: `available_count` is trusted even when the `credits` list is truncated; an
+/// available credit already past its expiry is not counted.
+pub fn codex_resets(root: &Value, now: u64) -> ResetCredits {
+    let items = root
+        .get("credits")
+        .and_then(Value::as_array)
+        .unwrap_or(&[]);
+    let expiries: Vec<Option<u64>> = items
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("available"))
+        .map(|item| {
+            item.get("expires_at")
+                .and_then(Value::as_str)
+                .and_then(parse_iso8601)
+        })
+        .collect();
+    let reported = root
+        .get("available_count")
+        .and_then(Value::as_f64)
+        .map(|count| count.max(0.0) as u32);
+    let expired = expiries
+        .iter()
+        .flatten()
+        .filter(|expiry| **expiry <= now)
+        .count() as u32;
+    ResetCredits {
+        available: reported
+            .unwrap_or(expiries.len() as u32)
+            .saturating_sub(expired),
+        next_expiry: expiries
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|expiry| *expiry > now)
+            .min(),
+    }
 }
 
 // ------------------------------------------------------------------ time and token helpers
@@ -770,8 +1271,30 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
 
 /// The `exp` claim (seconds) of a JWT, used only as a local expiry hint; the server decides.
 pub fn jwt_expiry(token: &str) -> Option<u64> {
+    jwt_claims(token)?
+        .get("exp")
+        .and_then(Value::as_f64)
+        .map(|e| e as u64)
+}
+
+/// The claims object of a JWT, unverified: identity labels and local hints only.
+fn jwt_claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64url_decode(payload)?;
-    let claims = json::parse(&bytes, CREDENTIAL_MAX_BYTES)?;
-    claims.get("exp").and_then(Value::as_f64).map(|e| e as u64)
+    json::parse(&bytes, CREDENTIAL_MAX_BYTES)
+}
+
+/// Calendar date (year, month 1..=12, day) of a day count since 1970-01-01.
+pub fn civil_from_days(days: i64) -> (i64, usize, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
+    let month = if shifted < 10 { shifted + 3 } else { shifted - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month as usize, day)
 }

@@ -14,11 +14,14 @@ import {
   Sparkles,
   TriangleAlert,
 } from "lucide-react";
-import { ago, api, appsApi, bytes, type CachedApps, type CleanupReport, type Status, type UpdateReport, type Volume } from "../api";
+import { ago, api, appsApi, bytes, isWindows, type CachedApps, type CleanupReport, type Status, type UpdateReport, type Volume } from "../api";
 import type { Account, Limit, NotchState } from "./Settings";
 import { systemReadings } from "./Monitor";
 import { Sparkline, levelColor } from "../components/Chart";
 import { lastMinutes, memPercent, useMetrics } from "../metrics";
+
+// The hub runs on the Mac and on Windows; the Windows machine is a PC.
+const MACHINE = isWindows ? "PC" : "Mac";
 
 type Level = "ok" | "warn" | "bad";
 
@@ -454,7 +457,7 @@ function chooseHeadline(i: HeadlineInput): Headline {
   const rest = "Open Monitor to see what is using it.";
 
   if (!i.status) {
-    return { level: "ok", title: "Reading your Mac…", reason: "Live readings appear in a moment.", actions: [] };
+    return { level: "ok", title: `Reading your ${MACHINE}…`, reason: "Live readings appear in a moment.", actions: [] };
   }
 
   const issues: { level: Level; make: () => Headline }[] = [
@@ -510,7 +513,7 @@ function chooseHeadline(i: HeadlineInput): Headline {
   if (i.available > 0) actions.push({ label: "Update apps", section: "apps" });
   return {
     level: "ok",
-    title: "Your Mac is running well",
+    title: `Your ${MACHINE} is running well`,
     reason: `${parts}: both comfortable. Storage is fine.${extras.length ? ` ${extras.join(" · ")}.` : ""}`,
     actions: actions.slice(0, 2),
   };

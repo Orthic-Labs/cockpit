@@ -7,8 +7,8 @@ const MAX_ITEMS: usize = 512;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    /// `null`, `true` and `false` (the readers never need booleans).
     Null,
+    Bool(bool),
     Number(f64),
     Text(String),
     Array(Vec<Value>),
@@ -35,6 +35,13 @@ impl Value {
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Number(n) if n.is_finite() => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(flag) => Some(*flag),
             _ => None,
         }
     }
@@ -104,8 +111,8 @@ impl Reader<'_> {
             b'{' => self.object(depth),
             b'[' => self.array(depth),
             b'"' => self.string().map(Value::Text),
-            b't' => self.literal(b"true").map(|_| Value::Null),
-            b'f' => self.literal(b"false").map(|_| Value::Null),
+            b't' => self.literal(b"true").map(|_| Value::Bool(true)),
+            b'f' => self.literal(b"false").map(|_| Value::Bool(false)),
             b'n' => self.literal(b"null").map(|_| Value::Null),
             b'-' | b'0'..=b'9' => self.number(),
             _ => None,

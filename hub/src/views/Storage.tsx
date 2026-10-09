@@ -6,6 +6,7 @@ import {
   ago,
   bytes,
   isStale,
+  isWindows,
   signedBytes,
   tone,
   type CleanupFinding,
@@ -18,6 +19,10 @@ import {
   type Volume,
 } from "../api";
 import { KINDS, kindOf, squarify } from "../chart";
+
+// Windows has the Recycle Bin and File Explorer; the Mac has the Trash and Finder.
+const TRASH = isWindows ? "Recycle Bin" : "Trash";
+const FILE_MANAGER = isWindows ? "File Explorer" : "Finder";
 import { ChromeSnapshotsLine } from "./ChromeSnapshots";
 import { DriveHealthLine, DriveHealthPanel } from "./DriveHealth";
 import { Duplicates } from "./Duplicates";
@@ -270,7 +275,7 @@ export function Storage() {
   // Double-click and Return open in Finder; ⌘C copies the path; ⌘⌫ asks to trash.
   const onRowKey = (e: ReactKeyboardEvent, row: Row) => {
     if (!actionable(row)) return;
-    const command = e.metaKey && !e.altKey && !e.ctrlKey;
+    const command = isWindows ? e.ctrlKey && !e.altKey && !e.metaKey : e.metaKey && !e.altKey && !e.ctrlKey;
     if (command && e.key.toLowerCase() === "c") {
       e.preventDefault();
       copyText(row.path);
@@ -285,11 +290,11 @@ export function Storage() {
   // Declared after the handlers above: the builder runs during render.
   const itemMenu = useContextMenu<Row>(
     (row) => [
-      { id: "finder", label: row.is_dir ? "Open in Finder" : "Reveal in Finder", icon: <FolderOpen size={13} />, run: () => showInFinder(row.path) },
+      { id: "finder", label: `${row.is_dir ? "Open" : "Reveal"} in ${FILE_MANAGER}`, icon: <FolderOpen size={13} />, run: () => showInFinder(row.path) },
       { id: "copy-path", label: "Copy path", icon: <Copy size={13} />, shortcut: "mod+c", separatorBefore: true, run: () => copyText(row.path) },
       { id: "copy-name", label: "Copy name", icon: <Copy size={13} />, run: () => copyText(row.name) },
       { id: "move", label: "Move to…", icon: <FolderInput size={13} />, separatorBefore: true, run: () => moveItem(row) },
-      { id: "trash", label: "Move to Trash", icon: <Trash2 size={13} />, shortcut: "mod+Backspace", danger: true, separatorBefore: true, run: () => askTrash(row) },
+      { id: "trash", label: `Move to ${TRASH}`, icon: <Trash2 size={13} />, shortcut: "mod+Backspace", danger: true, separatorBefore: true, run: () => askTrash(row) },
     ],
     "Item actions",
   );
@@ -398,7 +403,7 @@ export function Storage() {
       if (result.activity_id) {
         setUndo({
           id: result.activity_id,
-          text: `Moved ${bytes(result.moved_bytes)} to the Trash${result.skipped.length ? `; ${result.skipped.length} skipped` : ""}.`,
+          text: `Moved ${bytes(result.moved_bytes)} to the ${TRASH}${result.skipped.length ? `; ${result.skipped.length} skipped` : ""}.`,
         });
       } else if (result.skipped.length) {
         setError(result.skipped.map((s) => `${shortPath(s.path)}: ${s.reason}`).join("\n"));
@@ -562,9 +567,9 @@ export function Storage() {
       )}
       {folder?.needs_access && !results && (
         <div className="st-notice st-notice--warn" role="status">
-          <span>Some folders couldn't be read. Grant Full Disk Access to include them.</span>
+          <span>{isWindows ? "Some folders couldn't be read. Allow file system access in Windows Settings to include them." : "Some folders couldn't be read. Grant Full Disk Access to include them."}</span>
           <Button size="sm" onClick={() => api.openFullDiskAccess()}>
-            Open Full Disk Access
+            {isWindows ? "Open File system settings" : "Open Full Disk Access"}
           </Button>
         </div>
       )}
@@ -622,7 +627,7 @@ export function Storage() {
                         {bytes(g.bytes)}
                       </span>
                       <Button size="sm" onClick={() => setPending({ label: g.label, items: g.items })} disabled={busy}>
-                        Move to Trash
+                        Move to {TRASH}
                       </Button>
                     </span>
                     {expanded && (
@@ -640,7 +645,7 @@ export function Storage() {
                               {bytes(f.bytes)}
                             </span>
                             <Button size="sm" variant="ghost" onClick={() => setPending({ label: f.name, items: [f] })} disabled={busy}>
-                              Move to Trash
+                              Move to {TRASH}
                             </Button>
                           </div>
                         ))}
@@ -804,9 +809,9 @@ export function Storage() {
 
       {pending && (
         <ConfirmDialog
-          title={pending.items.length === 1 ? `Move ${pending.items[0].name} to the Trash?` : `Move ${pending.items.length} items to the Trash?`}
-          description={`${pending.items.length > 1 ? `${pending.label}: ` : ""}${plural(pending.items.length, "item")}, ${bytes(pending.items.reduce((s, f) => s + f.bytes, 0))} will move to the Trash. Nothing is deleted: you can put it back, or empty the Trash yourself.`}
-          confirmLabel="Move to Trash"
+          title={pending.items.length === 1 ? `Move ${pending.items[0].name} to the ${TRASH}?` : `Move ${pending.items.length} items to the ${TRASH}?`}
+          description={`${pending.items.length > 1 ? `${pending.label}: ` : ""}${plural(pending.items.length, "item")}, ${bytes(pending.items.reduce((s, f) => s + f.bytes, 0))} will move to the ${TRASH}. Nothing is deleted: you can put it back, or empty the ${TRASH} yourself.`}
+          confirmLabel={`Move to ${TRASH}`}
           onConfirm={confirmMove}
           onCancel={() => setPending(null)}
         />
@@ -814,9 +819,9 @@ export function Storage() {
 
       {itemTrash && (
         <ConfirmDialog
-          title={`Move ${itemTrash.row.name} to the Trash?`}
-          description={`${shortPath(itemTrash.row.path)}, ${bytes(itemTrash.row.bytes)} will move to the Trash. Nothing is deleted: you can put it back, or empty the Trash yourself.`}
-          confirmLabel="Move to Trash"
+          title={`Move ${itemTrash.row.name} to the ${TRASH}?`}
+          description={`${shortPath(itemTrash.row.path)}, ${bytes(itemTrash.row.bytes)} will move to the ${TRASH}. Nothing is deleted: you can put it back, or empty the ${TRASH} yourself.`}
+          confirmLabel={`Move to ${TRASH}`}
           onConfirm={confirmItemTrash}
           onCancel={() => setItemTrash(null)}
         />
@@ -825,8 +830,8 @@ export function Storage() {
       {itemMove && (
         <ConfirmDialog
           title={`Copy ${itemMove.row.name} to another drive?`}
-          description={`${shortPath(itemMove.destination)} is on another drive, so ${itemMove.row.name} is copied to ${shortPath(itemMove.target)}, and the original moves to the Trash.`}
-          confirmLabel="Copy and move to Trash"
+          description={`${shortPath(itemMove.destination)} is on another drive, so ${itemMove.row.name} is copied to ${shortPath(itemMove.target)}, and the original moves to the ${TRASH}.`}
+          confirmLabel={`Copy and move to ${TRASH}`}
           onConfirm={confirmItemMove}
           onCancel={() => setItemMove(null)}
         />

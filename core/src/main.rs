@@ -87,7 +87,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     arguments.retain(|a| a != "--json");
     if arguments.is_empty() || ["help", "--help", "-h"].contains(&arguments[0].as_str()) {
         println!(
-            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]\nsend <file|folder…> --to <alias> [--json]  (nearby device, LocalSend protocol; it must accept)\nsend --list [--json]\nbridge peers [--local] [--json]|send \"<chat> on <device>\" \"<text>\" [--from CHAT] [--json]|link <device> <ssh-host> [--pulse PATH]|unlink <device>|status [--json]|install [--claude] [--codex] [--dry-run]|uninstall|inbox [--from CHAT] [--json]  (message AI chats on linked computers over ssh through Pulse)\nclaude accounts|known|backups [--json]\nclaude auto [--json]  (sync every account on disk, minus excluded ones, when Claude is closed)\nclaude include|exclude <account-id> [--json]\nclaude sync --dry-run|--apply [--json]  (merges Code-session metadata across Claude Desktop accounts; Claude must be closed)\nclaude restore <backup-id> [--force] [--json]\napps list [--json]\napps updates [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. Cleanup & process actions await feasibility & safety gates."
+            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]  (the notch's last published Claude/Codex limits, read from notch-state.json; no credentials)\nsend <file|folder…> --to <alias> [--json]  (nearby device, LocalSend protocol; it must accept)\nsend --list [--json]\nbridge peers [--local] [--json]|send \"<chat> on <device>\" \"<text>\" [--from CHAT] [--json]|link <device> <ssh-host> [--pulse PATH]|unlink <device>|status [--json]|install [--claude] [--codex] [--dry-run]|uninstall|inbox [--from CHAT] [--json]  (message AI chats on linked computers over ssh through Pulse)\nclaude accounts|known|backups [--json]\nclaude auto [--json]  (sync every account on disk, minus excluded ones, when Claude is closed)\nclaude include|exclude <account-id> [--json]\nclaude sync --dry-run|--apply [--json]  (merges Code-session metadata across Claude Desktop accounts; Claude must be closed)\nclaude restore <backup-id> [--force] [--json]\napps list [--json]\napps updates [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. On Windows apps list, apps updates (winget; checked live, can take a few minutes) and apps detail (registry path or exact app name; no leftover list) work, and apps uninstall is done in the hub's Apps page. Cleanup & process actions await feasibility & safety gates."
         );
         return Ok(());
     }
@@ -619,11 +619,8 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         }
         "usage" => {
             require_empty(&arguments)?;
-            emit(
-                json!({"claude":{"value":null,"state":"unavailable","source":null,"observed_at":null},"codex":{"value":null,"state":"unavailable","source":null,"observed_at":null},"reason":"notch provider readings are available in native app; CLI unavailable; credentials are not inspected by CLI"}),
-                machine,
-                View::Usage,
-            );
+            // The readings the notch published to notch-state.json; no credential is read.
+            emit(pulse_core::usage_snapshot::read(), machine, View::Usage);
         }
         "apps" => return apps(arguments, machine),
         "plan" | "apply" | "quit" | "force-quit" | "uninstall-plan" => {
@@ -1124,9 +1121,104 @@ fn resolve_app(target: &str) -> Result<String, String> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn apps(_arguments: Vec<String>, _machine: bool) -> Result<(), CliError> {
     Err("apps is not available on this platform yet".into())
+}
+
+#[cfg(windows)]
+fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
+    use pulse_core::apps_windows::{self, Installed, updates};
+    if arguments.is_empty() {
+        return Err("apps requires list, updates, detail or uninstall".into());
+    }
+    let sub = arguments.remove(0);
+    match sub.as_str() {
+        "list" => {
+            require_empty(&arguments)?;
+            let apps: Vec<_> = apps_windows::read_installed()?
+                .into_iter()
+                .map(|app| app.entry)
+                .collect();
+            emit_inspection(json!({"apps": apps}), machine);
+        }
+        "updates" => {
+            require_empty(&arguments)?;
+            let installed = apps_windows::read_installed()?;
+            let found = updates::check(&installed, &|_: &updates::AppUpdate| {})?;
+            if machine {
+                println!(
+                    "{}",
+                    json!({"checked_at": found.checked_at, "apps": found.apps})
+                );
+            } else {
+                for row in &found.apps {
+                    println!(
+                        "{}: update available {} (installed {}, via {})",
+                        row.name,
+                        row.latest_version.as_deref().unwrap_or("?"),
+                        row.installed_version.as_deref().unwrap_or("?"),
+                        row.source
+                    );
+                }
+                println!(
+                    "{} update(s) available across {} apps",
+                    found.apps.len(),
+                    installed.len()
+                );
+            }
+        }
+        "detail" => {
+            if arguments.len() != 1 {
+                return Err("apps detail requires exactly one <app-path|name>".into());
+            }
+            let target = arguments[0].as_str();
+            let installed = apps_windows::read_installed()?;
+            let by_path: Vec<&Installed> = installed
+                .iter()
+                .filter(|a| a.entry.path.eq_ignore_ascii_case(target))
+                .collect();
+            let matches: Vec<&Installed> = if by_path.is_empty() {
+                installed
+                    .iter()
+                    .filter(|a| a.entry.name.eq_ignore_ascii_case(target))
+                    .collect()
+            } else {
+                by_path
+            };
+            let app = match matches.as_slice() {
+                [one] => *one,
+                [] => return Err(format!("no installed app has the path or name {target}").into()),
+                many => {
+                    return Err(format!(
+                        "ambiguous name {target}; pass one of these paths: {}",
+                        many.iter()
+                            .map(|a| a.entry.path.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                    .into());
+                }
+            };
+            emit_inspection(
+                json!({
+                    "app": app.entry,
+                    "publisher": app.publisher,
+                    "uninstall_command": app.uninstall,
+                    "items": [],
+                    "background": [],
+                    "receipts": [],
+                    "note": "leftover folders are listed in the Pulse hub's Apps page, not here",
+                }),
+                machine,
+            );
+        }
+        "uninstall" => {
+            return Err("apps uninstall is not available from the command line on Windows; use the Pulse hub's Apps page, which runs the app's own uninstaller and moves chosen leftovers to the Recycle Bin after re-checking them".into());
+        }
+        other => return Err(format!("unknown apps command: {other}").into()),
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

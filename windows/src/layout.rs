@@ -120,8 +120,22 @@ pub const SHAPE_LENGTH: f32 =
 /// Settings orb arc: gap inside the ear, and stroke width.
 pub const ORB_GAP: f32 = 27.0 * DESIGN;
 pub const ORB_STROKE: f32 = 18.0 * DESIGN;
-/// How far the orb arc's round cap reaches past the end of the shape.
-pub const ORB_OVERHANG: f32 = ORB_STROKE / 2.0;
+/// Settings button (the arc filled in, with a gear): the Mac's 124 design px disc, trimmed to
+/// 19 DIPs so it stays inside the body's depth, centred on the flare's centre of curvature
+/// at the end of the shape. The pointer zone around it reaches 8 DIPs further.
+pub const ORB_RADIUS: f32 = 19.0;
+pub const ORB_ZONE: f32 = ORB_RADIUS + 8.0;
+/// The six dots that move the notch (two lines along the stack, three across): dot size,
+/// centre to centre pitch and the gap from the disc, in the Mac's design frame.
+pub const GRIP_DOT: f32 = 19.0 * DESIGN;
+pub const GRIP_PITCH: f32 = 31.0 * DESIGN;
+pub const GRIP_GAP: f32 = 13.0 * DESIGN;
+/// The grip's length along the stack, and from the orb's centre to the grip's.
+pub const GRIP_LENGTH: f32 = GRIP_PITCH + GRIP_DOT;
+pub const GRIP_REACH: f32 = ORB_RADIUS + GRIP_GAP + GRIP_LENGTH / 2.0;
+/// Room the window keeps past the end of the shape for the orb's arc cap and, while it is
+/// out, the grip and its pointer zone.
+pub const ORB_OVERHANG: f32 = GRIP_REACH + GRIP_LENGTH / 2.0 + 3.0;
 /// Gap between the notch and a hover card.
 pub const CARD_GAP: f32 = 6.0;
 /// Folded pill: depth (band included) and length along the edge, in logical pixels. It
@@ -163,7 +177,7 @@ fn open_depth(dpi: u32) -> i32 {
 }
 
 /// Notch body size in device pixels on a top or bottom edge: the whole shape, ears
-/// included, plus the orb arc's cap.
+/// included, plus the room past its end for the settings button and the move grip.
 pub fn body_size(dpi: u32) -> (i32, i32) {
     let s = scale(dpi);
     let along = ((SHAPE_LENGTH + ORB_OVERHANG) * s).round() as i32;
@@ -335,6 +349,45 @@ pub fn ring_center(edge: Edge, index: usize, dpi: u32) -> (f32, f32) {
     to_canvas(edge, along, depth, open_depth(dpi) as f32)
 }
 
+/// Which part of the settings handle (the button and the grip beside it) a point is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Handle {
+    /// The settings button.
+    Orb,
+    /// The six dots that move the notch.
+    Grip,
+}
+
+/// Where a point of the open notch lies relative to the settings button's centre, in DIPs:
+/// along the stack (positive away from the shape) and in depth (positive away from the screen
+/// edge). `x` and `y` are notch-local device pixels on `edge`.
+fn orb_offset(edge: Edge, x: i32, y: i32, dpi: u32) -> (f32, f32) {
+    let s = scale(dpi);
+    let across = open_depth(dpi) as f32;
+    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+    let (along, depth) = match edge {
+        Edge::Top => (px, py),
+        Edge::Bottom => (px, across - py),
+        Edge::Left => (py, px),
+        Edge::Right => (py, across - px),
+    };
+    ((along - SHAPE_LENGTH * s) / s, (depth - CURL * s) / s)
+}
+
+/// The settings handle under a point in notch-local device pixels on `edge`. The button's
+/// zone is always live (its resting arc sits in it); the grip's only while it is `grip_out`.
+pub fn handle_at(edge: Edge, x: i32, y: i32, dpi: u32, grip_out: bool) -> Option<Handle> {
+    let (along, depth) = orb_offset(edge, x, y, dpi);
+    if grip_out
+        && along >= ORB_RADIUS + GRIP_GAP / 2.0
+        && along <= ORB_OVERHANG
+        && depth.abs() <= GRIP_PITCH + GRIP_DOT / 2.0 + 3.0
+    {
+        return Some(Handle::Grip);
+    }
+    (along.hypot(depth) <= ORB_ZONE).then_some(Handle::Orb)
+}
+
 /// Cell under a point in notch-local device pixels on `edge`.
 pub fn cell_at_for(edge: Edge, x: i32, y: i32, dpi: u32) -> Option<usize> {
     let (width, height) = body_size_for(edge, dpi);
@@ -343,6 +396,10 @@ pub fn cell_at_for(edge: Edge, x: i32, y: i32, dpi: u32) -> Option<usize> {
     }
     let s = scale(dpi);
     let along = (if edge.is_vertical() { y } else { x }) as f32;
+    // Past the end of the shape, and in the settings button's zone, there is no ring.
+    if along >= SHAPE_LENGTH * s || handle_at(edge, x, y, dpi, false).is_some() {
+        return None;
+    }
     let first_edge = (CURL + PAD_ALONG - SPACING / 2.0) * s;
     let index = ((along - first_edge) / ((RING + SPACING) * s)).floor();
     Some((index.max(0.0) as usize).min(CELL_COUNT - 1))

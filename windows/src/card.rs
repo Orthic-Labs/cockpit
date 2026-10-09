@@ -7,7 +7,7 @@ use crate::glyphs::{Symbol, Tile};
 use crate::layout::{self, Cell, Edge};
 use crate::send::{self, Panel};
 use crate::sensors::{Machine, Reading, size_text};
-use crate::usage::{Status, Usage};
+use crate::usage::{Extras, Status, Usage};
 
 /// The icon beside a card's title (the Mac's provider glyph); drawn by `render.rs`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,6 +63,10 @@ pub enum Head {
     Close,
     /// A bare small cross with no disc (the alert card's dismiss).
     Dismiss,
+    /// A check: the Claude restart finished.
+    Done,
+    /// A red mark: the Claude restart failed (the reason is a line on the card).
+    Failed,
 }
 
 /// One pill of a button row.
@@ -109,8 +113,17 @@ impl Live {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
-    /// Label on the left, quieter value on the right. An empty value makes it a button.
+    /// Label on the left, quieter value on the right (a device on the Send card is one such
+    /// row with an action).
     Pair { label: String, value: String },
+    /// A full-width button plate, the Mac's "Copy last" and "Paste clipboard" rows: an optional
+    /// symbol, the label, and a quieter detail at the right. Without a detail the symbol and
+    /// label sit in the plate's middle. Whatever does not fit is cut with an ellipsis.
+    Button {
+        symbol: Option<Symbol>,
+        label: String,
+        detail: String,
+    },
     /// One metered window: label and trailing text on a line, a bar (none without a share),
     /// then the summary line.
     Meter {
@@ -302,7 +315,34 @@ pub fn panel_for(
         };
     }
     let content = content_for(cell, machine, usage, now);
-    (Panel::new(content), false)
+    let mut panel = Panel::new(content);
+    if cell == Cell::Claude {
+        claude_restart_button(&mut panel);
+    }
+    (panel, false)
+}
+
+/// The Claude card's small round "Restart Claude and sync chats" button, right of its header:
+/// a refresh arrow, a spinner while it runs, a check for about two seconds, a red mark (with
+/// the reason as a line on the card) when it failed. Clicking it is handled by the notch.
+fn claude_restart_button(panel: &mut Panel) {
+    use crate::claude_restart::{self, Phase};
+    let press = Some(send::Action::Refresh);
+    match claude_restart::phase() {
+        Phase::Idle => panel.heads(vec![(Head::Refresh, press)]),
+        Phase::Running => panel.heads(vec![(Head::Scanning, None)]),
+        Phase::Done => panel.heads(vec![(Head::Done, press)]),
+        Phase::Failed(reason) => {
+            panel.heads(vec![(Head::Failed, press)]);
+            panel.row(
+                Row::Tinted {
+                    text: reason,
+                    tone: Tone::Critical,
+                },
+                None,
+            );
+        }
+    }
 }
 
 fn content_for(cell: Cell, machine: Option<&Machine>, usage: &[Usage; 2], now: u64) -> CardContent {
@@ -317,8 +357,9 @@ fn content_for(cell: Cell, machine: Option<&Machine>, usage: &[Usage; 2], now: u
 }
 
 /// The System card, row for row as the Mac's: CPU and memory pressure as bars with a detail
-/// line, then GPU, network and fans as one-line pairs. A reading this PC cannot give says so
-/// ("Unavailable on this PC"); one not sampled yet says "Measuring\u{2026}".
+/// line, then GPU, network and fans as one-line pairs, and the temperature at the title's
+/// right. A reading this PC cannot give is left out, as on the Mac; one not sampled yet says
+/// "Measuring\u{2026}".
 pub fn system(machine: Option<&Machine>) -> CardContent {
     let mut rows = Vec::new();
     let mut accessory = None;
@@ -355,10 +396,12 @@ pub fn system(machine: Option<&Machine>) -> CardContent {
                     "Memory readings unavailable".into(),
                 )),
             }
-            rows.push(pair("GPU", &m.gpu, |share| {
+            // The Mac leaves out a sensor it cannot read, and so does this card; only a
+            // reading still being taken says so.
+            rows.extend(pair("GPU", &m.gpu, |share| {
                 format!("{} busy", percent_text(Some(*share)))
             }));
-            rows.push(pair("Network", &m.network, |rate| {
+            rows.extend(pair("Network", &m.network, |rate| {
                 format!(
                     "\u{2193} {} \u{b7} \u{2191} {} \u{b7} {}",
                     rate_text(rate.down),
@@ -366,15 +409,20 @@ pub fn system(machine: Option<&Machine>) -> CardContent {
                     rate.kind
                 )
             }));
-            rows.push(pair("Fans", &m.fans, |fans| {
+            rows.extend(pair("Fans", &m.fans, |fans| {
                 let speeds: Vec<String> = fans.iter().map(u32::to_string).collect();
                 format!("{} rpm", speeds.join(" / "))
             }));
-            // The Mac shows the CPU temperature at the title's right; with no reading the
-            // row says so instead of leaving it out.
-            match &m.temperature {
-                Reading::Value(degrees) => accessory = Some(format!("{} \u{b0}C", degrees.round())),
-                other => rows.push(pair("Temperature", other, |_: &f32| String::new())),
+            // The Mac shows the CPU temperature at the title's right; here it is whatever
+            // Windows lets an unelevated process read, each named by its source.
+            if let Reading::Value(temps) = &m.temperature {
+                let text: Vec<String> = temps
+                    .iter()
+                    .map(|t| format!("{} {} \u{b0}C", t.source, t.celsius.round()))
+                    .collect();
+                if !text.is_empty() {
+                    accessory = Some(text.join(" \u{b7} "));
+                }
             }
         }
         None => rows.push(Row::Note("Waiting for the first sample".into())),
@@ -400,16 +448,17 @@ fn pressure_word(machine: &Machine) -> &'static str {
     }
 }
 
-/// A label with its value on the right, or why there is none.
-fn pair<T>(label: &str, reading: &Reading<T>, text: impl Fn(&T) -> String) -> Row {
-    Row::Pair {
+/// A label with its value on the right; nothing for a reading this PC cannot give.
+fn pair<T>(label: &str, reading: &Reading<T>, text: impl Fn(&T) -> String) -> Option<Row> {
+    let value = match reading {
+        Reading::Value(value) => text(value),
+        Reading::Pending => "Measuring\u{2026}".to_string(),
+        Reading::Unavailable => return None,
+    };
+    Some(Row::Pair {
         label: label.to_string(),
-        value: match reading {
-            Reading::Value(value) => text(value),
-            Reading::Pending => "Measuring\u{2026}".to_string(),
-            Reading::Unavailable => "Unavailable on this PC".to_string(),
-        },
-    }
+        value,
+    })
 }
 
 /// A transfer rate the way the Mac words it: "1.2 MB/s", "180 KB/s".
@@ -472,7 +521,7 @@ pub fn disks(machine: Option<&Machine>, health: &Report) -> CardContent {
 }
 
 /// What a provider card says when it has no windows to show, and what fixes it.
-fn status_message(name: &str, status: Status) -> String {
+fn status_message(name: &str, status: Status, account: Option<&str>) -> String {
     let tool = if name == "Claude" {
         "Claude Code"
     } else {
@@ -491,11 +540,71 @@ fn status_message(name: &str, status: Status) -> String {
         Status::Unavailable => {
             "Couldn't read usage \u{2014} the service is unavailable".to_string()
         }
+        // Claude Desktop is signed into an account with no recent cached reading; no other
+        // account's numbers stand in for it.
+        Status::NoReading => match account {
+            Some(account) => format!("No reading for {account} yet"),
+            None => "No reading yet".to_string(),
+        },
         // Says what happened and what fixes it, not "sign in" (the login is there).
         Status::AccessDenied => format!(
             "Windows refused Pulse access to {name}'s saved login. Fix the file's permissions to read usage."
         ),
     }
+}
+
+/// "Oct 9, 2026" for a Unix time in the local zone.
+fn date_text(secs: u64, utc_offset_secs: i64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = (secs as i64 + utc_offset_secs).div_euclid(86_400);
+    let (year, month, day) = crate::usage::civil_from_days(days);
+    format!("{} {day}, {year}", MONTHS[month - 1])
+}
+
+/// The Codex credit balance and plan-renewal rows; each is left out when there is no data.
+fn codex_detail_rows(extras: &Extras, utc_offset_secs: i64) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if let Some(credits) = &extras.credits {
+        rows.push(Row::Pair {
+            label: "Available credits".to_string(),
+            value: credits.clone(),
+        });
+    }
+    if let Some(until) = extras.plan_until {
+        rows.push(Row::Pair {
+            label: "Plan active until".to_string(),
+            value: date_text(until, utc_offset_secs),
+        });
+    }
+    rows
+}
+
+/// The Mac's "Unused resets" section: shown only while some are available.
+fn reset_rows(extras: &Extras, now: u64, utc_offset_secs: i64) -> Vec<Row> {
+    let Some(resets) = extras.resets.filter(|resets| resets.available > 0) else {
+        return Vec::new();
+    };
+    let count = match resets.available {
+        1 => "1 unused reset".to_string(),
+        many => format!("{many} unused resets"),
+    };
+    let mut rows = vec![Row::Pair {
+        label: "Unused resets".to_string(),
+        value: count,
+    }];
+    if let Some(expiry) = resets.next_expiry.filter(|expiry| *expiry > now) {
+        rows.push(Row::Pair {
+            label: if resets.available > 1 {
+                "Next expires".to_string()
+            } else {
+                "Expires".to_string()
+            },
+            value: date_text(expiry, utc_offset_secs),
+        });
+    }
+    rows
 }
 
 fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
@@ -512,9 +621,20 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
         }));
     }
     if usage.windows.is_empty() {
-        rows.push(Row::Note(status_message(name, usage.status)));
+        rows.push(Row::Note(status_message(
+            name,
+            usage.status,
+            usage.account.as_deref(),
+        )));
     }
+    let mut details_shown = false;
     for window in &usage.windows {
+        // The Mac's order: the account's own windows, then its credit and plan rows, then
+        // each model's or feature's box.
+        if window.group.is_some() && !details_shown {
+            rows.extend(codex_detail_rows(&usage.extras, offset));
+            details_shown = true;
+        }
         let (used, left) = halves(window.fraction);
         let meter = Row::Meter {
             label: window.label.clone(),
@@ -541,6 +661,10 @@ fn provider(name: &str, usage: &Usage, now: u64) -> CardContent {
             rows.push(meter);
         }
     }
+    if !details_shown {
+        rows.extend(codex_detail_rows(&usage.extras, offset));
+    }
+    rows.extend(reset_rows(&usage.extras, now, offset));
     // Only worth saying when the numbers are not current: a remembered reading has to be
     // dated, or it quietly passes itself off as live.
     let reading_age = if usage.status == Status::Ok || usage.windows.is_empty() {

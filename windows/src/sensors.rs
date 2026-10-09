@@ -6,12 +6,17 @@
 //! The System card's extra rows (GPU busy share from the PDH "GPU Engine" counters, network
 //! rates from `GetIfTable2` over physical adapters) are sampled on their own background
 //! thread, because the GPU counter needs two collections a second apart. The UI thread only
-//! copies the latest result. Windows offers no CPU temperature or fan speed without a kernel
-//! driver or administrator rights, so those are reported as unavailable, never estimated.
+//! copies the latest result. The one temperature Windows gives an unelevated process is the
+//! NVIDIA GPU's, read through the driver's `nvml.dll` (loaded from System32, handles cached,
+//! sampled every few seconds). CPU zones (`MSAcpi_ThermalZoneTemperature`, the "Thermal Zone
+//! Information" counters) are absent or need administrator rights on the PC probed, and
+//! `Win32_Fan` carries no speed, so a CPU temperature or fan speed is never estimated: the
+//! reading stays unavailable and the card leaves it out.
 
 use crate::diag::{self, FailureLatch, Transition};
 use crate::lifecycle::cpu_fraction;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::{Mutex, Once, PoisonError};
 use std::time::{Duration, Instant};
@@ -27,9 +32,12 @@ use windows::Win32::System::Performance::{
     PDH_NO_DATA, PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData,
     PdhGetFormattedCounterArrayW, PdhOpenQueryW,
 };
+use windows::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::GetSystemTimes;
-use windows::core::{Error, PCWSTR};
+use windows::core::{Error, PCWSTR, s, w};
 
 /// `GetDriveTypeW` result for a fixed (non-removable, non-network) drive.
 const DRIVE_FIXED: u32 = 3;
@@ -89,6 +97,13 @@ pub struct NetRate {
     pub kind: String,
 }
 
+/// One temperature and where it was read, so the card can say whose it is ("GPU 57 °C").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Temp {
+    pub source: &'static str,
+    pub celsius: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Machine {
     /// Share of all logical processors busy since the previous sample.
@@ -100,9 +115,10 @@ pub struct Machine {
     /// Busiest adapter's 3D engine share, 0..=1.
     pub gpu: Reading<f32>,
     pub network: Reading<NetRate>,
-    /// Degrees Celsius; never available from a live reader on Windows.
-    pub temperature: Reading<f32>,
-    /// Fan speeds in rpm; never available from a live reader on Windows.
+    /// Every temperature an unelevated process can read (the NVIDIA GPU's); `Value` is never
+    /// empty. There is no CPU temperature without administrator rights or a kernel driver.
+    pub temperature: Reading<Vec<Temp>>,
+    /// Fan speeds in rpm; Windows reports none (`Win32_Fan` has no speed field filled).
     pub fans: Reading<Vec<u32>>,
 }
 
@@ -200,7 +216,7 @@ impl Sampler {
             drives,
             gpu: extras.gpu,
             network: extras.network,
-            temperature: Reading::Unavailable,
+            temperature: extras.temperature,
             fans: Reading::Unavailable,
         }
     }
@@ -210,11 +226,13 @@ impl Sampler {
 struct Extras {
     gpu: Reading<f32>,
     network: Reading<NetRate>,
+    temperature: Reading<Vec<Temp>>,
 }
 
 static EXTRAS: Mutex<Extras> = Mutex::new(Extras {
     gpu: Reading::Pending,
     network: Reading::Pending,
+    temperature: Reading::Pending,
 });
 static EXTRAS_START: Once = Once::new();
 
@@ -232,6 +250,7 @@ fn start_extras() {
             let mut extras = EXTRAS.lock().unwrap_or_else(PoisonError::into_inner);
             extras.gpu = Reading::Unavailable;
             extras.network = Reading::Unavailable;
+            extras.temperature = Reading::Unavailable;
         }
     });
 }
@@ -239,7 +258,17 @@ fn start_extras() {
 fn extras_loop() {
     let mut gpu_latch = FailureLatch::new();
     let mut net_latch = FailureLatch::new();
+    let mut temp_latch = FailureLatch::new();
     let mut previous: Option<(Instant, Vec<Iface>)> = None;
+    // The GPU's thermal sensor moves slowly: asking every few seconds is plenty and keeps a
+    // sleeping hybrid-graphics GPU from being poked on every pass.
+    let nvml = Nvml::open();
+    let mut temperature = if nvml.is_some() {
+        Reading::Pending
+    } else {
+        Reading::Unavailable
+    };
+    let mut tick = 0u32;
     loop {
         let taken = Instant::now();
         let current = read_interfaces();
@@ -269,10 +298,28 @@ fn extras_loop() {
             "PdhGetFormattedCounterArrayW",
             "gpu",
         );
+        if let Some(nvml) = &nvml {
+            if tick % NVML_EVERY == 0 {
+                temperature = match nvml.temperature() {
+                    Some(celsius) => Reading::Value(vec![Temp {
+                        source: "GPU",
+                        celsius,
+                    }]),
+                    None => Reading::Unavailable,
+                };
+                log_transition(
+                    temp_latch.observe(matches!(temperature, Reading::Unavailable)),
+                    "nvmlDeviceGetTemperature",
+                    "gpu_temperature",
+                );
+            }
+        }
+        tick = tick.wrapping_add(1);
         {
             let mut extras = EXTRAS.lock().unwrap_or_else(PoisonError::into_inner);
             extras.gpu = gpu;
             extras.network = network;
+            extras.temperature = temperature.clone();
         }
         std::thread::sleep(Duration::from_secs(2));
     }
@@ -283,6 +330,81 @@ fn log_transition(transition: Transition, op: &str, ctx: &str) {
         Transition::Failed => diag::info("sampler_failed", &[("op", op), ("ctx", ctx)]),
         Transition::Recovered => diag::info("sampler_recovered", &[("op", op), ("ctx", ctx)]),
         Transition::Unchanged => {}
+    }
+}
+
+/// Loop passes (about three seconds each) between two NVML temperature reads.
+const NVML_EVERY: u32 = 4;
+
+type NvmlDevice = *mut c_void;
+
+/// NVIDIA's management library: the display driver ships `nvml.dll` in System32 and its
+/// temperature query needs no elevation. Loaded dynamically (no import, so nothing breaks
+/// on PCs without the driver); the device handles are fetched once and kept. Owned by the
+/// sampling thread alone, so the raw handles never cross threads.
+struct Nvml {
+    devices: Vec<NvmlDevice>,
+    /// `nvmlDeviceGetTemperature(device, NVML_TEMPERATURE_GPU = 0, &mut degrees_celsius)`.
+    get_temperature: unsafe extern "C" fn(NvmlDevice, i32, *mut u32) -> i32,
+}
+
+impl Nvml {
+    /// Loads the library and the first few GPUs; `None` without an NVIDIA driver or GPU.
+    fn open() -> Option<Self> {
+        // The system directory only: a copy next to the exe is never loaded.
+        // SAFETY: a valid NUL-terminated name; the module stays loaded for the process.
+        let module =
+            unsafe { LoadLibraryExW(w!("nvml.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.ok()?;
+        // SAFETY (the four transmutes): the exports have exactly these C signatures in NVML's
+        // public header; the function pointer types differ only in ABI and arguments.
+        let init: unsafe extern "C" fn() -> i32 =
+            unsafe { std::mem::transmute(GetProcAddress(module, s!("nvmlInit_v2"))?) };
+        let device_count: unsafe extern "C" fn(*mut u32) -> i32 =
+            unsafe { std::mem::transmute(GetProcAddress(module, s!("nvmlDeviceGetCount_v2"))?) };
+        let device_at: unsafe extern "C" fn(u32, *mut NvmlDevice) -> i32 = unsafe {
+            std::mem::transmute(GetProcAddress(module, s!("nvmlDeviceGetHandleByIndex_v2"))?)
+        };
+        let get_temperature: unsafe extern "C" fn(NvmlDevice, i32, *mut u32) -> i32 = unsafe {
+            std::mem::transmute(GetProcAddress(module, s!("nvmlDeviceGetTemperature"))?)
+        };
+        // SAFETY: `init` takes no arguments; NVML_SUCCESS is 0.
+        if unsafe { init() } != 0 {
+            return None;
+        }
+        let mut count = 0u32;
+        // SAFETY: `count` is a valid out pointer for the call.
+        if unsafe { device_count(&mut count) } != 0 {
+            return None;
+        }
+        let mut devices = Vec::new();
+        for index in 0..count.min(8) {
+            let mut handle: NvmlDevice = std::ptr::null_mut();
+            // SAFETY: `handle` is a valid out pointer; the handle stays valid until NVML is
+            // shut down, which this process never does.
+            if unsafe { device_at(index, &mut handle) } == 0 && !handle.is_null() {
+                devices.push(handle);
+            }
+        }
+        if devices.is_empty() {
+            return None;
+        }
+        Some(Self {
+            devices,
+            get_temperature,
+        })
+    }
+
+    /// The hottest GPU's core temperature in degrees Celsius; `None` when none answers.
+    fn temperature(&self) -> Option<f32> {
+        self.devices
+            .iter()
+            .filter_map(|device| {
+                let mut degrees = 0u32;
+                // SAFETY: a handle NVML returned and an out pointer valid for the call.
+                let status = unsafe { (self.get_temperature)(*device, 0, &mut degrees) };
+                (status == 0).then_some(degrees as f32)
+            })
+            .reduce(f32::max)
     }
 }
 

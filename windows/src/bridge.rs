@@ -17,7 +17,7 @@
 //! Windows drive health card reads the disks itself).
 
 use crate::settings::{self, Arg, Command, PillSettings};
-use crate::{autostart, diag, installer, raii, send, shot, update, usage};
+use crate::{autostart, claude_accounts, diag, installer, raii, send, shot, update, usage};
 use std::ffi::c_void;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,6 +60,9 @@ pub struct Hooks {
     pub commit: fn(PillSettings),
     /// "Check now" in the hub's General page.
     pub check_updates: fn(),
+    /// Device name of the primary monitor: the edge published for the hub's Edge control is
+    /// that monitor's.
+    pub primary_monitor: fn() -> Option<String>,
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -79,6 +82,19 @@ fn signal_state() {
     let event = open_event(STATE_EVENT);
     if event != 0 {
         // SAFETY: a live event handle, closed right after.
+        unsafe {
+            SetEvent(event as Handle);
+            CloseHandle(event as Handle);
+        }
+    }
+}
+
+/// Wakes the worker so it republishes now rather than at its next poll: the notch moved
+/// itself (an Alt-drag or the grip took it to another edge) and the hub should follow.
+pub fn wake() {
+    let event = open_event(COMMAND_EVENT);
+    if event != 0 {
+        // SAFETY: a live event handle, closed right after; the worker holds its own.
         unsafe {
             SetEvent(event as Handle);
             CloseHandle(event as Handle);
@@ -194,13 +210,13 @@ fn ordered(settings: &PillSettings) -> Vec<&'static str> {
     ids
 }
 
-/// The edge shared by every stored monitor entry, else top.
-fn shared_edge(settings: &PillSettings) -> &'static str {
-    settings
-        .edges
-        .values()
-        .next()
-        .map_or("top", |edge| edge.as_str())
+/// The edge the notch is docked to on the primary monitor: what the hub's Edge control shows.
+/// A move is stored per monitor (`edges`, and only when it differs from `edge_default`) and a
+/// pick in the hub is the default, so a monitor without an entry follows the default.
+fn published_edge(settings: &PillSettings, primary: Option<&str>) -> &'static str {
+    primary
+        .map_or(settings.edge_default, |key| settings.edge(key))
+        .as_str()
 }
 
 fn visibility(settings: &PillSettings) -> &'static str {
@@ -253,7 +269,16 @@ fn state_json(hooks: &Hooks) -> String {
     out.push_str(",\"notchVisibility\":");
     esc(&mut out, visibility(&s));
     out.push_str(",\"notchEdge\":");
-    esc(&mut out, shared_edge(&s));
+    let primary = (hooks.primary_monitor)();
+    esc(&mut out, published_edge(&s, primary.as_deref()));
+    // Size: the Mac's three named sizes plus the slider that overrides them.
+    out.push_str(",\"notchSize\":");
+    esc(&mut out, s.notch_size.as_str());
+    out.push_str(&format!(
+        ",\"usesCustomNotchScale\":{},\"customNotchScale\":{}",
+        s.custom_scale_on,
+        f64::from(s.custom_scale_milli) / 1000.0
+    ));
     out.push_str(",\"edges\":{");
     for (index, (key, edge)) in s.edges.iter().enumerate() {
         if index > 0 {
@@ -264,7 +289,8 @@ fn state_json(hooks: &Hooks) -> String {
         esc(&mut out, edge.as_str());
     }
     out.push_str("}},\"options\":{\"notchEdge\":[\"top\",\"bottom\",\"left\",\"right\"],");
-    out.push_str("\"notchVisibility\":[\"alwaysShow\",\"onHover\",\"hidden\"]},\"displays\":[");
+    out.push_str("\"notchVisibility\":[\"alwaysShow\",\"onHover\",\"hidden\"],");
+    out.push_str("\"notchSize\":[\"small\",\"medium\",\"large\"]},\"displays\":[");
     for (index, key) in s.monitors.keys().enumerate() {
         if index > 0 {
             out.push(',');
@@ -297,9 +323,9 @@ fn state_json(hooks: &Hooks) -> String {
             reading.status == usage::Status::AccessDenied,
             reading.status == usage::Status::Expired,
         ));
-        esc(&mut out, reading.status.text());
+        esc(&mut out, &reading.summary());
         out.push_str(",\"summary\":");
-        esc(&mut out, reading.status.text());
+        esc(&mut out, &reading.summary());
         out.push_str(",\"label\":null,\"plan\":");
         opt_text(&mut out, reading.plan.as_deref());
         out.push_str(",\"limits\":[");
@@ -324,7 +350,13 @@ fn state_json(hooks: &Hooks) -> String {
                 }
             ));
         }
-        out.push_str("]}");
+        out.push(']');
+        // The hub's Accounts list of every Claude account on this PC.
+        if *id == "claude" {
+            out.push_str(",\"claudeAccounts\":");
+            out.push_str(&claude_accounts::published_json());
+        }
+        out.push('}');
     }
     out.push_str("],\"providerOrder\":[");
     for (index, id) in order.iter().enumerate() {
@@ -372,11 +404,16 @@ fn drain(dir: &Path, controller_key: isize, hooks: &Hooks) -> bool {
     files.truncate(MAX_COMMANDS);
     let handled = !files.is_empty();
     for file in files {
-        let command = fs::read(&file)
-            .ok()
-            .and_then(|bytes| settings::parse_command(&bytes));
+        let bytes = fs::read(&file).ok();
         let _ = fs::remove_file(&file);
-        if let Some(command) = command {
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        // The hub's Claude account commands (rename, forget) are the account book's.
+        if claude_accounts::apply_command(&bytes) {
+            continue;
+        }
+        if let Some(command) = settings::parse_command(&bytes) {
             apply(&command, controller_key, hooks);
         }
     }
@@ -451,7 +488,10 @@ fn commit(
         || next.positions != before.positions
         || next.monitors != before.monitors
         || next.folds != before.folds
-        || next.visible != before.visible;
+        || next.visible != before.visible
+        || next.notch_size != before.notch_size
+        || next.custom_scale_on != before.custom_scale_on
+        || next.custom_scale_milli != before.custom_scale_milli;
     (hooks.commit)(next);
     if placement_changed {
         // SAFETY: posting to a window handle that may have gone is harmless.
@@ -558,20 +598,31 @@ fn apply_set(s: &mut PillSettings, key: &str, value: &Arg) -> bool {
             let Some(edge) = crate::layout::Edge::parse(text) else {
                 return false;
             };
-            // The default for monitors not yet known by name, and every one that is.
+            // One edge for every monitor, like the Mac's single setting: the default covers
+            // all of them (the monitors are not known by name here), and a monitor moved by
+            // hand before loses its own entry. `published_edge` reads this default back.
             s.edge_default = edge;
-            let keys: Vec<String> = s
-                .monitors
-                .keys()
-                .chain(s.positions.keys())
-                .chain(s.edges.keys())
-                .cloned()
-                .collect();
-            for key in keys {
-                s.set_edge(&key, edge);
-            }
+            s.edges.clear();
             true
         }
+        "notchSize" => match value {
+            Arg::Text(text) => match settings::NotchSize::parse(text) {
+                Some(size) => {
+                    s.notch_size = size;
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        },
+        "usesCustomNotchScale" | "uses_custom_notch_scale" => flag(value, &mut s.custom_scale_on),
+        "customNotchScale" | "custom_notch_scale" => match value {
+            Arg::Number(scale) if scale.is_finite() => {
+                s.custom_scale_milli = settings::custom_scale_milli(*scale);
+                true
+            }
+            _ => false,
+        },
         _ => false,
     }
 }

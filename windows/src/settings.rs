@@ -14,6 +14,9 @@
 //! `"nearby_accept_known":true`.
 //! Installer cards: `"installer_auto":true` (install signed MSIX/MSI packages on its own instead of asking
 //! about every installer in Downloads).
+//! Notch size (the Mac's `notchSize`, `usesCustomNotchScale`, `customNotchScale`):
+//! `"notch_size":"small"|"large"` (medium when absent), `"uses_custom_notch_scale":true` and
+//! `"custom_notch_scale":0.5..1.5` (out-of-range values are clamped).
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -40,6 +43,10 @@ pub const MAX_MONITORS: usize = 64;
 pub const MAX_KEY_BYTES: usize = 256;
 pub const POSITION_DEFAULT: u16 = 500;
 pub const POSITION_MAX: u16 = 1000;
+/// The custom size slider's range in thousandths (the Mac's 0.5...1.5) and its default.
+pub const CUSTOM_SCALE_MIN: u16 = 500;
+pub const CUSTOM_SCALE_MAX: u16 = 1500;
+pub const CUSTOM_SCALE_DEFAULT: u16 = 1000;
 const MAX_DEPTH: usize = 8;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const DIR_NAME: &str = "Pulse";
@@ -86,6 +93,41 @@ impl MonitorSetting {
     };
 }
 
+/// How large the notch is drawn: the Mac's three named sizes. Medium is the design frame at
+/// 1:1 (the Windows default).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotchSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl NotchSize {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotchSize::Small => "small",
+            NotchSize::Medium => "medium",
+            NotchSize::Large => "large",
+        }
+    }
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "small" => Some(NotchSize::Small),
+            "medium" => Some(NotchSize::Medium),
+            "large" => Some(NotchSize::Large),
+            _ => None,
+        }
+    }
+    /// What every measured distance is multiplied by (the Mac's 0.8, 1 and 1.25).
+    pub fn scale(self) -> f32 {
+        match self {
+            NotchSize::Small => 0.8,
+            NotchSize::Medium => 1.0,
+            NotchSize::Large => 1.25,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PillSettings {
     pub visible: bool,
@@ -110,6 +152,14 @@ pub struct PillSettings {
     /// The notch rests as a small pill and opens when the pointer reaches it (the Mac's "Show
     /// on hover", its default); false keeps it open ("Always show"). On by default.
     pub folds: bool,
+    /// Size preset (the Mac's `notchSize`); ignored while `custom_scale_on`. Medium by default.
+    pub notch_size: NotchSize,
+    /// The slider decides the size instead of the preset (`usesCustomNotchScale`). Off by
+    /// default.
+    pub custom_scale_on: bool,
+    /// The slider's multiplier in thousandths, `CUSTOM_SCALE_MIN..=CUSTOM_SCALE_MAX`
+    /// (`customNotchScale`).
+    pub custom_scale_milli: u16,
     /// Nearby sharing is on. On by default.
     pub nearby_enabled: bool,
     /// Name other devices see; `None` lets the hub choose.
@@ -154,6 +204,9 @@ impl PillSettings {
             positions: BTreeMap::new(),
             edges: BTreeMap::new(),
             folds: true,
+            notch_size: NotchSize::Medium,
+            custom_scale_on: false,
+            custom_scale_milli: CUSTOM_SCALE_DEFAULT,
             nearby_enabled: true,
             nearby_alias: None,
             nearby_save_folder: None,
@@ -206,6 +259,18 @@ impl PillSettings {
         }
         self.edges.insert(key.to_string(), edge) != Some(edge)
     }
+    /// What every measured distance of the notch is multiplied by: the slider while it is in
+    /// charge, else the preset.
+    pub fn notch_scale(&self) -> f32 {
+        if self.custom_scale_on {
+            f32::from(
+                self.custom_scale_milli
+                    .clamp(CUSTOM_SCALE_MIN, CUSTOM_SCALE_MAX),
+            ) / 1000.0
+        } else {
+            self.notch_size.scale()
+        }
+    }
     /// Setting for a monitor; unknown monitors get the defaults (enabled, top-right).
     pub fn monitor(&self, key: &str) -> MonitorSetting {
         self.monitors
@@ -244,6 +309,12 @@ impl Default for PillSettings {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The custom size slider's multiplier (such as 1.25) in thousandths, kept to its range.
+pub fn custom_scale_milli(scale: f64) -> u16 {
+    let milli = (scale * 1000.0).round();
+    milli.clamp(f64::from(CUSTOM_SCALE_MIN), f64::from(CUSTOM_SCALE_MAX)) as u16
 }
 
 pub fn clamp_cadence(seconds: i64) -> u32 {
@@ -590,6 +661,7 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
     }
     for (name, slot) in [
         ("folds", &mut settings.folds),
+        ("uses_custom_notch_scale", &mut settings.custom_scale_on),
         ("mac_shortcuts", &mut settings.mac_shortcuts),
         ("screenshot_shortcuts", &mut settings.screenshot_shortcuts),
         ("screenshot_to_desktop", &mut settings.screenshot_to_desktop),
@@ -674,6 +746,24 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         None | Some(Json::Null) => {}
         Some(Json::Text(text)) => {
             settings.edge_default = Edge::parse(text).ok_or(ParseError::Malformed)?;
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
+    match member(&root, "notch_size") {
+        None | Some(Json::Null) => {}
+        Some(Json::Text(text)) => {
+            settings.notch_size = NotchSize::parse(text).ok_or(ParseError::Malformed)?;
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
+    match member(&root, "custom_notch_scale") {
+        None | Some(Json::Null) => {}
+        Some(Json::Number(text)) => {
+            let scale = text.parse::<f64>().map_err(|_| ParseError::Malformed)?;
+            if !scale.is_finite() {
+                return Err(ParseError::Malformed);
+            }
+            settings.custom_scale_milli = custom_scale_milli(scale);
         }
         Some(_) => return Err(ParseError::Malformed),
     }
@@ -804,6 +894,25 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
     }
     if settings.edge_default != Edge::Top {
         out.push_str(&format!(",\"edge\":\"{}\"", settings.edge_default.as_str()));
+    }
+    if settings.notch_size != NotchSize::Medium {
+        out.push_str(&format!(
+            ",\"notch_size\":\"{}\"",
+            settings.notch_size.as_str()
+        ));
+    }
+    if settings.custom_scale_on {
+        out.push_str(",\"uses_custom_notch_scale\":true");
+    }
+    if settings.custom_scale_milli != CUSTOM_SCALE_DEFAULT {
+        let milli = settings
+            .custom_scale_milli
+            .clamp(CUSTOM_SCALE_MIN, CUSTOM_SCALE_MAX);
+        out.push_str(&format!(
+            ",\"custom_notch_scale\":{}.{:03}",
+            milli / 1000,
+            milli % 1000
+        ));
     }
     out.push_str("}\n");
     if out.len() > MAX_FILE_BYTES

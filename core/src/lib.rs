@@ -4,6 +4,8 @@ pub mod activity;
 #[cfg(unix)]
 pub mod app_manager;
 pub mod apps;
+#[cfg(windows)]
+pub mod apps_windows;
 #[cfg(feature = "localsend")]
 pub mod bridge;
 pub mod claude_sync;
@@ -30,6 +32,7 @@ pub mod scan;
 pub mod state_migration;
 pub mod storage_browser;
 pub mod store;
+pub mod usage_snapshot;
 pub mod worker;
 
 pub use model::*;

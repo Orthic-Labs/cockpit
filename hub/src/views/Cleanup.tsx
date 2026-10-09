@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, ConfirmDialog, SegmentedControl } from "@rightkit/app-shell/react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronRight } from "lucide-react";
-import { ago, bytes, isStale, type ChromeSnapshots } from "../api";
+import { ago, bytes, isStale, isWindows, type ChromeSnapshots } from "../api";
+
+// Windows moves files to the Recycle Bin; the Mac moves them to the Trash.
+const TRASH = isWindows ? "Recycle Bin" : "Trash";
 import { ChromeSnapshotsLine } from "./ChromeSnapshots";
 import "./cleanup.css";
 
@@ -240,10 +243,10 @@ export function Cleanup() {
         result.skipped.length
           ? {
               tone: "warn",
-              text: `Partly moved: ${bytes(result.moved_bytes)} (${items(result.moved_items)}) went to the Trash, ${result.skipped.length} skipped.`,
+              text: `Partly moved: ${bytes(result.moved_bytes)} (${items(result.moved_items)}) went to the ${TRASH}, ${result.skipped.length} skipped.`,
               detail,
             }
-          : { tone: "ok", text: `Moved to the Trash: ${bytes(result.moved_bytes)} (${items(result.moved_items)}).` },
+          : { tone: "ok", text: `Moved to the ${TRASH}: ${bytes(result.moved_bytes)} (${items(result.moved_items)}).` },
       );
       // What moved leaves the list at once; the rescan behind it confirms.
       const left = new Set(result.skipped.map((s) => s.path));
@@ -267,7 +270,7 @@ export function Cleanup() {
       if (result.skipped.length) setRestoreIssue((prev) => ({ ...prev, [id]: detail }));
       setNote(
         result.skipped.length
-          ? { tone: "warn", text: `Partly restored: ${bytes(result.restored_bytes)} (${items(result.restored_items)}), ${result.skipped.length} stayed in the Trash.` }
+          ? { tone: "warn", text: `Partly restored: ${bytes(result.restored_bytes)} (${items(result.restored_items)}), ${result.skipped.length} stayed in the ${TRASH}.` }
           : { tone: "ok", text: `Restored: ${bytes(result.restored_bytes)} (${items(result.restored_items)}).` },
       );
       setHistory(await cleanup.history());
@@ -325,7 +328,7 @@ export function Cleanup() {
             <div className="ck-history-main">
               <strong>{new Date(a.at * 1000).toLocaleString()}</strong>
               <span className="muted">
-                {items(a.items.length)} moved to the Trash · {bytes(a.bytes)}
+                {items(a.items.length)} moved to the {TRASH} · {bytes(a.bytes)}
                 {left.length < a.items.length ? ` · ${a.items.length - left.length} restored` : ""}
               </span>
               <details className="ck-detail ck-paths">
@@ -335,13 +338,13 @@ export function Cleanup() {
                 </summary>
                 {a.items.map((i) => (
                   <p key={i.path} className="muted ck-path">
-                    {shortPath(i.path)} · {i.restored ? "Restored" : i.trash_path ? "In the Trash" : "Not restorable"}
+                    {shortPath(i.path)} · {i.restored ? "Restored" : i.trash_path ? `In the ${TRASH}` : "Not restorable"}
                   </p>
                 ))}
               </details>
               {issue && (
                 <p className="ck-issue" role="alert">
-                  Some items stayed in the Trash.
+                  Some items stayed in the {TRASH}.
                   <span className="ck-lines">{issue}</span>
                 </p>
               )}
@@ -449,7 +452,7 @@ export function Cleanup() {
                 <span>About these numbers</span>
               </summary>
               <p className="muted">
-                Nothing is deleted. Items go to the Trash, where you can put them back or empty it yourself. Sizes are what the
+                Nothing is deleted. Items go to the {TRASH}, where you can put them back or empty it yourself. Sizes are what the
                 scan measured; ≥ marks a lower bound when part of a folder could not be read. Items whose owner could not be
                 verified, or whose app is running, are never offered.
               </p>
@@ -464,19 +467,19 @@ export function Cleanup() {
             <strong className="ck-num">
               {chosen.length} selected · {total(chosen)}
             </strong>
-            <span className="muted"> to move to the Trash</span>
+            <span className="muted"> to move to the {TRASH}</span>
           </div>
           <Button onClick={() => setPending(chosen)} disabled={busy || chosen.length === 0}>
-            Move {chosen.length} to Trash
+            Move {chosen.length} to {TRASH}
           </Button>
         </div>
       )}
 
       {pending && (
         <ConfirmDialog
-          title={`Move ${items(pending.length)} to the Trash?`}
-          description={`${items(pending.length)}, ${total(pending)}, will move to the Trash. Nothing is deleted: you can put them back from History here or from the Trash.`}
-          confirmLabel="Move to Trash"
+          title={`Move ${items(pending.length)} to the ${TRASH}?`}
+          description={`${items(pending.length)}, ${total(pending)}, will move to the ${TRASH}. Nothing is deleted: you can put them back from History here or from the ${TRASH}.`}
+          confirmLabel={`Move to ${TRASH}`}
           onConfirm={() => move(pending)}
           onCancel={() => setPending(null)}
         />

@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { Badge, Button, ConfirmDialog, EmptyState } from "@rightkit/app-shell/react";
 import { Copy } from "lucide-react";
-import { api, bytes, type DuplicateReport } from "../api";
+import { api, bytes, isWindows, type DuplicateReport } from "../api";
 import "./health.css";
+
+// Windows moves extra copies to the Recycle Bin; the Mac moves them to the Trash.
+const TRASH = isWindows ? "Recycle Bin" : "Trash";
 
 const shortPath = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
 const copies = (n: number) => `${n} cop${n === 1 ? "y" : "ies"}`;
@@ -75,7 +78,7 @@ export function Duplicates() {
       const movedPaths = result.moved.map((m) => m.path);
       setRemoved((prev) => new Set([...prev, ...movedPaths]));
       setNotice(
-        `Moved ${copies(result.moved.length)} to the Trash, ${bytes(result.moved_bytes)}. The kept copies are untouched.` +
+        `Moved ${copies(result.moved.length)} to the ${TRASH}, ${bytes(result.moved_bytes)}. The kept copies are untouched.` +
           (result.skipped.length ? ` ${result.skipped.length} skipped.` : ""),
       );
       if (result.skipped.length) {
@@ -128,7 +131,7 @@ export function Duplicates() {
           <div className="muted small">
             {groups.length === 0
               ? `No extra copies in ${shortPath(folder)}.`
-              : `${copies(groups.reduce((n, g) => n + g.extras.length, 0))} in ${groups.length} group${groups.length === 1 ? "" : "s"} · ${bytes(reclaimable)} can be freed by moving the extras to the Trash`}
+              : `${copies(groups.reduce((n, g) => n + g.extras.length, 0))} in ${groups.length} group${groups.length === 1 ? "" : "s"} · ${bytes(reclaimable)} can be freed by moving the extras to the ${TRASH}`}
             {` · checked ${report.files_considered.toLocaleString()} files`}
             {report.truncated ? " · the folder is very large, so only part of it was checked" : ""}
             {report.skipped.length ? ` · ${report.skipped.length} skipped (links, cloud placeholders, unreadable)` : ""}
@@ -150,7 +153,7 @@ export function Duplicates() {
                 {copies(group.extras.length + 1)} · {bytes(group.size_bytes)} each
               </span>
               <Button size="sm" onClick={() => setPending({ title: `${copies(all.length)} of ${shortPath(group.kept_path)}`, items: all })} disabled={busy}>
-                Move {all.length} extra{all.length === 1 ? "" : "s"} to Trash
+                Move {all.length} extra{all.length === 1 ? "" : "s"} to {TRASH}
               </Button>
             </div>
             <div className="dup-row">
@@ -170,7 +173,7 @@ export function Duplicates() {
                   onClick={() => setPending({ title: shortPath(path), items: itemsFor(group.kept_path, group.size_bytes, [path]) })}
                   disabled={busy}
                 >
-                  Move to Trash
+                  Move to {TRASH}
                 </Button>
               </div>
             ))}
@@ -180,9 +183,9 @@ export function Duplicates() {
 
       {pending && (
         <ConfirmDialog
-          title={pending.items.length === 1 ? `Move this copy to the Trash?` : `Move ${pending.items.length} copies to the Trash?`}
-          description={`${pending.title}: ${copies(pending.items.length)}, ${bytes(pending.items.reduce((s, i) => s + i.bytes, 0))} will move to the Trash. The copy you keep stays where it is. Nothing is deleted: you can put them back from the Trash.`}
-          confirmLabel="Move to Trash"
+          title={pending.items.length === 1 ? `Move this copy to the ${TRASH}?` : `Move ${pending.items.length} copies to the ${TRASH}?`}
+          description={`${pending.title}: ${copies(pending.items.length)}, ${bytes(pending.items.reduce((s, i) => s + i.bytes, 0))} will move to the ${TRASH}. The copy you keep stays where it is. Nothing is deleted: you can put them back from the ${TRASH}.`}
+          confirmLabel={`Move to ${TRASH}`}
           onConfirm={() => moveToTrash(pending.items)}
           onCancel={() => setPending(null)}
         />

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Pulse hub main window",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-focus", "os:allow-platform"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-focus", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-close", "os:allow-platform"]
 }

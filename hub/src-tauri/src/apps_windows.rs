@@ -1,7 +1,10 @@
 //! Apps and process commands on Windows. The page and the command names are the
 //! macOS ones (see `apps.rs`); this module answers them from what Windows keeps.
 //!
-//! Inventory: the Uninstall registry keys (HKLM 64-bit and 32-bit views, HKCU).
+//! Inventory: the Uninstall registry keys (HKLM 64-bit and 32-bit views, HKCU), read
+//! here with `winreg`. What counts as an app, the shared types, "last used" matching
+//! and the winget update check live in the core (`pulse_core::apps_windows`), which
+//! `pulse apps` uses too.
 //! Uninstall: starts the app's own registered uninstaller, which asks for its own
 //! confirmation and elevation. Selected leftover folders go to the Recycle Bin only
 //! after the uninstaller has removed the app's registration.
@@ -21,6 +24,7 @@ use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use pulse_core::apps_windows::{AppEntry, Installed, RawUninstall};
 use pulse_core::ProcessIdentity;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -66,45 +70,12 @@ impl Drop for Busy {
 // Inventory
 // ---------------------------------------------------------------------------
 
-/// The same fields the macOS page reads. `bundle_id` and `running` have no
-/// Windows source here, so they stay empty/false. `last_used` comes from
-/// UserAssist when it has a record of the app being launched.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AppEntry {
-    pub name: String,
-    /// The install folder when it is known and unique; otherwise the registry key.
-    pub path: String,
-    pub bundle_id: Option<String>,
-    pub version: Option<String>,
-    /// `EstimatedSize` from the registry; 0 when the installer did not record one.
-    pub size_bytes: u64,
-    pub last_used: Option<i64>,
-    pub running: bool,
-    /// Why uninstall is not offered, if it is not.
-    pub protected: Option<String>,
-}
-
-struct Installed {
-    entry: AppEntry,
-    uninstall: Option<String>,
-    /// The Uninstall key's own name (a GUID, or something like `Git_is1`).
-    key_name: String,
-    publisher: Option<String>,
-    /// The install folder, only when exactly one app registered it.
-    folder: Option<String>,
-}
-
 fn read_value(key: &RegKey, name: &str) -> Option<String> {
     key.get_value::<String, _>(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 fn read_flag(key: &RegKey, name: &str) -> bool {
     key.get_value::<u32, _>(name).map(|v| v != 0).unwrap_or(false)
-}
-
-fn install_folder(raw: &str) -> Option<String> {
-    let trimmed = raw.trim().trim_matches('"').trim_end_matches(['\\', '/']);
-    (!trimmed.is_empty() && std::path::Path::new(trimmed).is_dir()).then(|| trimmed.to_string())
 }
 
 /// Every app listed in the Uninstall keys, without updates and system components.
@@ -114,78 +85,30 @@ fn read_installed() -> Vec<Installed> {
         ("HKLM32", RegKey::predef(HKEY_LOCAL_MACHINE), KEY_WOW64_32KEY),
         ("HKCU", RegKey::predef(HKEY_CURRENT_USER), KEY_WOW64_64KEY),
     ];
-    let mut found: Vec<(Installed, Option<String>)> = Vec::new();
-    let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
+    let mut raws: Vec<RawUninstall> = Vec::new();
     for (label, hive, view) in views {
         let Ok(root) = hive.open_subkey_with_flags(UNINSTALL, KEY_READ | view) else { continue };
         for name in root.enum_keys().flatten() {
             let Ok(key) = root.open_subkey_with_flags(&name, KEY_READ | view) else { continue };
-            let Some(display) = read_value(&key, "DisplayName") else { continue };
-            // Updates, hotfixes and parts of other products are not apps.
-            if read_flag(&key, "SystemComponent")
-                || read_value(&key, "ParentKeyName").is_some()
-                || read_value(&key, "ParentDisplayName").is_some()
-                || matches!(
-                    read_value(&key, "ReleaseType").as_deref(),
-                    Some("Update" | "Hotfix" | "Security Update" | "Update Rollup" | "ServicePack")
-                )
-            {
-                continue;
-            }
-            let version = read_value(&key, "DisplayVersion");
-            if !seen.insert((display.to_lowercase(), version.clone())) {
-                continue;
-            }
-            let uninstall = read_value(&key, "UninstallString");
-            let protected = if read_flag(&key, "NoRemove") {
-                Some("Windows does not allow this app to be removed.".to_string())
-            } else if uninstall.is_none() {
-                Some("This app registered no uninstaller.".to_string())
-            } else {
-                None
-            };
-            let size_kb = key.get_value::<u32, _>("EstimatedSize").unwrap_or(0);
-            found.push((
-                Installed {
-                    entry: AppEntry {
-                        name: display,
-                        path: format!(r"{label}\{UNINSTALL}\{name}"),
-                        bundle_id: None,
-                        version,
-                        size_bytes: u64::from(size_kb) * 1024,
-                        last_used: None,
-                        running: false,
-                        protected,
-                    },
-                    uninstall,
-                    key_name: name.clone(),
-                    publisher: read_value(&key, "Publisher"),
-                    folder: None,
-                },
-                read_value(&key, "InstallLocation").and_then(|raw| install_folder(&raw)),
-            ));
+            let Some(display_name) = read_value(&key, "DisplayName") else { continue };
+            raws.push(RawUninstall {
+                label: label.to_string(),
+                key_name: name,
+                display_name,
+                version: read_value(&key, "DisplayVersion"),
+                uninstall: read_value(&key, "UninstallString"),
+                publisher: read_value(&key, "Publisher"),
+                install_location: read_value(&key, "InstallLocation"),
+                size_kb: key.get_value::<u32, _>("EstimatedSize").unwrap_or(0),
+                system_component: read_flag(&key, "SystemComponent"),
+                no_remove: read_flag(&key, "NoRemove"),
+                has_parent: read_value(&key, "ParentKeyName").is_some()
+                    || read_value(&key, "ParentDisplayName").is_some(),
+                release_type: read_value(&key, "ReleaseType"),
+            });
         }
     }
-    // An install folder stands in for the registry key only when exactly one app has it.
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for (_, folder) in &found {
-        if let Some(folder) = folder {
-            *counts.entry(folder.to_lowercase()).or_default() += 1;
-        }
-    }
-    let mut out: Vec<Installed> = found
-        .into_iter()
-        .map(|(mut app, folder)| {
-            if let Some(folder) = folder {
-                if counts.get(&folder.to_lowercase()) == Some(&1) {
-                    app.entry.path = folder.clone();
-                    app.folder = Some(folder);
-                }
-            }
-            app
-        })
-        .collect();
-    out.sort_by_key(|app| app.entry.name.to_lowercase());
+    let mut out = pulse_core::apps_windows::assemble(raws);
     usage::apply(&mut out);
     out
 }

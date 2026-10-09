@@ -675,16 +675,17 @@ fn ago(at: u64) -> String {
 }
 
 impl Last {
-    /// The hover card's top row: "Copy last: <preview> · <age>".
-    fn row_label(&self) -> Option<String> {
+    /// The hover card's top row as the Mac's button: "Copy last: <preview>" with the age
+    /// ("8 min ago") apart, at the right.
+    fn row_label(&self) -> Option<(String, String)> {
         let what = match &self.text {
             Some(t) => {
                 let line = t.lines().next().unwrap_or("").trim();
                 if line.is_empty() {
                     return None;
                 }
-                if line.chars().count() > 24 {
-                    format!("{}\u{2026}", line.chars().take(24).collect::<String>())
+                if line.chars().count() > 28 {
+                    format!("{}\u{2026}", line.chars().take(28).collect::<String>())
                 } else {
                     line.to_string()
                 }
@@ -697,7 +698,7 @@ impl Last {
                 }
             }
         };
-        Some(format!("Copy last: {what} \u{b7} {}", ago(self.at)))
+        Some((format!("Copy last: {what}"), ago(self.at)))
     }
 }
 
@@ -1507,11 +1508,12 @@ impl Model {
             rows.push(row);
             actions.push(action);
         };
-        if let Some(label) = self.last.as_ref().and_then(Last::row_label) {
+        if let Some((label, detail)) = self.last.as_ref().and_then(Last::row_label) {
             add(
-                Row::Pair {
+                Row::Button {
+                    symbol: Some(Symbol::Copy),
                     label,
-                    value: String::new(),
+                    detail,
                 },
                 Some(Action::CopyLast),
             );
@@ -1561,9 +1563,10 @@ impl Model {
                 );
             }
             add(
-                Row::Pair {
+                Row::Button {
+                    symbol: Some(Symbol::Stop),
                     label: "Cancel".into(),
-                    value: String::new(),
+                    detail: String::new(),
                 },
                 Some(Action::Cancel),
             );
@@ -1613,31 +1616,21 @@ impl Model {
             );
         }
         let blocked = live.is_some_and(|s| s.local_network.as_deref() == Some("blocked"));
+        // The Mac's order: the network hint stands in for the paste button and its hint line.
         if blocked {
             add(Row::Text(FIREWALL_HINT.into()), None);
-        }
-        if live.is_some_and(|s| s.running) {
-            if !devices.is_empty() {
-                add(
-                    Row::Pair {
-                        label: "Paste clipboard".into(),
-                        value: String::new(),
-                    },
-                    Some(Action::Paste),
-                );
-                add(
-                    Row::Text("Ctrl+V sends the clipboard · drop files here".into()),
-                    None,
-                );
-            }
-            let scanning = live.is_some_and(|s| s.scanning);
-            let again = if scanning { "Looking…" } else { "Look again" };
+        } else if !devices.is_empty() {
             add(
-                Row::Pair {
-                    label: again.to_string(),
-                    value: String::new(),
+                Row::Button {
+                    symbol: Some(Symbol::Copy),
+                    label: "Paste clipboard".into(),
+                    detail: String::new(),
                 },
-                (!scanning).then_some(Action::Refresh),
+                Some(Action::Paste),
+            );
+            add(
+                Row::Text("Ctrl+V sends the clipboard \u{b7} drop files here".into()),
+                None,
             );
         }
         Panel {
@@ -1897,7 +1890,7 @@ pub fn ring() -> Ring {
 }
 
 /// The hover card of the Send cell: transfer or status line, nearby devices (click sends a
-/// waiting paste or drop to it), Paste, Look again.
+/// waiting paste or drop to it), Paste and its hint, as the Mac's (no rescan button there).
 pub fn hover_panel() -> Panel {
     model().hover_panel()
 }

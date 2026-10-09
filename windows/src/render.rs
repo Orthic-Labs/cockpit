@@ -7,7 +7,7 @@ use crate::card::{Button, CardContent, Head, Hit, Lead, Live, Mark, Row, Tone};
 use crate::fileicon;
 use crate::glyphs::{self, Glyph, Symbol, Tile};
 use crate::layout::{
-    self, Badges, CellView, Edge, INK_PRIMARY, INK_SECONDARY, PROGRESS_STROKE, RING,
+    self, Badges, CellView, Edge, Handle, INK_PRIMARY, INK_SECONDARY, PROGRESS_STROKE, RING,
     RING_TRACK_ALPHA, TRACK_STROKE, WEEKLY_RADIUS, WEEKLY_STROKE,
 };
 use crate::surface::TextPainter;
@@ -183,7 +183,9 @@ fn shape_outline(length: f32, depth: f32, s: f32) -> Vec<(f32, f32)> {
 
 /// The notch on `edge`: the open body with its five rings, ears and settings arc, or the
 /// folded pill. A permissions badge draws as an amber dot (the pill's centre, or the middle
-/// of the settings arc); otherwise a pending update draws as a red one on the arc.
+/// of the settings arc); otherwise a pending update draws as a red one on the arc. With the
+/// pointer on the settings handle (`handle`) the arc fills in as the settings button with a
+/// gear, and the move grip comes out beside it.
 pub fn render_notch(
     views: &[CellView],
     edge: Edge,
@@ -191,8 +193,9 @@ pub fn render_notch(
     badges: Badges,
     dpi: u32,
     text: &mut TextPainter,
+    handle: Option<Handle>,
 ) -> Canvas {
-    draw_notch(views, edge, folded, badges, dpi, text, false)
+    draw_notch(views, edge, folded, badges, dpi, text, (false, handle))
 }
 
 /// `render_notch` with the bezel band kept: the Mac's view renders show the 2 pt the shape
@@ -205,9 +208,11 @@ pub fn render_notch_shot(
     dpi: u32,
     text: &mut TextPainter,
 ) -> Canvas {
-    draw_notch(views, edge, folded, badges, dpi, text, true)
+    draw_notch(views, edge, folded, badges, dpi, text, (true, None))
 }
 
+/// `keep_band` and the handle part shown out: the live notch keeps no band and carries the
+/// pointer zones (see `draw_handle_zone`); the view shots keep the band and draw neither.
 fn draw_notch(
     views: &[CellView],
     edge: Edge,
@@ -215,7 +220,7 @@ fn draw_notch(
     badges: Badges,
     dpi: u32,
     _text: &mut TextPainter,
-    keep_band: bool,
+    (keep_band, handle): (bool, Option<Handle>),
 ) -> Canvas {
     let s = layout::scale(dpi);
     let (width, height) = layout::panel_size(edge, folded, dpi);
@@ -246,6 +251,9 @@ fn draw_notch(
         .into_iter()
         .map(|(along, down)| frame.at(along, down - band))
         .collect();
+    if !folded && !keep_band {
+        draw_handle_zone(&mut canvas, frame, s, handle.is_some());
+    }
     canvas.fill_polygon(&[outline], 0x000000, 1.0);
     if folded {
         if badges.permissions {
@@ -272,10 +280,16 @@ fn draw_notch(
             )
         })
         .collect();
-    canvas.stroke_polyline(&arc, layout::ORB_STROKE * s, false, 0x000000, 1.0);
+    // Out, the button replaces the arc: it is the same circle filled in.
+    if handle.is_none() {
+        canvas.stroke_polyline(&arc, layout::ORB_STROKE * s, false, 0x000000, 1.0);
+    }
     for (index, view) in views.iter().enumerate() {
         let centre = frame.shift(layout::ring_center(edge, index, dpi));
         draw_cell(&mut canvas, view, centre, s);
+    }
+    if let Some(part) = handle {
+        draw_handle(&mut canvas, frame, s, part);
     }
     // One badge dot on the middle of the arc: permissions (amber) wins over update (red).
     let reach = (layout::CURL - layout::ORB_GAP) * s * std::f32::consts::FRAC_1_SQRT_2;
@@ -292,6 +306,122 @@ fn draw_notch(
         );
     }
     canvas
+}
+
+/// Fills the rectangle spanning `from` to `to` (`(along, depth)` points of the notch's frame),
+/// its corners rounded by `radius`.
+fn fill_frame_rect(
+    canvas: &mut Canvas,
+    frame: Frame,
+    from: (f32, f32),
+    to: (f32, f32),
+    radius: f32,
+    (colour, alpha): (u32, f32),
+) {
+    let (x0, y0) = frame.at(from.0, from.1);
+    let (x1, y1) = frame.at(to.0, to.1);
+    let (left, top) = (x0.min(x1), y0.min(y1));
+    canvas.fill_round_rect(
+        left,
+        top,
+        x0.max(x1) - left,
+        y0.max(y1) - top,
+        [radius; 4],
+        colour,
+        alpha,
+    );
+}
+
+/// Pixels the pointer can land on beyond the black. A layered window passes the pointer
+/// through its fully transparent pixels, so the settings button's zone (and the grip's while
+/// it is out) carries one 255th of black, which nothing can see. Drawn first: the notch's
+/// own black goes over it.
+fn draw_handle_zone(canvas: &mut Canvas, frame: Frame, s: f32, grip_out: bool) {
+    const PLATE: (u32, f32) = (0x000000, 1.0 / 255.0);
+    let (along, depth) = (layout::SHAPE_LENGTH * s, layout::CURL * s);
+    let zone = layout::ORB_ZONE * s;
+    let (first, last) = ((along - zone, depth - zone), (along + zone, depth + zone));
+    fill_frame_rect(canvas, frame, first, last, zone, PLATE);
+    if grip_out {
+        let half = (layout::GRIP_PITCH + layout::GRIP_DOT / 2.0 + 3.0) * s;
+        let start = along + (layout::ORB_RADIUS + layout::GRIP_GAP / 2.0) * s;
+        let end = along + layout::ORB_OVERHANG * s;
+        let (first, last) = ((start, depth - half), (end, depth + half));
+        fill_frame_rect(canvas, frame, first, last, 0.0, PLATE);
+    }
+}
+
+/// The settings button (the disc the resting arc fills into, with a gear) and the move grip
+/// beside it on a black plate. The grip is out whenever the pointer is on either; `part` is
+/// the one it is on, drawn brighter.
+fn draw_handle(canvas: &mut Canvas, frame: Frame, s: f32, part: Handle) {
+    let (along, depth) = (layout::SHAPE_LENGTH * s, layout::CURL * s);
+    let centre = frame.at(along, depth);
+    let radius = layout::ORB_RADIUS * s;
+    // The plate runs from the disc's middle out past the last dots; the disc covers its end.
+    let half = (layout::GRIP_PITCH + layout::GRIP_DOT / 2.0 + 1.5) * s;
+    let end = along + (layout::GRIP_REACH + layout::GRIP_LENGTH / 2.0 + 2.0) * s;
+    let (first, last) = ((along, depth - half), (end, depth + half));
+    fill_frame_rect(canvas, frame, first, last, half, (0x000000, 1.0));
+    dot(canvas, centre, radius, 0x000000);
+    let orb_ink = if part == Handle::Orb { 1.0 } else { 0.7 };
+    draw_gear(canvas, centre, radius * 0.52, INK_PRIMARY, orb_ink);
+    let (grip_ink, growth) = if part == Handle::Grip {
+        (0.95, 1.3)
+    } else {
+        (0.55, 1.0)
+    };
+    let dot_radius = layout::GRIP_DOT / 2.0 * s * growth;
+    let grip_along = along + layout::GRIP_REACH * s;
+    for line in [-0.5f32, 0.5] {
+        for row in [-1.0f32, 0.0, 1.0] {
+            let (x, y) = frame.at(
+                grip_along + line * layout::GRIP_PITCH * s,
+                depth + row * layout::GRIP_PITCH * s,
+            );
+            canvas.fill_round_rect(
+                x - dot_radius,
+                y - dot_radius,
+                2.0 * dot_radius,
+                2.0 * dot_radius,
+                [dot_radius; 4],
+                INK_PRIMARY,
+                grip_ink,
+            );
+        }
+    }
+}
+
+/// An eight-toothed gear of outer `radius` centred on `(cx, cy)`, with a hole in the middle.
+fn draw_gear(canvas: &mut Canvas, (cx, cy): (f32, f32), radius: f32, colour: u32, alpha: f32) {
+    const TEETH: usize = 8;
+    const HOLE_POINTS: usize = 24;
+    let step = std::f32::consts::TAU / TEETH as f32;
+    let root = radius * 0.78;
+    let mut rim: Vec<(f32, f32)> = Vec::with_capacity(TEETH * 4);
+    for tooth in 0..TEETH {
+        let centre = tooth as f32 * step;
+        // Each tooth: up from the root circle, across its crest and back down.
+        for (offset, reach) in [
+            (-0.30f32, root),
+            (-0.17, radius),
+            (0.17, radius),
+            (0.30, root),
+        ] {
+            let angle = centre + offset;
+            rim.push((cx + reach * angle.cos(), cy + reach * angle.sin()));
+        }
+    }
+    let hole: Vec<(f32, f32)> = (0..HOLE_POINTS)
+        .map(|point| {
+            let angle = point as f32 * std::f32::consts::TAU / HOLE_POINTS as f32;
+            (
+                cx + radius * 0.36 * angle.cos(),
+                cy + radius * 0.36 * angle.sin(),
+            )
+        })
+        .collect();
+    canvas.fill_polygon(&[rim, hole], colour, alpha);
 }
 
 /// A filled dot centred on `(x, y)`.
@@ -438,6 +568,10 @@ const STATUS_DOT: f32 = 6.4;
 const STATUS_GAP: f32 = 4.1;
 const BUTTON_HEIGHT: f32 = 22.0;
 const BUTTON_RADIUS: f32 = 6.0;
+/// A button plate's side padding, its symbol, and the gap after the symbol or before the detail.
+const BUTTON_PAD: f32 = 8.0;
+const BUTTON_SYMBOL: f32 = 12.0;
+const BUTTON_INNER: f32 = 5.0;
 /// Space kept between a label and its value.
 const VALUE_GAP: f32 = 7.5;
 /// A grouped limits box (the Mac's `TooltipCard` group): title inset, title to box, box
@@ -670,24 +804,40 @@ struct Plan {
     head: Vec<(f32, f32, f32, f32)>,
 }
 
-/// Left edge and width of each pill of a button row from `left`, then the close circle.
+/// Left edge and width of each pill of a button row from `left`, then the close circle. Pills
+/// that together would pass `right` are all narrowed in proportion (their labels then end in
+/// an ellipsis), so a row never spills out of its card.
 fn button_spans(
     buttons: &[Button],
     close: bool,
-    left: f32,
+    (left, right): (f32, f32),
     text: &mut TextPainter,
     s: f32,
 ) -> Vec<(f32, f32)> {
+    let natural: Vec<f32> = buttons
+        .iter()
+        .map(|button| {
+            let label = dip_width(text, &button.label, BODY_SIZE, true, s);
+            let symbol = if button.symbol.is_some() {
+                PILL_SYMBOL + PILL_INNER
+            } else {
+                0.0
+            };
+            2.0 * PILL_PAD + symbol + label
+        })
+        .collect();
+    let gaps = PILL_GAP * natural.len().saturating_sub(1) as f32;
+    let close_room = if close { PILL_GAP + PILL_HEIGHT } else { 0.0 };
+    let total: f32 = natural.iter().sum();
+    let available = (right - left - gaps - close_room).max(0.0);
+    let shrink = if total > available && total > 0.0 {
+        available / total
+    } else {
+        1.0
+    };
     let mut spans = Vec::new();
     let mut x = left;
-    for button in buttons {
-        let label = dip_width(text, &button.label, BODY_SIZE, true, s);
-        let symbol = if button.symbol.is_some() {
-            PILL_SYMBOL + PILL_INNER
-        } else {
-            0.0
-        };
-        let width = 2.0 * PILL_PAD + symbol + label;
+    for width in natural.iter().map(|width| width * shrink) {
         spans.push((x, width));
         x += width + PILL_GAP;
     }
@@ -764,7 +914,7 @@ fn flow_row(
         (lines_height(lines.len(), m), lines, Vec::new())
     };
     match row {
-        Row::Pair { value, .. } if value.is_empty() => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
+        Row::Button { .. } => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
         Row::Pair { .. } | Row::Status { .. } => (m.line, Vec::new(), Vec::new()),
         Row::Meter { fraction, .. } => (meter_height(*fraction, m), Vec::new(), Vec::new()),
         Row::Group { rows, .. } => {
@@ -782,7 +932,7 @@ fn flow_row(
         Row::Buttons { buttons, close } => (
             PILL_HEIGHT,
             Vec::new(),
-            button_spans(buttons, *close, CARD_PAD, text, s),
+            button_spans(buttons, *close, (CARD_PAD, CARD_PAD + room), text, s),
         ),
         Row::Progress(_) => (PROGRESS_HEIGHT, Vec::new(), Vec::new()),
         Row::Device { .. } | Row::Waiting(_) => (DEVICE_HEIGHT, Vec::new(), Vec::new()),
@@ -925,7 +1075,8 @@ fn banner_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32
         rows[index].top = height - CARD_PAD - above;
         rows[index].height = row_height;
         if let Row::Buttons { buttons, close } = &content.rows[index] {
-            rows[index].spans = button_spans(buttons, *close, text_left, text, s);
+            let limit = (text_left, width - CARD_PAD);
+            rows[index].spans = button_spans(buttons, *close, limit, text, s);
         }
     }
     Plan {
@@ -1411,7 +1562,63 @@ impl Pen<'_> {
             color: ink,
         };
         let baseline = centre + (BODY_BASELINE - DRAWN.line / 2.0) * s;
-        self.put(&button.label, cursor, baseline, style, false);
+        // A label wider than its pill (the pill was cut to fit the card) ends in an ellipsis.
+        let room = (x + width - PILL_PAD * s - cursor).max(0.0).round() as i32;
+        let label = self.fit(&button.label, style, room);
+        self.put(&label, cursor, baseline, style, false);
+    }
+
+    /// A full-width button plate (the Mac's "Copy last" and "Paste clipboard" rows): a faint
+    /// plate, the symbol and label, and the detail at the right. With no detail the symbol and
+    /// label sit in the middle. The detail keeps up to half the plate; whatever does not fit
+    /// is cut with an ellipsis. Dimmed when the button does nothing.
+    fn button_plate(
+        &mut self,
+        (left, right, y): (f32, f32, f32),
+        (symbol, label, detail): (Option<Symbol>, &str, &str),
+        live: bool,
+    ) {
+        let s = self.s;
+        let height = BUTTON_HEIGHT * s;
+        self.canvas.fill_round_rect(
+            left,
+            y,
+            right - left,
+            height,
+            [BUTTON_RADIUS * s; 4],
+            0xFFFFFF,
+            TRACK_ALPHA,
+        );
+        let color = if live { INK_PRIMARY } else { INK_SECONDARY };
+        let (ink, quiet) = (body(color), body(INK_SECONDARY));
+        let pad = BUTTON_PAD * s;
+        let icon = if symbol.is_some() {
+            (BUTTON_SYMBOL + BUTTON_INNER) * s
+        } else {
+            0.0
+        };
+        let mut room = right - left - 2.0 * pad - icon;
+        let mut detail_text = String::new();
+        if !detail.is_empty() {
+            detail_text = self.fit(detail, quiet, (room / 2.0) as i32);
+            room -= self.width(&detail_text, quiet) as f32 + BUTTON_INNER * s;
+        }
+        let label = self.fit(label, ink, room.max(0.0) as i32);
+        let label_width = self.width(&label, ink) as f32;
+        let start = if detail.is_empty() {
+            (left + right - icon - label_width) / 2.0
+        } else {
+            left + pad
+        };
+        if let Some(symbol) = symbol {
+            let centre = (start + BUTTON_SYMBOL * s / 2.0, y + height / 2.0);
+            glyphs::symbol(self.canvas, symbol, centre, BUTTON_SYMBOL * s, color, 1.0);
+        }
+        let baseline = y + (BUTTON_HEIGHT - DRAWN.line) / 2.0 * s + BODY_BASELINE * s;
+        self.put(&label, start + icon, baseline, ink, false);
+        if !detail_text.is_empty() {
+            self.put(&detail_text, right - pad, baseline, quiet, true);
+        }
     }
 
     /// A round header or row button: a faint disc with a cross, a refresh arrow or a spinner;
@@ -1447,6 +1654,13 @@ impl Pen<'_> {
             }
             Head::Close | Head::Dismiss => {
                 glyphs::symbol(self.canvas, Symbol::Xmark, centre, X_SIZE * s, ink, 1.0);
+            }
+            Head::Done => {
+                glyphs::symbol(self.canvas, Symbol::Check, centre, PILL_SYMBOL * s, ink, 1.0);
+            }
+            Head::Failed => {
+                let red = layout::BAND_CRITICAL;
+                glyphs::symbol(self.canvas, Symbol::Warning, centre, PILL_SYMBOL * s, red, 1.0);
             }
         }
     }
@@ -1622,32 +1836,28 @@ impl Pen<'_> {
             // Baseline of the line `extra` DIPs down the row.
             let base = |extra: f32| y + (extra + BODY_BASELINE) * s;
             match row {
-                Row::Pair { label, value } if value.is_empty() => {
-                    let height = BUTTON_HEIGHT * s;
-                    self.canvas.fill_round_rect(
-                        left,
-                        y,
-                        right - left,
-                        height,
-                        [BUTTON_RADIUS * s; 4],
-                        0xFFFFFF,
-                        TRACK_ALPHA,
-                    );
-                    let ink = body(if on { INK_PRIMARY } else { INK_SECONDARY });
-                    let label_width = self.width(label, ink) as f32;
-                    self.put(
-                        label,
-                        (left + right - label_width) / 2.0,
-                        y + (BUTTON_HEIGHT - DRAWN.line) / 2.0 * s + BODY_BASELINE * s,
-                        ink,
-                        false,
-                    );
-                }
+                Row::Button {
+                    symbol,
+                    label,
+                    detail,
+                } => self.button_plate(
+                    (left, right, y),
+                    (*symbol, label.as_str(), detail.as_str()),
+                    on,
+                ),
                 Row::Pair { label, value } => {
-                    let label_width = self.put(label, left, base(0.0), body(INK_PRIMARY), false);
-                    let room = (right - left) as i32 - label_width - (VALUE_GAP * s) as i32;
-                    let value = self.fit(value, body(INK_SECONDARY), room);
-                    self.put(&value, right, base(0.0), body(INK_SECONDARY), true);
+                    // Both sides are cut to fit: the value keeps what the label leaves (and
+                    // at least half the line when it needs it).
+                    let (primary, quiet) = (body(INK_PRIMARY), body(INK_SECONDARY));
+                    let total = (right - left) as i32;
+                    let gap = (VALUE_GAP * s) as i32;
+                    let label_width = self.width(label, primary);
+                    let value_room = (total - label_width - gap).max(total / 2);
+                    let value = self.fit(value, quiet, value_room);
+                    let value_width = self.width(&value, quiet);
+                    let label = self.fit(label, primary, total - value_width - gap);
+                    self.put(&label, left, base(0.0), primary, false);
+                    self.put(&value, right, base(0.0), quiet, true);
                 }
                 Row::Meter { .. } => self.meter(columns, y, row),
                 Row::Group { title, rows } => {

@@ -21,7 +21,7 @@ use crate::json::{self, Value};
 use crate::layout::{self, Badges, Cell, CellView, Edge};
 use crate::render;
 use crate::send::{self, Action, Panel};
-use crate::sensors::{Drive, Machine, MemInfo, NetRate, Reading};
+use crate::sensors::{Drive, Machine, MemInfo, NetRate, Reading, Temp};
 use crate::surface::TextPainter;
 use crate::update;
 use crate::usage::{Block, LimitWindow, Status, Usage};
@@ -275,6 +275,8 @@ fn usage_from(cell: &Value) -> Usage {
                 .to_string(),
             resets_at: num_of(block, "resetsInMinutes").map(|m| NOW + (m * 60.0) as u64),
         }),
+        account: None,
+        extras: crate::usage::Extras::default(),
     }
 }
 
@@ -452,12 +454,18 @@ fn fans_from(window: &Value) -> Reading<Vec<u32>> {
     }
 }
 
-/// The header note ("54" and the degree sign C) as degrees.
-fn temperature_from(cell: &Value) -> Reading<f32> {
+/// The header note ("54" and the degree sign C) as one degrees reading; the Mac's is the
+/// CPU's, and the Windows card names its source.
+fn temperature_from(cell: &Value) -> Reading<Vec<Temp>> {
     str_of(cell, "headerNote")
         .and_then(|n| n.split_whitespace().next())
         .and_then(|n| n.parse().ok())
-        .map_or(Reading::Unavailable, Reading::Value)
+        .map_or(Reading::Unavailable, |celsius| {
+            Reading::Value(vec![Temp {
+                source: "CPU",
+                celsius,
+            }])
+        })
 }
 
 fn drive_from(window: &Value, system: bool) -> Option<Drive> {
@@ -607,8 +615,16 @@ impl Rows {
         self.actions.push(action);
     }
 
-    fn button(&mut self, label: &str, action: Option<Action>) {
-        self.add(pair(label, ""), action);
+    /// A button plate: its symbol, label and the detail at the right.
+    fn button(&mut self, (symbol, label, detail): (Symbol, &str, &str), action: Option<Action>) {
+        self.add(
+            Row::Button {
+                symbol: Some(symbol),
+                label: label.to_string(),
+                detail: detail.to_string(),
+            },
+            action,
+        );
     }
 
     fn finish(self, title: &str) -> Panel {
@@ -642,8 +658,16 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     let windows = cell.map_or(&[][..], |c| arr(c, "windows"));
     let transfer = windows.iter().find(|w| str_of(w, "id") == Some("transfer"));
     let detail = transfer.and_then(|w| str_of(w, "detail")).unwrap_or("");
-    let running = detail != "Off";
     let mut panel = Rows::default();
+    // The Mac's order: the last received item, then the headline, the devices, the paste row.
+    if let Some(last) = windows
+        .iter()
+        .find(|w| str_of(w, "id") == Some("action:copylast"))
+    {
+        let label = str_of(last, "label").unwrap_or("");
+        let age = str_of(last, "detail").unwrap_or("");
+        panel.button((Symbol::Copy, label, age), Some(Action::CopyLast));
+    }
     match transfer.and_then(|w| num_of(w, "used").map(|f| (w, f as f32))) {
         Some((window, fraction)) => {
             panel.add(
@@ -655,18 +679,10 @@ fn send_hover(cell: Option<&Value>) -> Panel {
                 },
                 None,
             );
-            panel.button("Cancel", Some(Action::Cancel));
+            panel.button((Symbol::Stop, "Cancel", ""), Some(Action::Cancel));
         }
         None if !detail.is_empty() => panel.add(pair("Nearby sharing", detail), None),
         None => {}
-    }
-    if let Some(last) = windows
-        .iter()
-        .find(|w| str_of(w, "id") == Some("action:copylast"))
-    {
-        let label = str_of(last, "label").unwrap_or("");
-        let age = str_of(last, "detail").unwrap_or("");
-        panel.button(&format!("{label} \u{b7} {age}"), Some(Action::CopyLast));
     }
     let devices: Vec<(&str, &str, &str)> = windows
         .iter()
@@ -679,27 +695,23 @@ fn send_hover(cell: Option<&Value>) -> Panel {
             ))
         })
         .collect();
-    if windows
-        .iter()
-        .any(|w| str_of(w, "id") == Some("hint-network"))
-    {
-        panel.add(Row::Text(send::FIREWALL_HINT.to_string()), None);
-    }
     for (fingerprint, alias, kind) in &devices {
         panel.add(
             pair(alias, kind),
             Some(Action::SendTo((*fingerprint).to_string())),
         );
     }
-    if running {
-        if !devices.is_empty() {
-            panel.button("Paste clipboard", Some(Action::Paste));
-            panel.add(
-                Row::Text("Ctrl+V sends the clipboard \u{b7} drop files here".to_string()),
-                None,
-            );
-        }
-        panel.button("Look again", Some(Action::Refresh));
+    let blocked = windows
+        .iter()
+        .any(|w| str_of(w, "id") == Some("hint-network"));
+    if blocked {
+        panel.add(Row::Text(send::FIREWALL_HINT.to_string()), None);
+    } else if !devices.is_empty() {
+        panel.button((Symbol::Copy, "Paste clipboard", ""), Some(Action::Paste));
+        panel.add(
+            Row::Text("Ctrl+V sends the clipboard \u{b7} drop files here".to_string()),
+            None,
+        );
     }
     let mut panel = panel.finish("Send");
     panel.content.mark = Mark::Send;

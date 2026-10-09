@@ -16,6 +16,9 @@ mod autostart;
 mod bridge;
 mod canvas;
 mod card;
+mod claude_accounts;
+mod claude_restart;
+mod desktop;
 mod diag;
 mod drive_health;
 mod fileicon;
@@ -39,8 +42,9 @@ mod update;
 mod usage;
 mod viewshots;
 mod visibility;
+mod zstd;
 
-use layout::{Badges, Cell, CellView, Edge, SEND_CELL};
+use layout::{Badges, Cell, CellView, Edge, Handle, SEND_CELL};
 use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate};
 use raii::{ClassGuard, OwnedWindow, TimerGuard, hwnd_from_key, hwnd_key};
 use runtime::{
@@ -89,6 +93,9 @@ const FOLD_POLL_MS: u32 = 160;
 /// Polls the pointer must be outside before the notch folds (about half a second).
 const FOLD_GRACE_TICKS: u32 = 3;
 const HOVER_GRACE_MS: u32 = 220;
+/// Hub section the settings button opens: the Mac notch's own (`HubLauncher.open(section:
+/// "settings")`), which the hub shows as Accounts, the first page of its settings.
+const SETTINGS_SECTION: &str = "settings";
 /// One-second tick while an alert or update card is up (alerts put themselves away).
 const NOTICE_TIMER_ID: usize = 10;
 static NOTICE_TIMER_ARMED: AtomicBool = AtomicBool::new(false);
@@ -110,9 +117,13 @@ struct Panel {
     // unchanged so the next refresh retries while the panel keeps owning its HWND.
     visibility: Retry<bool>,
     /// What the layered bitmap currently shows (cell views + DPI); `None` forces a redraw.
-    drawn: Option<(Vec<CellView>, Edge, bool, u32, Badges)>,
+    drawn: Option<Drawn>,
     window: OwnedWindow,
 }
+
+/// What a notch's bitmap was drawn from: cells, edge, folded, DPI, badges and the settings
+/// handle part shown out.
+type Drawn = (Vec<CellView>, Edge, bool, u32, Badges, Option<Handle>);
 
 struct Drag {
     panel: isize,
@@ -136,6 +147,10 @@ struct Interaction {
     tracking: Option<isize>,
     /// Panel and cell where a plain left press started (click on release in the same cell).
     press: Option<(isize, usize)>,
+    /// Panel and part of the settings handle under the pointer (the grip is out while any is).
+    handle: Option<(isize, Handle)>,
+    /// Panel where a left press started on the settings button (click on release on it).
+    press_orb: Option<isize>,
     drag: Option<Drag>,
     /// Quit menu: owning panel and its screen rectangle.
     menu: Option<(isize, RECT)>,
@@ -169,6 +184,8 @@ impl Interaction {
             hover: None,
             tracking: None,
             press: None,
+            handle: None,
+            press_orb: None,
             drag: None,
             menu: None,
             card_shown: None,
@@ -439,6 +456,7 @@ fn run_pill() -> Result<(), Error> {
                 persist_settings();
             },
             check_updates: update::check_now,
+            primary_monitor: primary_monitor_id,
         },
     );
     update::start(controller.key(), lock_state().settings.auto_update_check);
@@ -671,6 +689,7 @@ fn desired_placements(found: &[MonitorSpec]) -> Vec<Placed> {
             .collect();
         (app.settings.clone(), open)
     };
+    let size = settings.notch_scale();
     found
         .iter()
         .filter(|spec| settings.monitor(&spec.id).enabled)
@@ -679,12 +698,35 @@ fn desired_placements(found: &[MonitorSpec]) -> Vec<Placed> {
             slot: Slot {
                 edge: settings.edge(&spec.id),
                 along: settings.position(&spec.id),
-                // A notch the pointer has opened stays open until the fold timer says so.
+                // A notch the pointer has opened stays open until the fold timer says so (a
+                // settings change that turns folding on starts it: `refold_after_settings`).
                 folded: settings.folds && !open.contains(&spec.id),
-                dpi: monitor_dpi(spec.bounds),
+                dpi: notch_dpi(monitor_dpi(spec.bounds), size),
             },
         })
         .collect()
+}
+
+/// The DPI a notch is laid out at: its monitor's, times the chosen size. Every metric (rings,
+/// text, cards) follows the DPI, so one number scales the whole notch, per monitor.
+fn notch_dpi(monitor: u32, size: f32) -> u32 {
+    ((monitor as f32 * size).round() as u32).clamp(48, 480)
+}
+
+/// Device name of the primary monitor, the one the hub's Edge control reports.
+fn primary_monitor_id() -> Option<String> {
+    // SAFETY: a plain query; the origin resolves to the primary monitor by default.
+    let monitor = unsafe {
+        windows::Win32::Graphics::Gdi::MonitorFromPoint(
+            POINT { x: 0, y: 0 },
+            windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTOPRIMARY,
+        )
+    };
+    let mut info = monitor_info();
+    // SAFETY: `info` is a MONITORINFOEXW with its size set, as the call requires.
+    unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) }
+        .as_bool()
+        .then(|| monitor_id(&info))
 }
 
 fn apply_monitor_set(desired: &[Placed]) -> bool {
@@ -912,7 +954,7 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
 /// changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     let ring = send::ring();
-    let (views, slot, badges) = {
+    let (views, slot, badges, handle) = {
         let app = lock_state();
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
@@ -923,24 +965,39 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
         } else {
             layout::views(app.machine.as_ref(), usage, &ring)
         };
+        // The settings handle part the pointer is on (the folded pill has none).
+        let handle = app
+            .ui
+            .handle
+            .filter(|h| h.0 == key && !panel.slot.folded)
+            .map(|h| h.1);
         let drawn = (
             &views,
             panel.slot.edge,
             panel.slot.folded,
             panel.slot.dpi,
             app.badges,
+            handle,
         );
         if panel
             .drawn
             .as_ref()
-            .is_some_and(|shown| (&shown.0, shown.1, shown.2, shown.3, shown.4) == drawn)
+            .is_some_and(|shown| (&shown.0, shown.1, shown.2, shown.3, shown.4, shown.5) == drawn)
         {
             return;
         }
-        (views, panel.slot, app.badges)
+        (views, panel.slot, app.badges, handle)
     };
     let Some(canvas) = with_text(|text| {
-        render::render_notch(&views, slot.edge, slot.folded, badges, slot.dpi, text)
+        render::render_notch(
+            &views,
+            slot.edge,
+            slot.folded,
+            badges,
+            slot.dpi,
+            text,
+            handle,
+        )
     }) else {
         return;
     };
@@ -951,7 +1008,7 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
                 .iter_mut()
                 .find(|p| p.window.key() == key)
             {
-                panel.drawn = Some((views, slot.edge, slot.folded, slot.dpi, badges));
+                panel.drawn = Some((views, slot.edge, slot.folded, slot.dpi, badges, handle));
             }
         }
         // `drawn` stays stale, so the next refresh retries.
@@ -1135,6 +1192,18 @@ fn cell_under(key: isize, x: i32, y: i32) -> Option<usize> {
     layout::cell_at_for(panel.slot.edge, x, y, panel.slot.dpi)
 }
 
+/// Part of the settings handle under a point in a panel's own pixels; none on the folded
+/// pill. The grip counts only while it is out (the pointer is on the handle).
+fn handle_under(key: isize, x: i32, y: i32) -> Option<Handle> {
+    let app = lock_state();
+    let panel = app.panels.iter().find(|p| p.window.key() == key)?;
+    if panel.slot.folded {
+        return None;
+    }
+    let grip_out = app.ui.handle.is_some_and(|h| h.0 == key);
+    layout::handle_at(panel.slot.edge, x, y, panel.slot.dpi, grip_out)
+}
+
 /// Creates the shared card window on first use; returns its key.
 fn ensure_card() -> Option<isize> {
     let existing = lock_state().card.as_ref().map(OwnedWindow::key);
@@ -1193,6 +1262,9 @@ fn dismiss_card_for(key: isize) {
         if relevant {
             app.ui.hover = None;
             app.ui.menu = None;
+        }
+        if app.ui.handle.is_some_and(|h| h.0 == key) {
+            app.ui.handle = None;
         }
         relevant
     };
@@ -1625,6 +1697,7 @@ fn set_folded(key: isize, folded: bool) {
         app.ui.fold_outside = 0;
         if folded {
             app.ui.hover = None;
+            app.ui.handle = None;
         }
     }
     redraw_panel(key, &usage::snapshot());
@@ -1634,6 +1707,28 @@ fn set_folded(key: isize, folded: bool) {
         } else {
             let _ = unsafe { SetTimer(Some(controller), FOLD_TIMER_ID, FOLD_POLL_MS, None) };
         }
+    }
+}
+
+/// A hub setting changed how the notches are placed. Reconciling keeps a notch the pointer
+/// opened open, and only opening a notch starts the fold timer, so turning "On hover" on
+/// while the notch was pinned open (Always show) would have left it open for good. Start the
+/// timer and let the first tick fold it, as the Mac's "On hover" folds the notch at once,
+/// unless the pointer is on it.
+fn refold_after_settings() {
+    let pending = {
+        let mut app = lock_state();
+        let pending = app.settings.folds && app.panels.iter().any(|p| !p.slot.folded);
+        if pending {
+            app.ui.fold_outside = FOLD_GRACE_TICKS - 1;
+        }
+        pending
+    };
+    if !pending {
+        return;
+    }
+    if let Some(controller) = controller_hwnd() {
+        let _ = unsafe { SetTimer(Some(controller), FOLD_TIMER_ID, FOLD_POLL_MS, None) };
     }
 }
 
@@ -1718,6 +1813,10 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
         set_folded(key, false);
         return;
     }
+    // The settings handle (button and grip) takes the pointer ahead of the rings.
+    if update_handle(key, x, y) {
+        return;
+    }
     match cell_under(key, x, y) {
         Some(cell) => {
             let changed = {
@@ -1737,15 +1836,52 @@ fn on_mouse_move(hwnd: HWND, x: i32, y: i32) {
     }
 }
 
+/// Moves the pointer onto or off the settings handle, redrawing the notch when the part under
+/// it changed (the arc fills in as the button and the grip comes out, or both go back). True
+/// while the pointer is on the handle: the rings see nothing then.
+fn update_handle(key: isize, x: i32, y: i32) -> bool {
+    if lock_state().ui.menu.is_some() {
+        return false;
+    }
+    let now = handle_under(key, x, y);
+    let changed = {
+        let mut app = lock_state();
+        let before = app.ui.handle.filter(|h| h.0 == key).map(|h| h.1);
+        if before != now {
+            app.ui.handle = now.map(|part| (key, part));
+        }
+        before != now
+    };
+    if changed {
+        redraw_panel(key, &usage::snapshot());
+        if now.is_some() {
+            clear_hover(key);
+        }
+    }
+    now.is_some()
+}
+
 fn on_mouse_leave(hwnd: HWND) {
     let key = hwnd_key(hwnd);
-    {
+    // The pointer left the notch: the grip goes back into the button's arc.
+    let handle_was_out = {
         let mut app = lock_state();
         if app.ui.tracking == Some(key) {
             app.ui.tracking = None;
         }
+        let out = app.ui.handle.is_some_and(|h| h.0 == key);
+        if out {
+            app.ui.handle = None;
+        }
+        out
+    };
+    if handle_was_out {
+        redraw_panel(key, &usage::snapshot());
     }
-    let over_send = lock_state().ui.hover == Some((key, SEND_CELL));
+    let over_send = lock_state()
+        .ui
+        .hover
+        .is_some_and(|(hovered, cell)| hovered == key && (cell == SEND_CELL || is_claude_cell(cell)));
     if over_send {
         arm_hover_grace();
     } else {
@@ -1798,7 +1934,14 @@ fn on_card_mouse_leave() {
     sync_card();
 }
 
-/// A click on the Send card: runs the action of the row under the pointer.
+/// The Claude cell's card has a button (restart and sync), so it takes the pointer like the
+/// Send card does.
+fn is_claude_cell(cell: usize) -> bool {
+    Cell::ALL.get(cell) == Some(&Cell::Claude)
+}
+
+/// A click on the Send card or the Claude card: runs the action of the control under the
+/// pointer.
 fn on_card_click(x: i32, y: i32) {
     let notice = lock_state()
         .ui
@@ -1809,7 +1952,7 @@ fn on_card_click(x: i32, y: i32) {
         on_notice_click(x, y);
         return;
     }
-    let action = {
+    let (action, claude) = {
         let app = lock_state();
         let Some(shown) = app.ui.card_shown.as_ref() else {
             return;
@@ -1822,12 +1965,17 @@ fn on_card_click(x: i32, y: i32) {
         else {
             return;
         };
-        with_text(|text| render::hit_at(&shown.panel.content, dpi, text, (x, y)))
+        let action = with_text(|text| render::hit_at(&shown.panel.content, dpi, text, (x, y)))
             .flatten()
-            .and_then(|hit| shown.panel.action(hit))
+            .and_then(|hit| shown.panel.action(hit));
+        (action, is_claude_cell(shown.cell))
     };
     if let Some(action) = action {
-        send::perform(action);
+        if claude {
+            claude_restart::start();
+        } else {
+            send::perform(action);
+        }
         // The card is about to change or go; the pointer re-announces itself on the next one.
         let mut app = lock_state();
         app.ui.card_hover = false;
@@ -1868,24 +2016,42 @@ fn on_notice_click(x: i32, y: i32) {
 
 fn on_lbutton_down(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
+    // Alt-drag takes the notch from anywhere; the grip takes it without Alt.
     if alt_down() {
         begin_drag(hwnd);
         return;
     }
-    if let Some(cell) = cell_under(key, x, y) {
-        lock_state().ui.press = Some((key, cell));
+    match handle_under(key, x, y) {
+        Some(Handle::Grip) => begin_drag(hwnd),
+        Some(Handle::Orb) => lock_state().ui.press_orb = Some(key),
+        None => {
+            if let Some(cell) = cell_under(key, x, y) {
+                lock_state().ui.press = Some((key, cell));
+            }
+        }
     }
 }
 
 fn on_lbutton_up(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
-    let (drag, press) = {
+    let (drag, press, press_orb) = {
         let mut app = lock_state();
-        (app.ui.drag.take(), app.ui.press.take())
+        (
+            app.ui.drag.take(),
+            app.ui.press.take(),
+            app.ui.press_orb.take(),
+        )
     };
     if let Some(drag) = drag {
         let _ = unsafe { ReleaseCapture() };
         finish_drag(drag);
+        return;
+    }
+    // A press and release on the settings button opens the hub's settings, as on the Mac.
+    if press_orb == Some(key) {
+        if handle_under(key, x, y) == Some(Handle::Orb) && !hub::open(SETTINGS_SECTION) {
+            diag::info("hub_unavailable", &[("section", SETTINGS_SECTION)]);
+        }
         return;
     }
     let Some((press_key, press_cell)) = press else {
@@ -1944,7 +2110,11 @@ fn begin_drag(hwnd: HWND) {
         let mut app = lock_state();
         app.ui.hover = None;
         app.ui.press = None;
+        app.ui.press_orb = None;
+        // The grip goes back into the button while the notch is carried.
+        app.ui.handle = None;
     }
+    redraw_panel(key, &usage::snapshot());
     hide_card();
     lock_state().ui.drag = Some(drag);
     let _ = unsafe { SetCapture(hwnd) };
@@ -2047,6 +2217,8 @@ fn finish_drag(drag: Drag) {
         }
     }
     persist_settings();
+    // The hub's Edge control follows the move at once instead of at the next two-second poll.
+    bridge::wake();
 }
 
 /// Right-click: a single "Quit" item, drawn as a non-activating card so focus never moves.
@@ -2219,6 +2391,7 @@ extern "system" fn controller_proc(
             }
             bridge::MSG_PLACEMENT_CHANGED => {
                 on_display_change();
+                refold_after_settings();
                 return LRESULT(0);
             }
             usage::MSG_USAGE_UPDATED => {
@@ -2290,6 +2463,25 @@ extern "system" fn panel_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
                 on_capture_lost();
                 return LRESULT(0);
             }
+            WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
+                // A pointing hand over the settings button, the four-way arrow over the grip.
+                let part = lock_state()
+                    .ui
+                    .handle
+                    .filter(|h| h.0 == hwnd_key(hwnd))
+                    .map(|h| h.1);
+                let shape = match part {
+                    Some(Handle::Orb) => Some(IDC_HAND),
+                    Some(Handle::Grip) => Some(IDC_SIZEALL),
+                    None => None,
+                };
+                if let Some(shape) = shape {
+                    if let Ok(cursor) = LoadCursorW(None, shape) {
+                        SetCursor(Some(cursor));
+                    }
+                    return LRESULT(1);
+                }
+            }
             WM_RBUTTONUP => {
                 if !alt_down() {
                     open_menu(hwnd);
@@ -2324,7 +2516,7 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                             .ui
                             .card_shown
                             .as_ref()
-                            .is_some_and(|c| c.cell == SEND_CELL || c.notice)
+                            .is_some_and(|c| c.cell == SEND_CELL || c.notice || is_claude_cell(c.cell))
                 };
                 return if takes_pointer {
                     LRESULT(HTCLIENT as isize)

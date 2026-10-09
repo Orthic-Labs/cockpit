@@ -684,7 +684,27 @@ fn usage(out: &mut String, v: &Value) {
     out.push_str("Provider usage\n");
     for (name, key) in [("Claude", "claude"), ("Codex", "codex")] {
         let m = &v[key];
-        let shown = if m["value"].is_null() || !m.is_object() {
+        let shown = if let Some(limits) = m["value"]["limits"].as_array() {
+            // The notch's published limits: "Weekly limit 31%", then how it stands.
+            let mut s = limits
+                .iter()
+                .map(|l| {
+                    format!(
+                        "{} {}%",
+                        text(&l["label"]),
+                        text(&l["used_percent"]).trim_end_matches(".0")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            if let Some(state) = m["state"].as_str().filter(|s| *s != "ok") {
+                let _ = write!(s, " ({})", esc(state));
+            }
+            if let Some(at) = m["observed_at"].as_str() {
+                let _ = write!(s, " as of {}", esc(at));
+            }
+            s
+        } else if m["value"].is_null() || !m.is_object() {
             unavailable(&reason_of(m))
         } else {
             let mut s = text(&m["value"]);
@@ -697,6 +717,17 @@ fn usage(out: &mut String, v: &Value) {
             s
         };
         let _ = writeln!(out, "  {name}: {shown}");
+    }
+    if let Some(age) = v["snapshot"]["age_seconds"].as_u64() {
+        let _ = writeln!(
+            out,
+            "  notch snapshot last changed {age}s ago{}",
+            if v["snapshot"]["notch_running"] == false {
+                " (notch not running)"
+            } else {
+                ""
+            }
+        );
     }
     if let Some(r) = v["reason"].as_str() {
         let _ = writeln!(out, "  {}", esc(r));
