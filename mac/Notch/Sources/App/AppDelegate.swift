@@ -92,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Pulse fork: an accessory app from the first moment — no Dock tile,
         // no menu-bar item. The notch is the only surface.
         NSApp.setActivationPolicy(.accessory)
+        // CI only: render the notch's views off-screen and exit (App/ViewShots.swift).
+        if ViewShots.requested { MainActor.assumeIsolated { ViewShots.runAndExit() } }
         guard !isRunningTests else { return }
         do {
             try ProductMigration.run()

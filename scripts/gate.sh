@@ -93,6 +93,26 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
     exit 1
   fi
   test -x "$RUNNER_TEMP/pulse-notch/Build/Products/Release/Pulse.app/Contents/MacOS/Pulse"
+  # Every notch view rendered off-screen (ImageRenderer, scale 2) from qa/notch-views.json,
+  # for the Mac-vs-Windows side-by-side. Lands beside the hub QA evidence so the artifact
+  # upload carries it; fewer PNGs than view ids fails the gate.
+  views_out="$RUNNER_TEMP/pulse-hub-qa/views/mac"
+  rm -rf "$views_out"; mkdir -p "$views_out"
+  views_rc=0
+  PULSE_RENDER_VIEWS=1 PULSE_VIEWS_JSON="$PWD/qa/notch-views.json" PULSE_VIEW_SHOTS="$views_out" \
+    python3 -c 'import subprocess,sys; sys.exit(subprocess.run(sys.argv[1:], timeout=300).returncode)' \
+    "$RUNNER_TEMP/pulse-notch/Build/Products/Release/Pulse.app/Contents/MacOS/Pulse" || views_rc=$?
+  python3 - "$PWD/qa/notch-views.json" "$views_out" <<'PY' || views_rc=$?
+import json, os, sys
+ids = [v["id"] for v in json.load(open(sys.argv[1]))]
+missing = [i for i in ids if not os.path.isfile(os.path.join(sys.argv[2], i + ".png")) or os.path.getsize(os.path.join(sys.argv[2], i + ".png")) < 500]
+pngs = [f for f in os.listdir(sys.argv[2]) if f.endswith(".png")]
+print(f"Mac view shots: {len(pngs)} PNGs for {len(ids)} view ids")
+if missing or len(pngs) < len(ids):
+    print("Missing or empty view shots: " + ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+PY
+  [[ $views_rc -eq 0 ]] || { echo "Notch view rendering failed ($views_rc)" >&2; exit "$views_rc"; }
   # Headless dogfood of the hub on rightkit-qa: the debug-only qa-native build
   # (compile-time barred from release) is launched hidden and driven through its
   # in-app control server (rightkit-control). The test makes its own fixture HOME so
@@ -106,7 +126,7 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   # generated ci workflow has no artifact upload.
   if [[ -z "${PULSE_SKIP_HUB_QA:-}" ]]; then
     qa_out="$RUNNER_TEMP/pulse-hub-qa"
-    rm -rf "$qa_out"; mkdir -p "$qa_out/screenshots" "$qa_out/evidence"
+    rm -rf "$qa_out/screenshots" "$qa_out/evidence" "$qa_out/managed"; mkdir -p "$qa_out/screenshots" "$qa_out/evidence"
     qa_rc=0
     (cd hub/src-tauri && cargo build --features qa-native,custom-protocol) || qa_rc=$?
     if [[ $qa_rc -eq 0 ]]; then

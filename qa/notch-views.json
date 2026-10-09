@@ -1,0 +1,5366 @@
+[
+  {
+    "id": "notch-resting-right",
+    "title": "Resting notch, right edge",
+    "area": "notch",
+    "description": "The folded pill welded to the right screen edge, as it sits when nothing is hovered. No rings visible.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "right",
+      "expanded": false,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-resting-left",
+    "title": "Resting notch, left edge",
+    "area": "notch",
+    "description": "The folded pill welded to the left screen edge, as it sits when nothing is hovered. No rings visible.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "left",
+      "expanded": false,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-resting-top",
+    "title": "Resting notch, top edge",
+    "area": "notch",
+    "description": "The folded pill welded to the top screen edge, as it sits when nothing is hovered. No rings visible.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "top",
+      "expanded": false,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-resting-bottom",
+    "title": "Resting notch, bottom edge",
+    "area": "notch",
+    "description": "The folded pill welded to the bottom screen edge, as it sits when nothing is hovered. No rings visible.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "bottom",
+      "expanded": false,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-expanded-right",
+    "title": "Expanded notch, right edge",
+    "area": "notch",
+    "description": "The open notch on the right edge: five rings (Claude, Codex, System, Disks, Send) with the settings button and move grip area. Layout differs by orientation.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "right",
+      "expanded": true,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-expanded-left",
+    "title": "Expanded notch, left edge",
+    "area": "notch",
+    "description": "The open notch on the left edge: five rings (Claude, Codex, System, Disks, Send) with the settings button and move grip area. Layout differs by orientation.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "left",
+      "expanded": true,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-expanded-top",
+    "title": "Expanded notch, top edge",
+    "area": "notch",
+    "description": "The open notch on the top edge: five rings (Claude, Codex, System, Disks, Send) with the settings button and move grip area. Layout differs by orientation.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "top",
+      "expanded": true,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-expanded-bottom",
+    "title": "Expanded notch, bottom edge",
+    "area": "notch",
+    "description": "The open notch on the bottom edge: five rings (Claude, Codex, System, Disks, Send) with the settings button and move grip area. Layout differs by orientation.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "bottom",
+      "expanded": true,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-expanded-warning-mix",
+    "title": "Expanded notch, mixed bands",
+    "area": "notch",
+    "description": "Open notch with every ring in a different state: Claude watch, Codex critical, memory warning, disks critical, Send transferring.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "right",
+      "expanded": true,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.73,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.55,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.94,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.8,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.61,
+              "detail": "61% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.72,
+              "detail": "Pressure warning · 17.6 GB of 24 GB used",
+              "band": "watch"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.84,
+              "detail": "159 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.96,
+              "detail": "40 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Sending to Maya's iPhone",
+              "used": 0.42,
+              "detail": "41.8 MB of 99.5 MB · 2 of 3 files",
+              "band": "ample"
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-expanded-badges",
+    "title": "Expanded notch with update and permission badges",
+    "area": "notch",
+    "description": "Open notch with the settings button badged for a pending update and for macOS permissions needing approval.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "right",
+      "expanded": true,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ],
+      "badges": {
+        "update": true,
+        "permissions": true
+      }
+    }
+  },
+  {
+    "id": "notch-resting-permissions-dot",
+    "title": "Resting notch with permission dot",
+    "area": "notch",
+    "description": "The folded pill with the four-point amber dot shown while permissions need approval.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "right",
+      "expanded": false,
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x"
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ],
+      "badges": {
+        "permissions": true
+      }
+    }
+  },
+  {
+    "id": "notch-hover-claude-right",
+    "title": "Notch with Claude card, right edge",
+    "area": "notch",
+    "description": "Open notch on the right edge with the pointer on the Claude ring: the hover card sits to the left with its tail on the ring.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "right",
+      "expanded": true,
+      "hover": "claude",
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x",
+          "sessions": [
+            {
+              "name": "demo-app",
+              "detail": "~/work/demo-app · main",
+              "state": "busy",
+              "sinceMinutes": 6
+            },
+            {
+              "name": "api-server",
+              "detail": "~/work/api-server",
+              "state": "waiting",
+              "waitingFor": "Run the test suite?",
+              "sinceMinutes": 2
+            }
+          ]
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "notch-hover-claude-top",
+    "title": "Notch with Claude card, top edge",
+    "area": "notch",
+    "description": "Open notch on the top edge with the pointer on the Claude ring: the card hangs below the notch.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "notch",
+      "edge": "top",
+      "expanded": true,
+      "hover": "claude",
+      "cells": [
+        {
+          "id": "claude",
+          "name": "Claude",
+          "glyph": "claude",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "session",
+              "label": "Current session",
+              "used": 0.21,
+              "resetsInMinutes": 51
+            },
+            {
+              "id": "weekly_all",
+              "label": "All models",
+              "used": 0.12,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "weekly_sonnet",
+              "label": "Sonnet",
+              "used": 0.08,
+              "resetsInMinutes": 3192
+            }
+          ],
+          "headline": "session",
+          "weekly": "weekly_all",
+          "plan": "Max 5x",
+          "sessions": [
+            {
+              "name": "demo-app",
+              "detail": "~/work/demo-app · main",
+              "state": "busy",
+              "sinceMinutes": 6
+            },
+            {
+              "name": "api-server",
+              "detail": "~/work/api-server",
+              "state": "waiting",
+              "waitingFor": "Run the test suite?",
+              "sinceMinutes": 2
+            }
+          ]
+        },
+        {
+          "id": "codex",
+          "name": "Codex",
+          "glyph": "openai",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "primary",
+              "label": "5 hour",
+              "used": 0.34,
+              "resetsInMinutes": 140
+            },
+            {
+              "id": "secondary",
+              "label": "Weekly",
+              "used": 0.18,
+              "resetsInMinutes": 3192
+            },
+            {
+              "id": "spark-primary",
+              "label": "5 hour",
+              "used": 0.05,
+              "resetsInMinutes": 200,
+              "group": "GPT-5.3-Codex-Spark"
+            },
+            {
+              "id": "spark-secondary",
+              "label": "Weekly",
+              "used": 0.02,
+              "resetsInMinutes": 3192,
+              "group": "GPT-5.3-Codex-Spark"
+            }
+          ],
+          "headline": "primary",
+          "weekly": "secondary",
+          "plan": "Pro"
+        },
+        {
+          "id": "system-cpu",
+          "name": "System",
+          "glyph": "cpu",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "cpu",
+              "label": "CPU",
+              "used": 0.23,
+              "detail": "23% busy · 10 cores"
+            },
+            {
+              "id": "pressure",
+              "label": "Memory pressure",
+              "used": 0.38,
+              "detail": "Pressure normal · 9.1 GB of 24 GB used",
+              "band": "ample"
+            },
+            {
+              "id": "gpu",
+              "label": "GPU",
+              "detail": "9% busy"
+            },
+            {
+              "id": "network",
+              "label": "Network",
+              "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+            },
+            {
+              "id": "fans",
+              "label": "Fans",
+              "detail": "1320 / 1304 rpm"
+            }
+          ],
+          "headline": "pressure",
+          "weekly": "cpu",
+          "headerNote": "54 °C"
+        },
+        {
+          "id": "system-disks",
+          "name": "Disks",
+          "glyph": "disk",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "disk:internal",
+              "label": "Macintosh HD",
+              "used": 0.58,
+              "detail": "417 GB free of 994 GB",
+              "trailing": "41 °C"
+            },
+            {
+              "id": "disk:backup",
+              "label": "Backup SSD",
+              "used": 0.41,
+              "detail": "590 GB free of 1 TB",
+              "trailing": "37 °C"
+            },
+            {
+              "id": "health:disk3:a",
+              "label": "",
+              "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+            },
+            {
+              "id": "health:disk5:a",
+              "label": "",
+              "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+            }
+          ],
+          "headline": "disk:backup",
+          "weekly": "disk:internal"
+        },
+        {
+          "id": "system-send",
+          "name": "Send",
+          "glyph": "send",
+          "status": "ok",
+          "windows": [
+            {
+              "id": "transfer",
+              "label": "Nearby sharing",
+              "detail": "2 nearby",
+              "usedText": "Idle",
+              "prefersUsedText": true
+            },
+            {
+              "id": "nearby:aa11",
+              "label": "Maya's iPhone",
+              "detail": "Phone"
+            },
+            {
+              "id": "nearby:bb22",
+              "label": "Studio Mac",
+              "detail": "Computer"
+            },
+            {
+              "id": "action:paste",
+              "label": "Paste clipboard"
+            },
+            {
+              "id": "hint-paste",
+              "label": "",
+              "detail": "⌘V sends the clipboard · drop files here"
+            }
+          ],
+          "headline": "transfer"
+        }
+      ]
+    }
+  },
+  {
+    "id": "ring-claude-normal",
+    "title": "Claude ring, normal",
+    "area": "ring",
+    "description": "Claude: session 21% (green arc), weekly 12% (thin inner ring).",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.21,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.12,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x"
+      }
+    }
+  },
+  {
+    "id": "ring-claude-warning",
+    "title": "Claude ring, warning",
+    "area": "ring",
+    "description": "Claude: session 73% in the watch band (orange), weekly 55%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.73,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.55,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x"
+      }
+    }
+  },
+  {
+    "id": "ring-claude-critical",
+    "title": "Claude ring, critical",
+    "area": "ring",
+    "description": "Claude: session 94% in the critical band (red), weekly 80%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.94,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.8,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x"
+      }
+    }
+  },
+  {
+    "id": "ring-claude-blocked",
+    "title": "Claude ring, limit reached",
+    "area": "ring",
+    "description": "Claude: a limit is spent. Ring reads as exhausted, glyph dimmed.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.64,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.4,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "block": {
+          "reason": "Session limit reached",
+          "resetsInMinutes": 51
+        }
+      }
+    }
+  },
+  {
+    "id": "ring-claude-stale",
+    "title": "Claude ring, stale reading",
+    "area": "ring",
+    "description": "Claude: last reading 38 minutes old, ring dimmed.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "stale",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.42,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.2,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "staleMinutes": 38
+      }
+    }
+  },
+  {
+    "id": "ring-claude-unknown",
+    "title": "Claude ring, unknown",
+    "area": "ring",
+    "description": "Claude: no reading (sign-in needed). Grey track, no arc, dimmed glyph.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "needs-auth",
+        "windows": []
+      }
+    }
+  },
+  {
+    "id": "ring-claude-waiting",
+    "title": "Claude ring, session waiting on you",
+    "area": "ring",
+    "description": "Claude: normal reading with the inner amber ring pulsing because a session is blocked on a question.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.21,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.12,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "sessions": [
+          {
+            "name": "api-server",
+            "detail": "~/work/api-server",
+            "state": "waiting",
+            "waitingFor": "Run the test suite?",
+            "sinceMinutes": 2
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "ring-claude-complete",
+    "title": "Claude ring, session complete",
+    "area": "ring",
+    "description": "Claude: normal reading with the inner green ring shown when an agent session has just completed.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.21,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.12,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "sessions": [
+          {
+            "name": "demo-app",
+            "detail": "~/work/demo-app",
+            "state": "success",
+            "sinceMinutes": 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "ring-codex-normal",
+    "title": "Codex ring, normal",
+    "area": "ring",
+    "description": "Codex: 5-hour 34%, weekly 18%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.34,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.18,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro"
+      }
+    }
+  },
+  {
+    "id": "ring-codex-warning",
+    "title": "Codex ring, warning",
+    "area": "ring",
+    "description": "Codex: 5-hour 76%, weekly 60%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.76,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.6,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro"
+      }
+    }
+  },
+  {
+    "id": "ring-codex-critical",
+    "title": "Codex ring, critical",
+    "area": "ring",
+    "description": "Codex: 5-hour 97%, weekly 85%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.97,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.85,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro"
+      }
+    }
+  },
+  {
+    "id": "ring-codex-unknown",
+    "title": "Codex ring, unknown",
+    "area": "ring",
+    "description": "Codex: no reading (sign-in needed).",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "needs-auth",
+        "windows": []
+      }
+    }
+  },
+  {
+    "id": "ring-codex-stale",
+    "title": "Codex ring, stale",
+    "area": "ring",
+    "description": "Codex: last reading 2 hours old.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "stale",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.34,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.18,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro",
+        "staleMinutes": 125
+      }
+    }
+  },
+  {
+    "id": "ring-memory-normal",
+    "title": "System ring, memory normal",
+    "area": "ring",
+    "description": "System cell: memory pressure normal (outer ring), CPU 23% (thin inner ring).",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.23,
+            "detail": "23% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.38,
+            "detail": "Pressure normal · 9.1 GB of 24 GB used",
+            "band": "ample"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "ring-memory-warning",
+    "title": "System ring, memory warning",
+    "area": "ring",
+    "description": "System cell: memory pressure warning (orange).",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.61,
+            "detail": "61% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.72,
+            "detail": "Pressure warning · 17.6 GB of 24 GB used",
+            "band": "watch"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "ring-memory-critical",
+    "title": "System ring, memory critical",
+    "area": "ring",
+    "description": "System cell: memory pressure critical (red), CPU 92%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.92,
+            "detail": "92% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.93,
+            "detail": "Pressure critical · 22.4 GB of 24 GB used",
+            "band": "critical"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "ring-memory-unknown",
+    "title": "System ring, memory unknown",
+    "area": "ring",
+    "description": "System cell: memory pressure reported as unknown (no band override), CPU 23%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.23,
+            "detail": "23% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.5,
+            "detail": "Pressure unknown · 12.0 GB of 24 GB used"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "ring-system-cpu-only",
+    "title": "System ring, memory unreadable",
+    "area": "ring",
+    "description": "System cell where memory could not be read: CPU 23% leads as the only ring.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.23,
+            "detail": "23% busy · 10 cores"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "ring-disks-normal",
+    "title": "Disks ring, normal",
+    "area": "ring",
+    "description": "Disks: external drive 41% (outer ring), internal 58% (thin inner ring).",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.58,
+            "detail": "417 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.41,
+            "detail": "590 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          },
+          {
+            "id": "health:disk5:a",
+            "label": "",
+            "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "ring-disks-warning",
+    "title": "Disks ring, warning",
+    "area": "ring",
+    "description": "Disks: external 74%, internal 84%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.84,
+            "detail": "159 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.74,
+            "detail": "260 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          },
+          {
+            "id": "health:disk5:a",
+            "label": "",
+            "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "ring-disks-critical",
+    "title": "Disks ring, critical",
+    "area": "ring",
+    "description": "Disks: external 96%, internal 91%.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.91,
+            "detail": "89 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.96,
+            "detail": "40 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          },
+          {
+            "id": "health:disk5:a",
+            "label": "",
+            "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "ring-disks-internal-only",
+    "title": "Disks ring, internal only",
+    "area": "ring",
+    "description": "Disks: no external drive, internal 58% leads alone.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.58,
+            "detail": "417 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          }
+        ],
+        "headline": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "ring-disks-unknown",
+    "title": "Disks ring, unknown",
+    "area": "ring",
+    "description": "Disks: no local disks could be read.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "error",
+        "windows": [],
+        "message": "No local disks found"
+      }
+    }
+  },
+  {
+    "id": "ring-send-idle",
+    "title": "Send ring, idle",
+    "area": "ring",
+    "description": "Send: idle with devices nearby, empty ring with the paper-plane glyph.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "2 nearby",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          },
+          {
+            "id": "nearby:aa11",
+            "label": "Maya's iPhone",
+            "detail": "Phone"
+          },
+          {
+            "id": "nearby:bb22",
+            "label": "Studio Mac",
+            "detail": "Computer"
+          },
+          {
+            "id": "action:paste",
+            "label": "Paste clipboard"
+          },
+          {
+            "id": "hint-paste",
+            "label": "",
+            "detail": "⌘V sends the clipboard · drop files here"
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "ring-send-transferring",
+    "title": "Send ring, transferring",
+    "area": "ring",
+    "description": "Send: transfer in flight at 42%, green arc.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Sending to Maya's iPhone",
+            "used": 0.42,
+            "detail": "41.8 MB of 99.5 MB · 2 of 3 files",
+            "band": "ample"
+          },
+          {
+            "id": "nearby:aa11",
+            "label": "Maya's iPhone",
+            "detail": "Phone"
+          },
+          {
+            "id": "nearby:bb22",
+            "label": "Studio Mac",
+            "detail": "Computer"
+          },
+          {
+            "id": "action:paste",
+            "label": "Paste clipboard"
+          },
+          {
+            "id": "hint-paste",
+            "label": "",
+            "detail": "⌘V sends the clipboard · drop files here"
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "ring-send-off",
+    "title": "Send ring, sharing off",
+    "area": "ring",
+    "description": "Send: nearby sharing is off.",
+    "backdrop": "#000000",
+    "fixture": {
+      "kind": "ring",
+      "weeklyRing": "inside",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "Off",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "tooltip-system-normal",
+    "title": "System card, normal",
+    "area": "hover-card",
+    "description": "CPU and memory hover card: CPU, memory pressure normal, GPU, network, fans, CPU temperature in the header.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.23,
+            "detail": "23% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.38,
+            "detail": "Pressure normal · 9.1 GB of 24 GB used",
+            "band": "ample"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "tooltip-system-warning",
+    "title": "System card, memory warning",
+    "area": "hover-card",
+    "description": "System hover card with memory pressure in the warning band.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.61,
+            "detail": "61% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.72,
+            "detail": "Pressure warning · 17.6 GB of 24 GB used",
+            "band": "watch"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "54 °C"
+      }
+    }
+  },
+  {
+    "id": "tooltip-system-critical",
+    "title": "System card, memory critical",
+    "area": "hover-card",
+    "description": "System hover card with memory pressure critical and CPU 92%.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.92,
+            "detail": "92% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.93,
+            "detail": "Pressure critical · 22.4 GB of 24 GB used",
+            "band": "critical"
+          },
+          {
+            "id": "gpu",
+            "label": "GPU",
+            "detail": "9% busy"
+          },
+          {
+            "id": "network",
+            "label": "Network",
+            "detail": "↓ 1.2 MB/s · ↑ 180 KB/s · Wi-Fi"
+          },
+          {
+            "id": "fans",
+            "label": "Fans",
+            "detail": "1320 / 1304 rpm"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu",
+        "headerNote": "88 °C"
+      }
+    }
+  },
+  {
+    "id": "tooltip-system-unknown",
+    "title": "System card, memory unknown",
+    "area": "hover-card",
+    "description": "System hover card where memory pressure is reported unknown and no sensors beyond CPU are available.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-cpu",
+        "name": "System",
+        "glyph": "cpu",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "cpu",
+            "label": "CPU",
+            "used": 0.23,
+            "detail": "23% busy · 10 cores"
+          },
+          {
+            "id": "pressure",
+            "label": "Memory pressure",
+            "used": 0.5,
+            "detail": "Pressure unknown · 12.0 GB of 24 GB used"
+          }
+        ],
+        "headline": "pressure",
+        "weekly": "cpu"
+      }
+    }
+  },
+  {
+    "id": "tooltip-disks-healthy",
+    "title": "Disks card, healthy",
+    "area": "hover-card",
+    "description": "Disks hover card: two volumes with free space, temperature on the name line, drive health OK lines.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.58,
+            "detail": "417 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.41,
+            "detail": "590 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          },
+          {
+            "id": "health:disk5:a",
+            "label": "",
+            "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "tooltip-disks-health-unavailable",
+    "title": "Disks card, health unavailable over USB",
+    "area": "hover-card",
+    "description": "Disks hover card where the external drive cannot report health over USB, showing the last reading.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.58,
+            "detail": "417 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.41,
+            "detail": "590 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          },
+          {
+            "id": "health:disk5:a",
+            "label": "",
+            "detail": "Backup SSD: Health n/a over USB"
+          },
+          {
+            "id": "health:disk5:last",
+            "label": "",
+            "detail": "Last reading Oct 2, 2026: OK · 36 °C · 9% worn"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "tooltip-disks-health-missing",
+    "title": "Disks card, smartmontools missing",
+    "area": "hover-card",
+    "description": "Disks hover card when the health tool is not installed.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.58,
+            "detail": "417 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.41,
+            "detail": "590 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:install",
+            "label": "Drive health",
+            "detail": "Install smartmontools for drive health"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "tooltip-disks-critical",
+    "title": "Disks card, nearly full",
+    "area": "hover-card",
+    "description": "Disks hover card with both volumes in warning and critical bands.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-disks",
+        "name": "Disks",
+        "glyph": "disk",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "disk:internal",
+            "label": "Macintosh HD",
+            "used": 0.91,
+            "detail": "89 GB free of 994 GB",
+            "trailing": "41 °C"
+          },
+          {
+            "id": "disk:backup",
+            "label": "Backup SSD",
+            "used": 0.96,
+            "detail": "40 GB free of 1 TB",
+            "trailing": "37 °C"
+          },
+          {
+            "id": "health:disk3:a",
+            "label": "",
+            "detail": "Macintosh HD: OK · 3% worn · 21.4 TB written"
+          },
+          {
+            "id": "health:disk5:a",
+            "label": "",
+            "detail": "Backup SSD: OK · 9% worn · 48.0 TB written"
+          }
+        ],
+        "headline": "disk:backup",
+        "weekly": "disk:internal"
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-normal",
+    "title": "Claude card, normal",
+    "area": "hover-card",
+    "description": "Claude hover card: plan, session and weekly windows with reset times, and the live session list.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.21,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.12,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "sessions": [
+          {
+            "name": "demo-app",
+            "detail": "~/work/demo-app · main",
+            "state": "busy",
+            "sinceMinutes": 6
+          },
+          {
+            "name": "api-server",
+            "detail": "~/work/api-server",
+            "state": "waiting",
+            "waitingFor": "Run the test suite?",
+            "sinceMinutes": 2
+          },
+          {
+            "name": "docs-site",
+            "detail": "~/work/docs-site",
+            "state": "idle",
+            "sinceMinutes": 41
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-warning",
+    "title": "Claude card, warning",
+    "area": "hover-card",
+    "description": "Claude hover card with the session in the watch band.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.73,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.55,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x"
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-critical",
+    "title": "Claude card, critical",
+    "area": "hover-card",
+    "description": "Claude hover card with the session in the critical band.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.94,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.8,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x"
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-blocked",
+    "title": "Claude card, limit reached",
+    "area": "hover-card",
+    "description": "Claude hover card with the red paused banner for a spent limit.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.64,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.4,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "block": {
+          "reason": "Session limit reached",
+          "resetsInMinutes": 51
+        }
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-stale",
+    "title": "Claude card, stale",
+    "area": "hover-card",
+    "description": "Claude hover card showing the age of the remembered reading in the header.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "stale",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Current session",
+            "used": 0.42,
+            "resetsInMinutes": 51
+          },
+          {
+            "id": "weekly_all",
+            "label": "All models",
+            "used": 0.2,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "weekly_sonnet",
+            "label": "Sonnet",
+            "used": 0.08,
+            "resetsInMinutes": 3192
+          }
+        ],
+        "headline": "session",
+        "weekly": "weekly_all",
+        "plan": "Max 5x",
+        "staleMinutes": 38
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-signin",
+    "title": "Claude card, sign-in needed",
+    "area": "hover-card",
+    "description": "Claude hover card with the sign-in guidance and no limit rows.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "needs-auth",
+        "windows": []
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-access-denied",
+    "title": "Claude card, access denied",
+    "area": "hover-card",
+    "description": "Claude hover card when macOS refused access to the saved login.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "access-denied",
+        "windows": []
+      }
+    }
+  },
+  {
+    "id": "tooltip-claude-error",
+    "title": "Claude card, read error",
+    "area": "hover-card",
+    "description": "Claude hover card when the usage read failed.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "claude",
+        "name": "Claude",
+        "glyph": "claude",
+        "status": "error",
+        "windows": [],
+        "message": "the network connection was lost"
+      }
+    }
+  },
+  {
+    "id": "tooltip-codex-normal",
+    "title": "Codex card, normal",
+    "area": "hover-card",
+    "description": "Codex hover card: plan, 5-hour and weekly windows plus a grouped Spark section.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.34,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.18,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro"
+      }
+    }
+  },
+  {
+    "id": "tooltip-codex-warning",
+    "title": "Codex card, warning",
+    "area": "hover-card",
+    "description": "Codex hover card with the 5-hour window in the watch band.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.76,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.6,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro"
+      }
+    }
+  },
+  {
+    "id": "tooltip-codex-stale",
+    "title": "Codex card, stale",
+    "area": "hover-card",
+    "description": "Codex hover card showing the age of the remembered reading.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "stale",
+        "windows": [
+          {
+            "id": "primary",
+            "label": "5 hour",
+            "used": 0.34,
+            "resetsInMinutes": 140
+          },
+          {
+            "id": "secondary",
+            "label": "Weekly",
+            "used": 0.18,
+            "resetsInMinutes": 3192
+          },
+          {
+            "id": "spark-primary",
+            "label": "5 hour",
+            "used": 0.05,
+            "resetsInMinutes": 200,
+            "group": "GPT-5.3-Codex-Spark"
+          },
+          {
+            "id": "spark-secondary",
+            "label": "Weekly",
+            "used": 0.02,
+            "resetsInMinutes": 3192,
+            "group": "GPT-5.3-Codex-Spark"
+          }
+        ],
+        "headline": "primary",
+        "weekly": "secondary",
+        "plan": "Pro",
+        "staleMinutes": 125
+      }
+    }
+  },
+  {
+    "id": "tooltip-codex-signin",
+    "title": "Codex card, sign-in needed",
+    "area": "hover-card",
+    "description": "Codex hover card with the sign-in guidance.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "codex",
+        "name": "Codex",
+        "glyph": "openai",
+        "status": "needs-auth",
+        "windows": []
+      }
+    }
+  },
+  {
+    "id": "tooltip-send-devices",
+    "title": "Send card, devices nearby",
+    "area": "hover-card",
+    "description": "Send hover card: two nearby devices, the Paste clipboard row and the hint line.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "2 nearby",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          },
+          {
+            "id": "nearby:aa11",
+            "label": "Maya's iPhone",
+            "detail": "Phone"
+          },
+          {
+            "id": "nearby:bb22",
+            "label": "Studio Mac",
+            "detail": "Computer"
+          },
+          {
+            "id": "action:paste",
+            "label": "Paste clipboard"
+          },
+          {
+            "id": "hint-paste",
+            "label": "",
+            "detail": "⌘V sends the clipboard · drop files here"
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "tooltip-send-empty",
+    "title": "Send card, no devices",
+    "area": "hover-card",
+    "description": "Send hover card with no devices nearby and no paste row.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "No devices nearby",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "tooltip-send-off",
+    "title": "Send card, sharing off",
+    "area": "hover-card",
+    "description": "Send hover card when nearby sharing is switched off.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "Off",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "tooltip-send-network-blocked",
+    "title": "Send card, local network blocked",
+    "area": "hover-card",
+    "description": "Send hover card telling the user to allow Local Network access.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Nearby sharing",
+            "detail": "No devices nearby",
+            "usedText": "Idle",
+            "prefersUsedText": true
+          },
+          {
+            "id": "hint-network",
+            "label": "",
+            "detail": "Allow Local Network for Pulse in System Settings."
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "tooltip-send-transferring",
+    "title": "Send card, transfer in flight",
+    "area": "hover-card",
+    "description": "Send hover card while a transfer runs: progress bar row, devices, paste row.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "tooltip",
+      "cell": {
+        "id": "system-send",
+        "name": "Send",
+        "glyph": "send",
+        "status": "ok",
+        "windows": [
+          {
+            "id": "transfer",
+            "label": "Sending to Maya's iPhone",
+            "used": 0.42,
+            "detail": "41.8 MB of 99.5 MB · 2 of 3 files",
+            "band": "ample"
+          },
+          {
+            "id": "nearby:aa11",
+            "label": "Maya's iPhone",
+            "detail": "Phone"
+          },
+          {
+            "id": "nearby:bb22",
+            "label": "Studio Mac",
+            "detail": "Computer"
+          },
+          {
+            "id": "action:paste",
+            "label": "Paste clipboard"
+          },
+          {
+            "id": "hint-paste",
+            "label": "",
+            "detail": "⌘V sends the clipboard · drop files here"
+          }
+        ],
+        "headline": "transfer"
+      }
+    }
+  },
+  {
+    "id": "send-picker-empty",
+    "title": "Send picker, looking for devices",
+    "area": "send-card",
+    "description": "Send-to picker with no devices yet: header, refresh and close buttons, spinner with Waiting for a device to appear.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Looking for devices…",
+      "detail": "Open LocalSend on the other device.",
+      "style": "ask",
+      "send": {
+        "rows": [],
+        "scanning": true
+      }
+    }
+  },
+  {
+    "id": "send-picker-scanning",
+    "title": "Send picker, scanning with devices",
+    "area": "send-card",
+    "description": "Send-to picker listing one device while a scan is still running (refresh button shows a spinner).",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Send to…",
+      "detail": "report.pdf",
+      "style": "ask",
+      "send": {
+        "rows": [
+          {
+            "alias": "Maya's iPhone",
+            "model": "iPhone 16 Pro",
+            "symbol": "iphone"
+          }
+        ],
+        "scanning": true
+      }
+    }
+  },
+  {
+    "id": "send-picker-devices",
+    "title": "Send picker, three devices",
+    "area": "send-card",
+    "description": "Send-to picker with three devices (phone, Mac, PC) for a pending file; each row shows icon, alias, model and a send arrow.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Send to…",
+      "detail": "report.pdf",
+      "style": "ask",
+      "send": {
+        "rows": [
+          {
+            "alias": "Maya's iPhone",
+            "model": "iPhone 16 Pro",
+            "symbol": "iphone"
+          },
+          {
+            "alias": "Studio Mac",
+            "model": "Mac Studio",
+            "symbol": "laptopcomputer"
+          },
+          {
+            "alias": "Living Room PC",
+            "model": "Windows PC",
+            "symbol": "display"
+          }
+        ],
+        "scanning": false
+      }
+    }
+  },
+  {
+    "id": "send-picker-text",
+    "title": "Send picker, pending text",
+    "area": "send-card",
+    "description": "Send-to picker for pasted clipboard text (detail reads Text).",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Send to…",
+      "detail": "Text",
+      "style": "ask",
+      "send": {
+        "rows": [
+          {
+            "alias": "Maya's iPhone",
+            "model": "iPhone 16 Pro",
+            "symbol": "iphone"
+          },
+          {
+            "alias": "Studio Mac",
+            "model": "Mac Studio",
+            "symbol": "laptopcomputer"
+          }
+        ],
+        "scanning": false
+      }
+    }
+  },
+  {
+    "id": "send-waiting-accept",
+    "title": "Sending, waiting for accept",
+    "area": "send-card",
+    "description": "Transfer card before the receiver answers: device icon, Waiting for Maya's iPhone to accept, indeterminate bar.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Waiting for Maya's iPhone to accept…",
+      "detail": "report.pdf",
+      "style": "working",
+      "send": {
+        "rows": [],
+        "scanning": false,
+        "transfer": {
+          "state": "waiting",
+          "symbol": "iphone",
+          "canCancel": false
+        }
+      }
+    }
+  },
+  {
+    "id": "send-sending-progress",
+    "title": "Sending with progress",
+    "area": "send-card",
+    "description": "Transfer card mid-send: 42% bar, bytes done of total, Cancel pill and close button.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Sending to Maya's iPhone",
+      "detail": "report.pdf · 41.8 MB of 99.5 MB",
+      "style": "working",
+      "send": {
+        "rows": [],
+        "scanning": false,
+        "transfer": {
+          "state": "active",
+          "symbol": "iphone",
+          "fraction": 0.42,
+          "canCancel": true
+        }
+      }
+    }
+  },
+  {
+    "id": "send-sending-multi",
+    "title": "Sending several files",
+    "area": "send-card",
+    "description": "Transfer card for a multi-file send: 2 of 3 files.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Sending to Studio Mac",
+      "detail": "41.8 MB of 99.5 MB · 2 of 3 files",
+      "style": "working",
+      "send": {
+        "rows": [],
+        "scanning": false,
+        "transfer": {
+          "state": "active",
+          "symbol": "laptopcomputer",
+          "fraction": 0.42,
+          "canCancel": true
+        }
+      }
+    }
+  },
+  {
+    "id": "send-sent",
+    "title": "Sent",
+    "area": "send-card",
+    "description": "Transfer card after a successful send: check mark, To Maya's iPhone and file name.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Sent",
+      "detail": "To Maya's iPhone · report.pdf",
+      "style": "done",
+      "send": {
+        "rows": [],
+        "scanning": false,
+        "transfer": {
+          "state": "done",
+          "symbol": "checkmark.circle",
+          "canCancel": false
+        }
+      }
+    }
+  },
+  {
+    "id": "send-declined",
+    "title": "Send declined",
+    "area": "send-card",
+    "description": "Transfer card when the receiver declined: hand icon, amber detail Nothing was sent.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Declined",
+      "detail": "Maya's iPhone declined. Nothing was sent.",
+      "style": "problem",
+      "send": {
+        "rows": [],
+        "scanning": false,
+        "transfer": {
+          "state": "problem",
+          "symbol": "hand.raised",
+          "canCancel": false
+        }
+      }
+    }
+  },
+  {
+    "id": "send-error",
+    "title": "Send failed",
+    "area": "send-card",
+    "description": "Transfer card for a failed send: warning triangle, amber error text.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Couldn't send",
+      "detail": "The connection to Maya's iPhone was lost.",
+      "style": "problem",
+      "send": {
+        "rows": [],
+        "scanning": false,
+        "transfer": {
+          "state": "problem",
+          "symbol": "exclamationmark.triangle",
+          "canCancel": false
+        }
+      }
+    }
+  },
+  {
+    "id": "send-incoming-files",
+    "title": "Incoming request, files",
+    "area": "nearby-card",
+    "description": "Incoming request card: Maya's iPhone wants to send 2 files (12.4 MB), saving to Downloads, with Accept and Decline.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Maya's iPhone wants to send 2 files (12.4 MB)",
+      "detail": "IMG_2041.jpg · Saves to Downloads",
+      "style": "ask",
+      "primary": {
+        "choice": "install",
+        "label": "Accept"
+      },
+      "secondary": {
+        "choice": "cancel",
+        "label": "Decline"
+      }
+    }
+  },
+  {
+    "id": "send-incoming-file-single",
+    "title": "Incoming request, one file",
+    "area": "nearby-card",
+    "description": "Incoming request card for a single file.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Studio Mac wants to send 1 file (3.2 MB)",
+      "detail": "notes.txt · Saves to Downloads",
+      "style": "ask",
+      "primary": {
+        "choice": "install",
+        "label": "Accept"
+      },
+      "secondary": {
+        "choice": "cancel",
+        "label": "Decline"
+      }
+    }
+  },
+  {
+    "id": "send-incoming-message",
+    "title": "Incoming request, message",
+    "area": "nearby-card",
+    "description": "Incoming request card for a text message preview, with Accept and Decline.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "messages",
+      "title": "Maya's iPhone wants to send a message",
+      "detail": "https://example.com/trip-plan · Saves to Downloads",
+      "style": "ask",
+      "primary": {
+        "choice": "install",
+        "label": "Accept"
+      },
+      "secondary": {
+        "choice": "cancel",
+        "label": "Decline"
+      }
+    }
+  },
+  {
+    "id": "send-saved",
+    "title": "Saved to Downloads",
+    "area": "nearby-card",
+    "description": "Received-file card: Saved to Downloads, the file name and a Show pill.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Saved to Downloads",
+      "detail": "IMG_2041.jpg",
+      "style": "done",
+      "primary": {
+        "choice": "showImage",
+        "label": "Show"
+      }
+    }
+  },
+  {
+    "id": "send-saved-multi",
+    "title": "Saved several files",
+    "area": "nearby-card",
+    "description": "Received-files card for several files.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Saved to Downloads",
+      "detail": "3 files from Maya's iPhone",
+      "style": "done",
+      "primary": {
+        "choice": "showImage",
+        "label": "Show"
+      }
+    }
+  },
+  {
+    "id": "send-message-text",
+    "title": "Received text, Copy",
+    "area": "nearby-card",
+    "description": "Received message card with plain text: Copy pill only.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "messages",
+      "title": "Message from Maya's iPhone",
+      "detail": "Pick up milk on the way home",
+      "style": "ask",
+      "primary": {
+        "choice": "copyText",
+        "label": "Copy"
+      }
+    }
+  },
+  {
+    "id": "send-message-link",
+    "title": "Received link, Copy and Open",
+    "area": "nearby-card",
+    "description": "Received message card whose text is a web address: Copy and Open pills.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "messages",
+      "title": "Message from Maya's iPhone",
+      "detail": "https://example.com/trip-plan",
+      "style": "ask",
+      "primary": {
+        "choice": "copyText",
+        "label": "Copy"
+      },
+      "secondary": {
+        "choice": "openLink",
+        "label": "Open"
+      }
+    }
+  },
+  {
+    "id": "send-message-copied",
+    "title": "Message copied",
+    "area": "nearby-card",
+    "description": "Brief confirmation card after Copy: Copied.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "messages",
+      "title": "Copied",
+      "detail": "",
+      "style": "done"
+    }
+  },
+  {
+    "id": "send-note-nothing",
+    "title": "Nothing to send",
+    "area": "nearby-card",
+    "description": "Problem note when the clipboard holds nothing sendable.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Nothing to send",
+      "detail": "The clipboard has no files or text.",
+      "style": "problem"
+    }
+  },
+  {
+    "id": "send-note-not-running",
+    "title": "Sharing isn't running",
+    "area": "nearby-card",
+    "description": "Problem note when the sharing service is off or still starting.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Sharing isn't running",
+      "detail": "Nearby sharing is off or still starting.",
+      "style": "problem"
+    }
+  },
+  {
+    "id": "send-note-declined",
+    "title": "Declined note",
+    "area": "nearby-card",
+    "description": "Note shown after the receiver declined: name declined, Nothing was sent.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Maya's iPhone declined",
+      "detail": "Nothing was sent.",
+      "style": "problem"
+    }
+  },
+  {
+    "id": "send-note-receive-failed",
+    "title": "Receive failed",
+    "area": "nearby-card",
+    "description": "Problem note when an incoming transfer failed.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Couldn't receive",
+      "detail": "The transfer was interrupted.",
+      "style": "problem"
+    }
+  },
+  {
+    "id": "disk-install-ask",
+    "title": "Disk image, install question",
+    "area": "disk-image-card",
+    "description": "Install question for an app found on a mounted disk image: app icon, Install Notes?, detail and Install pill.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Install Notes Pro?",
+      "detail": "Version 2.4.1 from Example Software. Copies to Applications.",
+      "style": "ask",
+      "primary": {
+        "choice": "install",
+        "label": "Install"
+      }
+    }
+  },
+  {
+    "id": "disk-install-untrusted",
+    "title": "Disk image, untrusted app",
+    "area": "disk-image-card",
+    "description": "Install question for an app that fails the trust check: amber warning line and Install anyway.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Install Notes Pro?",
+      "detail": "Version 2.4.1 from an unknown developer.",
+      "warning": "Its signature could not be verified.",
+      "style": "ask",
+      "primary": {
+        "choice": "install",
+        "label": "Install anyway"
+      }
+    }
+  },
+  {
+    "id": "disk-replace-ask",
+    "title": "Disk image, replace existing",
+    "area": "disk-image-card",
+    "description": "Question when the app is already installed: Replace pill.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Notes Pro",
+      "detail": "Version 2.4.1 is installed. This image has 2.5.0.",
+      "style": "ask",
+      "primary": {
+        "choice": "replace",
+        "label": "Replace"
+      }
+    }
+  },
+  {
+    "id": "disk-quit-update-ask",
+    "title": "Disk image, app running",
+    "area": "disk-image-card",
+    "description": "Question when the installed app is running: Quit & update pill.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Notes Pro",
+      "detail": "Notes Pro is open. It will be quit and reopened.",
+      "style": "ask",
+      "primary": {
+        "choice": "quitAndUpdate",
+        "label": "Quit & update"
+      }
+    }
+  },
+  {
+    "id": "disk-installing",
+    "title": "Disk image, installing",
+    "area": "disk-image-card",
+    "description": "Working card: Installing Notes Pro, Copying and checking it, indeterminate bar and close.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Installing Notes Pro",
+      "detail": "Copying and checking it.",
+      "style": "working"
+    }
+  },
+  {
+    "id": "disk-installing-cancel",
+    "title": "Disk image, installing with Cancel",
+    "area": "disk-image-card",
+    "description": "Working card that still offers Cancel.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Installing Notes Pro",
+      "detail": "Copying and checking it.",
+      "style": "working",
+      "primary": {
+        "choice": "cancel",
+        "label": "Cancel"
+      }
+    }
+  },
+  {
+    "id": "disk-installed-undo",
+    "title": "Disk image, installed with Undo",
+    "area": "disk-image-card",
+    "description": "Done card: Installed Notes Pro, ejected and download trashed notes, Undo pill.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Installed Notes Pro",
+      "detail": "Disk image ejected. Download moved to the Trash.",
+      "style": "done",
+      "primary": {
+        "choice": "undo",
+        "label": "Undo"
+      }
+    }
+  },
+  {
+    "id": "disk-updated-undo",
+    "title": "Disk image, updated with Undo",
+    "area": "disk-image-card",
+    "description": "Done card after an update: Updated Notes Pro to 2.5.0 with Undo.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Updated Notes Pro to 2.5.0",
+      "detail": "Disk image ejected. Reopened.",
+      "style": "done",
+      "primary": {
+        "choice": "undo",
+        "label": "Undo"
+      }
+    }
+  },
+  {
+    "id": "disk-undoing",
+    "title": "Disk image, undoing",
+    "area": "disk-image-card",
+    "description": "Working card during Undo: Undoing Notes Pro, Putting things back.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Undoing Notes Pro",
+      "detail": "Putting things back.",
+      "style": "working"
+    }
+  },
+  {
+    "id": "disk-undone",
+    "title": "Disk image, undone",
+    "area": "disk-image-card",
+    "description": "Done card after Undo: Removed Notes Pro, the new copy is in the Trash.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Restored the previous Notes Pro",
+      "detail": "The new copy is in the Trash.",
+      "style": "done"
+    }
+  },
+  {
+    "id": "disk-cancelled",
+    "title": "Disk image, cancelled",
+    "area": "disk-image-card",
+    "description": "Done card after Cancel: Cancelled, Notes Pro was not installed.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Cancelled",
+      "detail": "Notes Pro was not installed.",
+      "style": "done"
+    }
+  },
+  {
+    "id": "disk-install-failed",
+    "title": "Disk image, install failed",
+    "area": "disk-image-card",
+    "description": "Problem card: Could not install, signature check failed, Show in Finder.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Could not install Notes Pro",
+      "detail": "The copy did not pass its signature check.",
+      "style": "problem",
+      "primary": {
+        "choice": "showImage",
+        "label": "Show in Finder"
+      }
+    }
+  },
+  {
+    "id": "disk-still-open",
+    "title": "Disk image, app still open",
+    "area": "disk-image-card",
+    "description": "Problem card when the running app did not quit in time.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "app",
+      "title": "Notes Pro is still open",
+      "detail": "It did not quit. Save your work, then try again.",
+      "style": "problem",
+      "primary": {
+        "choice": "quitAndUpdate",
+        "label": "Quit & update"
+      }
+    }
+  },
+  {
+    "id": "disk-installer-package",
+    "title": "Disk image, installer package",
+    "area": "disk-image-card",
+    "description": "Question for an image that holds an installer package: Open installer.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "installer",
+      "title": "Notes Pro Installer",
+      "detail": "This disk image holds an installer.",
+      "style": "ask",
+      "primary": {
+        "choice": "openInstaller",
+        "label": "Open installer"
+      }
+    }
+  },
+  {
+    "id": "disk-several-apps",
+    "title": "Disk image, several apps",
+    "area": "disk-image-card",
+    "description": "Question for an image holding more than one app: Show in Finder.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "card",
+      "icon": "folder",
+      "title": "Example Suite",
+      "detail": "This disk image holds more than one app.",
+      "style": "ask",
+      "primary": {
+        "choice": "showImage",
+        "label": "Show in Finder"
+      }
+    }
+  },
+  {
+    "id": "update-available",
+    "title": "Update available",
+    "area": "update-card",
+    "description": "Update card: app icon, Pulse 0.3.0 is available, release notes line, Update, Later and close.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "update",
+      "version": "0.3.0",
+      "notes": "Faster drive health checks and a new Send card.",
+      "phase": "available"
+    }
+  },
+  {
+    "id": "update-available-no-notes",
+    "title": "Update available, no notes",
+    "area": "update-card",
+    "description": "Update card with the default body line.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "update",
+      "version": "0.3.0",
+      "notes": "",
+      "phase": "available"
+    }
+  },
+  {
+    "id": "update-downloading",
+    "title": "Update downloading",
+    "area": "update-card",
+    "description": "Installing card mid-download: Installing Pulse 0.3.0, Downloading… 45%, progress bar.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "update",
+      "version": "0.3.0",
+      "notes": "",
+      "phase": "downloading",
+      "progress": 0.45
+    }
+  },
+  {
+    "id": "update-installing",
+    "title": "Update installing",
+    "area": "update-card",
+    "description": "Installing card at the last stage: Installing…, full bar.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "update",
+      "version": "0.3.0",
+      "notes": "",
+      "phase": "installing"
+    }
+  },
+  {
+    "id": "alert-reset",
+    "title": "Usage reset notice",
+    "area": "alert",
+    "description": "Notch alert card: Claude Reset, Current session limit refreshed, green dot Quota is available, next reset time.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "alert",
+      "alertKind": "reset",
+      "provider": "Claude",
+      "glyph": "claude",
+      "window": "Current session",
+      "resetsInMinutes": 300
+    }
+  },
+  {
+    "id": "alert-session-limit",
+    "title": "Session limit reached notice",
+    "area": "alert",
+    "description": "Notch alert card: Claude Limit Reached, session spent, red dot, Resets at time.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "alert",
+      "alertKind": "sessionLimitReached",
+      "provider": "Claude",
+      "glyph": "claude",
+      "window": "Current session",
+      "resetsInMinutes": 51
+    }
+  },
+  {
+    "id": "alert-weekly-limit",
+    "title": "Weekly limit reached notice",
+    "area": "alert",
+    "description": "Notch alert card: Codex Weekly Limit, weekly spent, red dot.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "alert",
+      "alertKind": "weeklyLimitReached",
+      "provider": "Codex",
+      "glyph": "openai",
+      "window": "Weekly",
+      "resetsInMinutes": 3100
+    }
+  },
+  {
+    "id": "alert-threshold",
+    "title": "Threshold crossing notice",
+    "area": "alert",
+    "description": "Notch alert card for a usage threshold (notice words replace the kind's own): Claude at 90%.",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "alert",
+      "alertKind": "reset",
+      "provider": "Claude",
+      "glyph": "claude",
+      "window": "Current session",
+      "resetsInMinutes": 51,
+      "noticeTitle": "Claude at 90%",
+      "noticeSubtitle": "Current session is nearly spent",
+      "noticeStatus": "90% of the session limit used"
+    }
+  },
+  {
+    "id": "menu-quit",
+    "title": "Right-click menu",
+    "area": "menu",
+    "description": "The notch's context menu: a single Quit Pulse item with the Command-Q key equivalent. (Mac renders a drawn facsimile; the real one is a native NSMenu.)",
+    "backdrop": "#2B2B2F",
+    "fixture": {
+      "kind": "menu",
+      "items": [
+        {
+          "title": "Quit Pulse",
+          "shortcut": "⌘Q"
+        }
+      ]
+    }
+  }
+]

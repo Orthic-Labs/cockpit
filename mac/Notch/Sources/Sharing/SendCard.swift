@@ -103,14 +103,14 @@ struct SendCardBody: View {
 
             if send.rows.isEmpty {
                 HStack(spacing: Design.px(16)) {
-                    ProgressView().controlSize(.small).tint(Palette.textPrimary)
+                    CardProgress(linear: false)
                     Text(verbatim: L10n.t("Waiting for a device to appear…"))
                         .font(Typography.cardBody)
                         .foregroundStyle(secondaryInk)
                 }
                 .frame(maxWidth: .infinity, minHeight: SendCardContent.rowHeight, alignment: .center)
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
+                CardScroll {
                     VStack(spacing: SendCardContent.rowGap) {
                         ForEach(send.rows) { row in
                             SendDeviceRow(row: row, secondaryInk: secondaryInk) {
@@ -127,7 +127,7 @@ struct SendCardBody: View {
         Button { onChoice?(.refresh) } label: {
             ZStack {
                 if send.scanning {
-                    ProgressView().controlSize(.small).tint(Palette.textPrimary)
+                    CardProgress(linear: false)
                 } else {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 12, weight: .semibold))
@@ -182,16 +182,8 @@ struct SendCardBody: View {
                 Spacer(minLength: Design.px(14))
 
                 if transfer.state == .waiting || transfer.state == .active {
-                    Group {
-                        if let fraction = transfer.fraction {
-                            ProgressView(value: min(max(fraction, 0), 1))
-                        } else {
-                            ProgressView()
-                        }
-                    }
-                    .progressViewStyle(.linear)
-                    .tint(Palette.textPrimary)
-                    .padding(.bottom, Design.px(14))
+                    CardProgress(value: transfer.fraction.map { min(max($0, 0), 1) })
+                        .padding(.bottom, Design.px(14))
                 }
                 HStack(spacing: Design.px(14)) {
                     if transfer.canCancel {

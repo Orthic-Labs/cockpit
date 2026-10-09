@@ -181,9 +181,7 @@ struct DiskImageCard: View {
                     Spacer(minLength: Design.px(14))
 
                     if prompt.style == .working {
-                        ProgressView()
-                            .progressViewStyle(.linear)
-                            .tint(Palette.textPrimary)
+                        CardProgress()
                             .padding(.bottom, Design.px(prompt.primary == nil ? 20 : 14))
                             .transition(.opacity)
                         // A working card offers Cancel (and the close) only while cancelling is possible.
