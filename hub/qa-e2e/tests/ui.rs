@@ -1406,10 +1406,8 @@ fn check_interaction_states(inventory: &[Value]) -> Vec<String> {
         if !e["hover"].is_null() && e["hover_style_changed"] != true {
             problems.push(format!("no hover state: {who}"));
         }
-        // Advisory until rightkit-control's mouse-down is shown to reach `:active` in the
-        // page (2 of 121 clicked controls changed on 2026-10-10, before any CSS change).
         if harness_presses && e["clicked"] == true && e["press_pixels_changed"] != true {
-            eprintln!("interaction states (advisory): no pressed state: {who}");
+            problems.push(format!("no pressed state: {who}"));
         }
     }
     problems
@@ -1531,6 +1529,13 @@ fn hub_tour(h: &Harness) {
             // Every control of this section: hover, pressed and after-click shots plus an inventory entry each.
             #[cfg(target_os = "macos")]
             {
+                // A never-shown WebKit window runs no animation frames, so a CSS transition on
+                // a hover or pressed property stays at its start value in a snapshot. Until
+                // rightkit-control finishes animations before hidden screenshots (0.1.10), the
+                // crawl turns transitions off; the states themselves are what is measured.
+                let _ = ctl.eval(
+                    "if (!document.getElementById('qa-no-transition')) { const s = document.createElement('style'); s.id = 'qa-no-transition'; s.textContent = '*,*::before,*::after{transition:none!important;animation:none!important}'; document.head.appendChild(s); } return true",
+                );
                 crawl_section(&ctl, sec, sec.id, &shots, &bridge.join("hub-commands"), crawl_deadline, 40, &mut inventory);
                 write_inventory(&shots, &inventory);
             }
