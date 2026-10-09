@@ -150,9 +150,7 @@ struct DiskImageCard: View {
                 .frame(width: width, height: height)
 
             HStack(alignment: .center, spacing: Design.px(30)) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: prompt.iconPath))
-                    .resizable()
-                    .interpolation(.high)
+                CardIcon(path: prompt.iconPath)
                     .frame(width: Self.icon, height: Self.icon)
 
                 VStack(alignment: .leading, spacing: 0) {

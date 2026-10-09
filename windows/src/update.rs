@@ -148,6 +148,7 @@ pub fn card(version: &str, notes: &str, phase: Phase) -> Panel {
         title,
         lead: Some(Lead::Tile(Tile::App)),
         wide: true,
+        heavy_bar: true,
         ..CardContent::default()
     };
     // The bar fills with the download (85%), then preparing, then installing.

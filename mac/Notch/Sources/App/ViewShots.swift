@@ -68,6 +68,39 @@ struct CardProgress: View {
     }
 }
 
+/// A file's Finder icon: drawn live at runtime, a bitmap taken beforehand off-screen. An
+/// app's icon drawn lazily inside `ImageRenderer` washes out the whole render (every card
+/// with an app icon came out dimmed), so the still render rasterises it first.
+struct CardIcon: View {
+    let path: String
+    @Environment(\.viewShotStill) private var still
+
+    var body: some View {
+        Image(nsImage: still ? Self.bitmap(path) : NSWorkspace.shared.icon(forFile: path))
+            .resizable()
+            .interpolation(.high)
+    }
+
+    private static func bitmap(_ path: String) -> NSImage {
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        let side = 512
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .calibratedRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep)
+        else { return icon }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        icon.draw(in: NSRect(x: 0, y: 0, width: side, height: side), from: .zero,
+                  operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.addRepresentation(rep)
+        return image
+    }
+}
+
 /// A card's vertical list: a scroll view at runtime, the plain stack off-screen.
 struct CardScroll<Content: View>: View {
     private let content: Content
@@ -165,6 +198,7 @@ enum ViewShots {
     private static func render(_ view: AnyView, backdrop: NSColor, crop: Bool) -> Data? {
         let styled = view
             .environment(\.viewShotStill, true)
+            .environment(\.isEnabled, true)
             .environment(\.colorScheme, .dark)
             .environment(\.codenotchAccentColor, AccentColorChoice.green.color)
             .environment(\.notchSurfaceStyle, .solid)

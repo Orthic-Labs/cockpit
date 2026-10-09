@@ -434,18 +434,17 @@ const CARD_PAD: f32 = 12.0;
 const CARD_RADIUS: f32 = 18.6;
 const TAIL_LENGTH: f32 = 28.2;
 const TAIL_HEIGHT: f32 = 32.7;
-/// Em sizes in Segoe UI that match the Mac's SF cap heights (9.48 pt body, 13.7 pt title).
+/// Em sizes in Segoe UI: the title matches the Mac's SF cap height (13.7 pt); the body is
+/// sized to the Mac's measured text widths (SF sets about 8% wider at one cap height).
 const TITLE_SIZE: f32 = 14.0;
-const BODY_SIZE: f32 = 9.7;
+const BODY_SIZE: f32 = 10.5;
 /// Segoe UI's ascent in em: cell top to baseline.
 const ASCENT: f32 = 1.079;
 /// Line top to baseline in the Mac's layout (SF ascender 0.952 em).
-const TITLE_BASELINE: f32 = 13.0;
+const TITLE_BASELINE: f32 = 12.6;
 const BODY_BASELINE: f32 = 9.0;
 /// Pitch of a wrapped paragraph's lines.
 const WRAP_PITCH: f32 = 12.0;
-/// Characters a paragraph line holds before it wraps (the card's text column at body size).
-const WRAP_CHARS: usize = 38;
 const MARK_SIZE: f32 = 17.3;
 const MARK_GAP: f32 = 6.4;
 const HEADER_TO_BLOCK: f32 = 7.9;
@@ -479,6 +478,10 @@ const BANNER_GAP: f32 = 2.3;
 /// Least space between a banner's text and its bottom stack.
 const BANNER_SPACER: f32 = 5.3;
 const PROGRESS_HEIGHT: f32 = 4.0;
+/// The update card's bar: 16 design px tall, a 0.16 track and a 0.9 fill.
+const HEAVY_HEIGHT: f32 = 6.0;
+const HEAVY_TRACK_ALPHA: f32 = 0.16;
+const HEAVY_FILL_ALPHA: f32 = 0.9;
 const PROGRESS_ABOVE_BUTTONS: f32 = 5.3;
 const PROGRESS_ALONE: f32 = 7.5;
 const PROGRESS_TRACK_ALPHA: f32 = 0.2;
@@ -489,7 +492,7 @@ const PILL_HEIGHT: f32 = 24.8;
 const PILL_PAD: f32 = 10.5;
 const PILL_GAP: f32 = 5.3;
 const PILL_INNER: f32 = 3.8;
-const PILL_SYMBOL: f32 = 13.0;
+const PILL_SYMBOL: f32 = 14.0;
 const PILL_ALPHA: f32 = 0.14;
 /// The cross of a round close button.
 const X_SIZE: f32 = 15.0;
@@ -507,30 +510,12 @@ const DEVICE_ALPHA: f32 = 0.10;
 /// Below an alert's status line.
 const STATUS_TO_NEXT: f32 = 3.0;
 const STATUS_TEXT_GAP: f32 = 4.5;
-const SPINNER: f32 = 14.0;
+const SPINNER: f32 = 16.5;
 const SPINNER_GAP: f32 = 6.0;
 const SPINNER_STROKE: f32 = 2.0;
 const DISC_ALPHA: f32 = 0.10;
 const DISC_SYMBOL: f32 = 26.0;
 const DEVICE_NAME_GAP: f32 = 0.8;
-
-/// Greedy word wrap at `width` characters; a longer word keeps its own line.
-fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for word in text.split_whitespace() {
-        match lines.last_mut() {
-            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
-                line.push(' ');
-                line.push_str(word);
-            }
-            _ => lines.push(word.to_string()),
-        }
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
 
 /// Width in DIPs a string would occupy.
 fn dip_width(text: &mut TextPainter, value: &str, size: f32, bold: bool, s: f32) -> f32 {
@@ -559,6 +544,37 @@ fn fit_tail(
     String::new()
 }
 
+/// Length in characters of a trailing "<number> <word> (<size>)" count (or just the
+/// parenthesised part when no number precedes it); 0 when `chars` does not end in one.
+fn counted_tail(chars: &[char]) -> usize {
+    if chars.last() != Some(&')') {
+        return 0;
+    }
+    let Some(open) = chars.iter().rposition(|c| *c == '(') else {
+        return 0;
+    };
+    let mut start = open;
+    // Up to two words before the parenthesis, ending at a number.
+    for _ in 0..2 {
+        let mut word = start;
+        while word > 0 && chars[word - 1] == ' ' {
+            word -= 1;
+        }
+        let end = word;
+        while word > 0 && chars[word - 1] != ' ' {
+            word -= 1;
+        }
+        if word == end {
+            break;
+        }
+        start = word;
+        if chars[word..end].iter().all(|c| c.is_ascii_digit()) {
+            break;
+        }
+    }
+    chars.len() - start
+}
+
 /// `value` cut in the middle with an ellipsis to at most `max` DIPs, so the start of a name
 /// and the count or extension at its end both stay readable.
 fn fit_middle(
@@ -572,8 +588,21 @@ fn fit_middle(
         return value.to_string();
     }
     let chars: Vec<char> = value.chars().collect();
+    // A trailing count such as "2 files (12.4 MB)" stays whole; only the start is given up.
+    let kept_tail = counted_tail(&chars);
+    if kept_tail > 0 && kept_tail < chars.len() {
+        for head in (0..chars.len() - kept_tail).rev() {
+            let mut cut: String = chars[..head].iter().collect();
+            cut.push('\u{2026}');
+            cut.extend(&chars[chars.len() - kept_tail..]);
+            if dip_width(text, &cut, size, bold, s) <= max {
+                return cut;
+            }
+        }
+    }
+    // Otherwise the Mac's split: the end keeps the odd character.
     for keep in (0..chars.len()).rev() {
-        let head = keep.div_ceil(2);
+        let head = keep / 2;
         let tail = keep - head;
         let mut cut: String = chars[..head].iter().collect();
         cut.push('\u{2026}');
@@ -690,11 +719,14 @@ fn lines_height(count: usize, m: Metrics) -> f32 {
 fn flow_row(
     row: &Row,
     m: Metrics,
+    room: f32,
     text: &mut TextPainter,
     s: f32,
 ) -> (f32, Vec<String>, Vec<(f32, f32)>) {
-    let paragraph = |value: &str, width: usize| {
-        let lines = wrap(value, width);
+    // Wrapped by measured width, so a line that fits the column stays on one line (the Mac's
+    // `Text` only wraps when it does not fit).
+    let paragraph = |text: &mut TextPainter, value: &str, room: f32| {
+        let lines = wrap_measured(text, value, room, 8, s);
         (lines_height(lines.len(), m), lines, Vec::new())
     };
     match row {
@@ -709,9 +741,9 @@ fn flow_row(
             (m.line + bar + BAR_TO_USED + m.line, Vec::new(), Vec::new())
         }
         Row::Note(value) | Row::Text(value) | Row::Tinted { text: value, .. } => {
-            paragraph(value, WRAP_CHARS)
+            paragraph(text, value, room)
         }
-        Row::Alert(value) => paragraph(value, WRAP_CHARS - 4),
+        Row::Alert(value) => paragraph(text, value, room - STATUS_DOT - STATUS_GAP),
         Row::Rule => (HAIRLINE, Vec::new(), Vec::new()),
         Row::Session { .. } => (2.0 * m.line + SESSION_GAP, Vec::new(), Vec::new()),
         Row::Buttons { buttons, close } => (
@@ -780,7 +812,7 @@ fn flow_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32) 
             (Some(Row::Device { .. } | Row::Waiting(_)), Row::Device { .. }) => DEVICE_GAP,
             _ => BLOCK_GAP,
         };
-        let (height, lines, spans) = flow_row(row, m, text, s);
+        let (height, lines, spans) = flow_row(row, m, width - 2.0 * CARD_PAD, text, s);
         rows.push(Placed {
             top: y,
             height,
@@ -829,6 +861,11 @@ fn banner_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32
         rows.push(placed);
     }
     // The bottom stack, measured up from the card's content bottom: (row, top above it).
+    let bar = if content.heavy_bar {
+        HEAVY_HEIGHT
+    } else {
+        PROGRESS_HEIGHT
+    };
     let mut up = 0.0f32;
     let mut stack: Vec<(usize, f32, f32)> = Vec::new();
     for (index, row) in content.rows.iter().enumerate().rev() {
@@ -842,8 +879,8 @@ fn banner_plan(content: &CardContent, m: Metrics, text: &mut TextPainter, s: f32
                     PROGRESS_ALONE
                 } else {
                     PROGRESS_ABOVE_BUTTONS
-                } + PROGRESS_HEIGHT;
-                stack.push((index, up, PROGRESS_HEIGHT));
+                } + bar;
+                stack.push((index, up, bar));
             }
             _ => {}
         }
@@ -1251,8 +1288,19 @@ impl Pen<'_> {
 
     /// A progress bar: white on a faint track. `None` is indeterminate: a stripe that travels
     /// while the card animates, a fixed share in a still.
-    fn progress(&mut self, (left, right): (f32, f32), top: f32, fraction: Option<f32>) {
-        let height = PROGRESS_HEIGHT * self.s;
+    fn progress(
+        &mut self,
+        (left, right): (f32, f32),
+        top: f32,
+        fraction: Option<f32>,
+        heavy: bool,
+    ) {
+        let (thick, track, fill_alpha) = if heavy {
+            (HEAVY_HEIGHT, HEAVY_TRACK_ALPHA, HEAVY_FILL_ALPHA)
+        } else {
+            (PROGRESS_HEIGHT, PROGRESS_TRACK_ALPHA, 1.0)
+        };
+        let height = thick * self.s;
         let radius = height / 2.0;
         let width = right - left;
         self.canvas.fill_round_rect(
@@ -1262,7 +1310,7 @@ impl Pen<'_> {
             height,
             [radius; 4],
             0xFFFFFF,
-            PROGRESS_TRACK_ALPHA,
+            track,
         );
         let (from, share) = match (fraction, self.phase) {
             (Some(f), _) => (0.0, f.clamp(0.0, 1.0)),
@@ -1282,7 +1330,7 @@ impl Pen<'_> {
                 height,
                 [radius; 4],
                 INK_PRIMARY,
-                1.0,
+                fill_alpha,
             );
         }
     }
@@ -1658,7 +1706,7 @@ impl Pen<'_> {
                 Row::Buttons { buttons, .. } => {
                     self.button_row(buttons, placed, live, (index, ox, y));
                 }
-                Row::Progress(fraction) => self.progress(columns, y, *fraction),
+                Row::Progress(fraction) => self.progress(columns, y, *fraction, false),
                 Row::Device {
                     symbol,
                     alias,
@@ -1764,7 +1812,9 @@ impl Pen<'_> {
                         self.put(line, column, baseline, body(ink), false);
                     }
                 }
-                Row::Progress(fraction) => self.progress((column, right), y, *fraction),
+                Row::Progress(fraction) => {
+                    self.progress((column, right), y, *fraction, content.heavy_bar);
+                }
                 Row::Buttons { buttons, .. } => {
                     self.button_row(buttons, placed, live, (index, ox, y));
                 }

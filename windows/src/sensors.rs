@@ -227,15 +227,20 @@ fn read_drives() -> Vec<Drive> {
     drives
 }
 
-/// Binary gigabytes the way Explorer labels them ("931.5 GB", "2.0 TB").
+/// Binary gigabytes, labelled as the Mac's cards read them: three significant digits and no
+/// trailing ".0" ("22.4 GB", "994 GB", "1 TB", "1.5 TB").
 pub fn size_text(bytes: u64) -> String {
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
     let gib = bytes as f64 / GIB;
-    if gib >= 1024.0 {
-        format!("{:.1} TB", gib / 1024.0)
-    } else if gib >= 10.0 {
-        format!("{gib:.0} GB")
+    let (value, unit) = if gib >= 1024.0 {
+        (gib / 1024.0, "TB")
     } else {
-        format!("{gib:.1} GB")
-    }
+        (gib, "GB")
+    };
+    let number = if value >= 100.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}").trim_end_matches(".0").to_string()
+    };
+    format!("{number} {unit}")
 }

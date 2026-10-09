@@ -20,6 +20,9 @@ use windows::core::Error;
 
 const MAX_SURFACE_SIDE: usize = 8192;
 const FONT_FACE: &str = "Segoe UI";
+/// GDI weights: the Mac's titles are SF semibold (600), not bold; GDI picks Segoe UI Semibold.
+const SEMIBOLD: i32 = 600;
+const REGULAR: i32 = 400;
 
 /// A 32-bit top-down DIB section selected into a memory DC.
 pub struct Surface {
@@ -174,7 +177,7 @@ impl TextPainter {
         }
         let mut logical = LOGFONTW {
             lfHeight: -size_px.max(1),
-            lfWeight: if bold { 700 } else { 400 },
+            lfWeight: if bold { SEMIBOLD } else { REGULAR },
             lfCharSet: DEFAULT_CHARSET,
             lfQuality: ANTIALIASED_QUALITY,
             ..Default::default()

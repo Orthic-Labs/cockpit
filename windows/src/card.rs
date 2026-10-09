@@ -192,6 +192,8 @@ pub struct CardContent {
     pub subtitle: Option<String>,
     pub mark: Mark,
     pub tail: Option<Tail>,
+    /// The update card's heavier progress bar (the Mac draws it 16 design px tall).
+    pub heavy_bar: bool,
     pub rows: Vec<Row>,
 }
 

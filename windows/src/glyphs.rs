@@ -185,7 +185,7 @@ fn drive(canvas: &mut Canvas, centre: (f32, f32), scale: f32, color: u32, alpha:
 
 /// SF Symbol `paperplane`: the outline of the plane and its fold line.
 fn plane(canvas: &mut Canvas, centre: (f32, f32), scale: f32, color: u32, alpha: f32) {
-    let width = 1.05 * scale;
+    let width = 1.2 * scale;
     let outline = [(6.4, -6.9), (-6.9, -1.5), (-0.6, 0.5), (1.3, 6.4)];
     canvas.stroke_polyline(&place(&outline, centre, scale), width, true, color, alpha);
     canvas.stroke_polyline(
@@ -370,9 +370,10 @@ pub fn symbol(
     };
     match symbol {
         Symbol::Xmark => {
-            b.width = (size * 0.14).max(1.2);
-            b.path(&[(-0.55, -0.55), (0.55, 0.55)], false);
-            b.path(&[(0.55, -0.55), (-0.55, 0.55)], false);
+            // The Mac's xmark is semibold at 11 pt: a lighter stroke than a bold cross.
+            b.width = (size * 0.105).max(1.2);
+            b.path(&[(-0.52, -0.52), (0.52, 0.52)], false);
+            b.path(&[(0.52, -0.52), (-0.52, 0.52)], false);
         }
         Symbol::Refresh => {
             let end = 290.0;

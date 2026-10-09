@@ -192,6 +192,7 @@ private struct ActivityArc: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
+    @Environment(\.viewShotStill) private var still
     @State private var pulsing = false
 
     /// How much of the circle the moving arc covers.
@@ -242,7 +243,8 @@ private struct ActivityArc: View {
             .stroke(summary.color, lineWidth: NotchLayout.activityStroke)
             .opacity(pulsing ? (reduceTransparency ? 0.65 : 0.3) : 1)
             .onAppear {
-                guard !reduceMotion else { return }
+                // A still render shows the ring at full strength, not caught mid-pulse.
+                guard !reduceMotion, !still else { return }
                 withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
                     pulsing = true
                 }
