@@ -894,8 +894,8 @@ fn tooltip(fixture: &Value, text: &mut TextPainter) -> Outcome {
 /// A spent limit (`block`) already arrives through the cell's `Usage`.
 fn overlay(views: &mut [CellView], cells: &[&Value]) {
     for cell in cells {
-        match str_of(cell, "id") {
-            Some("system-cpu") => {
+        if str_of(cell, "id") == Some("system-cpu") {
+            {
                 let band = arr(cell, "windows")
                     .iter()
                     .find(|w| str_of(w, "id") == Some("pressure"))
@@ -911,7 +911,6 @@ fn overlay(views: &mut [CellView], cells: &[&Value]) {
                     _ => {}
                 }
             }
-            _ => {}
         }
     }
 }

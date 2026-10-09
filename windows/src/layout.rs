@@ -285,7 +285,7 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -
             problem: ring.problem,
             blocked: false,
             band: None,
-            },
+        },
     ]
 }
 

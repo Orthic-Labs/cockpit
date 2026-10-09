@@ -1067,8 +1067,8 @@ fn running_processes(location: &str, quit: bool) -> (u32, Vec<PathBuf>) {
         $p=@($p|Where-Object{-not $_.HasExited});if($p.Count -eq 0){break}}};\
         [Console]::Out.Write($p.Count);foreach($e in $x){[Console]::Out.Write(\"`n$e\")}}";
     let mode = if quit { "quit" } else { "check" };
-    let Some(output) = powershell(BODY, &[("PULSE_LOC", location), ("PULSE_MODE", mode)])
-        .filter(|o| o.code == 0)
+    let Some(output) =
+        powershell(BODY, &[("PULSE_LOC", location), ("PULSE_MODE", mode)]).filter(|o| o.code == 0)
     else {
         return (0, Vec::new());
     };
@@ -1222,7 +1222,9 @@ fn quit_job(mut item: Item, cancel: Arc<AtomicBool>) {
     let (left, exes) = item
         .location
         .as_deref()
-        .map_or((0, Vec::new()), |location| running_processes(location, true));
+        .map_or((0, Vec::new()), |location| {
+            running_processes(location, true)
+        });
     item.relaunch = exes;
     if left > 0 {
         model().ctx.item = Some(item.clone());

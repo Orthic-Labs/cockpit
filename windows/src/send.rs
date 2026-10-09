@@ -1377,7 +1377,7 @@ impl Model {
         match action {
             Action::SendTo(fingerprint) => self.send_to(&fingerprint),
             Action::CopyLast => {} // handled by `copy_last`, outside the lock
-            Action::Paste => {} // handled by `paste_clipboard`, which reads the clipboard first
+            Action::Paste => {}    // handled by `paste_clipboard`, which reads the clipboard first
             Action::Refresh => write_command("{\"command\":\"refresh\"}"),
             Action::Accept | Action::Decline => {
                 if let Card::Incoming(id) = self.card.clone() {
