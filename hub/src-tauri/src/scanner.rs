@@ -1202,7 +1202,6 @@ pub async fn search(
     extensions: Option<Vec<String>>,
 ) -> Result<Vec<Row>, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Row>, String> {
-        let index = restore().ok_or("scan first")?;
         let limit = limit.unwrap_or(100).clamp(1, 1000);
         let needle = query.trim().to_lowercase();
         let exts: Vec<String> = extensions
@@ -1211,6 +1210,15 @@ pub async fn search(
             .map(|ext| ext.trim().trim_start_matches('.').to_lowercase())
             .filter(|ext| !ext.is_empty())
             .collect();
+        // The whole-disk name index answers when it is ready (ranked by name
+        // match); otherwise, and for extension-only searches, the last scan does.
+        if let Some(found) = crate::disk_index::search(&query, limit, &exts) {
+            return Ok(found
+                .into_iter()
+                .map(|f| Row { path: f.path, name: f.name, is_dir: f.is_dir, bytes: f.bytes, summary: false })
+                .collect());
+        }
+        let index = restore().ok_or("scan first")?;
         if needle.is_empty() && exts.is_empty() {
             return Ok(Vec::new());
         }

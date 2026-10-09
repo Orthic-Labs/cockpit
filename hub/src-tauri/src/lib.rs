@@ -7,6 +7,7 @@ mod apps;
 mod cache;
 
 mod cleanup;
+mod disk_index;
 
 mod duplicates;
 
@@ -404,6 +405,7 @@ pub fn run() {
             watch_notch(app.handle().clone());
             health::start_background();
             metrics_history::start_background();
+            disk_index::start_background();
             share::start_background(app.handle().clone());
             Ok(())
         })
@@ -418,7 +420,7 @@ pub fn run() {
             status, processes, metrics_history::metrics_history, apps::apps_list, apps::app_detail, apps::app_uninstall,
             apps::apps_cached, apps::apps_refresh, apps::app_summary, apps::app_leftovers, apps::app_icons,
             apps::apps_updates_cached, apps::apps_updates_refresh, apps::app_update,
-            apps::process_rows, apps::process_quit, apps::process_force_quit, scanner::scan, scanner::scan_status, scanner::last_scan, growth::growth, scanner::children, scanner::search, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,
+            apps::process_rows, apps::process_quit, apps::process_force_quit, scanner::scan, scanner::scan_status, scanner::last_scan, growth::growth, scanner::children, scanner::search, disk_index::disk_index_status, disk_index::disk_index_sizes, reveal, volumes, eject, open_full_disk_access, notch_state, notch_command, initial_section, initial_app,
             cleanup::cleanup_scan, cleanup::cleanup_cached, cleanup::cleanup_apply, cleanup::cleanup_history, cleanup::cleanup_restore,
             health::drive_health, duplicates::duplicates_scan, duplicates::duplicates_trash, duplicates::home_path,
             files::file_identity, files::finder_open, files::file_choose_folder, files::file_move_plan, files::file_move, files::file_trash,

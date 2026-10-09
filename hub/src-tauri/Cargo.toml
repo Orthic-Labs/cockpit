@@ -32,5 +32,10 @@ pulse-core = { path = "../../core" }
 trash = "=5.2.9"
 tauri-plugin-os = "2"
 
+# Whole-disk name index and folder sizes (FSEvents, getattrlistbulk). Content search stays off:
+# the `content` feature is deliberately not enabled.
+[target.'cfg(target_os = "macos")'.dependencies]
+rightkit-fsindex = "0.1.0"
+
 # The hub is its own workspace so the core's locked workspace stays unchanged.
 [workspace]

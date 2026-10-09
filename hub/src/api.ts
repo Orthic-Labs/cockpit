@@ -30,6 +30,32 @@ export interface Process {
   memory: Metric<number>;
 }
 
+/** State of one volume's whole-disk index. `partial`: some folders were skipped or unreadable (Full Disk Access). */
+export interface DiskIndexVolume {
+  mount_point: string;
+  state: "building" | "ready" | "failed";
+  entries: number;
+  crawl_ms: number;
+  resumed_from_snapshot: boolean;
+  full_disk_access: boolean;
+  partial: boolean;
+  unreadable_dirs: number;
+  error: string | null;
+}
+export interface DiskIndexStatus {
+  supported: boolean;
+  volumes: DiskIndexVolume[];
+}
+/** `known: false` means the index does not hold the path yet; the numbers are then meaningless. */
+export interface IndexedSize {
+  path: string;
+  known: boolean;
+  allocated: number;
+  allocated_unique: number;
+  logical: number;
+  files: number;
+}
+
 export interface Row {
   path: string;
   name: string;
@@ -227,6 +253,8 @@ export const api = {
   children: (path: string) => invoke<Folder>("children", { path }),
   search: (query: string, limit?: number, extensions?: string[]) =>
     invoke<Row[]>("search", { query, limit: limit ?? null, extensions: extensions ?? null }),
+  diskIndexStatus: () => invoke<DiskIndexStatus>("disk_index_status"),
+  diskIndexSizes: (paths: string[]) => invoke<IndexedSize[]>("disk_index_sizes", { paths }),
   apps: () => invoke<AppEntry[]>("apps_list"),
   appDetail: (path: string) => invoke<AppDetail>("app_detail", { path }),
   uninstall: (path: string, bundleId: string | null, items: string[]) =>

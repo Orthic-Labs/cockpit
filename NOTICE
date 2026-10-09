@@ -7,6 +7,10 @@ its own license; the notices below are reproduced as those licenses require.
 - Petal (https://github.com/henrydennis/petal), MIT License. Directory listing
   (getattrlistbulk), scan and file-watching code adapted in core/ and
   hub/src-tauri/.
+- fsearch (https://github.com/noahdunnagan/fsearch), MIT License, Copyright
+  (c) 2026 Noah Dunnagan. The getattrlistbulk crawl, FSEvents binding and
+  fuzzy name scoring in the rightkit-fsindex crate (a hub dependency) are
+  adapted from it; the crate ships the full notice.
 - Uninstally (https://github.com/gostonx/uninstally), MIT License. Leftover
   detection rules and the Finder Sync extension layout adapted in core/ and
   mac/Notch/FinderExtension/.
