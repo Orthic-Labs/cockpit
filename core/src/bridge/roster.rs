@@ -1,21 +1,18 @@
 //! Which chats can be messaged: live Claude chats read from
 //! `~/.claude/sessions/*.json`, registered chats (and Claude without a session
 //! file), the most recent Codex threads from
-//! `~/.codex/session_index.jsonl`, and the rosters paired
-//! computers publish. A peer is shown as "<chat title> on <device alias>".
+//! `~/.codex/session_index.jsonl`, and the chats linked computers list over
+//! ssh. A peer is shown as "<chat title> on <device>".
 
 use super::BridgeError;
 use super::deliver_codex::{CodexThread, list_threads};
-use super::store::{RemoteRoster, Store};
+use super::links::RemoteChats;
+use super::store::Store;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-/// Remote rosters older than this are not shown (the other side publishes
-/// every 30 seconds).
-pub const REMOTE_MAX_AGE_MS: u64 = 120_000;
-
-/// One chat in a published roster.
+/// One chat as a linked computer lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RosterEntry {
     pub session: String,
@@ -58,16 +55,16 @@ impl LocalSession {
     }
 }
 
-/// A chat that can be messaged, here or on a paired computer.
+/// A chat that can be messaged, here or on a linked computer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Peer {
     /// What `pulse bridge send` accepts: the session id here, `<device>:<session>` elsewhere.
     pub id: String,
     pub session: String,
     pub name: String,
-    /// "<chat title> on <device alias>".
+    /// "<chat title> on <device>".
     pub display: String,
-    /// Fingerprint of the computer the chat runs on.
+    /// The computer the chat runs on: this one's alias, or a link's device name.
     pub device: String,
     pub device_alias: String,
     pub local: bool,
@@ -76,17 +73,9 @@ pub struct Peer {
     pub status: String,
 }
 
-fn home() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let variable = "USERPROFILE";
-    #[cfg(not(windows))]
-    let variable = "HOME";
-    std::env::var_os(variable).map(PathBuf::from)
-}
-
-/// `~/.claude/sessions`.
+/// `~/.claude/sessions` (or `$CLAUDE_CONFIG_DIR/sessions`).
 pub fn claude_sessions_dir() -> Option<PathBuf> {
-    home().map(|h| h.join(".claude").join("sessions"))
+    Some(super::deliver_claude::sessions_dir())
 }
 
 /// A check for whether a process id is running, read once for the whole list.
@@ -116,6 +105,10 @@ fn parse_claude(value: Value, alive: &dyn Fn(u32) -> bool) -> Option<LocalSessio
     }
     let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
     let id = text("sessionId").filter(|s| !s.is_empty())?;
+    // The Pulse hub registers itself so Claude accepts its posts; it is not a chat.
+    if text("entrypoint").as_deref() == Some(super::hub::ENTRYPOINT) {
+        return None;
+    }
     let cwd = text("cwd").unwrap_or_default();
     let name = title_for(&text("name").unwrap_or_default(), &cwd, "Claude chat");
     Some(LocalSession {
@@ -222,31 +215,13 @@ pub fn local_entries(sessions: &[LocalSession]) -> Vec<RosterEntry> {
     sessions.iter().map(LocalSession::entry).collect()
 }
 
-/// The `body` of a roster envelope.
-pub fn roster_body(entries: &[RosterEntry]) -> String {
-    serde_json::json!({ "sessions": entries }).to_string()
-}
-
-pub fn parse_roster_body(body: &str) -> Vec<RosterEntry> {
-    serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|v| v.get("sessions").cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
 fn display(name: &str, alias: &str) -> String {
     format!("{name} on {alias}")
 }
 
-/// Local chats plus the fresh remote rosters, each labelled with its computer.
-pub fn merge(
-    local: &[LocalSession],
-    local_device: &str,
-    local_alias: &str,
-    remotes: &[RemoteRoster],
-    now_ms: u64,
-) -> Vec<Peer> {
+/// Local chats plus what each linked computer listed, each labelled with its
+/// computer. Links that could not be asked contribute nothing.
+pub fn merge(local: &[LocalSession], local_alias: &str, remotes: &[RemoteChats]) -> Vec<Peer> {
     let mut peers: Vec<Peer> = local
         .iter()
         .map(|s| Peer {
@@ -254,7 +229,7 @@ pub fn merge(
             session: s.id.clone(),
             name: s.name.clone(),
             display: display(&s.name, local_alias),
-            device: local_device.to_string(),
+            device: local_alias.to_string(),
             device_alias: local_alias.to_string(),
             local: true,
             kind: s.kind.clone(),
@@ -262,20 +237,16 @@ pub fn merge(
             status: s.status.clone(),
         })
         .collect();
-    for roster in remotes {
-        if roster.device == local_device
-            || now_ms.saturating_sub(roster.received) > REMOTE_MAX_AGE_MS
-        {
-            continue;
-        }
-        for entry in &roster.entries {
+    for remote in remotes {
+        let Ok(listing) = &remote.listing else { continue };
+        for entry in &listing.chats {
             peers.push(Peer {
-                id: format!("{}:{}", roster.device, entry.session),
+                id: format!("{}:{}", remote.link.device, entry.session),
                 session: entry.session.clone(),
                 name: entry.name.clone(),
-                display: display(&entry.name, &roster.alias),
-                device: roster.device.clone(),
-                device_alias: roster.alias.clone(),
+                display: display(&entry.name, &remote.link.device),
+                device: remote.link.device.clone(),
+                device_alias: remote.link.device.clone(),
                 local: false,
                 kind: entry.kind.clone(),
                 cwd: entry.cwd.clone(),

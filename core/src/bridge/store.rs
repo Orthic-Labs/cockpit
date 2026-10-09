@@ -1,11 +1,10 @@
 //! Files the bridge keeps under `<Pulse state dir>/bridge`: per-chat inboxes
-//! (JSON lines with a read cursor), the outbox the relay drains, the cache of
-//! remote rosters, registered chats, and the
-//! relay's heartbeat. Every replacement is a temporary file renamed into place;
-//! inbox appends happen under a lock file.
+//! (JSON lines with a read cursor), linked computers (`links.json`),
+//! registered chats, and the hub's heartbeat. Every replacement is a
+//! temporary file renamed into place; inbox appends happen under a lock file.
 
 use super::envelope::{Envelope, now_ms};
-use super::roster::RosterEntry;
+use super::links::Link;
 use crate::localsend::proto;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -16,8 +15,8 @@ use std::time::{Duration, Instant};
 
 /// Per-inbox size cap; the oldest messages go first.
 pub const INBOX_CAP_BYTES: u64 = 10 * 1024 * 1024;
-/// A relay that has not written its heartbeat for this long counts as stopped.
-pub const RELAY_STALE_MS: u64 = 90_000;
+/// A hub that has not written its heartbeat for this long counts as stopped.
+pub const RELAY_STALE_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InboxEntry {
@@ -38,31 +37,6 @@ struct Cursor {
     next: u64,
 }
 
-/// A message waiting for the relay to send it to another computer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutboxItem {
-    pub id: String,
-    /// Fingerprint of the computer it goes to.
-    pub target_device: String,
-    /// Unsigned; the relay signs it with the pair key when it sends.
-    pub envelope: Envelope,
-    /// queued, sent, failed, or a receipt state: delivered, held, refused.
-    pub status: String,
-    #[serde(default)]
-    pub detail: Option<String>,
-    pub updated: u64,
-}
-
-/// The last roster a paired computer published.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteRoster {
-    pub device: String,
-    pub alias: String,
-    /// When it arrived (ms).
-    pub received: u64,
-    pub entries: Vec<RosterEntry>,
-}
-
 /// A chat that is not discovered from disk (Codex, or Claude without a
 /// session file) and registered here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,12 +51,12 @@ pub struct RegisteredSession {
     pub updated: u64,
 }
 
-/// What the relay says about itself.
+/// What the hub says about itself while its bridge runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayStatus {
     pub pid: u32,
     pub ts: u64,
-    pub device: String,
+    /// This computer's name, as chats are shown ("<chat> on <alias>").
     pub alias: String,
 }
 
@@ -193,14 +167,6 @@ impl Store {
         &self.root
     }
 
-    /// The directory the LocalSend service keeps its certificate and
-    /// `known-devices.json` in (a sibling of the bridge folder).
-    pub fn localsend_dir(&self) -> PathBuf {
-        self.root
-            .parent()
-            .map(|p| p.join("localsend"))
-            .unwrap_or_else(|| self.root.join("localsend"))
-    }
 
     fn lock(&self, target: &Path) -> io::Result<LockFile> {
         let path = target.with_extension("lock");
@@ -342,81 +308,18 @@ impl Store {
             .count()
     }
 
-    // ---- outbox ------------------------------------------------------------
+    // ---- linked computers --------------------------------------------------
 
-    fn outbox_path(&self, id: &str) -> PathBuf {
-        self.root
-            .join("outbox")
-            .join(format!("{}.json", safe_name(id)))
+    fn links_path(&self) -> PathBuf {
+        self.root.join("links.json")
     }
 
-    pub fn enqueue_outbox(&self, envelope: &Envelope, target_device: &str) -> io::Result<()> {
-        let item = OutboxItem {
-            id: envelope.id.clone(),
-            target_device: target_device.to_string(),
-            envelope: envelope.clone(),
-            status: "queued".to_string(),
-            detail: None,
-            updated: now_ms(),
-        };
-        write_json(&self.outbox_path(&item.id), &item)
+    pub fn links(&self) -> Vec<Link> {
+        read_json(&self.links_path()).unwrap_or_default()
     }
 
-    pub fn outbox_get(&self, id: &str) -> Option<OutboxItem> {
-        read_json(&self.outbox_path(id))
-    }
-
-    /// Items still waiting for the relay, oldest first.
-    pub fn outbox_queued(&self) -> Vec<OutboxItem> {
-        let mut items: Vec<OutboxItem> = json_files(&self.root.join("outbox"))
-            .iter()
-            .filter_map(|p| read_json::<OutboxItem>(p))
-            .filter(|i| i.status == "queued")
-            .collect();
-        items.sort_by_key(|i| i.updated);
-        items
-    }
-
-    pub fn outbox_update(&self, id: &str, status: &str, detail: Option<String>) -> io::Result<()> {
-        let Some(mut item) = self.outbox_get(id) else {
-            return Ok(());
-        };
-        item.status = status.to_string();
-        item.detail = detail;
-        item.updated = now_ms();
-        write_json(&self.outbox_path(id), &item)
-    }
-
-    /// Forget finished outbox items older than `max_age_ms`.
-    pub fn outbox_prune(&self, max_age_ms: u64) {
-        let now = now_ms();
-        for path in json_files(&self.root.join("outbox")) {
-            if let Some(item) = read_json::<OutboxItem>(&path)
-                && item.status != "queued"
-                && now.saturating_sub(item.updated) > max_age_ms
-            {
-                let _ = fs::remove_file(path);
-            }
-        }
-    }
-
-    // ---- remote rosters ----------------------------------------------------
-
-    fn roster_path(&self, device: &str) -> PathBuf {
-        self.root
-            .join("roster")
-            .join(format!("{}.json", safe_name(device)))
-    }
-
-    pub fn save_remote_roster(&self, roster: &RemoteRoster) -> io::Result<()> {
-        write_json(&self.roster_path(&roster.device), roster)
-    }
-
-    pub fn remote_rosters(&self) -> Vec<RemoteRoster> {
-        json_files(&self.root.join("roster"))
-            .iter()
-            .filter_map(|p| read_json::<RemoteRoster>(p))
-            .collect()
+    pub fn save_links(&self, links: &[Link]) -> io::Result<()> {
+        write_json(&self.links_path(), &links)
     }
 
     // ---- registered chats ---------------------------
@@ -470,23 +373,27 @@ impl Store {
         self.root.join("relay.json")
     }
 
-    pub fn write_relay_status(&self, device: &str, alias: &str) -> io::Result<()> {
+    pub fn write_relay_status(&self, alias: &str) -> io::Result<()> {
         write_json(
             &self.relay_path(),
             &RelayStatus {
                 pid: std::process::id(),
                 ts: now_ms(),
-                device: device.to_string(),
                 alias: alias.to_string(),
             },
         )
+    }
+
+    /// Forget the heartbeat (the hub's bridge stopped).
+    pub fn clear_relay_status(&self) {
+        let _ = fs::remove_file(self.relay_path());
     }
 
     pub fn relay_status(&self) -> Option<RelayStatus> {
         read_json(&self.relay_path())
     }
 
-    /// Whether a relay (the hub) is running.
+    /// Whether the hub's bridge is running.
     pub fn relay_alive(&self) -> bool {
         self.relay_status()
             .is_some_and(|s| now_ms().saturating_sub(s.ts) < RELAY_STALE_MS)

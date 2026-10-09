@@ -242,8 +242,9 @@ fn check_switches(ctl: &Control, sec: &Section, shots: &Path) -> usize {
     count
 }
 
-/// Accounts: all three Claude accounts are listed by name, the signed-in one carries the Active
-/// badge, a folder-only account reads "No reading yet" with its rename enabled and no Forget, the cached one's past session reset reads "Reset" (no percentage) while its
+/// Accounts: the two read Claude accounts are rows (the signed-in one with the Active badge and
+/// percentages, a named one by its name), the never-read one is folded into one "never seen signed
+/// in" line that expands to its name and "no reading" with rename enabled and no Forget, the cached one's past session reset reads "\u{2014}" (no percentage) while its
 /// future weekly reset keeps its percentage, and renaming leaves a command for the notch.
 fn claude_accounts_fail(ctl: &Control, shots: &Path, rows: &[Value], why: &str) -> ! {
     let _ = ctl.screenshot_to(&shots.join("FAIL-accounts-claude.png"));
@@ -261,18 +262,34 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
                 text: w.innerText.replace(/\s+/g, ' '),
             })),
             asOf: /as of /.test(r.innerText),
-            noReading: /No reading yet/.test(r.innerText),
+            noReading: /no reading/i.test(r.innerText),
+            inputs: r.querySelectorAll('input').length,
             renamable: !!r.querySelector('.ck-claude-name') && !r.querySelector('.ck-claude-name').disabled,
         }));
-        return rows;
+        const line = document.querySelector('.ck-claude-unseen');
+        return { rows, unseenLine: line ? line.textContent.trim() : null, unseenOpen: line?.getAttribute('aria-expanded') === 'true' };
     "#;
-    let rows = ctl.eval(js).expect("eval claude accounts");
-    let rows = rows.as_array().cloned().unwrap_or_default();
+    let state = ctl.eval(js).expect("eval claude accounts");
+    let rows = state["rows"].as_array().cloned().unwrap_or_default();
     let fail = |why: String| claude_accounts_fail(ctl, shots, &rows, &why);
-    if rows.len() != 3 {
-        fail(format!("expected 3 accounts, found {}", rows.len()));
+    // The never-read account is folded into one line; only the two read accounts are rows.
+    if rows.len() != 2 {
+        fail(format!("expected 2 account rows before expanding, found {}", rows.len()));
     }
-    let (active, cached, folder) = (&rows[0], &rows[1], &rows[2]);
+    if state["unseenLine"] != "1 account never seen signed in" || state["unseenOpen"] != false {
+        fail(format!("expected the collapsed \"1 account never seen signed in\" line, found {}", state["unseenLine"]));
+    }
+    if rows.iter().any(|r| r["inputs"] != 0) {
+        fail("no account row may show an input while not editing".into());
+    }
+    let (active, cached) = (&rows[0], &rows[1]);
+    let is_raw_id = |n: &Value| {
+        let n = n.as_str().unwrap_or("");
+        n.strip_prefix("Claude ").is_some_and(|h| h.len() == 8 && h.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    if is_raw_id(&active["name"]) || is_raw_id(&cached["name"]) {
+        fail("a named account must show its name, never \"Claude <8 hex>\"".into());
+    }
     if active["name"] != "Work" || active["active"] != true || active["forget"] != false || active["asOf"] != false {
         fail("the signed-in account should be \"Work\", Active, not forgettable and without an \"as of\" line".into());
     }
@@ -282,8 +299,8 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
     if cached["name"] != "old@example.test" || cached["active"] != false || cached["forget"] != true || cached["asOf"] != true {
         fail("the cached account should be named by its address, not Active, forgettable, with an \"as of\" line".into());
     }
-    if cached["wins"][0]["state"] != "reset" || cached["wins"][0]["value"] != "Reset" {
-        fail("the cached session window is past its reset and should read \"Reset\"".into());
+    if cached["wins"][0]["state"] != "reset" || cached["wins"][0]["value"] != "\u{2014}" {
+        fail("the cached session window is past its reset and should read \"\u{2014}\"".into());
     }
     if cached["wins"][1]["value"] != "55%" || cached["wins"][1]["state"] != "live" {
         fail("the cached weekly window has not reset and should still show 55%".into());
@@ -291,6 +308,19 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
     if cached["wins"][0]["text"].as_str().unwrap_or("").contains('%') {
         fail("a window past its reset must show no percentage".into());
     }
+    // Expand the folded line: the never-read account then shows its name and "no reading".
+    ctl.wait_eval(
+        "const b = document.querySelector('.ck-claude-unseen'); if (!b) return false; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return !!document.querySelector('.ck-claude-account[data-account=\"5e6f7a8b-0000-4000-8000-000000000001\"]');",
+        Duration::from_secs(10),
+    )
+    .expect("expand never-seen accounts");
+    let all = ctl.eval(js).expect("eval claude accounts expanded");
+    let all = all["rows"].as_array().cloned().unwrap_or_default();
+    let fail = |why: String| claude_accounts_fail(ctl, shots, &all, &why);
+    if all.len() != 3 {
+        fail(format!("expected 3 account rows after expanding, found {}", all.len()));
+    }
+    let folder = &all[2];
     if folder["name"] != "Claude 5e6f7a8b"
         || folder["active"] != false
         || folder["forget"] != false
@@ -299,7 +329,7 @@ fn check_claude_accounts(ctl: &Control, bridge: &Path, shots: &Path) {
         || folder["renamable"] != true
         || folder["wins"].as_array().is_some_and(|w| !w.is_empty())
     {
-        fail("the folder-only account should read \"Claude 5e6f7a8b\", \"No reading yet\", have its rename enabled, no windows, no \"as of\" line and no Forget".into());
+        fail("the folder-only account should read \"Claude 5e6f7a8b\", \"no reading\", have its rename enabled, no windows, no \"as of\" line and no Forget".into());
     }
 
     // Rename an account as a person would: click its name, type in the inline field, press away; the hub must leave the notch a

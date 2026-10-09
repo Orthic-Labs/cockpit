@@ -1,48 +1,42 @@
 //! Pulse bridge: the cross-machine part of AI chats messaging each other.
 //! Chats on one computer already talk natively (Claude to Claude over their
-//! sockets, Claude to Codex with `codex queue`). Pulse pairs computers, relays
-//! signed messages between them and delivers natively on the receiving side.
+//! sockets, Claude to Codex with `codex queue`). Pulse links computers over
+//! ssh and delivers natively on the receiving side.
 //!
 //! Pieces
-//! * `envelope`: the signed JSON message (`HMAC-SHA256` with a per-pair key).
-//! * `store`: inboxes, outbox, roster cache, relay heartbeat.
+//! * `envelope`: the JSON message (`from`, `to`, `body`).
+//! * `links`: linked computers (`links.json`) and the two remote commands run
+//!   over ssh: list chats, post one envelope.
+//! * `store`: inboxes, links, registered chats, the hub's heartbeat.
 //! * `roster`: which chats exist (`LocalSession`, `Peer`).
-//! * `control`: how the CLI asks the running hub to pair (files in the state folder).
-//! * `relay`: what a host with a running `localsend::Service` (the hub) calls: `tick` sends the outbox and publishes the
-//!   roster, `on_inbound` handles `Event::Bridge`, `on_local_reply` relays a
-//!   chat's reply, `is_known_local_session`, `status`.
+//! * `control`: how the CLI asks the running hub to deliver (files in the state folder).
+//! * `hub`: what the hub runs: registration as a Claude peer, heartbeat,
+//!   replies routed back over links, control requests, status.
 //! * `deliver_claude`, `deliver_codex`: native delivery into a chat here.
 //! * `install`: puts the Pulse bridge skill where Claude and Codex load it.
 //!
-//! The agent-facing surface is the CLI (`pulse bridge peers|send|pair|status`),
+//! The agent-facing surface is the CLI (`pulse bridge peers|send|link|status`),
 //! built on `all_peers`, `identify` and `send_text`. `Receipt` carries
 //! `ReceiptState::{Delivered, Held, Refused}`; `Held` and `Refused` leave the
 //! message in the chat's bridge inbox (`pulse bridge inbox`).
-//!
-//! Hub wiring: `bridge::on_inbound(&service, env)` for `Event::Bridge(env)`
-//! (off the service thread), `bridge::tick(&service)` every ~2 s,
-//! `bridge::on_local_reply(&service, reply)` and
-//! `bridge::is_known_local_session(id)` for `deliver_claude::ReplyHub`,
-//! `bridge::status()` for the page. Pair with
-//! `Service::bridge_pair(<alias or fingerprint>)` (a prompt appears on the
-//! other computer); `Service::is_paired` tells who is paired.
 
 pub mod control;
 pub mod deliver_claude;
 pub mod deliver_codex;
 pub mod envelope;
+pub mod hub;
 pub mod install;
-pub mod relay;
+pub mod links;
 pub mod roster;
 pub mod store;
 
-pub use envelope::{Envelope, EnvelopeError, Kind, ReplayGuard, Sender, Target};
-pub use relay::{Status, is_known_local_session, on_inbound, on_local_reply, status, tick};
+pub use envelope::{Envelope, EnvelopeError, Sender, Target};
 pub use roster::{LocalSession, Peer, RosterEntry};
 pub use store::Store;
 
 use serde::Serialize;
-use std::time::{Duration, Instant};
+use serde_json::json;
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
@@ -146,60 +140,47 @@ impl Receipt {
     }
 }
 
-/// This computer as the bridge knows it.
+/// This computer as the bridge knows it: the name chats are shown under.
 #[derive(Debug, Clone)]
 pub struct Identity {
-    /// Certificate fingerprint, the `device` in envelopes.
-    pub device: String,
-    /// How other computers list this one.
     pub alias: String,
 }
 
 fn default_alias() -> String {
     let host = sysinfo::System::host_name().unwrap_or_else(|| "Computer".to_string());
-    format!("{host} (Pulse)")
+    host.trim_end_matches(".local").to_string()
 }
 
-/// This computer's bridge identity: what the running relay recorded, else the
-/// sharing certificate in the state directory (created if absent, as the hub
-/// would) and a name made from the host name.
+/// This computer's name: what the running hub recorded, else the host name.
 pub fn local_identity(store: &Store) -> Result<Identity, BridgeError> {
-    if let Some(status) = store.relay_status()
-        && !status.device.is_empty()
-    {
-        return Ok(Identity {
-            device: status.device,
-            alias: status.alias,
-        });
-    }
-    let identity = crate::localsend::net::Identity::load_or_create(&store.localsend_dir())?;
-    Ok(Identity {
-        device: identity.fingerprint,
-        alias: default_alias(),
-    })
+    let alias = store
+        .relay_status()
+        .map(|s| s.alias)
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(default_alias);
+    Ok(Identity { alias })
 }
 
-/// Every chat that can be messaged: this computer's and the paired ones'.
+/// Every chat that can be messaged: this computer's and the linked ones'
+/// (asked over ssh, in parallel).
 pub fn all_peers(store: &Store, me: &Identity) -> Vec<Peer> {
     roster::merge(
         &roster::local_sessions(store),
-        &me.device,
         &me.alias,
-        &store.remote_rosters(),
-        envelope::now_ms(),
+        &links::list_all(store),
     )
 }
 
-/// Put `env` into a chat on this computer. Claude and Codex chats are tried
-/// directly first (`deliver_claude::deliver`, `deliver_codex::deliver`);
-/// anything not `Delivered` keeps the message in the chat's inbox for
-/// `pulse bridge inbox`.
-pub fn deliver_local(store: &Store, session: &LocalSession, env: &Envelope) -> Receipt {
-    deliver_local_via(store, session, env, None)
+/// This computer's chats only (what a linked computer asks for).
+pub fn local_peers(store: &Store, me: &Identity) -> Vec<Peer> {
+    roster::merge(&roster::local_sessions(store), &me.alias, &[])
 }
 
-/// `deliver_local`, with `reply_socket` (the sending Claude chat's own
-/// messaging socket) as the address a Claude target replies to.
+/// Put `env` into a chat on this computer from this process: Claude and Codex
+/// chats are pushed directly (`deliver_claude::deliver_via`,
+/// `deliver_codex::deliver`); anything not `Delivered` keeps the message in
+/// the chat's inbox for `pulse bridge inbox`. `reply_socket` (the sending
+/// Claude chat's own messaging socket) is where a Claude target replies.
 pub fn deliver_local_via(
     store: &Store,
     session: &LocalSession,
@@ -240,8 +221,7 @@ pub fn deliver_local_via(
 pub struct SendOutcome {
     pub msg_id: String,
     pub to: Peer,
-    /// delivered, held, refused (as above), or queued / sent / failed for a
-    /// message going to another computer.
+    /// delivered, held or refused (as above), from whichever computer the chat is on.
     pub status: String,
     pub detail: String,
 }
@@ -333,16 +313,75 @@ pub fn identify(
     })
 }
 
+/// Whether a direct post from this process reaches a Claude chat here. On
+/// macOS a chat accepts a peer message only from a process descending from a
+/// registered session: a chat's own shell is one; `pulse` run by sshd is not.
+fn direct_post_trusted() -> bool {
+    !cfg!(unix)
+        || std::env::var("CLAUDE_CODE_MESSAGING_SOCKET").is_ok_and(|v| !v.trim().is_empty())
+}
+
+/// Put `env` into a chat on this computer the way that works here: through
+/// the running hub (a registered peer) when a direct post would be dropped,
+/// else directly. `reply_socket` as in `deliver_local_via`.
+pub fn deliver_here(
+    store: &Store,
+    session: &LocalSession,
+    env: &Envelope,
+    reply_socket: Option<&str>,
+) -> Receipt {
+    let needs_hub = session.kind == "claude" && !direct_post_trusted();
+    if needs_hub && control::hub_running(store) {
+        let mut args = json!({"session": session.id, "envelope": links::encode_envelope(env)});
+        if let Some(socket) = reply_socket {
+            args["reply_socket"] = json!(socket);
+        }
+        return match control::call(store, "deliver", args, Duration::from_secs(20)) {
+            Ok(reply) if reply["ok"].as_bool() == Some(true) => Receipt {
+                msg_id: env.id.clone(),
+                session: session.id.clone(),
+                state: reply["status"]
+                    .as_str()
+                    .and_then(ReceiptState::parse)
+                    .unwrap_or(ReceiptState::Held),
+                detail: reply["detail"].as_str().unwrap_or("").to_string(),
+            },
+            Ok(reply) => Receipt {
+                msg_id: env.id.clone(),
+                session: session.id.clone(),
+                state: ReceiptState::Held,
+                detail: reply["error"].as_str().unwrap_or("Pulse refused").to_string(),
+            },
+            Err(e) => Receipt {
+                msg_id: env.id.clone(),
+                session: session.id.clone(),
+                state: ReceiptState::Held,
+                detail: e,
+            },
+        };
+    }
+    if needs_hub {
+        let _ = store.append_inbox(&session.id, env);
+        return Receipt {
+            msg_id: env.id.clone(),
+            session: session.id.clone(),
+            state: ReceiptState::Held,
+            detail: "Pulse isn't running here; Claude only takes messages posted by it. Kept in the bridge inbox."
+                .to_string(),
+        };
+    }
+    deliver_local_via(store, session, env, reply_socket)
+}
+
 /// Send `text` from `from` to the chat `to` names. A chat on this computer
-/// gets it at once, natively; a chat on a paired computer goes through the
-/// outbox, and this waits up to `wait` for the relay to send it.
+/// gets it at once; a chat on a linked computer gets it over ssh, and this
+/// waits for that computer's receipt.
 pub fn send_text(
     store: &Store,
     me: &Identity,
     from: &Caller,
     to: &str,
     text: &str,
-    wait: Duration,
 ) -> Result<SendOutcome, BridgeError> {
     let peers = all_peers(store, me);
     let peer = roster::resolve(&peers, to)?;
@@ -353,7 +392,7 @@ pub fn send_text(
     }
     let env = Envelope::new(
         Sender {
-            device: me.device.clone(),
+            device: me.alias.clone(),
             session: from.id.clone(),
             name: format!("{} on {}", from.name, me.alias),
         },
@@ -361,7 +400,6 @@ pub fn send_text(
             device: peer.device.clone(),
             session: peer.session.clone(),
         },
-        Kind::Message,
         text,
     )?;
     if peer.local {
@@ -370,7 +408,7 @@ pub fn send_text(
             .iter()
             .find(|s| s.id == peer.session)
             .ok_or_else(|| BridgeError::NotFound(to.to_string()))?;
-        let receipt = deliver_local_via(store, session, &env, from.reply_socket.as_deref());
+        let receipt = deliver_here(store, session, &env, from.reply_socket.as_deref());
         return Ok(SendOutcome {
             msg_id: env.id,
             to: peer,
@@ -378,36 +416,28 @@ pub fn send_text(
             detail: receipt.detail,
         });
     }
-    store.enqueue_outbox(&env, &peer.device)?;
-    if !store.relay_alive() {
-        return Ok(SendOutcome {
-            msg_id: env.id,
-            to: peer,
-            status: "queued".to_string(),
-            detail: "No Pulse relay is running (open Pulse); it is sent when one starts."
-                .to_string(),
-        });
-    }
-    let started = Instant::now();
-    loop {
-        if let Some(item) = store.outbox_get(&env.id)
-            && item.status != "queued"
-        {
-            return Ok(SendOutcome {
-                msg_id: env.id,
-                to: peer,
-                status: item.status,
-                detail: item.detail.unwrap_or_default(),
-            });
-        }
-        if started.elapsed() >= wait {
-            return Ok(SendOutcome {
-                msg_id: env.id,
-                to: peer,
-                status: "queued".to_string(),
-                detail: "The relay has not sent it yet.".to_string(),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(100));
+    let link = links::find(store, &peer.device)
+        .ok_or_else(|| BridgeError::NotFound(format!("no link named {}", peer.device)))?;
+    let receipt = links::post(&link, &env).map_err(BridgeError::Delivery)?;
+    Ok(SendOutcome {
+        msg_id: env.id,
+        to: peer,
+        status: receipt["status"].as_str().unwrap_or("held").to_string(),
+        detail: receipt["detail"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// A linked computer posted an envelope here (`pulse bridge post`): put it
+/// into the chat it names.
+pub fn receive(store: &Store, env: &Envelope) -> Receipt {
+    let sessions = roster::local_sessions(store);
+    match sessions.iter().find(|s| s.id == env.to.session) {
+        Some(session) => deliver_here(store, session, env, None),
+        None => Receipt {
+            msg_id: env.id.clone(),
+            session: env.to.session.clone(),
+            state: ReceiptState::Refused,
+            detail: "That chat isn't open on this computer any more.".to_string(),
+        },
     }
 }

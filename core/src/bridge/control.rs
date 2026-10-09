@@ -1,14 +1,15 @@
 //! A tiny local control channel from the `pulse bridge` CLI to the running
-//! Pulse hub, which owns the sharing service (and its port).
+//! Pulse hub.
 //!
 //! Files in the user's own Pulse state folder, so only that user can use it:
 //! the CLI drops `control/requests/<id>.json` (`{id, op, args, ts}`), the hub
 //! claims it (deletes the file) and writes `control/replies/<id>.json`, which
 //! the CLI reads and removes. Same on macOS and Windows; no sockets or pipes.
 //!
-//! The only operation today is `pair` (args `{device}`): pairing needs the
-//! hub's sharing service. `peers`, `send`, `status` and `inbox` need no
-//! service and work from the store, with the hub relaying (see `send_text`).
+//! The only operation today is `deliver` (args `{session, envelope,
+//! reply_socket?}`): on macOS a Claude chat accepts posts only from a
+//! registered peer, which the hub is (see `hub`). `peers`, `send` to other
+//! computers, `status` and `inbox` need no hub.
 
 use super::envelope::now_ms;
 use super::store::Store;
@@ -22,7 +23,7 @@ use std::time::{Duration, Instant};
 const REQUEST_TTL_MS: u64 = 300_000;
 /// The hub must claim a request within this long, else it is not listening.
 const CLAIM_WITHIN: Duration = Duration::from_secs(10);
-/// The relay heartbeat (written every ~2 s while the hub's bridge runs) must be this fresh.
+/// The hub's heartbeat (written every ~2 s while its bridge runs) must be this fresh.
 const HUB_FRESH_MS: u64 = 30_000;
 
 #[derive(Debug, Clone)]
@@ -63,7 +64,7 @@ pub fn hub_running(store: &Store) -> bool {
 /// Ask the hub to run `op` and wait up to `wait` for its reply.
 pub fn call(store: &Store, op: &str, args: Value, wait: Duration) -> Result<Value, String> {
     if !hub_running(store) {
-        return Err("Start Pulse (the hub runs nearby sharing) and try again.".to_string());
+        return Err("Start Pulse and try again.".to_string());
     }
     let id = format!("{}-{:x}", std::process::id(), now_ms());
     let request = requests_dir(store).join(format!("{id}.json"));

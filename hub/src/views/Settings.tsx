@@ -638,7 +638,14 @@ function asOf(secs: number): string {
     : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
 }
 
-function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Send }) {
+/** The two columns every read account shows: Session and Weekly, "—" where a window is not known. */
+function claudeColumns(windows: ClaudeWindow[]): { title: string; window?: ClaudeWindow }[] {
+  const found = claudeWindows(windows);
+  if (found.length > 0 && !found.every((r) => r.title === "Session" || r.title === "Weekly")) return found;
+  return ["Session", "Weekly"].map((title) => ({ title, window: found.find((r) => r.title === title)?.window }));
+}
+
+function ClaudeAccountRow({ account, send, unseen = false }: { account: ClaudeAccount; send: Send; unseen?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.name);
   const cancelled = useRef(false);
@@ -649,7 +656,6 @@ function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Sen
     if (next !== account.name) send({ command: "renameClaudeAccount", id: account.id, name: next });
     setEditing(false);
   };
-  const rows = claudeWindows(account.windows);
   const cached = !account.active && account.capturedAt != null;
   return (
     <div className="ck-claude-account" data-account={account.id}>
@@ -659,6 +665,7 @@ function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Sen
             className="ck-input ck-claude-edit"
             autoFocus
             value={draft}
+            placeholder="Name this account"
             onChange={(e) => setDraft(e.target.value)}
             onFocus={(e) => e.target.select()}
             onBlur={commit}
@@ -677,7 +684,7 @@ function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Sen
           </button>
         )}
         {account.active && <span className="ck-status ck-status-granted">Active</span>}
-        {account.plan && <span className="ck-sub ck-claude-plan">{account.plan}</span>}
+        {account.plan && !unseen && <span className="ck-sub ck-claude-plan">{account.plan}</span>}
         {cached && <span className="ck-sub ck-claude-asof">as of {asOf(account.capturedAt as number)}</span>}
         {!account.active && account.onDisk === false && (
           <button type="button" className="ck-forget" aria-label={`Forget ${account.name}`}
@@ -687,21 +694,45 @@ function ClaudeAccountRow({ account, send }: { account: ClaudeAccount; send: Sen
           </button>
         )}
       </div>
-      <div className="ck-claude-meters">
-        {rows.length === 0 && <span className="ck-sub ck-claude-none">No reading yet</span>}
-        {rows.map(({ title, window: w }) => {
-          const left = resetsIn(w.resetsAt);
-          const pct = Math.round(Math.min(Math.max(w.usedFraction, 0), 1) * 100);
-          return (
-            <div className="ck-claude-win" key={`${title}-${w.label}`} data-state={left ? "live" : "reset"}>
-              <span className="ck-sub">{title}</span>
-              {left ? <Bar fraction={w.usedFraction} color={tone(w.usedFraction)} height={4} /> : <span />}
-              <span className="ck-claude-value">{left ? `${pct}%` : "Reset"}</span>
-              <span className="ck-sub ck-claude-eta">{left ? `resets in ${left}` : ""}</span>
-            </div>
-          );
-        })}
-      </div>
+      {unseen ? (
+        <span className="ck-sub ck-claude-none">no reading</span>
+      ) : (
+        <div className="ck-claude-meters">
+          {claudeColumns(account.windows).map(({ title, window: w }) => {
+            const left = w ? resetsIn(w.resetsAt) : null;
+            const pct = w ? Math.round(Math.min(Math.max(w.usedFraction, 0), 1) * 100) : 0;
+            return (
+              <div className="ck-claude-win" key={title} data-state={left ? "live" : w ? "reset" : "none"}>
+                <div className="ck-claude-head">
+                  <span className="ck-sub">{title}</span>
+                  <span className="ck-claude-value">{left ? `${pct}%` : "\u2014"}</span>
+                  <span className="ck-sub ck-claude-eta">{left ? `resets in ${left}` : w ? "reset" : ""}</span>
+                </div>
+                {left ? <Bar fraction={w!.usedFraction} color={tone(w!.usedFraction)} height={4} /> : <span className="ck-claude-bar-off" />}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Accounts read at least once (and the signed-in one) as rows; the rest fold into one disclosure line. */
+function ClaudeAccountList({ accounts, send }: { accounts: ClaudeAccount[]; send: Send }) {
+  const [open, setOpen] = useState(false);
+  const seen = accounts.filter((c) => c.active || c.capturedAt != null);
+  const unseen = accounts.filter((c) => !seen.includes(c));
+  return (
+    <div className="ck-claude-list" aria-label="Claude accounts">
+      {seen.map((c) => <ClaudeAccountRow key={c.id} account={c} send={send} />)}
+      {unseen.length > 0 && (
+        <button type="button" className="ck-claude-unseen" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? <ChevronUp size={14} strokeWidth={1.75} aria-hidden="true" /> : <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />}
+          {unseen.length} {unseen.length === 1 ? "account" : "accounts"} never seen signed in
+        </button>
+      )}
+      {open && unseen.map((c) => <ClaudeAccountRow key={c.id} account={c} send={send} unseen />)}
     </div>
   );
 }
@@ -756,9 +787,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
             <Toggle checked={a.connected} onChange={(v) => send({ command: "connect", provider: a.id, value: v })} label={`Show ${a.name}`} />
           </div>
           {a.claudeAccounts && a.claudeAccounts.length > 0 && (
-            <div className="ck-claude-list" aria-label="Claude accounts">
-              {a.claudeAccounts.map((c) => <ClaudeAccountRow key={c.id} account={c} send={send} />)}
-            </div>
+            <ClaudeAccountList accounts={a.claudeAccounts} send={send} />
           )}
         </div>
       ))}

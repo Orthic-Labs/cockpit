@@ -88,24 +88,6 @@ pub fn is_message(files: &BTreeMap<String, FileMeta>) -> bool {
         })
 }
 
-/// A Pulse bridge envelope: one file of the bridge type with the envelope in `preview`.
-pub fn is_bridge(files: &BTreeMap<String, FileMeta>) -> bool {
-    files.len() == 1
-        && files.values().all(|f| {
-            f.file_type == crate::bridge::envelope::BRIDGE_FILE_TYPE
-                && f.preview.as_ref().is_some_and(|p| !p.is_empty())
-        })
-}
-
-/// A Pulse bridge pairing offer: one file of the pair type with the offer in `preview`.
-pub fn is_pair(files: &BTreeMap<String, FileMeta>) -> bool {
-    files.len() == 1
-        && files.values().all(|f| {
-            f.file_type == crate::bridge::envelope::PAIR_FILE_TYPE
-                && f.preview.as_ref().is_some_and(|p| !p.is_empty())
-        })
-}
-
 // ---- file names ------------------------------------------------------------
 
 /// One path component made safe: no separators, no control characters, no

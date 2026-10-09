@@ -1,444 +1,246 @@
-//! One journey through the Pulse bridge with two devices: pairing over a real
-//! TLS connection, signed messages accepted or refused by the receiving
-//! service, inbox trimming, rosters from disk and from a paired device, and the
-//! CLI's `peers` / `send` path (caller identification, local hold, remote
-//! queue) through the library. Delivery into Claude and Codex themselves is not
-//! exercised here.
+//! One journey through the Pulse bridge with two computers over ssh. Computer
+//! B (its own HOME) has a Claude chat with a fake messaging socket; a shell
+//! script stands in for ssh and runs the real `pulse` binary as B. Computer A
+//! links B, lists its chats, sends a message that B's `pulse bridge post`
+//! delivers into that socket, then sees a refusal once the chat is gone, and
+//! unlinks. Delivery into a real Claude or Codex chat is not exercised here.
 #![cfg(feature = "localsend")]
 
-use pulse_core::bridge::envelope::{
-    self, Envelope, EnvelopeError, Kind, MAX_BODY_BYTES, ReplayGuard, Sender, Target,
-};
+use pulse_core::bridge::links::{self, Link, RemoteChats, RemoteListing};
 use pulse_core::bridge::roster::{self, RosterEntry};
-use pulse_core::bridge::store::{RegisteredSession, RemoteRoster, Store};
-use pulse_core::bridge::{Caller, Identity, all_peers, identify, send_text};
-use pulse_core::localsend::proto;
-use pulse_core::localsend::{Config, Event, Service, net};
-use serde_json::json;
-use std::net::IpAddr;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use pulse_core::bridge::{BridgeError, Envelope, Sender, Target};
 
-const PORT: u16 = 53947;
-
-fn temp(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("pulse-bridge-{name}-{}", proto::random_hex(4)))
+fn entry(session: &str, name: &str) -> RosterEntry {
+    RosterEntry {
+        session: session.into(),
+        name: name.into(),
+        kind: "claude".into(),
+        cwd: String::new(),
+        status: "idle".into(),
+    }
 }
 
-fn message(from: &str, to: &str, body: &str) -> Envelope {
-    Envelope::new(
+fn remote(device: &str, chats: Vec<RosterEntry>) -> RemoteChats {
+    RemoteChats {
+        link: Link {
+            device: device.into(),
+            ssh: "fake".into(),
+            pulse: "pulse".into(),
+        },
+        listing: Ok(RemoteListing {
+            device: device.into(),
+            chats,
+        }),
+    }
+}
+
+/// Rosters merge linked chats under "<chat> on <device>"; a shared title is ambiguous.
+fn roster_and_wire_format() {
+    let remotes = [
+        remote("B", vec![entry("chat-b", "Planner")]),
+        remote("C", vec![entry("chat-c", "Planner")]),
+    ];
+    let peers = roster::merge(&[], "A", &remotes);
+    assert_eq!(peers.len(), 2);
+    assert_eq!(peers[0].display, "Planner on B");
+    assert_eq!(peers[0].id, "B:chat-b");
+    assert!(!peers[0].local);
+    let hit = roster::resolve(&peers, "Planner on C").unwrap();
+    assert_eq!(hit.session, "chat-c");
+    match roster::resolve(&peers, "Planner") {
+        Err(BridgeError::Invalid(text)) => assert!(text.contains("more than one"), "{text}"),
+        other => panic!("expected an ambiguity error, got {other:?}"),
+    }
+    assert!(matches!(
+        roster::resolve(&peers, "nobody"),
+        Err(BridgeError::NotFound(_))
+    ));
+
+    let env = Envelope::new(
         Sender {
-            device: from.into(),
+            device: "A".into(),
             session: "chat-a".into(),
-            name: "Planner on Mac A".into(),
+            name: "Driver on A".into(),
         },
         Target {
-            device: to.into(),
+            device: "B".into(),
             session: "chat-b".into(),
         },
-        Kind::Message,
-        body,
+        "ünïcödé ✓ \"quoted\"\nsecond line",
     )
-    .expect("envelope")
+    .unwrap();
+    let back = links::decode_envelope(&links::encode_envelope(&env)).unwrap();
+    assert_eq!(back, env);
+    assert!(links::decode_envelope("!!not base64!!").is_err());
 }
 
-/// POST one `prepare-upload` the way a paired Pulse device does.
-fn post(file_type: &str, preview: &str, fingerprint: &str) -> net::Reply {
-    let body = json!({
-        "info": {"alias": "Mac A", "version": "2.0", "deviceType": "desktop",
-                 "fingerprint": fingerprint, "port": 53317, "protocol": "https"},
-        "files": {"b0": {"id": "b0", "fileName": "x", "size": preview.len(),
-                         "fileType": file_type, "preview": preview}}
-    })
-    .to_string();
-    let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    net::request_json(
-        ip,
-        PORT,
-        true,
-        "",
-        "POST",
-        "/api/localsend/v2/prepare-upload",
-        Some(body.as_bytes()),
-        Duration::from_secs(30),
+#[cfg(unix)]
+fn journey() {
+    use pulse_core::bridge::store::Store;
+    use pulse_core::bridge::{Caller, all_peers, identify, local_identity, send_text};
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let temp = |name: &str| -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pulse-bridge-{name}-{}-{}",
+            std::process::id(),
+            pulse_core::localsend::proto::random_hex(4)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    };
+    let a = temp("a");
+    let b = temp("b");
+
+    // Computer B: one Claude chat with a fake messaging socket.
+    let sessions = b.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let socket = b.join("cc.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let pid = std::process::id();
+    let session_file = sessions.join(format!("{pid}.json"));
+    std::fs::write(
+        &session_file,
+        serde_json::json!({
+            "pid": pid, "sessionId": "chat-b", "name": "Planner",
+            "cwd": b.to_string_lossy(), "status": "idle", "peerProtocol": 1,
+            "messagingSocketPath": socket.to_string_lossy(), "entrypoint": "cli",
+        })
+        .to_string(),
     )
-    .expect("prepare-upload answers")
+    .unwrap();
+    std::fs::write(
+        sessions.join(format!("{pid}.{}.key", "ab".repeat(32))),
+        r#"{"peerToken": "x"}"#,
+    )
+    .unwrap();
+    let (line_tx, line_rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut line = String::new();
+            if BufReader::new(stream).read_line(&mut line).is_ok() && !line.is_empty() {
+                let _ = line_tx.send(line);
+            }
+        }
+    });
+
+    // The fake ssh: drops the host argument and runs B's pulse as B.
+    let pulse = env!("CARGO_BIN_EXE_pulse");
+    let script = a.join("fake-ssh.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nshift\nexec env HOME='{b}' CLAUDE_CONFIG_DIR='{b}/.claude' \
+             CLAUDE_CODE_MESSAGING_SOCKET='{sock}' \"$@\"\n",
+            b = b.display(),
+            sock = socket.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // The only test in this binary, so no other thread reads the environment yet.
+    unsafe { std::env::set_var("PULSE_BRIDGE_SSH", &script) };
+
+    let store = Store::new(&a);
+    let me = local_identity(&store).unwrap();
+
+    // a) linking lists B's chats.
+    let listing = links::add(
+        &store,
+        Link {
+            device: "B".into(),
+            ssh: "fake".into(),
+            pulse: pulse.into(),
+        },
+    )
+    .expect("link B");
+    assert!(
+        listing
+            .chats
+            .iter()
+            .any(|c| c.name == "Planner" && c.session == "chat-b"),
+        "{listing:?}"
+    );
+    assert_eq!(links::all(&store).len(), 1);
+
+    // b) the roster shows it as a remote peer.
+    let peers = all_peers(&store, &me);
+    let planner = peers
+        .iter()
+        .find(|p| p.id == "B:chat-b")
+        .unwrap_or_else(|| panic!("no remote Planner in {peers:?}"));
+    assert_eq!(planner.display, "Planner on B");
+    assert!(!planner.local);
+
+    // The calling chat is found from the environment, as `pulse bridge send` does.
+    let env = |name: &str| match name {
+        "CLAUDE_CODE_MESSAGING_SOCKET" => Some("/tmp/chat-a.sock".to_string()),
+        "CLAUDE_SESSION_ID" => Some("chat-a".to_string()),
+        _ => None,
+    };
+    let found = identify(&[], &env, None).unwrap();
+    assert_eq!(found.id, "chat-a");
+    assert_eq!(found.reply_socket.as_deref(), Some("/tmp/chat-a.sock"));
+
+    // c) a message goes over ssh and into B's chat socket.
+    let driver = Caller {
+        id: "chat-a".into(),
+        name: "Driver".into(),
+        reply_socket: None,
+    };
+    let sent = send_text(&store, &me, &driver, "Planner on B", "hello from A").unwrap();
+    assert_eq!(sent.status, "delivered", "{}", sent.detail);
+    let line = line_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("B's chat socket got a message");
+    let frame: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    let content = frame["message"]["content"].as_str().unwrap();
+    assert!(content.contains("<cross-session-message"), "{content}");
+    assert!(content.contains("from-name=\"Driver on "), "{content}");
+    assert!(content.contains(" via Pulse\""), "{content}");
+    assert!(content.contains("hello from A"), "{content}");
+
+    // d) once the chat is gone B refuses; A's roster no longer offers it.
+    std::fs::remove_file(&session_file).unwrap();
+    let gone = Envelope::new(
+        Sender {
+            device: "A".into(),
+            session: "chat-a".into(),
+            name: "Driver on A".into(),
+        },
+        Target {
+            device: "B".into(),
+            session: "chat-b".into(),
+        },
+        "anyone there?",
+    )
+    .unwrap();
+    let link = links::find(&store, "b").expect("link kept");
+    let receipt = links::post(&link, &gone).unwrap();
+    assert_eq!(receipt["status"], "refused", "{receipt}");
+    assert!(
+        receipt["detail"].as_str().unwrap().contains("isn't open"),
+        "{receipt}"
+    );
+    assert!(send_text(&store, &me, &driver, "Planner on B", "again").is_err());
+
+    // e) unlinking removes the remote chats.
+    assert!(links::remove(&store, "B").unwrap());
+    assert!(!links::remove(&store, "B").unwrap());
+    assert!(all_peers(&store, &me).iter().all(|p| p.local));
+
+    let _ = std::fs::remove_dir_all(&a);
+    let _ = std::fs::remove_dir_all(&b);
 }
 
 #[test]
-fn two_devices_pair_exchange_signed_messages_and_the_cli_sends() {
-    let now = envelope::now_ms();
-
-    // ---- signing -----------------------------------------------------------
-    assert_eq!(
-        envelope::to_hex(&envelope::hmac_sha256(
-            b"Jefe",
-            b"what do ya want for nothing?"
-        )),
-        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-    );
-    let key = envelope::from_hex(&envelope::new_pair_key()).unwrap();
-    assert_eq!(key.len(), 32);
-    let mut env = message("dev-a", "dev-b", "hello from A");
-    env.sign(&key);
-    let received = Envelope::from_json(&env.to_json()).unwrap();
-    let mut replay = ReplayGuard::default();
-    assert_eq!(
-        envelope::accept(&received, Some(key.as_slice()), now, &mut replay),
-        Ok(())
-    );
-    assert_eq!(
-        envelope::accept(&received, Some(key.as_slice()), now, &mut replay),
-        Err(EnvelopeError::Replay)
-    );
-    let mut tampered = received.clone();
-    tampered.body = "HELLO".into();
-    assert_eq!(
-        envelope::accept(
-            &tampered,
-            Some(key.as_slice()),
-            now,
-            &mut ReplayGuard::default()
-        ),
-        Err(EnvelopeError::BadSignature)
-    );
-    assert_eq!(
-        envelope::accept(
-            &received,
-            Some(&[7u8; 32][..]),
-            now,
-            &mut ReplayGuard::default()
-        ),
-        Err(EnvelopeError::BadSignature)
-    );
-    assert_eq!(
-        envelope::accept(&received, None, now, &mut ReplayGuard::default()),
-        Err(EnvelopeError::UnknownDevice)
-    );
-    let mut old = message("dev-a", "dev-b", "late");
-    old.ts = now - 6 * 60 * 1000;
-    old.sign(&key);
-    assert_eq!(
-        envelope::accept(&old, Some(key.as_slice()), now, &mut ReplayGuard::default()),
-        Err(EnvelopeError::Skew)
-    );
-    assert!(matches!(
-        Envelope::new(
-            Sender::default(),
-            Target::default(),
-            Kind::Message,
-            "x".repeat(MAX_BODY_BYTES + 1)
-        ),
-        Err(EnvelopeError::Oversize)
-    ));
-    let mut window = ReplayGuard::new(3);
-    for nonce in ["n1", "n2", "n3", "n4"] {
-        assert!(window.insert("dev-a", nonce));
-    }
-    assert!(
-        window.insert("dev-a", "n1"),
-        "the oldest nonce was forgotten"
-    );
-
-    // ---- pairing and signed delivery through a real service ----------------
-    let (save, state) = (temp("save"), temp("state"));
-    let heard: Arc<Mutex<Vec<Envelope>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = heard.clone();
-    let service = Arc::new(
-        Service::start(
-            Config {
-                alias: "Mac B (Pulse)".into(),
-                port: PORT,
-                save_dir: save.clone(),
-                accept_known: true,
-                state_dir: state.clone(),
-                device_model: "Mac".into(),
-            },
-            Arc::new(move |event: Event| {
-                if let Event::Bridge(envelope) = event {
-                    sink.lock().unwrap().push(envelope);
-                }
-            }),
-        )
-        .expect("service starts"),
-    );
-    let b_fingerprint = service.fingerprint();
-    let secret = envelope::new_pair_key();
-    let pair_key = envelope::from_hex(&secret).unwrap();
-    let signed = |body: &str, to: &str| {
-        let mut e = message("phone-1", to, body);
-        e.sign(&pair_key);
-        e.to_json()
-    };
-
-    // Not paired yet: refused, nothing heard.
-    let first = signed("too early", &b_fingerprint);
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &first, "phone-1").status,
-        403
-    );
-
-    // Pairing always asks, even with accept-known on; declining stores nothing.
-    let asker = {
-        let service = service.clone();
-        std::thread::spawn(move || {
-            for answer in [false, true] {
-                for _ in 0..400 {
-                    let waiting = service.snapshot().incoming.first().map(|i| i.id.clone());
-                    if let Some(id) = waiting {
-                        assert!(service.respond(&id, answer));
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                std::thread::sleep(Duration::from_millis(300));
-            }
-        })
-    };
-    let offer = json!({ "offer": secret }).to_string();
-    assert_eq!(
-        post(envelope::PAIR_FILE_TYPE, &offer, "phone-1").status,
-        403
-    );
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &first, "phone-1").status,
-        403
-    );
-    assert_eq!(
-        post(envelope::PAIR_FILE_TYPE, &offer, "phone-1").status,
-        204
-    );
-    asker.join().unwrap();
-    let known = std::fs::read_to_string(state.join("known-devices.json")).unwrap();
-    assert!(known.contains("phone-1") && known.contains(&secret));
-
-    // Paired: a valid message is taken once, and never touches the save folder.
-    let good = signed("build is green", &b_fingerprint);
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &good, "phone-1").status,
-        204
-    );
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &good, "phone-1").status,
-        403,
-        "replay"
-    );
-    let forged = good.replace("build is green", "rm -rf");
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &forged, "phone-1").status,
-        403
-    );
-    let wrong_target = signed("misrouted", "someone-else");
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &wrong_target, "phone-1").status,
-        403
-    );
-    let impostor = signed("hi", &b_fingerprint);
-    assert_eq!(
-        post(envelope::BRIDGE_FILE_TYPE, &impostor, "phone-2").status,
-        403
-    );
-    {
-        let seen = heard.lock().unwrap();
-        assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].body, "build is green");
-    }
-    assert!(!save.exists() || std::fs::read_dir(&save).unwrap().next().is_none());
-    assert!(service.snapshot().transfers.is_empty());
-    assert!(service.is_paired("phone-1"));
-    drop(service);
-    std::thread::sleep(Duration::from_millis(600));
-
-    // The key survives a restart.
-    let restarted = Service::start(
-        Config {
-            alias: "Mac B (Pulse)".into(),
-            port: PORT,
-            save_dir: save.clone(),
-            accept_known: false,
-            state_dir: state.clone(),
-            device_model: "Mac".into(),
-        },
-        Arc::new(|_| {}),
-    )
-    .expect("restart");
-    assert!(restarted.is_paired("phone-1"));
-    drop(restarted);
-
-    // ---- store -------------------------------------------------------------
-    let dir = temp("store");
-    let store = Store::new(&dir).with_inbox_cap(4096);
-    for i in 0..40 {
-        let e = message(
-            "dev-a",
-            "dev-b",
-            &format!("message {i} {}", "x".repeat(100)),
-        );
-        store.append_inbox("chat-b", &e).unwrap();
-    }
-    let size = std::fs::metadata(dir.join("bridge/inbox/chat-b.jsonl"))
-        .unwrap()
-        .len();
-    assert!(size <= 4096, "inbox stays under its cap, was {size}");
-    let kept = store.read_inbox("chat-b");
-    assert!(kept.len() < 40 && kept.last().unwrap().seq == 40 && kept[0].seq > 1);
-    assert_eq!(store.take_unread("chat-b", None).unwrap().len(), kept.len());
-    assert!(store.take_unread("chat-b", None).unwrap().is_empty());
-    let store = Store::new(&dir);
-
-    // ---- roster ------------------------------------------------------------
-    let me_pid = std::process::id();
-    let sessions_dir = dir.join("claude-sessions");
-    std::fs::create_dir_all(&sessions_dir).unwrap();
-    let file = |pid: u32, id: &str, name: &str| {
-        json!({"pid": pid, "sessionId": id, "name": name, "cwd": "/work/app",
-               "status": "idle", "messagingSocketPath": "/tmp/s.sock", "peerProtocol": 1})
-        .to_string()
-    };
-    std::fs::write(
-        sessions_dir.join(format!("{me_pid}.json")),
-        file(me_pid, "claude-1", "Fix build"),
-    )
-    .unwrap();
-    std::fs::write(
-        sessions_dir.join("999999.json"),
-        file(999_999, "claude-dead", "Gone"),
-    )
-    .unwrap();
-    std::fs::write(sessions_dir.join("junk.json"), "not json").unwrap();
-    std::fs::write(sessions_dir.join(format!("{me_pid}.abc.key")), "{}").unwrap();
-    let alive = move |pid: u32| pid == me_pid;
-    let claude = roster::claude_sessions_in(&sessions_dir, &alive);
-    assert_eq!(claude.len(), 1);
-    assert_eq!(claude[0].id, "claude-1");
-    assert_eq!(claude[0].messaging_socket.as_deref(), Some("/tmp/s.sock"));
-
-    let register = |id: &str, name: &str, pid: u32| {
-        store
-            .register_session(&RegisteredSession {
-                id: id.into(),
-                kind: "test".into(),
-                name: name.into(),
-                cwd: "/work/api".into(),
-                pid,
-                updated: now,
-            })
-            .unwrap();
-    };
-    register("chat-b", "Builder", me_pid);
-    register("chat-gone", "Closed", 999_999);
-    let local = roster::local_sessions_in(&store, Some(sessions_dir.as_path()), &alive);
-    let ids: Vec<&str> = local.iter().map(|s| s.id.as_str()).collect();
-    assert!(ids.contains(&"claude-1") && ids.contains(&"chat-b") && !ids.contains(&"chat-gone"));
-
-    let remote = |received: u64| RemoteRoster {
-        device: "dev-b".into(),
-        alias: "Mac B".into(),
-        received,
-        entries: vec![RosterEntry {
-            session: "codex-9".into(),
-            name: "Fix build".into(),
-            kind: "codex".into(),
-            cwd: "/srv".into(),
-            status: "idle".into(),
-        }],
-    };
-    let peers = roster::merge(&local, "dev-a", "Mac A", &[remote(now)], now);
-    assert!(
-        peers
-            .iter()
-            .any(|p| p.display == "Fix build on Mac B" && !p.local)
-    );
-    assert!(
-        roster::merge(
-            &local,
-            "dev-a",
-            "Mac A",
-            &[remote(now - 10 * 60 * 1000)],
-            now
-        )
-        .iter()
-        .all(|p| p.local),
-        "a stale roster is dropped"
-    );
-    assert!(roster::resolve(&peers, "fix build").is_err(), "ambiguous");
-    assert_eq!(
-        roster::resolve(&peers, "Fix build on Mac B").unwrap().id,
-        "dev-b:codex-9"
-    );
-    assert_eq!(roster::resolve(&peers, "builder").unwrap().id, "chat-b");
-
-    // ---- the CLI's peers / send path -----------------------------------------
-    store
-        .save_remote_roster(&remote(envelope::now_ms()))
-        .unwrap();
-    let me = Identity {
-        device: "dev-a".into(),
-        alias: "Mac A".into(),
-    };
-    register("chat-a", "Planner", me_pid);
-    let local = roster::local_sessions_in(&store, Some(sessions_dir.as_path()), &alive);
-    let no_env = |_: &str| None::<String>;
-    let planner = identify(&local, &no_env, Some("Planner")).unwrap();
-    assert_eq!(planner.id, "chat-a");
-    assert!(identify(&local, &no_env, Some("nobody")).is_err());
-    assert_eq!(
-        identify(&local, &no_env, None).unwrap(),
-        Caller {
-            id: "cli".into(),
-            name: "Pulse CLI".into(),
-            reply_socket: None
-        }
-    );
-    // Inside a Claude chat its own socket names it and is the reply address.
-    let in_claude =
-        |name: &str| (name == "CLAUDE_CODE_MESSAGING_SOCKET").then(|| "/tmp/s.sock".to_string());
-    let claude = identify(&local, &in_claude, None).unwrap();
-    assert_eq!(claude.id, "claude-1");
-    assert_eq!(claude.reply_socket.as_deref(), Some("/tmp/s.sock"));
-    // Inside Codex the thread id names it; no socket.
-    let in_codex = |name: &str| (name == "CODEX_THREAD_ID").then(|| "codex-7".to_string());
-    let codex = identify(&local, &in_codex, None).unwrap();
-    assert_eq!(codex.id, "codex-7");
-    assert!(codex.reply_socket.is_none());
-
-    let listed = all_peers(&store, &me);
-    let ids: Vec<&str> = listed.iter().map(|p| p.id.as_str()).collect();
-    assert!(ids.contains(&"chat-b") && ids.contains(&"dev-b:codex-9"));
-    let remote_peer = listed.iter().find(|p| !p.local).unwrap();
-    assert_eq!(remote_peer.display, "Fix build on Mac B");
-    assert_eq!(remote_peer.kind, "codex");
-
-    // A local chat that can't be pushed to keeps the message in its inbox.
-    let wait = Duration::from_millis(200);
-    let sent = send_text(&store, &me, &planner, "chat-b", "build is green", wait).unwrap();
-    assert_eq!(sent.status, "held");
-    let messages = store.take_unread("chat-b", None).unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].env.body, "build is green");
-    assert_eq!(messages[0].env.from.name, "Planner on Mac A");
-    assert_eq!(messages[0].env.from.session, "chat-a");
-    assert!(store.take_unread("chat-b", None).unwrap().is_empty());
-    assert!(send_text(&store, &me, &planner, "Planner", "me", wait).is_err());
-
-    // A chat on a paired device is queued for the relay, unsigned until sent.
-    let queued = send_text(&store, &me, &planner, "Fix build on Mac B", "ping", wait).unwrap();
-    assert_eq!(queued.status, "queued");
-    let outbox = store.outbox_queued();
-    assert_eq!(outbox.len(), 1);
-    assert_eq!(outbox[0].target_device, "dev-b");
-    assert_eq!(outbox[0].envelope.to.session, "codex-9");
-    assert_eq!(outbox[0].envelope.from.session, "chat-a");
-    assert!(!outbox[0].envelope.is_signed());
-    let mut relayed = outbox[0].envelope.clone();
-    relayed.sign(&key);
-    assert_eq!(relayed.verify(&key, envelope::now_ms()), Ok(()));
-
-    let bad = send_text(&store, &me, &planner, "nobody at all", "hi", wait).unwrap_err();
-    assert!(bad.to_string().contains("nobody at all"));
-
-    for path in [save, state, dir] {
-        let _ = std::fs::remove_dir_all(path);
-    }
+fn two_computers_message_each_other_over_ssh() {
+    #[cfg(unix)]
+    journey();
+    roster_and_wire_format();
 }

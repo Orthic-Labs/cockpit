@@ -14,4 +14,5 @@ Every test migration must inventory exact deleted test names/files, replacement 
 
 ## Bridge
 
-To message a chat on another machine: `pulse bridge peers`, then `pulse bridge send "<chat> on <device>" "<text>"`. The installed CLI is `Pulse.app/Contents/Helpers/pulse` on Mac and `Pulse\Helpers\pulse.exe` on Windows.
+Link a computer once: `pulse bridge link <device> <ssh-host> [--pulse PATH]` (ssh keys must work). Then `pulse bridge peers` and `pulse bridge send "<chat> on <device>" "<text>"`; `pulse bridge status` shows links.
+The installed CLI is `Pulse.app/Contents/Helpers/pulse` on Mac and `Pulse\Helpers\pulse.exe` on Windows.

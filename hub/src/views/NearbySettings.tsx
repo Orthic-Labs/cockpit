@@ -14,13 +14,12 @@ export interface ShareState {
   warnings: string[];
   /** macOS Local Network access: "granted" once a multicast send worked, "blocked" when macOS refuses. */
   localNetwork: "unknown" | "granted" | "blocked";
-  /** The agent bridge (pulse_core::bridge): chats on this computer and on nearby ones. */
+  /** The agent bridge (pulse_core::bridge): chats on this computer and on linked ones (over ssh). */
   bridge?: {
     enabled: boolean;
     active?: boolean;
     localChats?: number;
-    remoteChats?: number;
-    peers?: { device: string; alias: string; chats: number }[];
+    links?: { device: string; ssh: string; chats: number | null; error: string | null }[];
     lastError?: string | null;
     device?: string;
   };
@@ -96,20 +95,18 @@ function AgentBridge({ share }: { share: ShareState | null }) {
 
   let status = "";
   if (!enabled) status = "Off.";
-  else if (!share?.running) status = "Starts with nearby sharing.";
   else {
     const local = bridge?.localChats ?? 0;
-    const remote = bridge?.remoteChats ?? 0;
-    const peers = bridge?.peers ?? [];
-    const device = peers.length === 1 ? peers[0].alias : "other computers";
-    status = `${local} ${local === 1 ? "chat" : "chats"} here, ${remote} on ${device}.`;
+    const links = (bridge?.links ?? []).map((l) =>
+      l.error ? `${l.device}: ${l.error}` : `${l.chats ?? 0} on ${l.device}`);
+    status = [`${local} ${local === 1 ? "chat" : "chats"} here.`, ...links.map((t) => `${t}.`)].join(" ");
   }
 
   return (
     <>
       <Row
         label="Agent bridge"
-        note="Lets Claude and Codex chats on this computer message chats on nearby Pulse computers. Nothing leaves your network."
+        note="Lets Claude and Codex chats on this computer message chats on linked computers over ssh. Link one with: pulse bridge link <device> <ssh-host>"
       >
         <Toggle checked={enabled} onChange={toggle} label="Agent bridge" />
       </Row>

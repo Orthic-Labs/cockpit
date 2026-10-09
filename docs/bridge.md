@@ -1,34 +1,42 @@
 # Pulse bridge
 
-Pulse's only job is cross-machine messaging between AI chats (Claude Desktop's Code tab, Codex). On one computer chats already talk natively: Claude to Claude over their messaging sockets (SendMessage), Claude to Codex with `codex queue`. Pulse pairs computers, relays signed messages and delivers natively on the receiving machine.
+Messages between AI chats on different computers, over ssh. Chats on one computer already talk natively; Pulse only adds the hop between computers and delivers natively at the far end. No network listener, no pairing, no shared secret.
 
-## Two commands
+## Commands (`pulse bridge …`)
 
-The installed CLI is `Pulse.app/Contents/Helpers/pulse` on Mac and `Pulse\Helpers\pulse.exe` on Windows.
+- `link <device> <ssh-host> [--pulse PATH]` stores a link and checks it by listing that computer's chats. `unlink <device>` removes it.
+- `peers [--local] [--json]` lists chats here plus each link's (`ssh <host> <pulse> bridge peers --local --json`, asked in parallel).
+- `send "<chat> on <device>" "<text>" [--from CHAT]` delivers and prints the receipt: delivered, held or refused.
+- `post <base64 envelope>` is what a link runs over ssh to deliver one message on the receiving computer.
+- `status`, `inbox`, `install|uninstall` (the Pulse skill for Claude and Codex).
 
-- `pulse bridge peers [--json]`: every chat that can be messaged, here and on paired computers, as "<chat> on <device>" with kind (`claude` or `codex`) and status.
-- `pulse bridge send "<chat> on <device>" "<text>" [--json]`: a chat on another computer goes through the relay and is delivered natively there; a chat on this computer is delivered natively here, so one command works everywhere. The result is `delivered`, `held`, `refused` or `queued` (no relay running yet).
+## Links
 
-Also: `pulse bridge status` (relay, chat counts, paired computers seen), `pulse bridge inbox [--from CHAT]` (only for messages that could not be delivered natively: held or refused).
+`<state>/bridge/links.json` holds `{device, ssh, pulse}`: the name chats show, an ssh alias or `user@host`, and the path of `pulse` there. ssh must work without a prompt (keys, BatchMode, 10 s connect, 25 s per command). Links are one-way: link both computers to talk both ways. `PULSE_BRIDGE_SSH` replaces the `ssh` program (tests).
 
-## Pairing
+## Sending
 
-`pulse bridge pair <device>` asks a nearby computer to pair; accept the prompt there. Both sides keep one random 32-byte key. Pair once per pair of computers; the CLI hands the request to the running Pulse hub (it owns nearby sharing and its port) through files in the state folder (`bridge/control/requests` and `replies`), and the hub uses the new key at once. The prompt on the other computer reads "Pair with <this computer> for Pulse bridge". If Pulse is not running, `pair` says to start it. `peers`, `send`, `status` and `inbox` need no service: they use the shared store and the hub relays.
+A remote send runs `ssh <host> <pulse> bridge post <base64 envelope>`; the envelope is base64 so no quoting survives two shells. The receiving `pulse` finds the chat, delivers, and prints one JSON receipt that the sender relays. A chat that closed is refused; one that cannot be pushed into is held in its bridge inbox.
 
-## Skill
+## Delivery into Claude
 
-`pulse bridge install [--claude] [--codex] [--dry-run]` installs the Pulse skill (`plugins/pulse-bridge`) into `~/.claude/skills/pulse-bridge/` and `$CODEX_HOME/skills/pulse-bridge/` so the harness knows these commands. It is idempotent, writes atomically, keeps a differing existing file once as `SKILL.md.pulse-bak`, and `pulse bridge uninstall` reverses it. The hub's Agent bridge block has a button that runs it. Open chats need a restart.
+- macOS: a Claude chat accepts a peer message only from a process descending from a registered session. `pulse` started by sshd has no such ancestor and would be dropped silently. So the running Pulse hub registers itself as a Claude peer, and `post` hands the delivery to the hub through control files in the state folder. If the hub is not running the message is held and `status` says "open Pulse".
+- Windows: the chat's named pipe takes an auth frame with its peer token, so `pulse` posts directly.
+- Codex threads get `codex queue`; whether a thread is open is unknown, so they always list as idle.
 
-## How replies route
+## Replies
 
-Each chat sending a message is identified from its environment: `--from`, else the Claude chat owning `CLAUDE_CODE_MESSAGING_SOCKET`, else `CODEX_THREAD_ID`, else "Pulse CLI". The message arrives as "<chat> on <device> via Pulse".
-
-- Claude target: pushed to the chat's own socket in the shape Claude uses. Its SendMessage reply goes to a Pulse reply socket on that machine, is signed and relayed back, and lands in the calling chat natively (a Claude caller via its socket, a Codex caller via `codex queue` to its thread).
-- Codex target: `codex queue --thread <id> --message <text>`. The message tells the thread to answer with `pulse bridge send "<chat> on <device>" "<text>"`.
-- A local Claude target of a local Claude caller replies straight to the caller's own socket.
-
-Rosters publish every ~30 s; ones older than 2 minutes are hidden. Codex threads (the 50 most recent from `~/.codex/session_index.jsonl`) show as `idle`; their liveness is unknown. On Windows the Claude reply socket is not implemented, so Claude chats there reply with `pulse bridge send`.
+The hub listens on one reply socket per remote peer and passes it as the message's `from`. A Claude chat answers there; the hub (`hub::on_local_reply`) sends the reply back over the link as a new envelope, shown as "<chat> on <device> via Pulse". The Windows reply socket is not implemented: Claude chats there reply with `pulse bridge send`, as Codex chats do.
 
 ## Security
 
-Messages between computers are signed with HMAC-SHA256 under the pair key from the accepted pairing. Unsigned, wrongly signed, replayed, stale (clock skew over 5 minutes) envelopes and unknown senders are dropped. Only text (up to 64 KiB) is carried, never files or commands. Nothing leaves the local network.
+- ssh keys authenticate every hop; nothing listens on the network.
+- Only plain text up to 64 KiB, wrapped in a `cross-session-message` tag with any embedded tag escaped.
+- Claude keys (`peerToken`) are read for the local chat only and never logged or sent.
+- Anyone who can ssh as the user and run `pulse` can message that user's chats; that is the trust boundary.
+
+## Limits
+
+- ssh costs about 0.5 s per message and per `peers`.
+- Held and refused messages stay in the chat's inbox until read.
+- Codex liveness is unknown; a Codex message to a closed thread is queued, not confirmed.
