@@ -403,7 +403,15 @@ pub fn deliver_via(
         .collect();
     let sender = format!("{} via Pulse", shim::env_from_name(env));
     let session_id = format!("pulse-{short}");
-    let reply_from = from.map(|address| format!("uds:{address}"));
+    // A frame without a reply address is dropped by the chat without a word (seen on
+    // Windows, where no reply listener exists yet). A stable placeholder keeps the
+    // message deliverable; a chat that answers it gets no reply socket and uses
+    // `pulse bridge send` instead, as the skill says.
+    let reply_from = Some(match from {
+        Some(address) => format!("uds:{address}"),
+        None if cfg!(windows) => r"uds:\\.\pipe\pulse-bridge-noreply".to_string(),
+        None => "uds:/tmp/pulse-bridge-noreply.sock".to_string(),
+    });
     let content = wrap_content(
         reply_from.as_deref().unwrap_or(""),
         &session_id,
