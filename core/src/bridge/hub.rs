@@ -149,12 +149,15 @@ fn register(alias: &str) {
             "linux"
         },
     );
-    #[cfg(windows)]
     // Claude's own entries say `win32:<host>`; match that so readers treat ours alike.
-    let host = sysinfo::System::host_name()
-        .unwrap_or_else(|| "pc".to_string())
-        .to_lowercase();
-    let domain_owned = format!("win32:{host}");
+    #[cfg(windows)]
+    let domain_owned = format!(
+        "win32:{}",
+        sysinfo::System::host_name()
+            .unwrap_or_else(|| "pc".to_string())
+            .to_lowercase()
+    );
+    #[cfg(windows)]
     let (home_var, domain) = ("USERPROFILE", domain_owned.as_str());
     let json_path = dir.join(format!("{pid}.json"));
     let key_hash = crate::localsend::proto::random_hex(32);
