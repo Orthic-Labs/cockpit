@@ -29,8 +29,11 @@
 //! Replies: the chat answers to `from`, a socket this process listens on
 //! (`ReplyHub`). One socket per remote peer, so a reply knows who it is for.
 //! Empty connections (a liveness probe) are tolerated. On Windows the reply
-//! listener is not implemented: no `from` is sent, so a chat replies with
-//! `pulse bridge send`.
+//! listener is one named pipe per peer, `\\.\pipe\LOCAL\pulse-bridge-<fnv>`,
+//! whose DACL grants the current user and SYSTEM only. All Windows pipe I/O to a
+//! chat is overlapped with deadlines (connect 3 s, write 3 s, ACK read
+//! `ACK_WINDOW`); a stage that stalls is cancelled and reported by name. The
+//! `pulse-bridge-noreply` placeholder `from` is sent only while no hub runs.
 
 use super::{BridgeError, Envelope, LocalSession, Receipt};
 use serde_json::{Value, json};
@@ -45,7 +48,7 @@ use std::time::{Duration, Instant};
 pub const PEER_PROTOCOL: u64 = 1;
 /// How long to wait for the chat's accept / hold / refuse.
 const ACK_WINDOW: Duration = Duration::from_secs(3);
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const MAX_REPLY_BYTES: u64 = 1024 * 1024;
 
 /// The few places this file touches the types `bridge/mod.rs` owns. If those
@@ -147,7 +150,21 @@ fn process_matches(pid: u32, recorded_start: Option<&str>, domain: Option<&str>)
             };
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        // Claude records the process start; a reused pid has another creation time.
+        // An identity that can't be read or compared is not live.
+        // Claude writes `pidDomain` as `win32:<host>` on Windows.
+        if domain.is_none_or(|d| d == "windows" || d.starts_with("win32"))
+            && let Some(recorded) = recorded_start.filter(|r| !r.is_empty())
+        {
+            return match (win::parse_start(recorded), win::creation_epoch_secs(pid)) {
+                (Some(want), Some(have)) => (want - have).abs() <= 2.0,
+                _ => false,
+            };
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (recorded_start, domain);
     }
@@ -202,8 +219,16 @@ fn open_session(pid: u32) -> Result<Result<SessionFiles, String>, BridgeError> {
         .filter(|t| !t.is_empty())
         .ok_or_else(|| shim::gone("This chat's key file has no token."))?
         .to_string();
-    let start = key["procStart"].as_str().or(info["procStart"].as_str());
-    if !process_matches(pid, start, key["pidDomain"].as_str()) {
+    // Claude's key file says `procStart` on macOS (ctime text, UTC) and `procStartFt` on
+    // Windows (a FILETIME integer); the session file carries `procStart` on both.
+    let start: Option<String> = [&key["procStart"], &key["procStartFt"], &info["procStart"]]
+        .into_iter()
+        .find_map(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        });
+    if !process_matches(pid, start.as_deref(), key["pidDomain"].as_str()) {
         return Err(shim::gone(
             "This chat has closed (its process is gone or was replaced).",
         ));
@@ -225,14 +250,8 @@ fn connect(path: &str) -> std::io::Result<(Writer, Reader)> {
 
 #[cfg(windows)]
 fn connect(path: &str) -> std::io::Result<(Writer, Reader)> {
-    // A named pipe opens like a file. Both frames are written before anything
-    // is read, because a synchronous pipe serialises I/O on its handles.
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?;
-    let reader = file.try_clone()?;
-    Ok((Box::new(file), Box::new(reader)))
+    // Overlapped pipe I/O with a deadline per stage (see `win`).
+    win::connect(path, ACK_WINDOW)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -332,7 +351,7 @@ fn wrap_content(from: &str, session: &str, name: &str, text: &str) -> String {
 }
 
 /// Attributes and body of a `<cross-session-message ...>` wrapper, if `content` is one.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 fn parse_wrapper(content: &str) -> Option<(HashMap<String, String>, String)> {
     let rest = content.trim().strip_prefix(TAG_OPEN)?;
     if !rest.starts_with(char::is_whitespace) && !rest.starts_with('>') {
@@ -403,8 +422,8 @@ pub fn deliver_via(
         .collect();
     let sender = format!("{} via Pulse", shim::env_from_name(env));
     let session_id = format!("pulse-{short}");
-    // A frame without a reply address is dropped by the chat without a word (seen on
-    // Windows, where no reply listener exists yet). A stable placeholder keeps the
+    // A frame without a reply address is dropped by the chat without a word. While
+    // no hub listens (so no reply address exists), a stable placeholder keeps the
     // message deliverable; a chat that answers it gets no reply socket and uses
     // `pulse bridge send` instead, as the skill says.
     let reply_from = Some(match from {
@@ -445,6 +464,7 @@ pub fn deliver_via(
         | std::io::ErrorKind::PermissionDenied => {
             shim::gone("This chat's messaging socket is not accepting connections.")
         }
+        std::io::ErrorKind::TimedOut => shim::io(&format!("Couldn't reach the chat: {e}")),
         _ => shim::io(&format!("Couldn't reach the chat: {}", e.kind())),
     })?;
 
@@ -452,7 +472,12 @@ pub fn deliver_via(
         writer
             .write_all(line.as_bytes())
             .and_then(|_| writer.flush())
-            .map_err(|_| shim::gone("The chat closed the connection while Pulse was sending."))?;
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::TimedOut => {
+                    shim::io(&format!("The chat did not take the message: {e}"))
+                }
+                _ => shim::gone("The chat closed the connection while Pulse was sending."),
+            })?;
     }
 
     let (tx, rx) = mpsc::channel::<Value>();
@@ -526,9 +551,9 @@ pub struct ReplyMessage {
 type OnReply = Arc<dyn Fn(ReplyMessage) + Send + Sync>;
 type IsKnown = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// Listens on one Unix socket per remote peer and turns frames from known
-/// local chats into `ReplyMessage`s. Unix only; on Windows it never listens.
-#[cfg_attr(not(unix), allow(dead_code))]
+/// Listens on one Unix socket (a named pipe on Windows) per remote peer and
+/// turns frames from known local chats into `ReplyMessage`s.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 pub struct ReplyHub {
     on_reply: OnReply,
     is_known: IsKnown,
@@ -563,6 +588,19 @@ fn fnv(text: &str) -> String {
         hash = hash.wrapping_mul(0x100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// The reply pipe for one remote peer on Windows. `LOCAL\` is the same session-local
+/// pipe namespace Claude's own `cc-msg-<hash>` pipes use.
+#[cfg(windows)]
+pub fn reply_pipe_name(peer_key: &str) -> String {
+    format!(r"\\.\pipe\LOCAL\pulse-bridge-{}", fnv(peer_key))
+}
+
+/// The address a reply from `peer_key` goes to, listening on it first; None
+/// when no reply hub is running or this system can't listen.
+pub fn reply_address(peer_key: &str) -> Option<String> {
+    current_hub()?.address_for(peer_key)
 }
 
 /// Where the reply socket for one remote peer lives: a short path in a private
@@ -609,11 +647,65 @@ impl ReplyHub {
             paths.insert(peer_key.to_string(), text.clone());
             Some(text)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let mut paths = self.paths.lock().ok()?;
+            if let Some(name) = paths.get(peer_key) {
+                return Some(name.clone());
+            }
+            let name = reply_pipe_name(peer_key);
+            self.listen_pipe(peer_key.to_string(), &name).ok()?;
+            paths.insert(peer_key.to_string(), name.clone());
+            Some(name)
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = peer_key;
             None
         }
+    }
+
+    /// One server per peer: an instance waits for a client, and a fresh instance is
+    /// created as soon as one connects so a second reply never finds no pipe.
+    #[cfg(windows)]
+    fn listen_pipe(self: &Arc<Self>, peer_key: String, name: &str) -> std::io::Result<()> {
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let descriptor = win::descriptor()?;
+        let first = win::create_instance(&wide, &descriptor, true)?;
+        let hub = Arc::clone(self);
+        std::thread::spawn(move || {
+            let mut waiting = Some(first);
+            while !hub.stop.load(Ordering::Relaxed) {
+                let pipe = match waiting.take() {
+                    Some(pipe) => pipe,
+                    None => match win::create_instance(&wide, &descriptor, false) {
+                        Ok(pipe) => pipe,
+                        Err(_) => {
+                            std::thread::sleep(Duration::from_millis(500));
+                            continue;
+                        }
+                    },
+                };
+                match win::accept(&pipe, &hub.stop) {
+                    win::Accepted::Connected => {
+                        let hub = Arc::clone(&hub);
+                        let key = peer_key.clone();
+                        std::thread::spawn(move || {
+                            let pipe = Arc::new(pipe);
+                            hub.handle_lines(win::PipeReader::server(Arc::clone(&pipe)), &key);
+                            win::disconnect(&pipe);
+                        });
+                    }
+                    win::Accepted::Stopped => break,
+                    win::Accepted::Failed => {
+                        win::disconnect(&pipe);
+                        waiting = Some(pipe);
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                }
+            }
+        });
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -653,7 +745,13 @@ impl ReplyHub {
     fn handle(&self, stream: std::os::unix::net::UnixStream, peer_key: &str) {
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-        for line in BufReader::new(stream.take(MAX_REPLY_BYTES)).lines() {
+        self.handle_lines(stream, peer_key);
+    }
+
+    /// Frames from one connection, as `ReplyMessage`s for known local chats.
+    #[cfg(any(unix, windows))]
+    fn handle_lines(&self, reader: impl Read, peer_key: &str) {
+        for line in BufReader::new(reader.take(MAX_REPLY_BYTES)).lines() {
             let Ok(line) = line else { break };
             let Ok(frame) = serde_json::from_str::<Value>(&line) else {
                 continue;
@@ -691,7 +789,7 @@ impl ReplyHub {
 }
 
 /// A message's content as plain text: a string, or the text blocks of an array.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 fn content_text(content: &Value) -> Option<String> {
     let text = match content {
         Value::String(s) => s.clone(),
@@ -703,4 +801,594 @@ fn content_text(content: &Value) -> Option<String> {
         _ => return None,
     };
     (!text.trim().is_empty()).then_some(text)
+}
+
+// ---- Windows named pipes ----------------------------------------------------------
+
+/// Windows pipe plumbing: bounded overlapped client I/O to a chat, the reply
+/// pipe server with a current-user-only DACL, and process identity. Patterned on
+/// `ipc::windows`; every overlapped operation is cancelled with `CancelIoEx` when
+/// its deadline passes, and a buffer the kernel never released is leaked rather
+/// than freed.
+#[cfg(windows)]
+mod win {
+    use super::{Reader, Writer};
+    use ::windows::Win32::Foundation::{
+        CloseHandle, ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING, ERROR_NO_DATA,
+        ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, FILETIME, HANDLE, HLOCAL,
+        LocalFree, WAIT_OBJECT_0, WIN32_ERROR,
+    };
+    use ::windows::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+        SDDL_REVISION_1,
+    };
+    use ::windows::Win32::Security::{
+        GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        TokenUser,
+    };
+    use ::windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE, FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
+        WriteFile,
+    };
+    use ::windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use ::windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT, WaitNamedPipeW,
+    };
+    use ::windows::Win32::System::Threading::{
+        CreateEventW, GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
+        PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
+    };
+    use ::windows::core::{HRESULT, PCWSTR, PWSTR};
+    use std::io::{self, Read, Write};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+    const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+    /// How long the server waits for the next byte of a reply before giving up.
+    const SERVER_READ_IDLE: Duration = Duration::from_secs(5);
+    /// How long the kernel gets to confirm a cancelled operation.
+    const CANCEL_DRAIN_MS: u32 = 5000;
+    const PIPE_BUFFER: u32 = 64 * 1024;
+
+    fn is(error: &::windows::core::Error, code: WIN32_ERROR) -> bool {
+        error.code() == HRESULT::from_win32(code.0)
+    }
+
+    fn os_error(error: &::windows::core::Error) -> io::Error {
+        let code = error.code().0 as u32;
+        if code >> 16 == 0x8007 {
+            io::Error::from_raw_os_error((code & 0xFFFF) as i32)
+        } else {
+            io::Error::other(error.to_string())
+        }
+    }
+
+    fn is_closed(error: &::windows::core::Error) -> bool {
+        [ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED, ERROR_NO_DATA]
+            .iter()
+            .any(|code| is(error, *code))
+    }
+
+    fn millis(wait: Duration) -> u32 {
+        u32::try_from(wait.as_millis()).map_or(u32::MAX - 1, |m| m.min(u32::MAX - 1))
+    }
+
+    /// Owned kernel handle, closed on drop. A pipe handle may be used from several
+    /// threads at once (one read, one write), each with its own OVERLAPPED.
+    pub(super) struct Handle(HANDLE);
+    // SAFETY: a kernel handle is a plain integer token; the calls made through it
+    // are thread-safe.
+    unsafe impl Send for Handle {}
+    // SAFETY: see above.
+    unsafe impl Sync for Handle {}
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            if !self.0.is_invalid() {
+                // SAFETY: owned by this wrapper and closed exactly once.
+                let _ = unsafe { CloseHandle(self.0) };
+            }
+        }
+    }
+
+    /// One in-flight overlapped operation: event, OVERLAPPED and staging buffer at
+    /// a fixed heap address the kernel may keep using until it confirms release.
+    struct Ctx {
+        overlapped: OVERLAPPED,
+        event: Handle,
+        buf: Vec<u8>,
+    }
+
+    fn new_ctx(len: usize) -> io::Result<Box<Ctx>> {
+        // SAFETY: manual-reset, initially non-signalled, unnamed event.
+        let event = unsafe { CreateEventW(None, true, false, PCWSTR(std::ptr::null())) }
+            .map(Handle)
+            .map_err(|e| os_error(&e))?;
+        Ok(Box::new(Ctx {
+            overlapped: OVERLAPPED {
+                hEvent: event.0,
+                ..OVERLAPPED::default()
+            },
+            event,
+            buf: vec![0u8; len],
+        }))
+    }
+
+    /// Cancel `ctx`'s operation and wait for the kernel to let go of it. If it never
+    /// does, the context is leaked and false is returned.
+    fn cancel(pipe: HANDLE, ctx: Box<Ctx>) -> Option<Box<Ctx>> {
+        // SAFETY: the operation was started on `pipe` with this OVERLAPPED.
+        let _ = unsafe { CancelIoEx(pipe, Some(&ctx.overlapped as *const OVERLAPPED)) };
+        // SAFETY: the event is owned by `ctx`.
+        let settled = unsafe { WaitForSingleObject(ctx.event.0, CANCEL_DRAIN_MS) } == WAIT_OBJECT_0;
+        if settled {
+            Some(ctx)
+        } else {
+            let _ = Box::leak(ctx); // the kernel may still own it
+            None
+        }
+    }
+
+    enum Op<'a> {
+        Read(&'a mut [u8]),
+        Write(&'a [u8]),
+    }
+
+    /// One overlapped read or write bounded by `timeout`; a timeout is an
+    /// `ErrorKind::TimedOut` error saying `<what> timed out`. A closed pipe reads as
+    /// end of file and writes as `BrokenPipe`.
+    fn transfer(pipe: HANDLE, op: Op<'_>, timeout: Duration, what: &str) -> io::Result<usize> {
+        let (writing, len) = match &op {
+            Op::Read(buf) => (false, buf.len()),
+            Op::Write(data) => (true, data.len()),
+        };
+        if len == 0 {
+            return Ok(0);
+        }
+        let mut ctx = new_ctx(len)?;
+        if let Op::Write(data) = &op {
+            ctx.buf.copy_from_slice(data);
+        }
+        let timed_out = || io::Error::new(io::ErrorKind::TimedOut, format!("{what} timed out"));
+        let settle = |error: &::windows::core::Error| -> io::Result<usize> {
+            if !is_closed(error) {
+                Err(os_error(error))
+            } else if writing {
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the chat closed the pipe",
+                ))
+            } else {
+                Ok(0)
+            }
+        };
+        // SAFETY: `ctx` stays at a fixed heap address; it is dropped only after the
+        // kernel has released it, and is leaked (in `cancel`) when it has not.
+        let started = unsafe {
+            if writing {
+                WriteFile(
+                    pipe,
+                    Some(ctx.buf.as_slice()),
+                    None,
+                    Some(&mut ctx.overlapped as *mut OVERLAPPED),
+                )
+            } else {
+                ReadFile(
+                    pipe,
+                    Some(ctx.buf.as_mut_slice()),
+                    None,
+                    Some(&mut ctx.overlapped as *mut OVERLAPPED),
+                )
+            }
+        };
+        match started {
+            Ok(()) => {}
+            Err(e) if is(&e, ERROR_IO_PENDING) => {}
+            Err(e) => return settle(&e),
+        }
+        // SAFETY: the event is owned by `ctx`.
+        let wait = unsafe { WaitForSingleObject(ctx.event.0, millis(timeout)) };
+        let finished = if wait == WAIT_OBJECT_0 {
+            ctx
+        } else {
+            let Some(ctx) = cancel(pipe, ctx) else {
+                return Err(timed_out());
+            };
+            ctx
+        };
+        let mut done = 0u32;
+        // SAFETY: the operation is complete or cancelled; this only reads its status.
+        let outcome = unsafe { GetOverlappedResult(pipe, &finished.overlapped, &mut done, false) };
+        let cancelled_early = wait != WAIT_OBJECT_0;
+        match outcome {
+            Ok(()) if done > 0 || !cancelled_early => {
+                if let Op::Read(buf) = op {
+                    buf[..done as usize].copy_from_slice(&finished.buf[..done as usize]);
+                }
+                Ok(done as usize)
+            }
+            Ok(()) => Err(timed_out()),
+            Err(_) if cancelled_early => Err(timed_out()),
+            Err(e) => settle(&e),
+        }
+    }
+
+    // ---- client ----
+
+    pub(super) struct PipeWriter(Arc<Handle>);
+    impl Write for PipeWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            transfer(self.0.0, Op::Write(buf), WRITE_TIMEOUT, "write")
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Reads from a pipe. A client reader has an overall deadline that starts at its
+    /// first read; a server reader waits at most `per_read` for each chunk.
+    pub(super) struct PipeReader {
+        pipe: Arc<Handle>,
+        per_read: Duration,
+        overall: Option<Duration>,
+        deadline: Option<Instant>,
+    }
+
+    impl PipeReader {
+        pub(super) fn server(pipe: Arc<Handle>) -> Self {
+            Self {
+                pipe,
+                per_read: SERVER_READ_IDLE,
+                overall: None,
+                deadline: None,
+            }
+        }
+    }
+
+    impl Read for PipeReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let limit = match self.overall {
+                Some(total) => {
+                    let deadline = *self.deadline.get_or_insert_with(|| Instant::now() + total);
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(io::Error::new(io::ErrorKind::TimedOut, "read timed out"));
+                    }
+                    left.min(self.per_read)
+                }
+                None => self.per_read,
+            };
+            transfer(self.pipe.0, Op::Read(buf), limit, "read")
+        }
+    }
+
+    /// Open the chat's pipe: connect within 3 s (`WaitNamedPipeW` while it is busy),
+    /// then hand back a writer with a 3 s write deadline and a reader bounded by
+    /// `ack` (plus a margin, so the caller's own ACK timer always fires first).
+    pub(super) fn connect(path: &str, ack: Duration) -> io::Result<(Writer, Reader)> {
+        let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let deadline = Instant::now() + CONNECT_TIMEOUT;
+        let handle = loop {
+            // SAFETY: `wide` is NUL-terminated.
+            let opened = unsafe {
+                CreateFileW(
+                    PCWSTR(wide.as_ptr()),
+                    FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
+                    FILE_SHARE_NONE,
+                    None,
+                    OPEN_EXISTING,
+                    FILE_FLAG_OVERLAPPED,
+                    None,
+                )
+            };
+            match opened {
+                Ok(handle) => break Handle(handle),
+                Err(e) if is(&e, ERROR_PIPE_BUSY) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(io::Error::new(io::ErrorKind::TimedOut, "connect timed out"));
+                    }
+                    // SAFETY: `wide` is NUL-terminated; this blocks at most `left`.
+                    let available = unsafe { WaitNamedPipeW(PCWSTR(wide.as_ptr()), millis(left)) };
+                    if !available.as_bool() {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+                Err(e) => return Err(os_error(&e)),
+            }
+        };
+        let pipe = Arc::new(handle);
+        let reader = PipeReader {
+            pipe: Arc::clone(&pipe),
+            per_read: ack + Duration::from_millis(500),
+            overall: Some(ack + Duration::from_millis(500)),
+            deadline: None,
+        };
+        Ok((Box::new(PipeWriter(pipe)), Box::new(reader)))
+    }
+
+    // ---- server ----
+
+    /// Owned security descriptor from the SDDL converter.
+    pub(super) struct Descriptor(PSECURITY_DESCRIPTOR);
+    // SAFETY: an immutable, self-contained descriptor block.
+    unsafe impl Send for Descriptor {}
+    impl Drop for Descriptor {
+        fn drop(&mut self) {
+            if !self.0.0.is_null() {
+                // SAFETY: allocated with LocalAlloc by the converter; freed once.
+                let _ = unsafe { LocalFree(Some(HLOCAL(self.0.0))) };
+            }
+        }
+    }
+
+    fn user_sid_string() -> io::Result<String> {
+        let mut token = HANDLE(std::ptr::null_mut());
+        // SAFETY: pseudo handle for this process; the token is closed by `Handle`.
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+            .map_err(|e| os_error(&e))?;
+        let token = Handle(token);
+        let mut needed = 0u32;
+        // SAFETY: size probe with a null buffer.
+        match unsafe { GetTokenInformation(token.0, TokenUser, None, 0, &mut needed) } {
+            Err(e) if is(&e, ERROR_INSUFFICIENT_BUFFER) && needed > 0 => {}
+            Err(e) => return Err(os_error(&e)),
+            Ok(()) => return Err(io::Error::other("empty token user")),
+        }
+        let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+        let mut written = 0u32;
+        // SAFETY: the buffer holds at least `needed` bytes and is pointer-aligned.
+        unsafe {
+            GetTokenInformation(
+                token.0,
+                TokenUser,
+                Some(buffer.as_mut_ptr().cast::<core::ffi::c_void>()),
+                needed,
+                &mut written,
+            )
+        }
+        .map_err(|e| os_error(&e))?;
+        // SAFETY: filled by GetTokenInformation(TokenUser).
+        let sid = unsafe { (*(buffer.as_ptr().cast::<TOKEN_USER>())).User.Sid };
+        let mut text = PWSTR(std::ptr::null_mut());
+        // SAFETY: `sid` is valid; the string is LocalAlloc'd and freed below.
+        unsafe { ConvertSidToStringSidW(sid, &mut text) }.map_err(|e| os_error(&e))?;
+        // SAFETY: `text` is a NUL-terminated UTF-16 string.
+        let value = unsafe {
+            let mut len = 0usize;
+            while *text.0.add(len) != 0 {
+                len += 1;
+            }
+            let value = String::from_utf16_lossy(std::slice::from_raw_parts(text.0, len));
+            let _ = LocalFree(Some(HLOCAL(text.0.cast::<core::ffi::c_void>())));
+            value
+        };
+        Ok(value)
+    }
+
+    /// DACL: protected, GENERIC_ALL for the current user and SYSTEM only, owner the
+    /// current user.
+    pub(super) fn descriptor() -> io::Result<Descriptor> {
+        let sid = user_sid_string()?;
+        let sddl: Vec<u16> = format!("O:{sid}D:P(A;;GA;;;{sid})(A;;GA;;;SY)")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut raw = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `sddl` is NUL-terminated; the result is freed by `Descriptor`.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(sddl.as_ptr()),
+                SDDL_REVISION_1,
+                &mut raw,
+                None,
+            )
+        }
+        .map_err(|e| os_error(&e))?;
+        Ok(Descriptor(raw))
+    }
+
+    /// A byte-mode, overlapped, local-only instance of the pipe. The first instance
+    /// refuses to share the name, so another process can't squat on it.
+    pub(super) fn create_instance(
+        wide_name: &[u16],
+        descriptor: &Descriptor,
+        first: bool,
+    ) -> io::Result<Handle> {
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0.0,
+            bInheritHandle: false.into(),
+        };
+        let open = if first {
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED
+        } else {
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED
+        };
+        // SAFETY: `wide_name` is NUL-terminated; `attributes` outlives the call.
+        let pipe = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(wide_name.as_ptr()),
+                open,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS | PIPE_WAIT,
+                255,
+                PIPE_BUFFER,
+                PIPE_BUFFER,
+                0,
+                Some(&attributes as *const SECURITY_ATTRIBUTES),
+            )
+        };
+        if pipe.is_invalid() {
+            return Err(os_error(&::windows::core::Error::from_win32()));
+        }
+        Ok(Handle(pipe))
+    }
+
+    pub(super) enum Accepted {
+        Connected,
+        Stopped,
+        Failed,
+    }
+
+    /// Wait for a client, checking `stop` every 100 ms.
+    pub(super) fn accept(pipe: &Handle, stop: &AtomicBool) -> Accepted {
+        let Ok(mut ctx) = new_ctx(0) else {
+            return Accepted::Failed;
+        };
+        // SAFETY: fixed heap address; released by the kernel before it is dropped,
+        // else leaked in `cancel`.
+        match unsafe { ConnectNamedPipe(pipe.0, Some(&mut ctx.overlapped as *mut OVERLAPPED)) } {
+            Ok(()) => {}
+            Err(e) if is(&e, ERROR_PIPE_CONNECTED) => return Accepted::Connected,
+            Err(e) if is(&e, ERROR_IO_PENDING) => {}
+            Err(_) => return Accepted::Failed,
+        }
+        loop {
+            // SAFETY: the event is owned by `ctx`.
+            let wait = unsafe { WaitForSingleObject(ctx.event.0, 100) };
+            if wait == WAIT_OBJECT_0 {
+                let mut done = 0u32;
+                // SAFETY: signalled, so the kernel is finished with `ctx`.
+                let outcome =
+                    unsafe { GetOverlappedResult(pipe.0, &ctx.overlapped, &mut done, false) };
+                return if outcome.is_ok() {
+                    Accepted::Connected
+                } else {
+                    Accepted::Failed
+                };
+            }
+            if wait != ::windows::Win32::Foundation::WAIT_TIMEOUT {
+                let _ = cancel(pipe.0, ctx);
+                return Accepted::Failed;
+            }
+            if stop.load(Ordering::Relaxed) {
+                let _ = cancel(pipe.0, ctx);
+                return Accepted::Stopped;
+            }
+        }
+    }
+
+    pub(super) fn disconnect(pipe: &Handle) {
+        // SAFETY: a valid server pipe handle.
+        let _ = unsafe { DisconnectNamedPipe(pipe.0) };
+    }
+
+    // ---- process identity ----
+
+    /// When process `pid` started, in seconds since the Unix epoch.
+    pub(super) fn creation_epoch_secs(pid: u32) -> Option<f64> {
+        // SAFETY: a plain OpenProcess for limited query rights; closed by `Handle`.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+        let process = Handle(process);
+        let (mut created, mut exited, mut kernel, mut user) = (
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+        );
+        // SAFETY: a valid process handle and four live FILETIME out-parameters.
+        unsafe { GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user) }
+            .ok()?;
+        let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+        Some((ticks as f64 - 116_444_736_000_000_000.0) / 1e7)
+    }
+
+    /// A recorded `procStart` as epoch seconds. Claude's Windows form isn't fixed
+    /// here, so this takes a number (seconds, milliseconds, microseconds, FILETIME
+    /// ticks or nanoseconds, told apart by size), an ISO-8601 time, or the
+    /// `Www Mon DD HH:MM:SS YYYY` form macOS records. Anything else is unknown.
+    pub(super) fn parse_start(text: &str) -> Option<f64> {
+        let t = text.trim();
+        if !t.is_ascii() {
+            return None;
+        }
+        if let Ok(v) = t.parse::<f64>() {
+            return Some(if v >= 5e17 {
+                v / 1e9
+            } else if v >= 1e16 {
+                (v - 116_444_736_000_000_000.0) / 1e7
+            } else if v >= 1e14 {
+                v / 1e6
+            } else if v >= 1e11 {
+                v / 1e3
+            } else {
+                v
+            });
+        }
+        parse_iso(t).or_else(|| parse_ctime(t))
+    }
+
+    fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+        let y = if month <= 2 { year - 1 } else { year };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+
+    fn epoch(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> i64 {
+        days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + s
+    }
+
+    fn parse_iso(t: &str) -> Option<f64> {
+        let b = t.as_bytes();
+        if b.len() < 19
+            || b[4] != b'-'
+            || b[7] != b'-'
+            || (b[10] != b'T' && b[10] != b' ')
+            || b[13] != b':'
+            || b[16] != b':'
+        {
+            return None;
+        }
+        let num = |range: std::ops::Range<usize>| t.get(range)?.parse::<i64>().ok();
+        let base = epoch(
+            num(0..4)?,
+            num(5..7)?,
+            num(8..10)?,
+            num(11..13)?,
+            num(14..16)?,
+            num(17..19)?,
+        );
+        let mut rest = &t[19..];
+        let mut fraction = 0.0;
+        if let Some(after) = rest.strip_prefix('.') {
+            let digits = after.chars().take_while(char::is_ascii_digit).count();
+            fraction = format!("0.{}", &after[..digits]).parse().ok()?;
+            rest = &after[digits..];
+        }
+        let offset = match rest {
+            "" | "Z" | "z" => 0,
+            zone if zone.starts_with(['+', '-']) => {
+                let sign = if zone.starts_with('-') { -1 } else { 1 };
+                let digits: String = zone[1..].chars().filter(char::is_ascii_digit).collect();
+                if digits.len() < 2 {
+                    return None;
+                }
+                let hours: i64 = digits[..2].parse().ok()?;
+                let minutes: i64 = digits.get(2..4).map_or(Some(0), |m| m.parse().ok())?;
+                sign * (hours * 3600 + minutes * 60)
+            }
+            _ => return None,
+        };
+        Some((base - offset) as f64 + fraction)
+    }
+
+    fn parse_ctime(t: &str) -> Option<f64> {
+        let parts: Vec<&str> = t.split_whitespace().collect();
+        let [_, month, day, clock, year] = parts[..] else {
+            return None;
+        };
+        let months = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let month = i64::try_from(months.iter().position(|m| *m == month)?).ok()? + 1;
+        let mut hms = clock.split(':').map(|p| p.parse::<i64>().ok());
+        let (h, mi, s) = (hms.next()??, hms.next()??, hms.next()??);
+        Some(epoch(year.parse().ok()?, month, day.parse().ok()?, h, mi, s) as f64)
+    }
 }

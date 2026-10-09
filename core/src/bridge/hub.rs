@@ -8,8 +8,10 @@
 //! descends from nothing, so its posts are dropped without a word. The hub
 //! therefore registers itself there (`<pid>.json` plus a key file, named like
 //! Claude's own, entrypoint `pulse-hub`) and the CLI hands local deliveries to
-//! it through `control` when it runs. On Windows the chat checks the auth
-//! token instead, so the CLI posts directly there and nothing is registered.
+//! it through `control` when it runs. On Windows the chat also checks the auth
+//! token, so the CLI can post directly; the hub is registered there too
+//! (`pidDomain` windows, its own reply pipe as `messagingSocketPath`) so chats
+//! list it and can answer it.
 
 use super::control::Request;
 use super::deliver_claude::ReplyMessage;
@@ -87,9 +89,8 @@ pub fn is_known_local_session(id: &str) -> bool {
 // ---- registration ------------------------------------------------------------------
 
 /// Put this process in Claude's session registry so its posts are accepted.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn register(alias: &str) {
-    use std::os::unix::fs::PermissionsExt;
     let dir = super::deliver_claude::sessions_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return;
@@ -133,14 +134,35 @@ fn register(alias: &str) {
         }
     }
     let now = super::envelope::now_ms();
-    let reply_dir = super::deliver_claude::reply_socket_path("hub");
+    #[cfg(unix)]
+    let reply_dir = super::deliver_claude::reply_socket_path("hub")
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(windows)]
+    let reply_dir = super::deliver_claude::reply_pipe_name("hub");
+    #[cfg(unix)]
+    let (home_var, domain) = (
+        "HOME",
+        if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "linux"
+        },
+    );
+    #[cfg(windows)]
+    // Claude's own entries say `win32:<host>`; match that so readers treat ours alike.
+    let host = sysinfo::System::host_name()
+        .unwrap_or_else(|| "pc".to_string())
+        .to_lowercase();
+    let domain_owned = format!("win32:{host}");
+    let (home_var, domain) = ("USERPROFILE", domain_owned.as_str());
     let json_path = dir.join(format!("{pid}.json"));
     let key_hash = crate::localsend::proto::random_hex(32);
     let key_path = dir.join(format!("{pid}.{key_hash}.key"));
     let record = json!({
         "pid": pid,
         "sessionId": super::envelope::new_uuid(),
-        "cwd": std::env::var("HOME").unwrap_or_else(|_| "/".to_string()),
+        "cwd": std::env::var(home_var).unwrap_or_else(|_| "/".to_string()),
         "startedAt": now,
         "version": format!("pulse {}", env!("CARGO_PKG_VERSION")),
         "peerProtocol": super::deliver_claude::PEER_PROTOCOL,
@@ -148,17 +170,26 @@ fn register(alias: &str) {
         "kind": "interactive",
         "entrypoint": ENTRYPOINT,
         "hostSessionId": format!("pulse-hub-{alias}"),
-        "pidDomain": if cfg!(target_os = "macos") { "darwin" } else { "linux" },
-        "messagingSocketPath": reply_dir.to_string_lossy(),
+        "pidDomain": domain,
+        "messagingSocketPath": reply_dir,
         "name": REGISTERED_NAME,
         "nameSince": now,
         "updatedAt": now,
         "status": "idle",
         "statusUpdatedAt": now,
     });
-    let key = json!({"peerToken": crate::localsend::proto::random_hex(32)});
+    // No `procStart`: the hub doesn't record a start time, and a reader without one
+    // checks only that the pid is running.
+    let key = json!({
+        "peerToken": crate::localsend::proto::random_hex(32),
+        "pidDomain": domain,
+    });
     if std::fs::write(&key_path, key.to_string()).is_ok() {
-        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
+        }
     }
     if std::fs::write(&json_path, record.to_string()).is_ok() {
         let mut state = state();
@@ -167,7 +198,7 @@ fn register(alias: &str) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn register(_alias: &str) {}
 
 fn unregister() {
@@ -207,8 +238,16 @@ pub fn tick(alias: &str) {
     }
     let _ = local_chats(store, SESSION_SCAN_EVERY);
     let registered = state().registered.is_some();
-    if cfg!(unix) && !registered {
+    if cfg!(any(unix, windows)) && !registered {
         register(alias);
+    }
+    // The registered pipe has to be listening: a chat that finds the hub in the
+    // registry may post to it. (Idempotent; a no-op until the reply hub exists.)
+    #[cfg(windows)]
+    {
+        if state().registered.is_some() {
+            let _ = super::deliver_claude::reply_address("hub");
+        }
     }
     let due = state()
         .links_asked
