@@ -21,6 +21,7 @@ fn entry(session: &str, name: &str) -> RosterEntry {
         kind: "claude".into(),
         cwd: String::new(),
         status: "idle".into(),
+        updated_ms: None,
     }
 }
 
@@ -259,6 +260,7 @@ fn windows_replies(
         name: "Planner".into(),
         cwd: String::new(),
         status: "idle".into(),
+        updated_ms: None,
         pid: Some(pid),
         messaging_socket: None,
         peer_protocol: Some(1),
