@@ -1082,7 +1082,7 @@ pub fn backups(backups_dir: &Path) -> Vec<BackupInfo> {
             })
         })
         .collect();
-    list.sort_by_key(|a| std::cmp::Reverse(a.ts));
+    list.sort_by(|a, b| b.ts.cmp(&a.ts));
     list
 }
 
