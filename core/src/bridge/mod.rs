@@ -25,7 +25,7 @@
 //!
 //! The bridge switch: when the bridge is off on a computer (`Store::bridge_enabled`),
 //! `send_text`, `receive`, `deliver_here` and the hub's control and reply paths
-//! return `Refused` ("The agent bridge is off on <device>") and keep no inbox copy.
+//! return `Refused` ("Chat is off on <device>") and keep no inbox copy.
 
 pub mod control;
 pub mod deliver_claude;
@@ -51,7 +51,7 @@ pub enum BridgeError {
     /// Not possible here (for example delivery into Claude on Windows).
     #[error("{0}")]
     Unsupported(String),
-    #[error("no chat matches \"{0}\"; see `pulse bridge peers`")]
+    #[error("no chat matches \"{0}\"; see `pulse chat peers`")]
     NotFound(String),
     #[error("{0}")]
     Invalid(String),
@@ -238,7 +238,7 @@ fn bridge_off(store: &Store, msg_id: &str, session: &str) -> Option<Receipt> {
     Some(Receipt {
         msg_id: msg_id.to_string(),
         session: session.to_string(),
-        ..Receipt::refused(format!("The agent bridge is off on {device}"))
+        ..Receipt::refused(format!("Chat is off on {device}"))
     })
 }
 
@@ -279,7 +279,7 @@ pub fn deliver_local_via(
         "claude" => deliver_claude::deliver_via(session, env, reply_socket),
         "codex" => deliver_codex::deliver(session, env),
         other => Err(BridgeError::Unsupported(format!(
-            "can't push into a {other} chat; it reads its bridge inbox"
+            "can't push into a {other} chat; it reads its chat inbox"
         ))),
     };
     let (state, detail) = match pushed {
@@ -299,7 +299,7 @@ pub fn deliver_local_via(
                 ReceiptState::Refused | ReceiptState::Unknown => state,
                 _ => ReceiptState::Held,
             };
-            receipt(state, format!("{detail} (kept in the bridge inbox)"))
+            receipt(state, format!("{detail} (kept in the chat inbox)"))
         }
         Err(e) => receipt(
             ReceiptState::Unknown,
@@ -469,7 +469,7 @@ pub fn deliver_here(
                 msg_id: env.id.clone(),
                 session: session.id.clone(),
                 state: ReceiptState::Held,
-                detail: "Pulse isn't running here; Claude only takes messages posted by it. Kept in the bridge inbox."
+                detail: "Pulse isn't running here; Claude only takes messages posted by it. Kept in the chat inbox."
                     .to_string(),
             },
             Err(e) => Receipt {

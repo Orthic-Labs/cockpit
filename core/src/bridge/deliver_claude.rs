@@ -562,7 +562,7 @@ pub fn deliver_via(
     let reply_from = Some(match route {
         ReplyRoute::Listening(address) => format!("uds:{address}"),
         ReplyRoute::Unavailable(why) => {
-            eprintln!("pulse bridge: reply route unavailable ({why}); advertising a placeholder");
+            eprintln!("pulse chat: reply route unavailable ({why}); advertising a placeholder");
             reply_note = Some(format!("Replies are unavailable ({why})."));
             if cfg!(windows) {
                 r"uds:\\.\pipe\pulse-bridge-noreply".to_string()
@@ -780,7 +780,7 @@ impl ConnectionSlot {
         if taken {
             Some(ConnectionSlot)
         } else {
-            eprintln!("pulse bridge: too many open reply connections; refusing one");
+            eprintln!("pulse chat: too many open reply connections; refusing one");
             None
         }
     }

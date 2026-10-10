@@ -347,7 +347,7 @@ final class NearbySharing {
             }
         }
         return ActivitySummary(sessions: [AgentSession(
-            id: "bridge", name: name, detail: L10n.t("Agent bridge"),
+            id: "bridge", name: name, detail: L10n.t("Chat"),
             state: state, waitingFor: state == .waiting ? activity.lastOutcome : nil, since: at)])
     }
 
@@ -365,7 +365,7 @@ final class NearbySharing {
     private func agentRows(_ bridge: ShareBridge?) -> [LimitWindow] {
         guard let bridge else { return [] }
         if bridge.enabled == false {
-            return [LimitWindow(id: "agents-off", label: L10n.t("Agent bridge off"), detail: "")]
+            return [LimitWindow(id: "agents-off", label: L10n.t("Chat off"), detail: "")]
         }
         var rows: [LimitWindow] = []
         for link in bridge.links ?? [] {
