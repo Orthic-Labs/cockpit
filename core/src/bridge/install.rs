@@ -58,7 +58,7 @@ fn targets(options: &Options) -> Vec<Target> {
             .unwrap_or_default();
         list.push(Target {
             name: "claude",
-            skill: root.join("skills").join("pulse-bridge").join("SKILL.md"),
+            skill: skills_dir(&root).join("pulse-bridge").join("SKILL.md"),
             root,
         });
     }
@@ -66,11 +66,24 @@ fn targets(options: &Options) -> Vec<Target> {
         let root = codex_home();
         list.push(Target {
             name: "codex",
-            skill: root.join("skills").join("pulse-bridge").join("SKILL.md"),
+            skill: skills_dir(&root).join("pulse-bridge").join("SKILL.md"),
             root,
         });
     }
     list
+}
+
+/// `<root>/skills`, resolved through a junction or symlink when it is one: Windows refuses
+/// to create files across an "untrusted mount point" (a `.codex\skills` junction to
+/// `.claude\skills` is common), so the real folder is written instead.
+fn skills_dir(root: &Path) -> PathBuf {
+    let dir = root.join("skills");
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.file_type().is_symlink() || m.file_type().is_dir() => {
+            std::fs::canonicalize(&dir).unwrap_or(dir)
+        }
+        _ => dir,
+    }
 }
 
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
