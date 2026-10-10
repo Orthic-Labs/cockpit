@@ -635,7 +635,10 @@ fn load_last_codex(now: u64) -> Option<Usage> {
         .as_array()?
         .iter()
         .filter_map(|w| {
-            let resets_at = w.get("resetsAt").and_then(Value::as_f64).map(|at| at as u64);
+            let resets_at = w
+                .get("resetsAt")
+                .and_then(Value::as_f64)
+                .map(|at| at as u64);
             // A window that has since reset says nothing true any more.
             if resets_at.is_some_and(|at| at <= now) {
                 return None;

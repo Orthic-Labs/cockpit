@@ -323,7 +323,9 @@ fn sign_in_guidance(id: &str, reading: &usage::Usage) -> String {
             format!("{how} Pulse reads that login; it never signs in itself.")
         }
         usage::Status::Expired => {
-            format!("The {tool} sign-in expired. Open {tool} once to refresh it; Pulse then reads it again.")
+            format!(
+                "The {tool} sign-in expired. Open {tool} once to refresh it; Pulse then reads it again."
+            )
         }
         usage::Status::AccessDenied => format!(
             "Windows refused Pulse access to the saved {tool} login. Fix the file's permissions."

@@ -379,12 +379,9 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
             "Resets at",
         ),
         // These kinds always carry a notice (`info_card`); a bare one reads as a reset.
-        Kind::Finished | Kind::DriveFilling | Kind::DriveFull | Kind::DriveHealth => (
-            format!("{provider} Reset"),
-            String::new(),
-            "",
-            "Next reset",
-        ),
+        Kind::Finished | Kind::DriveFilling | Kind::DriveFull | Kind::DriveHealth => {
+            (format!("{provider} Reset"), String::new(), "", "Next reset")
+        }
     };
     let (title, subtitle, status) = match &alert.notice {
         Some(notice) => (
@@ -497,7 +494,11 @@ pub fn observe(usage: &[Usage; 2], now: u64, prefs: Prefs) -> bool {
     // Thresholds are produced first and limits last, so the most specific card wins; a
     // drive that needs attention comes after them.
     let mut raised = model.watchers.observe(usage, now, prefs);
-    raised.extend(model.drives.observe(&sensors::read_drives(), &crate::drive_health::warnings()));
+    raised.extend(
+        model
+            .drives
+            .observe(&sensors::read_drives(), &crate::drive_health::warnings()),
+    );
     let pending = PENDING.swap(false, Ordering::Relaxed);
     let Some(alert) = raised.into_iter().next_back() else {
         return pending;

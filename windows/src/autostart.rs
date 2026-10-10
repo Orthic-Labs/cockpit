@@ -248,7 +248,9 @@ fn subkey_names(key: &Key) -> Vec<String> {
         if status != ERROR_SUCCESS {
             break;
         }
-        names.push(String::from_utf16_lossy(&buffer[..(len as usize).min(buffer.len())]));
+        names.push(String::from_utf16_lossy(
+            &buffer[..(len as usize).min(buffer.len())],
+        ));
     }
     names
 }
@@ -256,9 +258,7 @@ fn subkey_names(key: &Key) -> Vec<String> {
 /// The notifications row, the hub's own check (hub `permissions.rs`): "needsApproval" when
 /// toasts are off for the whole account or for an entry named Pulse, else "granted".
 pub fn notifications_status() -> &'static str {
-    let account_off = open_read(PUSH_KEY)
-        .and_then(|key| dword(&key, "ToastEnabled"))
-        == Some(0);
+    let account_off = open_read(PUSH_KEY).and_then(|key| dword(&key, "ToastEnabled")) == Some(0);
     let app_off = open_read(APP_NOTIFICATIONS).is_some_and(|settings| {
         subkey_names(&settings).iter().any(|name| {
             name.to_lowercase().contains("pulse")

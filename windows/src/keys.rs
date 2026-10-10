@@ -24,9 +24,9 @@
 
 use crate::{diag, shot};
 use std::mem::size_of;
-use std::sync::{Mutex, OnceLock, PoisonError};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;

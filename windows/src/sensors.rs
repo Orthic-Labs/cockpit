@@ -703,7 +703,11 @@ pub fn size_text(bytes: u64) -> String {
 /// hub's Overview agree. Same formatting as `size_text`.
 pub fn drive_size_text(bytes: u64) -> String {
     let gb = bytes as f64 / 1e9;
-    let (value, unit) = if gb >= 1000.0 { (gb / 1000.0, "TB") } else { (gb, "GB") };
+    let (value, unit) = if gb >= 1000.0 {
+        (gb / 1000.0, "TB")
+    } else {
+        (gb, "GB")
+    };
     let number = if value >= 100.0 {
         format!("{value:.0}")
     } else {
@@ -802,7 +806,9 @@ fn with_cpu_temperature(gpu: Reading<Vec<Temp>>) -> Reading<Vec<Temp>> {
             .name("pulse-cpu-temp".into())
             .spawn(cpu_temperature_loop);
     });
-    let cpu = *CPU_TEMPERATURE.lock().unwrap_or_else(PoisonError::into_inner);
+    let cpu = *CPU_TEMPERATURE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     let Some(celsius) = cpu else {
         return gpu;
     };
@@ -840,13 +846,20 @@ fn cpu_temperature_loop() {
         let celsius = tenths_kelvin.map(|t| t / 10.0 - 273.15);
         match celsius.filter(|c| (1.0..150.0).contains(c)) {
             Some(c) => {
-                *CPU_TEMPERATURE.lock().unwrap_or_else(PoisonError::into_inner) = Some(c);
+                *CPU_TEMPERATURE
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(c);
             }
             None => {
-                *CPU_TEMPERATURE.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                *CPU_TEMPERATURE
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = None;
                 diag::info(
                     "sampler_failed",
-                    &[("op", "MSAcpi_ThermalZoneTemperature"), ("ctx", "cpu_temperature")],
+                    &[
+                        ("op", "MSAcpi_ThermalZoneTemperature"),
+                        ("ctx", "cpu_temperature"),
+                    ],
                 );
                 return;
             }

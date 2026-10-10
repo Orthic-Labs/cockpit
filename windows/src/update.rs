@@ -234,7 +234,10 @@ pub fn hub_json() -> String {
     out.push_str(&format!(",\"status\":\"{name}\""));
     match &st.stage {
         Stage::Downloading(Some(share)) => {
-            out.push_str(&format!(",\"progress\":{}", f64::from(share.clamp(0.0, 1.0))));
+            out.push_str(&format!(
+                ",\"progress\":{}",
+                f64::from(share.clamp(0.0, 1.0))
+            ));
         }
         Stage::Failed(message) => {
             out.push_str(",\"message\":");
