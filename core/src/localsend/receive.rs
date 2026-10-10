@@ -4,6 +4,7 @@
 
 use super::net::{self, Request, Wire};
 use super::proto::{self, DeviceInfo, FileMeta, PrepareUploadRequest, PrepareUploadResponse};
+use super::trust::{PROOF_CERTIFICATE, normalize};
 use super::{
     Event, Incoming, IncomingFile, Inner, Pending, Session, SessionFile, Transfer, TrustState,
     lock, now_ms,
@@ -11,7 +12,6 @@ use super::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{self, BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,11 @@ type Answer = (u16, Option<Vec<u8>>);
 
 const ANSWER_WAIT: Duration = Duration::from_secs(60);
 const SESSION_IDLE: Duration = Duration::from_secs(120);
+/// What a sender that could not prove its key may send in one request.
+const UNPROVEN_MAX_FILES: usize = 200;
+const UNPROVEN_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Where files from a sender that could not prove its key are saved.
+const UNVERIFIED_FOLDER: &str = "Received (unverified)";
 
 fn json<T: Serialize>(status: u16, value: &T) -> Answer {
     (status, serde_json::to_vec(value).ok())
@@ -143,32 +148,26 @@ fn prepare_upload(
     }
 
     // Who is asking. A device that presented a certificate has proved it holds
-    // that key; it must be the one its request names. A sender with none (the
-    // LocalSend phone app) is only its own claim.
-    let claimed = parsed.info.fingerprint.to_ascii_lowercase();
-    let verified = presented.as_deref().is_some_and(|p| p == claimed);
-    let (state, proven) = {
+    // that key, and it must be the one the request names. One that presented a
+    // certificate for a different fingerprint, or none at all (the LocalSend
+    // phone app), is only its own claim; it is asked about, not refused, unless
+    // its claimed fingerprint is denied.
+    let claimed = normalize(&parsed.info.fingerprint);
+    let certified = presented.as_deref().is_some_and(|p| p == claimed);
+    let state = {
         let mut store = lock(&inner.trust);
-        if let Some(actual) = presented.as_deref().filter(|p| *p != claimed) {
-            // Someone vouching with one key while naming another device's.
-            store.observe(actual, &parsed.info.alias, None, None, true);
-            store.refuse(actual);
-            drop(store);
-            inner.emit(Event::Changed);
-            return message(403, "Rejected");
-        }
         store.observe(
             &claimed,
             &parsed.info.alias,
             parsed.info.device_model.as_deref(),
             parsed.info.device_type.as_deref(),
-            verified,
+            certified.then_some(PROOF_CERTIFICATE),
         );
         let state = store.state_of(&claimed);
         if state == TrustState::Deny {
             store.refuse(&claimed);
         }
-        (state, store.has_proven(&claimed))
+        state
     };
     if state == TrustState::Deny {
         inner.emit(Event::Changed);
@@ -210,6 +209,34 @@ fn prepare_upload(
         .collect();
     let request_id = proto::random_hex(8);
 
+    // A sender with no client certificate gets one chance to prove its key
+    // before an Allow is honoured: connect back to the address it called from,
+    // at the port it announced, and check the key there signs for its
+    // fingerprint. Failure or a timeout just means the card is raised. This
+    // proves a key holder answers at that address, not that it is the caller
+    // (a relay to the real device while it is online could pass).
+    let mut verified = certified;
+    if state == TrustState::Allow && presented.is_none() {
+        let port = inner.announced_port(&claimed).unwrap_or(proto::PORT);
+        if net::prove_key(ip, port, &claimed) {
+            lock(&inner.trust).mark_callback(&claimed);
+            verified = true;
+        }
+    }
+    let allowed = state == TrustState::Allow && verified;
+    if !verified && (parsed.files.len() > UNPROVEN_MAX_FILES || total > UNPROVEN_MAX_BYTES) {
+        return message(
+            413,
+            "A device that can't prove its identity may send at most 200 files and 2 GB at once.",
+        );
+    }
+    // Files from an unproven sender never mix with the owner's own.
+    let save_dir = if verified {
+        config.save_dir.clone()
+    } else {
+        config.save_dir.join(UNVERIFIED_FOLDER)
+    };
+
     let incoming = Incoming {
         id: request_id.clone(),
         from: if alias.is_empty() {
@@ -240,14 +267,8 @@ fn prepare_upload(
         verified,
     };
 
-    // Allow skips the card, for text as for files. A sender that proved its key
-    // is always honoured. One that did not is honoured only while it is
-    // announced from this address, and never when the device has proved its key
-    // before (then a missing proof is a stranger using its name).
-    // TODO: other LocalSend apps cannot prove identity; Allow for them rests on
-    // the announced address alone.
-    let allowed = state == TrustState::Allow
-        && (verified || (!proven && inner.announced_at(&claimed, ip)));
+    // Allow skips the card, for text as for files, for a sender that proved its
+    // key (the next lines decide that before the card is built).
     let accepted = if allowed {
         true
     } else {
@@ -293,7 +314,8 @@ fn prepare_upload(
         saved_files: Vec::new(),
         error: None,
         message: None,
-        clipboard: parsed.pulse.as_ref().is_some_and(|p| p.clipboard),
+        // Only a sender that is Allow and proven may put things on the clipboard.
+        clipboard: allowed && parsed.pulse.as_ref().is_some_and(|p| p.clipboard),
         started: now_ms(),
         finished: None,
     });
@@ -342,7 +364,7 @@ fn prepare_upload(
             cancel,
             activity: Instant::now(),
             saved: Vec::new(),
-            save_dir: config.save_dir,
+            save_dir,
         },
     );
     json(
@@ -435,7 +457,15 @@ fn upload(
         }
     };
     let part_path = partial_path(&final_path);
-    let mut out = match File::create(&part_path) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Private while it arrives; made readable (never executable) when whole.
+        options.mode(0o600);
+    }
+    let mut out = match options.open(&part_path) {
         Ok(file) => file,
         Err(e) => {
             let _ = std::fs::remove_file(&final_path);
@@ -509,8 +539,57 @@ fn upload(
         );
         return message(500, "Unknown error by receiver");
     }
+    finish_received(&final_path);
     finish_file(inner, session_id, file_id, final_path);
     (200, None)
+}
+
+/// A finished file: readable but never executable, and marked as coming from
+/// outside the computer (macOS quarantine, Windows Mark of the Web) so the system
+/// checks it before running it. Failures are logged and never fail the transfer.
+fn finish_received(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)) {
+            eprintln!("pulse sharing: couldn't set permissions on a received file: {e}");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let seconds = now_ms() / 1000;
+        let value = format!("0083;{seconds:x};Pulse;");
+        match std::ffi::CString::new(path.as_os_str().as_bytes()) {
+            Ok(name) => {
+                // SAFETY: NUL-terminated path and attribute name; `value` is valid for its length.
+                let rc = unsafe {
+                    libc::setxattr(
+                        name.as_ptr(),
+                        c"com.apple.quarantine".as_ptr(),
+                        value.as_ptr().cast(),
+                        value.len(),
+                        0,
+                        0,
+                    )
+                };
+                if rc != 0 {
+                    eprintln!(
+                        "pulse sharing: couldn't quarantine a received file: {}",
+                        io::Error::last_os_error()
+                    );
+                }
+            }
+            Err(e) => eprintln!("pulse sharing: couldn't quarantine a received file: {e}"),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let stream = format!("{}:Zone.Identifier", path.display());
+        if let Err(e) = std::fs::write(&stream, "[ZoneTransfer]\r\nZoneId=3\r\n") {
+            eprintln!("pulse sharing: couldn't mark a received file: {e}");
+        }
+    }
 }
 
 fn partial_path(final_path: &Path) -> PathBuf {

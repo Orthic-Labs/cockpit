@@ -20,6 +20,8 @@ export interface TrustDevice {
   present: boolean;
   /** It has proved it holds the key behind its fingerprint. */
   verified: boolean;
+  /** How: its client certificate, or by answering at its address; null when never. */
+  proof: "certificate" | "callback" | null;
   firstSeenMs: number;
   lastSeenMs: number;
   refused: number;
@@ -234,7 +236,13 @@ const KIND_NAMES: Record<string, string> = {
   mobile: "Phone", desktop: "Computer", web: "Browser", headless: "Terminal", server: "Server",
 };
 
-const VERIFIED_NOTE = "Not verified: this app can't prove its identity. Allow applies only on this network address.";
+const NOT_VERIFIED_NOTE = "Not verified: this app can't prove its identity. Allow asks first until it answers a check at its address.";
+
+function proofText(d: TrustDevice): { text: string; note: string } {
+  if (d.proof === "certificate") return { text: "verified (proved its key)", note: "This device proved it holds its key when it connected." };
+  if (d.proof === "callback") return { text: "verified (answered at its address)", note: "This device answered a check at its network address; that does not rule out a relay on the same network." };
+  return { text: "not verified", note: NOT_VERIFIED_NOTE };
+}
 
 function DeviceRow({ d, run }: { d: TrustDevice; run: (command: string, args: Record<string, unknown>) => void }) {
   const [editing, setEditing] = useState(false);
@@ -242,6 +250,7 @@ function DeviceRow({ d, run }: { d: TrustDevice; run: (command: string, args: Re
   const cancelled = useRef(false);
   useEffect(() => { if (!editing) setDraft(d.label); }, [d.label, editing]);
   const name = d.label || d.alias || "Unnamed device";
+  const proof = proofText(d);
   const commit = () => {
     if (cancelled.current) { cancelled.current = false; return; }
     const next = draft.trim();
@@ -278,14 +287,14 @@ function DeviceRow({ d, run }: { d: TrustDevice; run: (command: string, args: Re
               <Pencil size={12} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
-          <span className={`ck-status ck-status-${d.verified ? "granted" : "unknown"}`} title={d.verified ? "This device proved its identity." : VERIFIED_NOTE}>
-            {d.verified ? "verified" : "not verified"}
+          <span className={`ck-status ck-status-${proof.text.startsWith("verified") ? "granted" : "unknown"}`} title={proof.note}>
+            {proof.text}
           </span>
         </div>
         <div className="ck-sub">
           {[what, when, refused].filter(Boolean).join(" · ")}
         </div>
-        {!d.verified && d.state === "allow" && <div className="ck-sub">{VERIFIED_NOTE}</div>}
+        {!d.verified && d.state === "allow" && <div className="ck-sub">{NOT_VERIFIED_NOTE}</div>}
       </div>
       <div className="ck-ctl">
         <span className="ck-ctls">

@@ -269,6 +269,12 @@ pub fn deliver(
             ));
         }
         409 => return Err(format!("{} is busy with another transfer.", peer.alias)),
+        413 => {
+            return Err(format!(
+                "{} can't take that much from a device it can't verify (200 files, 2 GB).",
+                peer.alias
+            ));
+        }
         429 => {
             return Err(format!(
                 "{} says there are too many requests. Try again shortly.",

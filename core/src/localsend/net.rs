@@ -185,7 +185,13 @@ pub fn server_config(identity: &Identity) -> io::Result<Arc<ServerConfig>> {
 /// LocalSend devices use self-signed certificates and do not validate a chain.
 /// Like them, this accepts any certificate, but when the peer's announced
 /// fingerprint is a SHA-256 it must match the certificate shown, so a different
-/// device answering on a remembered address is refused.
+/// device answering on a remembered address is refused. The handshake signature
+/// is checked against that certificate's key, so only a holder of the private
+/// key passes; copying the public certificate is not enough.
+///
+/// Unverified interop risk: the check parses the certificate with webpki, which
+/// is stricter than some LocalSend apps' certificate generators (RSA, older
+/// X.509 profiles). A peer whose certificate it rejects cannot be sent to.
 #[derive(Debug)]
 struct PinVerifier {
     expected: Option<String>,
@@ -213,20 +219,20 @@ impl ServerCertVerifier for PinVerifier {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        verify_tls12_signature(message, cert, dss, &self.algorithms)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        verify_tls13_signature(message, cert, dss, &self.algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -548,6 +554,7 @@ fn reason(status: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        413 => "Payload Too Large",
         422 => "Unprocessable Entity",
         429 => "Too Many Requests",
         _ => "Internal Server Error",
@@ -662,4 +669,37 @@ pub fn request_json(
     );
     wire.finish();
     result
+}
+
+/// Connect-back proof for a sender that presented no client certificate: open
+/// our own TLS connection to `ip:port` and require that the server there holds
+/// the private key of a certificate whose SHA-256 is `fingerprint` (the pinned
+/// handshake signature is genuinely verified, see `PinVerifier`). False for a
+/// malformed fingerprint, a refused connection, a wrong key or a timeout (3 s).
+///
+/// Residual limit: this proves a holder of the key answers at that address, not
+/// that it is the one now calling. An attacker who relays the handshake to the
+/// real device while it is online on the same network could still pass.
+/// Certificate proof (`Wire::peer_fingerprint`) has no such limit.
+pub fn prove_key(ip: IpAddr, port: u16, fingerprint: &str) -> bool {
+    let fingerprint = fingerprint.to_ascii_lowercase();
+    if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let timeout = Duration::from_secs(3);
+    let Ok(mut wire) = connect_within(ip, port, true, &fingerprint, timeout, timeout) else {
+        return false;
+    };
+    let host = format!("{ip}:{port}");
+    let result = call(
+        &mut wire,
+        "GET",
+        &host,
+        &format!("{}/info", proto::API),
+        None,
+        0,
+        &mut |_| Ok(()),
+    );
+    wire.finish();
+    result.is_ok_and(|reply| reply.status == 200)
 }

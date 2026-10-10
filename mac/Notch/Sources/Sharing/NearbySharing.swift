@@ -18,10 +18,27 @@ struct ShareDevice: Decodable, Equatable {
     var canSend: Bool { state != "deny" }
 }
 
+/// One element of a list that decodes to nothing instead of failing the whole list.
+private struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+}
+
 /// `trust` in share-state.json: how new devices start, and one record per device seen.
+/// Every field is optional on the wire and unknown values count as "ask", so a hub and a
+/// notch of different versions never drop the whole share state over this block.
 struct ShareTrust: Decodable, Equatable {
     var defaultState: String
     var devices: [ShareTrustDevice]
+
+    private enum Keys: String, CodingKey { case defaultState, devices }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: Keys.self)
+        defaultState = ShareTrustDevice.known((try? c?.decode(String.self, forKey: .defaultState)) ?? nil)
+        devices = ((try? c?.decode([Lossy<ShareTrustDevice>].self, forKey: .devices)) ?? nil)?
+            .compactMap(\.value) ?? []
+    }
 }
 
 struct ShareTrustDevice: Decodable, Equatable {
@@ -30,8 +47,26 @@ struct ShareTrustDevice: Decodable, Equatable {
     var alias: String
     var state: String
     var present: Bool
-    var verified: Bool
+    /// "certificate", "callback" or nil.
+    var proof: String?
     var refused: Int
+
+    private enum Keys: String, CodingKey { case fingerprint, label, alias, state, present, proof, refused }
+
+    static func known(_ state: String?) -> String {
+        state == "allow" || state == "deny" ? state! : "ask"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        label = (try? c.decode(String.self, forKey: .label)) ?? ""
+        alias = (try? c.decode(String.self, forKey: .alias)) ?? ""
+        state = Self.known(try? c.decode(String.self, forKey: .state))
+        present = (try? c.decode(Bool.self, forKey: .present)) ?? false
+        proof = try? c.decode(String.self, forKey: .proof)
+        refused = (try? c.decode(Int.self, forKey: .refused)) ?? 0
+    }
 }
 
 struct ShareIncomingFile: Decodable, Equatable {

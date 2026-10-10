@@ -14,10 +14,11 @@ pub mod trust;
 
 pub use send::{Entry, Peer, SendItem};
 pub use trust::{TrustEntry, TrustState};
+use trust::normalize;
 
 use proto::DeviceInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -151,10 +152,15 @@ pub enum Event {
 #[serde(untagged)]
 enum KnownEntry {
     Plain(String),
-    Object { fingerprint: String },
+    Object {
+        fingerprint: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
 }
 
-fn load_known(path: &std::path::Path) -> HashSet<String> {
+/// The old list as (fingerprint, label) pairs; the label is empty when none.
+fn load_known(path: &std::path::Path) -> Vec<(String, String)> {
     let entries = std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Vec<KnownEntry>>(&bytes).ok())
@@ -162,7 +168,8 @@ fn load_known(path: &std::path::Path) -> HashSet<String> {
     entries
         .into_iter()
         .map(|entry| match entry {
-            KnownEntry::Plain(fingerprint) | KnownEntry::Object { fingerprint } => fingerprint,
+            KnownEntry::Plain(fingerprint) => (fingerprint, String::new()),
+            KnownEntry::Object { fingerprint, label } => (fingerprint, label.unwrap_or_default()),
         })
         .collect()
 }
@@ -294,21 +301,20 @@ impl Inner {
     /// Record a device heard from `ip`, unless it is this Mac itself. Emits
     /// `Devices` when the list changed. Returns whether the device was taken.
     pub fn upsert(&self, info: &DeviceInfo, ip: IpAddr) -> bool {
-        if info.fingerprint.is_empty()
-            || info.fingerprint == self.me.fingerprint
-            || self.is_own_ip(ip)
-        {
+        let fingerprint = normalize(&info.fingerprint);
+        if fingerprint.is_empty() || fingerprint == self.me.fingerprint || self.is_own_ip(ip) {
             return false;
         }
+        // An announcement is nobody's proof: it never sets a record's proof.
         lock(&self.trust).observe(
-            &info.fingerprint.to_ascii_lowercase(),
+            &fingerprint,
             &info.alias,
             info.device_model.as_deref(),
             info.device_type.as_deref(),
-            false,
+            None,
         );
         let device = Device {
-            fingerprint: info.fingerprint.clone(),
+            fingerprint,
             alias: info.alias.clone(),
             device_model: info.device_model.clone(),
             device_type: info.device_type.clone(),
@@ -368,13 +374,13 @@ impl Inner {
         list
     }
 
-    /// Whether the device with this fingerprint is announcing itself from `ip`
-    /// right now. All a sender without a client certificate can show.
-    pub fn announced_at(&self, fingerprint: &str, ip: IpAddr) -> bool {
-        !fingerprint.is_empty()
-            && lock(&self.devices)
-                .iter()
-                .any(|s| s.device.fingerprint == fingerprint && s.device.ip == ip.to_string())
+    /// The port the device with this fingerprint announced, if it is on the list.
+    pub fn announced_port(&self, fingerprint: &str) -> Option<u16> {
+        let fingerprint = normalize(fingerprint);
+        lock(&self.devices)
+            .iter()
+            .find(|s| s.device.fingerprint == fingerprint)
+            .map(|s| s.device.port)
     }
 
     pub fn trust_state(&self, fingerprint: &str) -> TrustState {
@@ -615,7 +621,7 @@ impl Service {
     pub fn forget(&self, fingerprint: &str) -> Result<(), String> {
         if lock(&self.inner.devices)
             .iter()
-            .any(|s| s.device.fingerprint == fingerprint)
+            .any(|s| s.device.fingerprint == normalize(fingerprint))
         {
             return Err("That device is nearby now.".to_string());
         }
@@ -633,6 +639,8 @@ impl Service {
 
     /// Decline this device's waiting requests and cancel its receives in flight.
     fn revoke(&self, fingerprint: &str) {
+        let fingerprint = normalize(fingerprint);
+        let fingerprint = fingerprint.as_str();
         let waiting: Vec<Arc<Pending>> = lock(&self.inner.pending)
             .values()
             .filter(|p| p.incoming.fingerprint == fingerprint)
@@ -669,9 +677,10 @@ impl Service {
     /// The nearby device with this fingerprint (or, failing that, alias).
     fn find_device(&self, target: &str) -> Option<Device> {
         let devices = lock(&self.inner.devices);
+        let wanted = normalize(target);
         devices
             .iter()
-            .find(|s| s.device.fingerprint == target)
+            .find(|s| s.device.fingerprint == wanted)
             .or_else(|| {
                 devices
                     .iter()
