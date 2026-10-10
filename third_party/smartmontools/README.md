@@ -22,16 +22,20 @@ separate program (command line only; no linking). Same licence (GPL-2.0, `GPL-2.
 
 - Where it lives: `%LOCALAPPDATA%\Programs\Pulse\Helpers\smartctl.exe` (the notch also looks beside
   `Pulse.exe` and in `ThirdParty\smartmontools\bin`); this folder is at `...\Pulse\ThirdParty\smartmontools\`.
-- Binary (to be uploaded, then pinned in `scripts/release/windows-payload.mjs`):
-  `https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/smartctl-7.5-windows-x64.exe`.
-  Fetched and SHA-256 verified at build time; never committed. Until it is uploaded and pinned the payload
-  has no `smartctl.exe` and the build still passes.
-- Corresponding source: the same `smartmontools-7.5.tar.gz` and `.asc` as above.
+- Binary: the official smartmontools 7.5 Windows installer,
+  https://github.com/smartmontools/smartmontools/releases/download/RELEASE_7_5/smartmontools-7.5.win32-setup.exe
+  (also https://sourceforge.net/projects/smartmontools/files/smartmontools/7.5/), SHA-256
+  896337fcc253220614cf8cdbd5cf2321c5aa326a37a04160a672a281e6104c70. The build fetches it, verifies that hash,
+  extracts only `bin\smartctl.exe` (the x64 build) with 7-Zip, verifies that file's SHA-256
+  b5db94e5082c042be44994b7a4fa8f7b5c8e713b2ab1c9a560d8f7a7995ea27d, and stages it as `Helpers\smartctl.exe`
+  (`scripts/release/windows-payload.mjs`). Never committed; a failed download or hash fails the build.
+- Corresponding source: the same `smartmontools-7.5.tar.gz` and `.asc` as above, or upstream's
+  https://github.com/smartmontools/smartmontools/releases/tag/RELEASE_7_5 and https://sourceforge.net/projects/smartmontools/files/smartmontools/7.5/.
 - Device naming: smartmontools addresses `\\.\PhysicalDriveN` as `/dev/pdN`; Pulse finds N from the drive letter with
   `IOCTL_STORAGE_GET_DEVICE_NUMBER` (core) or `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` (hub).
 - Elevation: smartctl opens a physical drive only from an elevated process. From the normal, unelevated hub it
   reports a permission error, so the hub falls back to what needs no administrator: the NVMe SMART / Health
   log through `IOCTL_STORAGE_QUERY_PROPERTY`, then Storage Management reliability counters, then the drive
   temperature. SATA SMART attributes need an elevated smartctl.
-- Signing: `smartctl.exe` is Authenticode-signed with the other payload executables (or its signer is
-  verified when RightKit ships it already signed).
+- Signing: upstream's `smartctl.exe` is unsigned; `Helpers/smartctl.exe` is in `sign.prePackageFiles`
+  (`right-release.config.mjs`), so it is Authenticode-signed with the other payload executables.

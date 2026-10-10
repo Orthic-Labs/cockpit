@@ -10,7 +10,7 @@
 //   pulse-hub.exe        Tauri hub (beside Pulse.exe, the first place hub.rs looks)
 //   Helpers\pulse.exe    CLI (a separate folder: Windows paths are case-insensitive, so it cannot sit
 //                        beside Pulse.exe)
-//   Helpers\smartctl.exe optional: smartmontools 7.5 Windows x64 build from the RightKit R2 bucket (see smartctl below)
+//   Helpers\smartctl.exe smartmontools 7.5 Windows x64, extracted from the official installer (see smartctl below)
 //   ThirdParty\          third_party licences;  NOTICE.txt, LICENSE.txt
 // Release update asset: dist/releases/windows/Pulse-Setup-x64.exe
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -28,7 +28,7 @@ const stagingRoot = join(repoRoot, 'dist', 'staging', 'windows');
 const stage = join(stagingRoot, 'Pulse');
 const installerName = 'Pulse-Setup-x64.exe';
 const output = join(repoRoot, 'dist', 'releases', 'windows', installerName);
-const payloadFiles = ['Pulse.exe', 'pulse-hub.exe', join('Helpers', 'pulse.exe'), 'notch-views.json', 'NOTICE.txt', 'LICENSE.txt'];
+const payloadFiles = ['Pulse.exe', 'pulse-hub.exe', join('Helpers', 'pulse.exe'), join('Helpers', 'smartctl.exe'), 'notch-views.json', 'NOTICE.txt', 'LICENSE.txt'];
 
 function fail(message) { throw new Error(`[pulse windows payload] ${message}`); }
 async function requireFile(path, label) {
@@ -46,37 +46,55 @@ async function copyFile(source, target, label) {
   await cp(source, target, { force: true });
 }
 
-// smartctl for Windows: fetched from the same RightKit R2 bucket and folder as the macOS build
-// (mac-payload.mjs), SHA-256 verified exactly, never committed. Both the file and its pin are
-// still to be provided (see third_party/smartmontools/README.md, Windows section):
-//   1. upload smartctl-7.5-windows-x64.exe (smartmontools 7.5, unmodified, x64) to
-//      native-tools/smartmontools-7.5-1/ in the bucket;
-//   2. put its SHA-256 in `sha256` below.
-// Until both exist this step logs a warning and the payload carries no smartctl.exe (the build
-// does not fail: the hub reads NVMe health without it, the notch says "Install smartmontools").
-// smartctl.exe must also be Authenticode-signed: add Helpers/smartctl.exe to sign.prePackageFiles
-// in right-release.config.mjs unless RightKit already ships it signed (then verify the signer).
+// smartctl for Windows: the official smartmontools 7.5 Windows installer (GitHub release RELEASE_7_5,
+// the same file SourceForge serves), SHA-256 pinned, fetched in CI and never committed. Only
+// bin\smartctl.exe (the x64 build; bin32\ is x86) is extracted from it with 7-Zip (preinstalled on the
+// GitHub Windows runners); nothing in the installer is run. The extracted exe's own SHA-256 is pinned
+// too. Upstream does not Authenticode-sign it, so right-release signs Helpers/smartctl.exe with the
+// other payload exes (sign.prePackageFiles in right-release.config.mjs). A missing download, a hash
+// mismatch or a missing 7-Zip fails the build: the Windows payload always carries smartctl.exe.
+// Licence text, NOTICE and the source link ship beside it in ThirdParty\smartmontools.
 const smartctl = {
-  url: 'https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/smartctl-7.5-windows-x64.exe',
-  sha256: null
+  url: 'https://github.com/smartmontools/smartmontools/releases/download/RELEASE_7_5/smartmontools-7.5.win32-setup.exe',
+  installerSha256: '896337fcc253220614cf8cdbd5cf2321c5aa326a37a04160a672a281e6104c70',
+  member: 'bin/smartctl.exe',
+  sha256: 'b5db94e5082c042be44994b7a4fa8f7b5c8e713b2ab1c9a560d8f7a7995ea27d'
 };
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-// The verified smartctl.exe path, or null (with a warning) when it is not published or not pinned.
+function find7z() {
+  const candidates = [process.env.PULSE_7Z, 'C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe'];
+  const found = candidates.find(candidatePath => candidatePath && existsSync(candidatePath));
+  if (found) return found;
+  const where = spawnSync('where', ['7z'], { encoding: 'utf8' });
+  if (where.status === 0) return where.stdout.split(/\r?\n/)[0].trim();
+  return fail('7-Zip (7z.exe) not found on the runner; needed to extract smartctl.exe from the smartmontools installer (set PULSE_7Z)');
+}
+
+// The verified smartctl.exe path in the runner temp cache.
 async function fetchSmartctl() {
-  if (!smartctl.sha256) { console.warn('[pulse windows payload] smartctl.exe skipped: no SHA-256 is pinned (see windows-payload.mjs)'); return null; }
   const cacheDir = join(process.env.RUNNER_TEMP || os.tmpdir(), 'pulse-smartctl');
-  const cached = join(cacheDir, `${smartctl.sha256}.exe`);
+  const cached = join(cacheDir, `smartctl-7.5-${smartctl.sha256}.exe`);
   try {
-    if (createHash('sha256').update(await readFile(cached)).digest('hex') === smartctl.sha256) return cached;
+    if (sha256(await readFile(cached)) === smartctl.sha256) return cached;
   } catch (error) { if (error?.code !== 'ENOENT') throw error; }
-  let response;
-  try { response = await fetch(smartctl.url, { redirect: 'follow' }); } catch (error) { console.warn(`[pulse windows payload] smartctl.exe skipped: download failed (${error?.message ?? error})`); return null; }
-  if (!response.ok) { console.warn(`[pulse windows payload] smartctl.exe skipped: HTTP ${response.status} from ${smartctl.url}`); return null; }
+  const response = await fetch(smartctl.url, { redirect: 'follow' }).catch(error => fail(`smartctl installer download failed: ${error?.message ?? error}`));
+  if (!response.ok) fail(`smartctl installer download failed: HTTP ${response.status} from ${smartctl.url}`);
   const bytes = Buffer.from(await response.arrayBuffer());
-  const actual = createHash('sha256').update(bytes).digest('hex');
-  if (actual !== smartctl.sha256) fail(`smartctl SHA-256 mismatch: expected ${smartctl.sha256}, got ${actual}`);
-  await mkdir(cacheDir, { recursive: true });
-  await writeFile(cached, bytes);
+  const actual = sha256(bytes);
+  if (actual !== smartctl.installerSha256) fail(`smartmontools installer SHA-256 mismatch: expected ${smartctl.installerSha256}, got ${actual}`);
+  const work = mkdtempSync(join(process.env.RUNNER_TEMP || os.tmpdir(), 'pulse-smartctl-work-'));
+  try {
+    const installer = join(work, 'smartmontools-setup.bin');
+    const out = join(work, 'out');
+    writeFileSync(installer, bytes);
+    run(find7z(), ['e', '-y', `-o${out}`, installer, smartctl.member], { stdio: ['ignore', 'ignore', 'inherit'] });
+    const extracted = await readFile(join(out, 'smartctl.exe')).catch(() => fail(`${smartctl.member} was not found in the smartmontools installer`));
+    const exeHash = sha256(extracted);
+    if (exeHash !== smartctl.sha256) fail(`smartctl.exe SHA-256 mismatch: expected ${smartctl.sha256}, got ${exeHash}`);
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(cached, extracted);
+  } finally { rmSync(work, { recursive: true, force: true }); }
   return cached;
 }
 
@@ -105,8 +123,7 @@ async function stagePayload(payload, source) {
   await copyFile(source.notch, join(payload, 'Pulse.exe'), 'notch exe');
   await copyFile(source.hub, join(payload, 'pulse-hub.exe'), 'hub exe');
   await copyFile(source.cli, join(payload, 'Helpers', 'pulse.exe'), 'Pulse CLI');
-  const tool = await fetchSmartctl();
-  if (tool) await copyFile(tool, join(payload, 'Helpers', 'smartctl.exe'), 'smartctl');
+  await copyFile(await fetchSmartctl(), join(payload, 'Helpers', 'smartctl.exe'), 'smartctl');
   await cp(join(repoRoot, 'third_party'), join(payload, 'ThirdParty'), { recursive: true, force: true });
   // The notch's view fixtures, so `Pulse.exe --render-views` works on an installed build (K8).
   await copyFile(join(repoRoot, 'qa', 'notch-views.json'), join(payload, 'notch-views.json'), 'view fixtures');

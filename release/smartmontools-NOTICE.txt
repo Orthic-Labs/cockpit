@@ -8,6 +8,7 @@ Source:    the upstream project above; the version used is 7.5.
 Pulse uses smartctl to read drive health (SMART data). Pulse runs smartctl as a
 separate program, through its command line. It does not link to smartctl and
 does not modify it. Where smartctl is bundled it sits at
-Pulse.app/Contents/Helpers/smartctl; otherwise Pulse uses a Homebrew install.
+Pulse.app/Contents/Helpers/smartctl on macOS and at Helpers\smartctl.exe in the install folder on
+Windows (the official smartmontools 7.5 Windows build); otherwise Pulse uses a Homebrew install.
 
 The GPL-2.0 licence applies to smartctl itself and not to Pulse.

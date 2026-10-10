@@ -12,7 +12,7 @@ export default {
   // Portable contract: right-release Authenticode-signs every payload exe; the package step builds the per-user NSIS
   // installer and signs it with RightKit's signer (scripts/release/windows-payload.mjs).
   prePackage:{cmd:'pnpm',args:['run','rightkit:prepare:win']},
-  sign:{prePackageFiles:['dist/staging/windows/Pulse/Pulse.exe','dist/staging/windows/Pulse/pulse-hub.exe','dist/staging/windows/Pulse/Helpers/pulse.exe']},
+  sign:{prePackageFiles:['dist/staging/windows/Pulse/Pulse.exe','dist/staging/windows/Pulse/pulse-hub.exe','dist/staging/windows/Pulse/Helpers/pulse.exe','dist/staging/windows/Pulse/Helpers/smartctl.exe']},
   package:{cmd:'pnpm',args:['run','rightkit:package:win'],timeoutMs:20*60*1000},
   artifacts:['dist/releases/windows/Pulse-Setup-x64.exe'],
   hardening:['dist/releases/windows/Pulse-Setup-x64.exe'],

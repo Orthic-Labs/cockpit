@@ -15,7 +15,8 @@ its own license; the notices below are reproduced as those licenses require.
   detection rules and the Finder Sync extension layout adapted in core/ and
   mac/Notch/FinderExtension/.
 - smartmontools 7.5 (https://www.smartmontools.org), GPL-2.0. The unmodified
-  smartctl is bundled at Pulse.app/Contents/Helpers/smartctl and run only as a
+  smartctl is bundled at Pulse.app/Contents/Helpers/smartctl (macOS) and Helpers\smartctl.exe (Windows,
+  from the official smartmontools 7.5 Windows installer) and run only as a
   separate program (command line; no linking); it is not part of Pulse. Source
   (GPL-2.0 tarball and signature):
   https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/ (smartmontools-7.5.tar.gz, .asc, SHA256SUMS)

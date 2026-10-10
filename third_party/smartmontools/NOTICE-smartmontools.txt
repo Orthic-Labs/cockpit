@@ -13,6 +13,13 @@ The binary is built, unmodified, from the upstream source tarball
 smartmontools-7.5.tar.gz (sha256 690b83ca331378da9ea0d9d61008c4b22dde391387b9bbad7f29387f2595f76e),
 with the script native-artifacts/smartmontools/build-macos.sh. No patches are applied.
 
+Windows: Helpers\smartctl.exe in the Pulse install folder is the unmodified x64 smartctl.exe from the
+official smartmontools 7.5 Windows installer (smartmontools-7.5.win32-setup.exe, sha256
+896337fcc253220614cf8cdbd5cf2321c5aa326a37a04160a672a281e6104c70, from
+https://github.com/smartmontools/smartmontools/releases/tag/RELEASE_7_5). Pulse starts it as a child
+process only. Its corresponding source is the same smartmontools-7.5.tar.gz, available at that release page
+and at https://sourceforge.net/projects/smartmontools/files/smartmontools/7.5/.
+
 Source offer: the corresponding source (that exact tarball, plus the build script and
 third-party/BUILD-NOTES-smartctl-macos-arm64.txt) is published next to every binary
 distribution at: https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/ (smartmontools-7.5.tar.gz, .asc, SHA256SUMS).
