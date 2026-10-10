@@ -1747,10 +1747,8 @@ fn mirror_into(sources: &[Folder], dest: &Folder) -> (usize, usize, bool) {
         copied += 1;
         changed = true;
     }
-    if changed {
-        if mirror_index(dest, &archived) == Some(false) {
-            skipped += 1;
-        }
+    if changed && mirror_index(dest, &archived) == Some(false) {
+        skipped += 1;
     }
     (copied, skipped, changed)
 }
