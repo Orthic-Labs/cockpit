@@ -46,7 +46,9 @@ fn cache_name(source: &str) -> String {
 }
 
 fn is_png(source: &str) -> bool {
-    Path::new(source).extension().is_some_and(|e| e.eq_ignore_ascii_case("png"))
+    Path::new(source)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
 }
 
 /// PNG bytes for every `(key, source)` that has an icon. With `extract` false only
@@ -91,7 +93,12 @@ pub fn load(sources: &[(String, String)], dir: &Path, extract: bool) -> HashMap<
     command
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .env("PULSE_ICON_LIST", &list_file);
-    let _ = run_capture(command, EXTRACT_TIMEOUT, "PowerShell", "Windows PowerShell is not available.");
+    let _ = run_capture(
+        command,
+        EXTRACT_TIMEOUT,
+        "PowerShell",
+        "Windows PowerShell is not available.",
+    );
     let _ = std::fs::remove_file(&list_file);
     for (key, _, target) in pending {
         if let Ok(bytes) = std::fs::read(&target)

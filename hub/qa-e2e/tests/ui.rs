@@ -2047,10 +2047,20 @@ fn mac_notch_journey(h: &Harness) {
         let was = s(state["settings"]["notchEdge"].clone());
         let target = if was == "bottom" { "top" } else { "bottom" };
 
-        // 2. The supervised hub child comes up (the notch starts it at launch).
-        let hub_up = wait_until(Duration::from_secs(20), || processes_matching(&staged_hub).into_iter().find(|(_, ppid)| *ppid == pid));
+        // 2. The supervised hub comes up (the notch starts it at launch). Evidence is what the
+        // hub writes into this fixture home: its share-state heartbeat or the bridge heartbeat.
+        // (A child-process match is not reliable: the notch may hand the launch to Launch
+        // Services, and the staged hub path can differ from the running image path.)
+        let hub_up = wait_until(Duration::from_secs(20), || {
+            let fresh = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(30));
+            if fresh(&bridge.join("share-state.json")) || fresh(&bridge.join("bridge/relay.json")) {
+                Some(())
+            } else {
+                processes_matching(&staged_hub).into_iter().find(|(_, ppid)| *ppid == pid).map(|_| ())
+            }
+        });
         if hub_up.is_none() {
-            problems.push(format!("no hub child of the notch (pid {pid}) started from {}\n{}", staged_hub.display(), diag()));
+            problems.push(format!("no hub of the notch (pid {pid}) came up: no share-state/bridge heartbeat in the fixture and no child from {}\n{}", staged_hub.display(), diag()));
         }
 
         // 3. A hub command (what the hub's Edge control leaves) changes the edge: applied, file consumed, republished.

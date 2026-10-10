@@ -43,10 +43,19 @@ fn specific_folder(folder: &str) -> bool {
         return false;
     }
     let lower = folder.trim_end_matches('\\').to_lowercase();
-    !["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "SystemRoot"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .any(|root| root.trim_end_matches('\\').to_lowercase() == lower)
+    ![
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "ProgramData",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "USERPROFILE",
+        "SystemRoot",
+    ]
+    .iter()
+    .filter_map(|name| std::env::var(name).ok())
+    .any(|root| root.trim_end_matches('\\').to_lowercase() == lower)
 }
 
 /// `Installed::entry.running` from a list of running program paths (lower case).
@@ -57,10 +66,14 @@ pub fn mark(apps: &mut [Installed], programs: &[String]) {
         .map(|file| norm(file.strip_suffix(".exe").unwrap_or(file)))
         .collect();
     for app in apps.iter_mut() {
-        let in_folder = app.run_folder.as_deref().filter(|f| specific_folder(f)).is_some_and(|folder| {
-            let prefix = format!("{}\\", folder.trim_end_matches('\\').to_lowercase());
-            programs.iter().any(|p| p.starts_with(&prefix))
-        });
+        let in_folder = app
+            .run_folder
+            .as_deref()
+            .filter(|f| specific_folder(f))
+            .is_some_and(|folder| {
+                let prefix = format!("{}\\", folder.trim_end_matches('\\').to_lowercase());
+                programs.iter().any(|p| p.starts_with(&prefix))
+            });
         let by_icon = app
             .icon_source
             .as_deref()

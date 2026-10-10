@@ -31,7 +31,10 @@ const SCRIPT: &str = concat!(
 );
 
 fn text(value: &Value) -> Option<String> {
-    value.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    value
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// The text of `<tag ...>value</tag>` (first one), or an attribute `name="value"` of a tag.
@@ -53,7 +56,9 @@ fn visual_elements(xml: &str) -> Vec<&str> {
     let mut rest = xml;
     while let Some(at) = rest.find("VisualElements") {
         let start = rest[..at].rfind('<').unwrap_or(0);
-        let Some(end) = rest[at..].find('>') else { break };
+        let Some(end) = rest[at..].find('>') else {
+            break;
+        };
         tags.push(&rest[start..at + end]);
         rest = &rest[at + end..];
     }
@@ -62,7 +67,9 @@ fn visual_elements(xml: &str) -> Vec<&str> {
 
 /// "Microsoft.WindowsTerminal" -> "Windows Terminal".
 fn readable(package_name: &str) -> String {
-    let base = package_name.split_once('.').map_or(package_name, |(_, rest)| rest);
+    let base = package_name
+        .split_once('.')
+        .map_or(package_name, |(_, rest)| rest);
     let mut out = String::new();
     let mut previous: Option<char> = None;
     for c in base.chars() {
@@ -93,16 +100,24 @@ fn logo_file(location: &Path, relative: &str) -> Option<PathBuf> {
             p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"))
                 && p.file_name().is_some_and(|n| {
                     let n = n.to_string_lossy().to_lowercase();
-                    n.starts_with(&format!("{stem}.")) && !n.contains("contrast") && !n.contains("altform-lightunplated")
+                    n.starts_with(&format!("{stem}."))
+                        && !n.contains("contrast")
+                        && !n.contains("altform-lightunplated")
                 })
         })
         .collect();
     // Prefer the 100%/200% scale, then a 32 to 48 px target size, then whatever is first.
     variants.sort_by_key(|p| {
-        let n = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let n = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
         if n.contains("scale-200") {
             0
-        } else if n.contains("scale-100") || n.contains("targetsize-48") || n.contains("targetsize-32") {
+        } else if n.contains("scale-100")
+            || n.contains("targetsize-48")
+            || n.contains("targetsize-32")
+        {
             1
         } else {
             2
@@ -115,25 +130,36 @@ fn logo_file(location: &Path, relative: &str) -> Option<PathBuf> {
 pub fn read() -> Result<Vec<Installed>, String> {
     let mut command = Command::new(powershell());
     command.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT]);
-    let (_, output) = run_capture(command, READ_TIMEOUT, "PowerShell", "Windows PowerShell is not available.")?;
+    let (_, output) = run_capture(
+        command,
+        READ_TIMEOUT,
+        "PowerShell",
+        "Windows PowerShell is not available.",
+    )?;
     let parsed: Value = serde_json::from_str(output.trim().trim_start_matches('\u{feff}'))
         .map_err(|_| "The Store apps could not be read.".to_string())?;
     let rows = parsed.as_array().cloned().unwrap_or_default();
     let mut apps = Vec::new();
     for row in rows {
-        let (Some(name), Some(full), Some(family), Some(location)) =
-            (text(&row["n"]), text(&row["f"]), text(&row["a"]), text(&row["l"]))
-        else {
+        let (Some(name), Some(full), Some(family), Some(location)) = (
+            text(&row["n"]),
+            text(&row["f"]),
+            text(&row["a"]),
+            text(&row["l"]),
+        ) else {
             continue;
         };
         let location_path = Path::new(&location);
-        let Ok(manifest) = std::fs::read_to_string(location_path.join("AppxManifest.xml")) else { continue };
+        let Ok(manifest) = std::fs::read_to_string(location_path.join("AppxManifest.xml")) else {
+            continue;
+        };
         let tags = visual_elements(&manifest);
         // Launchable only when some app of the package is listed.
         if tags.is_empty() || tags.iter().all(|t| t.contains("AppListEntry=\"none\"")) {
             continue;
         }
-        let literal = element_text(&manifest, "DisplayName").filter(|n| !n.starts_with("ms-resource:"));
+        let literal =
+            element_text(&manifest, "DisplayName").filter(|n| !n.starts_with("ms-resource:"));
         let display = literal.unwrap_or_else(|| readable(&name));
         let logo = tags
             .iter()

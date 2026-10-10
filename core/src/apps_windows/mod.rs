@@ -100,14 +100,20 @@ fn display_icon_file(raw: &str) -> Option<String> {
     if let Some(rest) = text.strip_prefix('"') {
         text = rest.split('"').next()?.to_string();
     } else if let Some((head, tail)) = text.rsplit_once(',')
-        && tail.trim().trim_start_matches('-').chars().all(|c| c.is_ascii_digit())
+        && tail
+            .trim()
+            .trim_start_matches('-')
+            .chars()
+            .all(|c| c.is_ascii_digit())
     {
         text = head.to_string();
     }
     // Expand %NAME% once (Windows keeps DisplayIcon unexpanded when it is REG_EXPAND_SZ).
     for _ in 0..8 {
         let Some(start) = text.find('%') else { break };
-        let Some(len) = text[start + 1..].find('%') else { break };
+        let Some(len) = text[start + 1..].find('%') else {
+            break;
+        };
         let name = &text[start + 1..start + 1 + len];
         let value = std::env::var(name).ok()?;
         text.replace_range(start..start + len + 2, &value);
@@ -127,16 +133,17 @@ fn folder_program(folder: &str, app_name: &str) -> Option<String> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
-            path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+            path.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
                 && !path
                     .file_stem()
                     .is_some_and(|s| s.to_string_lossy().to_lowercase().starts_with("unins"))
         })
         .collect();
-    if let Some(named) = programs
-        .iter()
-        .find(|p| p.file_stem().is_some_and(|s| usage::norm(&s.to_string_lossy()) == wanted))
-    {
+    if let Some(named) = programs.iter().find(|p| {
+        p.file_stem()
+            .is_some_and(|s| usage::norm(&s.to_string_lossy()) == wanted)
+    }) {
         return Some(named.to_string_lossy().into_owned());
     }
     (programs.len() == 1).then(|| programs.remove(0).to_string_lossy().into_owned())

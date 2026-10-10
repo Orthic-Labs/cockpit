@@ -14,7 +14,13 @@ fn stdout_write(args: std::fmt::Arguments<'_>, newline: bool) {
     let mut out = std::io::stdout().lock();
     let result = out
         .write_fmt(args)
-        .and_then(|()| if newline { out.write_all(b"\n") } else { Ok(()) })
+        .and_then(|()| {
+            if newline {
+                out.write_all(b"\n")
+            } else {
+                Ok(())
+            }
+        })
         .and_then(|()| out.flush());
     if let Err(error) = result {
         let closed = error.kind() == std::io::ErrorKind::BrokenPipe
@@ -692,7 +698,10 @@ fn monitor_text(extended: &Value) -> String {
     let observed = |o: &Value| -> String {
         match o.get("value") {
             Some(v) if !v.is_null() => v.to_string(),
-            _ => format!("unavailable ({})", o["label"].as_str().unwrap_or("no reason reported")),
+            _ => format!(
+                "unavailable ({})",
+                o["label"].as_str().unwrap_or("no reason reported")
+            ),
         }
     };
     let net = &extended["network"];
@@ -725,7 +734,10 @@ fn monitor_text(extended: &Value) -> String {
         }
     }
     let count = extended["processes"].as_array().map_or(0, Vec::len);
-    let _ = writeln!(out, "Processes: {count} (use `pulse procs`; add --json for the full sample)");
+    let _ = writeln!(
+        out,
+        "Processes: {count} (use `pulse procs`; add --json for the full sample)"
+    );
     out
 }
 fn emit_inspection(value: Value, machine: bool) {
@@ -1219,7 +1231,10 @@ fn find_installed_app<'a>(
         [] => None,
         many => Some(Err(format!(
             "ambiguous name {target}; pass one of these paths: {}",
-            many.iter().map(|a| a.entry.path.as_str()).collect::<Vec<_>>().join(", ")
+            many.iter()
+                .map(|a| a.entry.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ))),
     };
     let lower = target.to_lowercase();
@@ -1299,7 +1314,10 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
         }
         "uninstall" => {
             use std::os::windows::process::CommandExt;
-            if arguments.iter().any(|a| a == "--include" || a == "--only-preselected") {
+            if arguments
+                .iter()
+                .any(|a| a == "--include" || a == "--only-preselected")
+            {
                 return Err("leftover selection is only in the Pulse hub's Apps page; this command starts the app's own uninstaller".into());
             }
             if arguments.len() != 1 {
@@ -1335,7 +1353,10 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
                 machine,
             );
             if still_installed {
-                return Err(CliError { body: None, exit: 1 });
+                return Err(CliError {
+                    body: None,
+                    exit: 1,
+                });
             }
         }
         other => return Err(format!("unknown apps command: {other}").into()),
