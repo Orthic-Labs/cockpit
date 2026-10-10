@@ -83,12 +83,22 @@ run_hub_qa() {
       qa_rc=1
     fi
   fi
+  # The Mac notch the gate built (Xcode, unsigned): the test copies it, stages the qa-native hub into
+  # the copy and runs it against a temp HOME. It has no hidden mode, so PULSE_QA_REAL_NOTCH=1 (set
+  # only here, on the CI runner; this gate refuses to run elsewhere) is what lets the test start it.
+  real_notch=""
+  if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
+    notch_bin="$RUNNER_TEMP/pulse-notch/Build/Products/Release/Pulse.app/Contents/MacOS/Pulse"
+    [[ -x "$notch_bin" ]] || { echo "Notch binary missing: $notch_bin" >&2; qa_rc=1; }
+    real_notch=1
+  fi
   if [[ $qa_rc -eq 0 ]]; then
     # rightkit-qa >= 0.2.10 keeps managed runs under RIGHTKIT_MANAGED_ROOT
     # (default is a workstation path the runner cannot create).
     (cd hub/qa-e2e && RIGHTKIT_MANAGED_ROOT="$(native_path "$qa_out/managed")" \
       PULSE_QA_SHOTS="$(native_path "$qa_out/screenshots")" RIGHTKIT_QA_EVIDENCE="$(native_path "$qa_out/evidence")" \
       PULSE_QA_NOTCH_BIN="${notch_bin:+$(native_path "$notch_bin")}" \
+      PULSE_QA_REAL_NOTCH="$real_notch" \
       cargo test --test ui -- --nocapture) || qa_rc=$?
   fi
   echo "Hub QA evidence in $qa_out:"; ls -lR "$qa_out" || true
@@ -97,6 +107,10 @@ run_hub_qa() {
   # 0.2.10+ writes evidence inside the managed run (managed/runs/<app>/<id>/evidence).
   grep -rq '"passed"' "$qa_out" --include=evidence.json || { echo "Hub native QA left no passing evidence" >&2; exit 1; }
   [[ "$(find "$qa_out/screenshots" -name '*.png' | wc -l | tr -d ' ')" -ge 8 ]] || { echo "Hub native QA saved fewer than 8 screenshots" >&2; exit 1; }
+  if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
+    # The Mac notch step skips (and still writes a receipt) without PULSE_QA_REAL_NOTCH; its summary file proves it ran.
+    [[ -s "$qa_out/screenshots/14-mac-notch.txt" ]] || { echo "Hub native QA did not run the Mac notch step" >&2; exit 1; }
+  fi
   if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     # The notch step skips (and still writes a receipt) without PULSE_QA_NOTCH_BIN; its last screenshot proves it ran.
     [[ -s "$qa_out/screenshots/12-notch-edge-after.png" ]] || { echo "Hub native QA did not run the notch edge step" >&2; exit 1; }

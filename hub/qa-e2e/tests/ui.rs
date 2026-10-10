@@ -17,6 +17,9 @@
 //! Windows only, second scenario: `$PULSE_QA_NOTCH_BIN` names the notch executable
 //! (`windows/target/debug/pulse-windows-prototype.exe`). The step starts that real notch and mocks
 //! nothing, so it runs only where the variable is set (scripts/gate.sh sets it on the CI runner).
+//! macOS, second scenario: `$PULSE_QA_NOTCH_BIN` is `Pulse.app/Contents/MacOS/Pulse` and
+//! `$PULSE_QA_REAL_NOTCH=1` allows it to run (the Mac notch has no hidden mode and retires other
+//! Pulse processes at start, so only the CI runner sets both; see `mac_notch_journey`).
 //! A developer's machine is left alone: the notch draws its panels on the desktop, owns one
 //! per-user instance mutex and removes the user's start-with-Windows registry entry at start.
 
@@ -960,13 +963,12 @@ fn windows_interactions(ctl: &Control, sec: &Section, bridge: &Path, sc: &Scenar
     }
 }
 
-// ------------------------------------------------------------------- the control crawl (macOS)
+// ------------------------------------------------------------------- the control crawl (macOS and Windows)
 
 /// Page-side helpers shared by every crawl probe (prepended to each snippet; `eval` runs a
 /// function body). `enumerate()` lists the visible controls outside the nav, in document order:
 /// native and ARIA controls plus rows that merely have a click handler (pointer cursor on the
 /// outermost such element), keeping the innermost when one control holds another.
-#[cfg(target_os = "macos")]
 const CRAWL_JS: &str = r#"
 const SEL = 'button,[role=button],[role=switch],[role=radio],[role=tab],[role=checkbox],[role=link],[role=menuitem],[role=slider],[role=combobox],[role=option],a[href],select,input,textarea,summary,[tabindex="0"]';
 const clean = (t) => (t || '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -1026,7 +1028,6 @@ const styleSig = (el) => {
 const dialogs = () => document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open],.rk-modal,.rk-sheet,.modal').length;
 "#;
 
-#[cfg(target_os = "macos")]
 fn crawl_js(body: &str, subs: &[(&str, String)]) -> String {
     let mut b = body.to_string();
     for (key, value) in subs {
@@ -1035,26 +1036,20 @@ fn crawl_js(body: &str, subs: &[(&str, String)]) -> String {
     format!("{CRAWL_JS}\n{b}")
 }
 
-#[cfg(target_os = "macos")]
 const DESTRUCTIVE_WORDS: &[&str] = &[
     "forget", "uninstall", "delete", "remove", "restart", "quit", "erase", "trash", "clean", "cleanup", "reclaim", "reset",
     "wipe", "disconnect", "clear", "terminate", "kill", "stop", "apply", "purge", "revoke", "empty",
 ];
-#[cfg(target_os = "macos")]
 const DESTRUCTIVE_PHRASES: &[&str] = &["sign out", "log out", "move to"];
 /// Controls that change the look of the whole page (the theme toggle): a click leaves every
 /// later hover read unreliable while the theme crossfades, so they are hovered, never clicked.
-#[cfg(target_os = "macos")]
 const WHOLE_PAGE_WORDS: &[&str] = &["appearance", "theme"];
-#[cfg(target_os = "macos")]
 const EXTERNAL_WORDS: &[&str] = &["reveal", "grant", "allow", "download", "install", "feedback", "report"];
-#[cfg(target_os = "macos")]
 const EXTERNAL_PHRASES: &[&str] = &[
-    "system settings", "open settings", "open in finder", "show in finder", "request access", "check for update", "sign in",
+    "system settings", "open settings", "windows settings", "ms-settings", "open in finder", "show in finder", "request access", "check for update", "sign in",
     "log in", "learn more", "release notes", "documentation", "send test",
 ];
 
-#[cfg(target_os = "macos")]
 struct Found {
     idx: usize,
     label: String,
@@ -1064,7 +1059,6 @@ struct Found {
 }
 
 /// Why a control is hovered but never clicked, or None when pressing it is safe in the fixture home.
-#[cfg(target_os = "macos")]
 fn skip_reason(sec: &Section, f: &Found) -> Option<&'static str> {
     let l = f.label.to_lowercase();
     let words: Vec<&str> = l.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
@@ -1092,7 +1086,6 @@ fn skip_reason(sec: &Section, f: &Found) -> Option<&'static str> {
     None
 }
 
-#[cfg(target_os = "macos")]
 fn slug(label: &str) -> String {
     let mut out = String::new();
     for c in label.to_lowercase().chars() {
@@ -1112,7 +1105,6 @@ fn slug(label: &str) -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn list_controls(ctl: &Control) -> Vec<Found> {
     let js = crawl_js(
         "return enumerate().map((el, i) => ({i, label: labelOf(el), role: roleOf(el), disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true', href: el.getAttribute('href') || ''}));",
@@ -1134,7 +1126,6 @@ fn list_controls(ctl: &Control) -> Vec<Found> {
 }
 
 /// Brings the section back after a control navigated away or changed a pane.
-#[cfg(target_os = "macos")]
 fn reopen(ctl: &Control, sec: &Section) {
     let want = format!("return document.querySelector('.rk-top__title')?.textContent?.trim() === {}", json!(sec.title));
     if ctl.eval(&want).ok() != Some(json!(true)) {
@@ -1151,7 +1142,6 @@ fn reopen(ctl: &Control, sec: &Section) {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn page_state(ctl: &Control) -> Value {
     let js = crawl_js(
         "return {title: document.querySelector('.rk-top__title')?.textContent?.trim() ?? '', text: document.body.innerText, marks: marks(), dialogs: dialogs()};",
@@ -1161,7 +1151,6 @@ fn page_state(ctl: &Control) -> Value {
 }
 
 /// What changed between two page states, in words, plus the commands the hub left for the notch.
-#[cfg(target_os = "macos")]
 fn describe(before: &Value, after: &Value, commands: &[Value]) -> String {
     let mut parts: Vec<String> = Vec::new();
     if before["title"] != after["title"] {
@@ -1201,7 +1190,6 @@ fn describe(before: &Value, after: &Value, commands: &[Value]) -> String {
 
 /// Undoes a control's effect so the next control meets the page as it was: toggles and radios
 /// go back to their earlier state, dialogs close, focus leaves any field, the section reopens.
-#[cfg(target_os = "macos")]
 fn restore(ctl: &Control, sec: &Section, before_marks: &Value) {
     let undo = crawl_js(
         "const prev = __PREV__; const els = [...document.querySelectorAll(MARK_SEL)].filter((el) => !el.closest('nav.rk-nav')); let n = 0; if (els.length === prev.length) { els.forEach((el, j) => { const now = markOf(el); if (prev[j] === now) return; const role = roleOf(el); const was = prev[j].split('|'); if ((role === 'radio' || role === 'tab') && was[2] !== 'true' && was[4] !== 'true') return; el.click(); n++; }); } if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); return n;",
@@ -1232,14 +1220,12 @@ fn restore(ctl: &Control, sec: &Section, before_marks: &Value) {
     reopen(ctl, sec);
 }
 
-#[cfg(target_os = "macos")]
 fn file_bytes(p: &Path) -> Vec<u8> {
     std::fs::read(p).unwrap_or_default()
 }
 
 /// Hovers, presses and clicks every control of the open section, saving
 /// `<surface>__<control>__hover|pressed|after.png` and one inventory entry each.
-#[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn crawl_section(ctl: &Control, sec: &Section, surface: &str, shots: &Path, commands: &Path, deadline: std::time::Instant, per_section: usize, inventory: &mut Vec<Value>) {
     let controls = list_controls(ctl);
@@ -1329,9 +1315,8 @@ fn crawl_section(ctl: &Control, sec: &Section, surface: &str, shots: &Path, comm
     let _ = ctl.move_to(2.0, 2.0);
 }
 
-#[cfg(target_os = "macos")]
 fn write_inventory(shots: &Path, inventory: &[Value]) {
-    let _ = std::fs::write(shots.join("inventory.json"), serde_json::to_vec_pretty(&json!({"platform": "mac", "controls": inventory})).unwrap_or_default());
+    let _ = std::fs::write(shots.join("inventory.json"), serde_json::to_vec_pretty(&json!({"platform": if cfg!(windows) { "windows" } else { "mac" }, "controls": inventory})).unwrap_or_default());
     let yn = |v: &Value| match v.as_bool() {
         Some(true) => "yes",
         Some(false) => "no",
@@ -1340,7 +1325,7 @@ fn write_inventory(shots: &Path, inventory: &[Value]) {
     let cell = |t: String| t.replace('|', "/").replace('\n', " ");
     let captured = inventory.iter().filter(|e| !e["hover"].is_null()).count();
     let clicked = inventory.iter().filter(|e| e["clicked"] == true).count();
-    let mut md = String::from("# Mac hub controls\n\n");
+    let mut md = String::from(if cfg!(windows) { "# Windows hub controls\n\n" } else { "# Mac hub controls\n\n" });
     md.push_str(&format!("{} controls listed, {} with a hover shot, {} clicked.\n\n", inventory.len(), captured, clicked));
     md.push_str("| Surface | Control | Role | Hover shot | Hover look changed | Pressed pixels changed | Action observed |\n|---|---|---|---|---|---|---|\n");
     for e in inventory {
@@ -1359,7 +1344,6 @@ fn write_inventory(shots: &Path, inventory: &[Value]) {
 }
 
 /// The sidebar's own items: hover, press and click each (the click opens that section).
-#[cfg(target_os = "macos")]
 fn crawl_nav(ctl: &Control, shots: &Path, inventory: &mut Vec<Value>) {
     for sec in SECTIONS.iter() {
         let probe = format!(
@@ -1412,10 +1396,13 @@ fn crawl_nav(ctl: &Control, shots: &Path, inventory: &mut Vec<Value>) {
 /// The interaction standard, enforced on the crawl inventory: every control shows a hover state
 /// and every clicked control shows a pressed state. Allowlist: text inputs and native value
 /// controls (selects, sliders) show focus or a native popup instead, and disabled controls are inert.
-#[cfg(target_os = "macos")]
 const STATE_ALLOWLIST_ROLES: &[&str] = &["textbox", "searchbox", "select", "combobox", "slider", "spinbutton"];
 
-#[cfg(target_os = "macos")]
+/// Hover is blocking on both platforms. The pressed check is blocking on macOS only: whether a
+/// hidden WebView2 can produce `:active` is unmeasured (RightKit), so on Windows a control with no
+/// pressed state is printed as ADVISORY until the first CI evidence says it can be made blocking.
+const PRESSED_BLOCKING: bool = cfg!(target_os = "macos");
+
 fn check_interaction_states(inventory: &[Value]) -> Vec<String> {
     let mut problems = Vec::new();
     // The pressed check is only meaningful when the harness's mouse-down reaches the page at
@@ -1437,7 +1424,11 @@ fn check_interaction_states(inventory: &[Value]) -> Vec<String> {
             problems.push(format!("no hover state: {who}"));
         }
         if harness_presses && e["clicked"] == true && e["press_pixels_changed"] != true {
-            problems.push(format!("no pressed state: {who}"));
+            if PRESSED_BLOCKING {
+                problems.push(format!("no pressed state: {who}"));
+            } else {
+                eprintln!("ADVISORY (not a failure yet): no pressed state: {who}");
+            }
         }
     }
     problems
@@ -1479,11 +1470,10 @@ fn hub_tour(h: &Harness) {
 
         let ctl = launch_hub(&ws, &home, sc);
         let mut problems: Vec<String> = Vec::new();
-        // The control crawl (macOS): every control hovered, pressed and clicked per section, within one time budget.
-        #[cfg(target_os = "macos")]
+        // The control crawl (macOS and Windows): every control hovered, pressed and clicked per
+        // section, within one time budget (Windows' WebView2 is slower to screenshot).
         let mut inventory: Vec<Value> = Vec::new();
-        #[cfg(target_os = "macos")]
-        let crawl_deadline = std::time::Instant::now() + Duration::from_secs(270);
+        let crawl_deadline = std::time::Instant::now() + Duration::from_secs(if cfg!(windows) { 420 } else { 270 });
 
         for (index, sec) in SECTIONS.iter().enumerate() {
             if index > 0 {
@@ -1557,17 +1547,22 @@ fn hub_tour(h: &Harness) {
             sc.keep(&format!("{:02}-{}", index + 1, sec.id), &shot);
 
             // Every control of this section: hover, pressed and after-click shots plus an inventory entry each.
-            #[cfg(target_os = "macos")]
             {
                 crawl_section(&ctl, sec, sec.id, &shots, &bridge.join("hub-commands"), crawl_deadline, 40, &mut inventory);
                 write_inventory(&shots, &inventory);
+                // The crawl's presses left commands for the notch; the person-like interactions
+                // below look for their own, so start them from an empty folder (no notch runs here).
+                #[cfg(windows)]
+                {
+                    let _ = std::fs::remove_dir_all(bridge.join("hub-commands"));
+                    let _ = std::fs::create_dir_all(bridge.join("hub-commands"));
+                }
             }
 
             // After the screenshot (pressing scrolls the page): use the section's controls as a person would.
             #[cfg(windows)]
             windows_interactions(&ctl, sec, &bridge, sc, &shots, &mut problems);
         }
-        #[cfg(target_os = "macos")]
         {
             crawl_nav(&ctl, &shots, &mut inventory);
             write_inventory(&shots, &inventory);
@@ -1913,6 +1908,209 @@ fn notch_edge_journey(h: &Harness) {
     });
 }
 
+// ---------------------------------------------------------------------------- the real Mac notch
+
+/// The real notch process; SIGKILLed (with the staged hub it started) when this goes out of scope,
+/// unless the journey already stopped it with SIGTERM.
+#[cfg(target_os = "macos")]
+struct MacNotch {
+    child: std::process::Child,
+    staged_hub: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacNotch {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("pkill").arg("-9").arg("-f").arg(&self.staged_hub).status();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Pids (and their parents) of processes whose command line contains `needle`.
+#[cfg(target_os = "macos")]
+fn processes_matching(needle: &Path) -> Vec<(u32, u32)> {
+    let out = std::process::Command::new("ps").args(["-axo", "pid=,ppid=,command="]).output().map(|o| o.stdout).unwrap_or_default();
+    let needle = needle.to_string_lossy().into_owned();
+    String::from_utf8_lossy(&out)
+        .lines()
+        .filter(|l| l.contains(&needle))
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn read_json_file(path: &Path) -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn wait_until<T>(timeout: Duration, mut probe: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(found) = probe() {
+            return Some(found);
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The real Mac notch, started from the CI-built Pulse.app with HOME and CLAUDE_CONFIG_DIR in a
+/// temp fixture: it publishes `notch-state.json`, applies a hub command that sets the notch edge
+/// (saved to its UserDefaults and republished), and on SIGTERM exits cleanly taking its hub child
+/// with it. The Mac notch has no hidden mode: its panels are real windows on the desktop, and it
+/// retires any other Pulse and any other Pulse hub on the machine at start, so this runs only where
+/// `$PULSE_QA_REAL_NOTCH=1` (scripts/gate.sh sets it on the CI runner, never anywhere else).
+/// `$PULSE_QA_NOTCH_BIN` is the `Pulse.app/Contents/MacOS/Pulse` the gate built; the hub it
+/// supervises is the qa-native debug hub staged into a copy of that bundle (the Xcode build alone
+/// has no Helpers/Pulse.app).
+#[cfg(target_os = "macos")]
+fn mac_notch_journey(h: &Harness) {
+    h.scenario("mac notch applies the hub's edge change and exits cleanly", "fast", &[PLATFORM], |sc| {
+        let (Some(notch_bin), true) = (std::env::var_os("PULSE_QA_NOTCH_BIN").map(PathBuf::from), std::env::var("PULSE_QA_REAL_NOTCH").is_ok_and(|v| v == "1")) else {
+            sc.skip("PULSE_QA_REAL_NOTCH=1 and PULSE_QA_NOTCH_BIN are not both set: the Mac notch draws on the desktop, so it runs only on the CI runner");
+            return;
+        };
+        assert!(notch_bin.is_file(), "PULSE_QA_NOTCH_BIN {} is not a file", notch_bin.display());
+        let bundle = notch_bin.ancestors().nth(3).expect("Pulse.app above Contents/MacOS/Pulse").to_path_buf();
+        let ws = fresh_workspace(sc);
+        let home = ws.home.join("notch-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let claude = home.join(".claude");
+        std::fs::create_dir_all(&claude).expect("CLAUDE_CONFIG_DIR");
+        let bridge = bridge_dir(&home, &ws);
+        std::fs::create_dir_all(bridge.join("hub-commands")).expect("bridge dir");
+        let shots: PathBuf = std::env::var_os("PULSE_QA_SHOTS").map(PathBuf::from).unwrap_or_else(|| sc.scratch("screenshots"));
+        std::fs::create_dir_all(&shots).expect("screenshots dir");
+
+        // A copy of the bundle with the qa-native hub where the notch looks for its helper.
+        let staged = ws.home.join("staged");
+        let _ = std::fs::remove_dir_all(&staged);
+        std::fs::create_dir_all(&staged).expect("staging dir");
+        let app = staged.join("Pulse.app");
+        let copied = std::process::Command::new("ditto").arg(&bundle).arg(&app).status().expect("ditto");
+        assert!(copied.success(), "could not copy {} to {}", bundle.display(), app.display());
+        let hub_dir = app.join("Contents/Helpers/Pulse.app/Contents/MacOS");
+        std::fs::create_dir_all(&hub_dir).expect("helper dir");
+        let staged_hub = hub_dir.join("pulse-hub");
+        std::fs::copy(hub_binary(), &staged_hub).expect("stage the qa-native hub (build it first)");
+
+        let env_of = |cmd: &mut std::process::Command| {
+            cmd.env("HOME", &home)
+                .env("CFFIXED_USER_HOME", &home)
+                .env("CLAUDE_CONFIG_DIR", &claude)
+                .env("CODEX_HOME", home.join(".codex"))
+                .env("RIGHTKIT_PULSE_QA_HOME", &home);
+        };
+        let log = ws.home.join("notch.out.log");
+        let out = std::fs::File::create(&log).expect("notch log");
+        let err = out.try_clone().expect("notch log handle");
+        let mut cmd = std::process::Command::new(app.join("Contents/MacOS/Pulse"));
+        env_of(&mut cmd);
+        cmd.current_dir(&ws.home).stdin(std::process::Stdio::null()).stdout(out).stderr(err);
+        let child = cmd.spawn().unwrap_or_else(|e| panic!("cannot start the notch: {e}"));
+        let pid = child.id();
+        let mut running = MacNotch { child, staged_hub: staged_hub.clone() };
+        let diag = || {
+            let text = std::fs::read_to_string(&log).unwrap_or_default();
+            let start = text.len().saturating_sub(1500);
+            let start = (start..=text.len()).find(|i| text.is_char_boundary(*i)).unwrap_or(text.len());
+            format!(
+                "notch output tail:\n{}\nfiles in {}: {:?}",
+                &text[start..],
+                bridge.display(),
+                std::fs::read_dir(&bridge).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()
+            )
+        };
+
+        // 1. notch-state.json within 10 s, published by the notch itself.
+        let state_path = bridge.join("notch-state.json");
+        let state = wait_until(Duration::from_secs(10), || {
+            if let Ok(Some(status)) = running.child.try_wait() {
+                panic!("the notch exited ({status}) before it published notch-state.json\n{}", diag());
+            }
+            read_json_file(&state_path).filter(|v| v["product"] == "Pulse")
+        })
+        .unwrap_or_else(|| panic!("the notch published no notch-state.json within 10 s\n{}", diag()));
+        let mut problems: Vec<String> = Vec::new();
+        for key in ["notchEdge", "notchSize", "launchAtLogin"] {
+            if state["settings"][key].is_null() {
+                problems.push(format!("notch-state.json carries no settings.{key}"));
+            }
+        }
+        let was = s(state["settings"]["notchEdge"].clone());
+        let target = if was == "bottom" { "top" } else { "bottom" };
+
+        // 2. The supervised hub child comes up (the notch starts it at launch).
+        let hub_up = wait_until(Duration::from_secs(20), || processes_matching(&staged_hub).into_iter().find(|(_, ppid)| *ppid == pid));
+        if hub_up.is_none() {
+            problems.push(format!("no hub child of the notch (pid {pid}) started from {}\n{}", staged_hub.display(), diag()));
+        }
+
+        // 3. A hub command (what the hub's Edge control leaves) changes the edge: applied, file consumed, republished.
+        let command_file = bridge.join("hub-commands/001-qa-edge.json");
+        std::fs::write(&command_file, json!({"command": "set", "key": "notchEdge", "value": target}).to_string()).expect("write command");
+        let _ = std::process::Command::new("notifyutil").args(["-p", "dev.orthic.pulse.hub.command"]).status();
+        let applied = wait_until(Duration::from_secs(15), || {
+            read_json_file(&state_path).filter(|v| v["settings"]["notchEdge"] == target && !command_file.exists())
+        });
+        if applied.is_none() {
+            problems.push(format!(
+                "the hub command setting notchEdge={target} was not applied: state notchEdge {}, command file still present: {}\n{}",
+                read_json_file(&state_path).map(|v| v["settings"]["notchEdge"].to_string()).unwrap_or_default(),
+                command_file.exists(),
+                diag()
+            ));
+        }
+        // The saved setting (UserDefaults, read back with the same HOME). Advisory on first landing:
+        // whether cfprefsd honours the fixture HOME for another process is unmeasured; the republished
+        // state above is the blocking evidence.
+        let mut read = std::process::Command::new("defaults");
+        env_of(&mut read);
+        read.args(["read", "dev.orthic.pulse", "notchEdge"]);
+        let saved = wait_until(Duration::from_secs(10), || {
+            let o = read.output().ok()?;
+            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            (v == target).then_some(v)
+        });
+        if saved.is_none() {
+            eprintln!("ADVISORY (not a failure yet): `defaults read dev.orthic.pulse notchEdge` under the fixture HOME never read {target}");
+            sc.note(format!("defaults read dev.orthic.pulse notchEdge never read {target} under the fixture HOME"));
+        }
+
+        // 4. SIGTERM: a clean exit, and the hub child goes with it.
+        let hub_pids: Vec<u32> = processes_matching(&staged_hub).into_iter().map(|(p, _)| p).collect();
+        let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+        let exited = wait_until(Duration::from_secs(15), || running.child.try_wait().ok().flatten());
+        match exited {
+            None => problems.push(format!("the notch (pid {pid}) did not exit within 15 s of SIGTERM\n{}", diag())),
+            Some(status) => {
+                use std::os::unix::process::ExitStatusExt;
+                if !status.success() {
+                    problems.push(format!("the notch did not exit cleanly on SIGTERM: {status} (signal {:?})", status.signal()));
+                }
+            }
+        }
+        if wait_until(Duration::from_secs(8), || processes_matching(&staged_hub).is_empty().then_some(())).is_none() {
+            problems.push(format!("the notch's hub child survived the notch (pids before SIGTERM {hub_pids:?}, still {:?})", processes_matching(&staged_hub)));
+        }
+        let summary = format!("edge {was} -> {target}; hub child seen: {}; exit: {exited:?}; problems: {}\n", hub_up.is_some(), problems.len());
+        let _ = std::fs::write(shots.join("14-mac-notch.txt"), summary);
+        drop(running);
+        let _ = std::fs::remove_dir_all(&staged);
+        let _ = std::fs::remove_dir_all(&home);
+        if !problems.is_empty() {
+            panic!("{} problem(s) in the Mac notch step:\n- {}", problems.len(), problems.join("\n- "));
+        }
+    });
+}
+
 #[test]
 fn hub_sections_render_without_errors() {
     let h = Harness::new("pulse-hub", env!("CARGO_MANIFEST_DIR")).expect("rightkit-qa harness");
@@ -1921,4 +2119,7 @@ fn hub_sections_render_without_errors() {
     // first through the per-user instance mutex and exit.
     #[cfg(windows)]
     notch_edge_journey(&h);
+    // Same reason on the Mac: the real notch retires any other Pulse hub, so it runs after the tour.
+    #[cfg(target_os = "macos")]
+    mac_notch_journey(&h);
 }
