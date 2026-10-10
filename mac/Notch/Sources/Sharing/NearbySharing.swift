@@ -489,34 +489,25 @@ final class NearbySharing {
     /// (the system picker in window mode: click the window).
     enum ShotMode { case snip, screen, window }
 
-    /// The Snip / Screen / Window buttons: the capture goes to a temporary file and is sent
-    /// as a clipboard item, so it lands on the other computer's clipboard. Nothing is saved
-    /// to the Desktop and nothing touches this clipboard. Escape in the picker sends nothing.
+    /// The Snip / Screen / Window tools: a screenshot onto THIS computer's clipboard,
+    /// exactly like ⌃⇧⌘4 / ⌃⇧⌘3. Nothing is sent anywhere and nothing is saved; sending
+    /// is a separate act (Paste on the Send card, or "Paste to other" in Tools). Escape
+    /// in the picker takes nothing.
     func screenshot(_ mode: ShotMode) {
-        guard !devices.isEmpty else { return }
-        let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Pulse Clipboard", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let stamp = Int(Date().timeIntervalSince1970)
-        let file = folder.appendingPathComponent("Screenshot \(stamp).png")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        var arguments = ["-x", "-t", "png"]
+        var arguments = ["-c", "-x"]
         switch mode {
         case .snip: arguments += ["-i", "-s"]
         case .window: arguments += ["-i", "-w"]
         case .screen: arguments += ["-D", "1"]
         }
-        process.arguments = arguments + [file.path]
+        process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         process.terminationHandler = { _ in
-            Task { @MainActor in
-                let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
-                guard size > 0 else { return }  // cancelled in the picker
-                self.send(urls: [file], clipboard: true)
-            }
+            Task { @MainActor in self.onChange?() }  // Paste lights up
         }
         do {
             try process.run()
