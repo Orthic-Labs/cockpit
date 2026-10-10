@@ -578,7 +578,11 @@ fn state_json(hooks: &Hooks) -> String {
         // The hub names its paper-plane icon "send"; the notch's own glyph key is "Snd".
         esc(
             &mut out,
-            if *cell == Cell::Send { "send" } else { cell.glyph() },
+            if *cell == Cell::Send {
+                "send"
+            } else {
+                cell.glyph()
+            },
         );
         out.push_str(&format!(
             ",\"connected\":{},\"order\":{order}}}",
@@ -957,11 +961,7 @@ fn apply_connect(s: &mut PillSettings, command: &Command) -> bool {
     let (Some(wanted), Arg::Bool(on)) = (command.provider.as_deref(), &command.value) else {
         return false;
     };
-    let Some(id) = GAUGES
-        .iter()
-        .map(|(id, _, _)| *id)
-        .find(|id| *id == wanted)
-    else {
+    let Some(id) = GAUGES.iter().map(|(id, _, _)| *id).find(|id| *id == wanted) else {
         return false;
     };
     s.hidden_providers.retain(|hidden| hidden != id);

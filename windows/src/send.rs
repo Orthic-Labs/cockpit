@@ -916,7 +916,10 @@ impl Model {
                 self.clear_card();
             }
         }
-        if self.complete_until.is_some_and(|until| Instant::now() >= until) {
+        if self
+            .complete_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
             self.complete_until = None;
         }
         self.watch_hub();
@@ -1603,7 +1606,10 @@ impl Model {
 
     fn ring(&self) -> Ring {
         let live = self.fresh();
-        if self.complete_until.is_some_and(|until| Instant::now() < until) {
+        if self
+            .complete_until
+            .is_some_and(|until| Instant::now() < until)
+        {
             return Ring {
                 fraction: Some(1.0),
                 active: true,

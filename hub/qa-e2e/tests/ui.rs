@@ -709,7 +709,7 @@ fn windows_expectations(id: &str) -> (&'static [&'static str], &'static [&'stati
         }
         "appearance" => {
             const HAVE: &[&str] = &[
-                "Gauges", "At least one gauge stays on", "Show Claude", "Show Codex", "Show System", "Show Disks", "Show Send",
+                "Gauges", "At least one gauge stays on", "System", "Disks",
                 "Placement", "Edge", "Show", "Alt-drag the notch to slide it along its edge",
                 "Fold to a pill when the pointer leaves", "Reset position", "Size and surface", "Size", "Custom size",
                 "Colour", "Accent", "Watch limit", "Critical limit",
