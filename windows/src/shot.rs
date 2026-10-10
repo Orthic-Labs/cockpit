@@ -39,7 +39,8 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::GlobalFree;
 use windows::Win32::Foundation::{
-    COLORREF, E_FAIL, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
+    COLORREF, E_FAIL, GENERIC_READ, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
+    WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmFlush, DwmGetWindowAttribute,
@@ -52,6 +53,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppBGRA,
     IWICBitmapFrameEncode, IWICImagingFactory, WICBitmapEncoderNoCache,
+    WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::StructuredStorage::IPropertyBag2;
 use windows::Win32::System::Com::{
@@ -1239,6 +1241,56 @@ fn encode_png(shot: &mut Surface, path: &Path) -> Result<(), Error> {
         encoder.Commit()?;
     }
     Ok(())
+}
+
+/// Writes the picture file `source` (a clipboard `.bmp`) again as a PNG at `target`. False
+/// when it could not be read or written; a partial `target` is removed.
+pub fn reencode_png(source: &Path, target: &Path) -> bool {
+    let wide = |path: &Path| -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let (from, to) = (wide(source), wide(target));
+    // SAFETY: COM is initialised on this thread (the notch's UI thread); every interface is
+    // released on drop and both names outlive the calls.
+    let written = unsafe {
+        (|| -> Result<(), Error> {
+            let factory: IWICImagingFactory = CoCreateInstance(
+                &CLSID_WICImagingFactory,
+                None::<&IUnknown>,
+                CLSCTX_INPROC_SERVER,
+            )?;
+            let decoder = factory.CreateDecoderFromFilename(
+                PCWSTR(from.as_ptr()),
+                None,
+                GENERIC_READ,
+                WICDecodeMetadataCacheOnDemand,
+            )?;
+            let picture = decoder.GetFrame(0)?;
+            let stream = factory.CreateStream()?;
+            stream.InitializeFromFilename(PCWSTR(to.as_ptr()), 0x4000_0000)?; // GENERIC_WRITE
+            let istream: IStream = stream.cast()?;
+            let encoder = factory.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null())?;
+            encoder.Initialize(&istream, WICBitmapEncoderNoCache)?;
+            let mut frame: Option<IWICBitmapFrameEncode> = None;
+            encoder.CreateNewFrame(&mut frame, std::ptr::null_mut())?;
+            let frame = frame.ok_or_else(|| Error::from(E_FAIL))?;
+            frame.Initialize(None::<&IPropertyBag2>)?;
+            frame.WriteSource(&picture, std::ptr::null())?;
+            frame.Commit()?;
+            encoder.Commit()
+        })()
+    };
+    match written {
+        Ok(()) => true,
+        Err(error) => {
+            diag::win32_error("WicReencodePng", &error, "clipboard_png");
+            let _ = fs::remove_file(target);
+            false
+        }
+    }
 }
 
 fn open_clipboard(owner: HWND) -> bool {

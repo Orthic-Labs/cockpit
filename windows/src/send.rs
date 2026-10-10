@@ -720,6 +720,8 @@ impl Last {
 struct Pending {
     paths: Vec<PathBuf>,
     text: Option<String>,
+    /// Came from the clipboard (Paste): the receiver puts it on its clipboard.
+    clipboard: bool,
 }
 
 struct Model {
@@ -1117,7 +1119,7 @@ impl Model {
 
     // -- sending
 
-    fn send(&mut self, paths: Vec<PathBuf>, text: Option<String>) {
+    fn send(&mut self, paths: Vec<PathBuf>, text: Option<String>, clipboard: bool) {
         let files: Vec<PathBuf> = paths.into_iter().filter(|p| p.exists()).collect();
         if files.is_empty() && text.as_deref().unwrap_or("").is_empty() {
             return;
@@ -1132,17 +1134,27 @@ impl Model {
             return;
         }
         match self.target() {
-            Some(device) => self.deliver(files, text, &device),
+            Some(device) => self.deliver(files, text, clipboard, &device),
             None => {
                 // Several devices, or none yet: list them on a card (looking again when there
                 // are none) and send when one is clicked, so nothing goes to a device by habit.
-                self.pending = Some(Pending { paths: files, text });
+                self.pending = Some(Pending {
+                    paths: files,
+                    text,
+                    clipboard,
+                });
                 self.show_choose();
             }
         }
     }
 
-    fn deliver(&mut self, paths: Vec<PathBuf>, text: Option<String>, device: &Device) {
+    fn deliver(
+        &mut self,
+        paths: Vec<PathBuf>,
+        text: Option<String>,
+        clipboard: bool,
+        device: &Device,
+    ) {
         let list: Vec<String> = paths
             .iter()
             .map(|p| json_text(&p.to_string_lossy()))
@@ -1154,6 +1166,9 @@ impl Model {
         );
         if let Some(text) = text.as_deref().filter(|t| !t.is_empty()) {
             body.push_str(&format!(",\"text\":{}", json_text(text)));
+        }
+        if clipboard {
+            body.push_str(",\"clipboard\":true");
         }
         body.push('}');
         write_command(&body);
@@ -1480,7 +1495,7 @@ impl Model {
             .into_iter()
             .find(|d| d.fingerprint == fingerprint);
         if let (Some(waiting), Some(device)) = (self.pending.take(), device) {
-            self.deliver(waiting.paths, waiting.text, &device);
+            self.deliver(waiting.paths, waiting.text, waiting.clipboard, &device);
         }
     }
 
@@ -2031,9 +2046,9 @@ pub fn scroll_choose(steps: i32) -> bool {
 /// text goes to the only device nearby, or to the one picked on the card that appears.
 pub fn paste_clipboard() {
     match sys::read_clipboard() {
-        sys::Clip::Files(paths) => model().send(paths, None),
-        sys::Clip::Image(path) => model().send(vec![path], None),
-        sys::Clip::Text(text) => model().send(Vec::new(), Some(text)),
+        sys::Clip::Files(paths) => model().send(paths, None, true),
+        sys::Clip::Image(path) => model().send(vec![as_png(path)], None, true),
+        sys::Clip::Text(text) => model().send(Vec::new(), Some(text), true),
         sys::Clip::Empty => model().show_note(
             "Nothing to send",
             "The clipboard has no files or text.",
@@ -2041,6 +2056,24 @@ pub fn paste_clipboard() {
         ),
     }
     notify();
+}
+
+/// A clipboard picture saved as `.bmp` (the app offered no PNG) written again as PNG, a
+/// fraction of the size; the `.bmp` itself when that fails.
+fn as_png(path: PathBuf) -> PathBuf {
+    if !path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("bmp"))
+    {
+        return path;
+    }
+    let png = path.with_extension("png");
+    if crate::shot::reencode_png(&path, &png) {
+        let _ = std::fs::remove_file(&path);
+        png
+    } else {
+        path
+    }
 }
 
 /// The "Copy last" row: the last message, or the last saved files, back on the clipboard.
@@ -2075,7 +2108,7 @@ pub fn drop_files(paths: Vec<PathBuf>) -> bool {
     {
         let mut model = model();
         model.drop_targeting = false;
-        model.send(paths, None);
+        model.send(paths, None, false);
     }
     notify();
     true
