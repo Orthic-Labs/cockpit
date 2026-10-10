@@ -108,11 +108,7 @@ fn running_now() -> Vec<OpenChat> {
 }
 
 /// Notes the chats running now and forgets ones not seen for a day. Returns what is kept.
-pub fn remember(
-    file: &Path,
-    root: Option<&Path>,
-    now_ms: u64,
-) -> Result<Vec<OpenChat>, SyncError> {
+pub fn remember(file: &Path, root: Option<&Path>, now_ms: u64) -> Result<Vec<OpenChat>, SyncError> {
     let mut remembered = load(file);
     let account = root.and_then(sync::read_active_account);
     for mut chat in running_now() {
