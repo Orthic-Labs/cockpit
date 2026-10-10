@@ -2,7 +2,7 @@ import { Children, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Badge, Button, ConfirmDialog, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
-import { ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Cpu, HardDrive, MemoryStick, Pencil, Send as SendIcon, Wrench, X } from "lucide-react";
 import { LauncherLists, type LauncherConfig } from "./LauncherSettings";
 import { LocalNetworkRow, NearbyGroup } from "./NearbySettings";
 import { isWindows, tone } from "../api";
@@ -102,6 +102,8 @@ export interface NotchState {
   options: Record<string, string[]>;
   displays: { id: string; name: string }[];
   accounts: Account[];
+  /** Every notch cell in the notch's order; absent from a notch that has no Gauges group yet. */
+  gauges?: Gauge[];
   providerOrder: string[];
   launcherStatus?: string | null;
   helper?: "notRegistered" | "needsReenable" | "requiresApproval" | "enabled" | "notFound";
@@ -144,6 +146,19 @@ export interface Permission {
   why: string;
   status: "granted" | "needsApproval" | "off" | "unknown";
   required: boolean;
+  /** The features that need this permission, from what is switched on now (Mac notch only). */
+  needs?: string[];
+}
+
+/** One notch cell the Gauges group can turn on or off (the Mac notch's `gauges`). */
+export interface Gauge {
+  id: string;
+  name: string;
+  /** The notch's glyph for the cell (cpu, memory, disk, send, tools, claude, openai, ...). */
+  glyph: string;
+  connected: boolean;
+  /** Position in the notch's provider order, from 0. */
+  order: number;
 }
 
 type Send = (command: Record<string, unknown>) => void;
@@ -244,8 +259,7 @@ export function Settings({ section, notch, onNavigate }: {
         <Group title="Permissions">
           {state.permissions ? <PermissionLead permissions={state.permissions} /> : null}
           {!state.permissions ? <div className="ck-set ck-sub" role="status">Waiting for permission status from Pulse notch…</div> : (
-            <PermissionRows permissions={state.permissions} errors={state.permissionErrors} send={send}
-              nearbyOn={s.nearbyEnabled !== false} />
+            <PermissionRows permissions={state.permissions} errors={state.permissionErrors} send={send} />
           )}
         </Group>
       )}
@@ -254,6 +268,7 @@ export function Settings({ section, notch, onNavigate }: {
 
       {section === "appearance" && (
         <>
+          {state.gauges && state.gauges.length > 0 && <GaugesGroup gauges={state.gauges} send={send} />}
           <Group title="Placement">
             {choice("notchEdge", "Edge")}
             {(state.options.notchEdge ?? []).length > 0 && (
@@ -779,6 +794,39 @@ function ClaudeAccountList({ accounts, send }: { accounts: ClaudeAccount[]; send
   );
 }
 
+const GAUGE_ICONS: Record<string, { Icon: typeof Cpu; text: string }> = {
+  cpu: { Icon: Cpu, text: "Processor chip" },
+  memory: { Icon: MemoryStick, text: "Memory module" },
+  disk: { Icon: HardDrive, text: "Drive" },
+  send: { Icon: SendIcon, text: "Paper plane" },
+  tools: { Icon: Wrench, text: "Wrench" },
+};
+const GAUGE_MARKS: Record<string, string> = { claude: "Claude mark", openai: "OpenAI mark" };
+
+/**
+ * Every notch cell, in the notch's order, each with its own switch. The notch keeps at
+ * least one cell on, so the last one that is on cannot be turned off.
+ */
+function GaugesGroup({ gauges, send }: { gauges: Gauge[]; send: Send }) {
+  const rows = [...gauges].sort((a, b) => a.order - b.order);
+  const on = rows.filter((g) => g.connected).length;
+  return (
+    <Group title="Gauges">
+      {rows.map((g) => {
+        const icon = GAUGE_ICONS[g.glyph];
+        return (
+          <Row key={g.id} label={g.name} note={icon?.text ?? GAUGE_MARKS[g.glyph] ?? g.glyph}>
+            {icon && <icon.Icon size={16} strokeWidth={1.75} aria-hidden="true" />}
+            <Toggle checked={g.connected} disabled={g.connected && on <= 1}
+              onChange={(v) => send({ command: "connect", provider: g.id, value: v })} label={`Show ${g.name}`} />
+          </Row>
+        );
+      })}
+      <div className="ck-sub ck-foot">At least one gauge stays on. Order is set on the Accounts page.</div>
+    </Group>
+  );
+}
+
 function Accounts({ state, send }: { state: NotchState; send: Send }) {
   const order = state.providerOrder;
   const rank = (id: string) => {
@@ -801,7 +849,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
           <div className="ck-text">
             <div className="ck-account-name">
               <strong>{a.name}</strong>
-              <span className={`ck-status ck-status-${a.connected ? "granted" : "off"}`}>{a.connected ? "Shown" : "Hidden"}</span>
+              {!state.gauges && <span className={`ck-status ck-status-${a.connected ? "granted" : "off"}`}>{a.connected ? "Shown" : "Hidden"}</span>}
               {a.refusedAccess && <Badge tone="warn">Access refused</Badge>}
               {a.needsRenewal && <Badge tone="warn">Sign-in needed</Badge>}
             </div>
@@ -826,7 +874,9 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
               <button type="button" className="ck-mini" disabled={i === accounts.length - 1} onClick={() => move(a.id, 1)}
                 aria-label={`Move ${a.name} down`} title="Move down"><ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" /></button>
             </span>
-            <Toggle checked={a.connected} onChange={(v) => send({ command: "connect", provider: a.id, value: v })} label={`Show ${a.name}`} />
+            {!state.gauges && (
+              <Toggle checked={a.connected} onChange={(v) => send({ command: "connect", provider: a.id, value: v })} label={`Show ${a.name}`} />
+            )}
           </div>
           {a.claudeAccounts && a.claudeAccounts.length > 0 && (
             <ClaudeAccountList accounts={a.claudeAccounts} send={send} />
@@ -927,11 +977,10 @@ function PermissionLead({ permissions }: { permissions: Permission[] }) {
  * Permission rows from the notch. The hub runs as the notch's child process, so
  * the notch's Full Disk Access covers it; the hub's own probe only confirms.
  */
-function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
+function PermissionRows({ permissions, errors, send }: {
   permissions: Permission[];
   errors?: Record<string, string>;
   send: Send;
-  nearbyOn?: boolean;
 }) {
   const hub = useHubFullDiskAccess();
   return (
@@ -960,11 +1009,15 @@ function PermissionRows({ permissions, errors, send, nearbyOn = true }: {
                 </Button>
               </span>
             </Row>
+            {permission.needs && (
+              <div className="ck-sub ck-foot ck-needs">
+                {permission.needs.length > 0 ? `Needed for: ${permission.needs.join(" \u00b7 ")}` : "Not needed by anything you have on"}
+              </div>
+            )}
             {errors?.[permission.id] && <div className="error ck-foot" role="alert">{errors[permission.id]}</div>}
           </div>
         );
       })}
-      <LocalNetworkRow enabled={nearbyOn} />
       <StaleGrants />
     </>
   );

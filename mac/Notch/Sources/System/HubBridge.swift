@@ -212,6 +212,7 @@ final class HubBridge {
             "displays": displays,
             "accounts": accounts,
             "providerOrder": preferences.providerOrder,
+            "gauges": gauges(),
             "conveniences": actions.conveniences(),
             "launcherStatus": actions.launcherStatus() ?? NSNull(),
             "helper": PrivilegedHelper.state,
@@ -230,6 +231,27 @@ final class HubBridge {
         try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
         DarwinNotify.post(Self.stateNotification)
+    }
+
+    /// What the hub's Gauges group lists: one row per notch cell, in the notch's order.
+    private static let gaugeNames = [
+        SystemProviders.cpuID: "CPU", SystemProviders.memoryID: "Memory",
+        SystemProviders.disksID: "Disks", SystemProviders.sendID: "Send",
+        SystemProviders.toolsID: "Tools",
+    ]
+
+    private func gauges() -> [[String: Any]] {
+        store.providerSummaries.enumerated().map { index, summary in
+            ["id": summary.id,
+             "name": Self.gaugeNames[summary.id] ?? summary.name,
+             "glyph": summary.glyph.rawValue,
+             "connected": preferences.isConnected(summary.id),
+             "order": index]
+        }
+    }
+
+    private func connectedGaugeCount() -> Int {
+        store.providerSummaries.filter { preferences.isConnected($0.id) }.count
     }
 
     // MARK: - Commands in
@@ -263,7 +285,11 @@ final class HubBridge {
                 Self.table[key]?.set(preferences, command["value"])
             }
         case "connect":
-            if let provider, let on = command["value"] as? Bool { preferences.setConnected(on, for: provider) }
+            if let provider, let on = command["value"] as? Bool {
+                // The notch always keeps one cell: the last one on cannot be turned off.
+                if !on, preferences.isConnected(provider), connectedGaugeCount() <= 1 { break }
+                preferences.setConnected(on, for: provider)
+            }
         case "order":
             if let ids = command["value"] as? [String] { preferences.setProviderOrder(ids) }
         case "signIn":

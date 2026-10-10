@@ -61,9 +61,9 @@ static SECTIONS: [Section; 10] = [
     Section { id: "cleanup", title: "Cleanup", settings: false, expect: "", also: &[], switches: false },
     Section { id: "monitor", title: "Monitor", settings: false, expect: "", also: &[], switches: false },
     Section { id: "apps", title: "Apps", settings: false, expect: "", also: &[], switches: false },
-    Section { id: "permissions", title: "Permissions", settings: true, expect: "Accessibility", also: &[], switches: false },
+    Section { id: "permissions", title: "Permissions", settings: true, expect: "Accessibility", also: &["Needed for: Window shortcuts \u{b7} Middle-click tool wheel", "Not needed by anything you have on"], switches: false },
     Section { id: "accounts", title: "Accounts", settings: true, expect: "codex@example.test", also: &[], switches: true },
-    Section { id: "appearance", title: "Appearance", settings: true, expect: "Fold for full-screen apps", also: &[], switches: true },
+    Section { id: "appearance", title: "Appearance", settings: true, expect: "Fold for full-screen apps", also: &["Gauges", "Memory"], switches: true },
     Section { id: "notifications", title: "Notifications", settings: true, expect: "When a session finishes", also: &[], switches: true },
     // Nearby sharing lives inside General on the hub.
     Section { id: "general", title: "General", settings: true, expect: "Open Pulse at login", also: &["Nearby sharing", "Send and receive files nearby"], switches: true },
@@ -315,6 +315,16 @@ fn notch_fixture() -> Value {
             },
         ],
         "providerOrder": ["codex", "claude"],
+        // The Gauges group on Appearance: every notch cell in the notch's order (Claude is off).
+        "gauges": [
+            {"id": "codex", "name": "Codex", "glyph": "openai", "connected": true, "order": 0},
+            {"id": "claude", "name": "Claude", "glyph": "claude", "connected": false, "order": 1},
+            {"id": "system-cpu", "name": "CPU", "glyph": "cpu", "connected": true, "order": 2},
+            {"id": "system-memory", "name": "Memory", "glyph": "memory", "connected": true, "order": 3},
+            {"id": "system-disks", "name": "Disks", "glyph": "disk", "connected": true, "order": 4},
+            {"id": "system-send", "name": "Send", "glyph": "send", "connected": true, "order": 5},
+            {"id": "system-tools", "name": "Tools", "glyph": "tools", "connected": true, "order": 6},
+        ],
         "conveniences": {
             "accessibility": true, "inputMonitoring": true, "wanted": false, "fnStatus": "off",
             "fnDetail": "", "active": false, "runningApps": [], "autoQuitApps": [], "cutPasteResults": [],
@@ -324,9 +334,9 @@ fn notch_fixture() -> Value {
         "helper": "notRegistered",
         "helperError": null,
         "permissions": [
-            {"id": "accessibility", "title": "Accessibility", "why": "Lets Pulse move windows and read shortcuts.", "status": "granted", "required": true},
-            {"id": "automation", "title": "Automation", "why": "Lets Pulse ask Finder to move files.", "status": "needsApproval", "required": false},
-            {"id": "login", "title": "Open at login", "why": "Starts Pulse when you sign in.", "status": "off", "required": false},
+            {"id": "accessibility", "title": "Accessibility", "why": "Lets Pulse move windows and read shortcuts.", "status": "granted", "required": true, "needs": ["Window shortcuts", "Middle-click tool wheel"]},
+            {"id": "automation", "title": "Automation", "why": "Lets Pulse ask Finder to move files.", "status": "needsApproval", "required": false, "needs": []},
+            {"id": "login", "title": "Open at login", "why": "Starts Pulse when you sign in.", "status": "off", "required": false, "needs": []},
         ],
         "permissionErrors": {},
         "driveAlertID": null,

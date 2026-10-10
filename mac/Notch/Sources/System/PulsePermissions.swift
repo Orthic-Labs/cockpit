@@ -16,10 +16,12 @@ final class PulsePermissions {
         let why: String
         var status: Status
         let required: Bool
+        /// The features that need this permission, from what is switched on now.
+        var needs: [String] = []
 
         var snapshot: [String: Any] {
             ["id": id, "title": title, "why": why,
-             "status": status.rawValue, "required": required]
+             "status": status.rawValue, "required": required, "needs": needs]
         }
     }
 
@@ -38,40 +40,71 @@ final class PulsePermissions {
     func refresh() {
         guard !refreshing else { refreshAgain = true; return }
         let helper = PrivilegedHelper.state
-        let accessibilityRequired = preferences.convFnCommand || preferences.convFinderCutPaste
-            || preferences.convWindowMaximizer || preferences.convDockClickMinimize || preferences.convAutoQuit
+        // Each permission lists the features that need it, from what is on now.
+        let sendOn = preferences.nearbyEnabled && preferences.isConnected(SystemProviders.sendID)
+        let toolsOn = preferences.isConnected(SystemProviders.toolsID)
+        var accessibilityNeeds: [String] = []
+        if sendOn { accessibilityNeeds.append("⌘V sends the clipboard from the Send card") }
+        if preferences.convWindowMaximizer { accessibilityNeeds.append("Window shortcuts") }
+        if preferences.convFnCommand { accessibilityNeeds.append("Fn key command") }
+        if preferences.convFinderCutPaste { accessibilityNeeds.append("Finder cut & paste") }
+        if preferences.convDockClickMinimize { accessibilityNeeds.append("Dock click minimizes") }
+        if preferences.convAutoQuit { accessibilityNeeds.append("Auto Quit") }
+        if preferences.toolWheelEnabled { accessibilityNeeds.append("Middle-click tool wheel") }
+        // The launcher's hotkey needs no permission; pasting into the front app does.
+        if preferences.launcherEnabled { accessibilityNeeds.append("Launcher: pasting a snippet or clipboard item into the front app") }
+        let accessibilityRequired = !accessibilityNeeds.isEmpty
         // Cut and paste uses Finder's own Copy and Move Item Here keys, so no
         // Apple Events (Automation of Finder) are needed any more.
         let finderRequired = false
+        let screenNeeds = toolsOn ? ["Snip, Screen and Window screenshots in Tools"] : []
+        let screenGranted = CGPreflightScreenCaptureAccess()
+        let networkNeeds = preferences.nearbyEnabled ? ["Nearby sharing: finding devices and sending"] : []
+        let networkState = NearbySharing.shared.localNetworkState
+        let loginNeeds = preferences.launchAtLogin ? ["Pulse starts when you sign in"] : []
         var rows = [
             Entry(id: "helper", title: "Background helper",
-                  why: "Moves root-owned apps to Trash without an administrator password.",
+                  why: "Lets Pulse move apps owned by root to the Trash without asking for an administrator password each time.",
                   status: helper == "enabled" ? .granted
                     : helper == "requiresApproval" || helper == "needsReenable" ? .needsApproval
                     : helper == "notRegistered" ? .off : .unknown,
-                  required: helper == "needsReenable" || helper == "requiresApproval" || helper == "enabled"),
+                  required: helper == "needsReenable" || helper == "requiresApproval" || helper == "enabled",
+                  needs: ["Uninstalling root-owned apps without a password"]),
             Entry(id: "accessibility", title: "Accessibility",
-                  why: "Lets enabled keyboard & window conveniences respond to your input.",
+                  why: "Lets Pulse watch the keyboard, mouse and Dock, and press keys and move windows for you, in the features listed below.",
                   status: AXIsProcessTrusted() ? .granted : accessibilityRequired ? .needsApproval : .off,
-                  required: accessibilityRequired),
+                  required: accessibilityRequired, needs: accessibilityNeeds),
+            Entry(id: "screenRecording", title: "Screen Recording",
+                  why: "Lets the Snip, Screen and Window tools capture what is on your screen. Pulse keeps nothing it captures unless you save it.",
+                  status: screenGranted ? .granted : screenNeeds.isEmpty ? .off : .needsApproval,
+                  required: !screenNeeds.isEmpty, needs: screenNeeds),
             Entry(id: "fullDiskAccess", title: "Full Disk Access",
-                  why: "Lets Pulse read protected folders during disk scans.",
+                  why: "Lets the Storage scan open folders macOS protects, which would otherwise show as empty or unreadable.",
                   status: entries.first { $0.id == "fullDiskAccess" }?.status ?? .unknown,
-                  required: false),
+                  required: false,
+                  needs: ["Storage scans of protected folders (Mail, Messages, Safari, Photos)"]),
             Entry(id: "finderMenu", title: "Finder menu",
                   why: "Adds Cut, Copy Path and Open in Terminal to Finder's right-click menu. Optional.",
                   status: entries.first { $0.id == "finderMenu" }?.status ?? .unknown,
-                  required: false),
+                  required: false,
+                  needs: preferences.convFinderCutPaste ? ["Cut, Copy Path, Open in Terminal in Finder's menu"] : []),
+            Entry(id: "localNetwork", title: "Local network",
+                  why: "Lets Pulse find computers on your network and send files to them. macOS asks the first time a device connects.",
+                  status: networkNeeds.isEmpty ? .off
+                    : networkState == "granted" ? .granted
+                    : networkState == "blocked" ? .needsApproval : .unknown,
+                  required: !networkNeeds.isEmpty, needs: networkNeeds),
         ]
         if finderRequired {
             rows.append(Entry(id: "automation", title: "Automation of Finder",
                               why: "Reads Finder selections & destination folders for Cut & Paste.",
                               status: entries.first { $0.id == "automation" }?.status ?? .unknown,
-                              required: true))
+                              required: true, needs: ["Finder cut & paste"]))
         }
         rows.append(Entry(id: "login", title: "Launch at login",
-                          why: "Starts Pulse automatically when you sign in to your Mac.",
-                          status: Self.serviceStatus(SMAppService.mainApp.status), required: false))
+                          why: "Starts Pulse automatically each time you sign in to your Mac.",
+                          status: Self.serviceStatus(SMAppService.mainApp.status), required: !loginNeeds.isEmpty,
+                          needs: loginNeeds))
         update(rows)
         refreshing = true
         // File access & Apple Events can block. Neither silent probe runs on
@@ -110,6 +143,11 @@ final class PulsePermissions {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
             Self.openPrivacyPane("Privacy_Accessibility")
+        case "screenRecording":
+            _ = CGRequestScreenCaptureAccess()
+            Self.openPrivacyPane("Privacy_ScreenCapture")
+        case "localNetwork":
+            Self.openPrivacyPane("Privacy_LocalNetwork")
         case "fullDiskAccess":
             Self.openPrivacyPane("Privacy_AllFiles")
             Self.revealHubApp()

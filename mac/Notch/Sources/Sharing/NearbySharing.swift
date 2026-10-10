@@ -136,6 +136,8 @@ final class NearbySharing {
 
     private(set) var dropTargeting = false
     private var state: ShareState?
+    /// What the hub last reported for macOS Local Network access: granted, blocked or unknown.
+    var localNetworkState: String? { fresh(state)?.localNetwork }
     private var started = false
     private var watchdog: Timer?
     /// Ends the Send ring's pulse after a bridge message (`bridgeActivity`).
