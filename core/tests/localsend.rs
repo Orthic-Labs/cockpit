@@ -21,7 +21,6 @@ fn start(port: u16, save: &Path, state: &Path) -> Arc<Service> {
         alias: "Test Mac (Pulse)".into(),
         port,
         save_dir: save.to_path_buf(),
-        accept_known: false,
         state_dir: state.to_path_buf(),
         device_model: "Mac".into(),
     };

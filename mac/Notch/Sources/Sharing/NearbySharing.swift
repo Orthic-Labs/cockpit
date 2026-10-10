@@ -10,6 +10,28 @@ struct ShareDevice: Decodable, Equatable {
     let deviceType: String?
     let deviceModel: String?
     let ip: String?
+    /// "allow", "ask" or "deny" as the hub resolved it; absent from an older hub, which counts
+    /// as ask.
+    let state: String?
+
+    /// A device the owner has denied is neither offered as a target nor sent to.
+    var canSend: Bool { state != "deny" }
+}
+
+/// `trust` in share-state.json: how new devices start, and one record per device seen.
+struct ShareTrust: Decodable, Equatable {
+    var defaultState: String
+    var devices: [ShareTrustDevice]
+}
+
+struct ShareTrustDevice: Decodable, Equatable {
+    var fingerprint: String
+    var label: String
+    var alias: String
+    var state: String
+    var present: Bool
+    var verified: Bool
+    var refused: Int
 }
 
 struct ShareIncomingFile: Decodable, Equatable {
@@ -25,6 +47,8 @@ struct ShareIncoming: Decodable, Equatable {
     let isMessage: Bool
     let preview: String?
     let files: [ShareIncomingFile]?
+    /// The sender proved the key behind its fingerprint; absent from an older hub.
+    let verified: Bool?
 }
 
 struct ShareTransfer: Decodable, Equatable {
@@ -107,6 +131,8 @@ struct ShareState: Decodable, Equatable {
     var updatedAt: Double
     /// The agent bridge, when the hub runs one.
     var bridge: ShareBridge?
+    /// Device trust (Allow / Ask / Deny); absent from an older hub.
+    var trust: ShareTrust?
 }
 
 /// Pulse fork: the notch's side of nearby sharing (the LocalSend protocol).
@@ -305,7 +331,8 @@ final class NearbySharing {
 
     // MARK: - Devices and the target
 
-    var devices: [ShareDevice] { fresh(state)?.devices ?? [] }
+    /// Devices a send can go to: nearby and not denied.
+    var devices: [ShareDevice] { (fresh(state)?.devices ?? []).filter(\.canSend) }
 
     /// Where a paste or drop goes without asking: the only device nearby. With
     /// several, every send asks, so nothing goes to a device by habit.
@@ -341,7 +368,7 @@ final class NearbySharing {
             // Several devices, or none yet: list them on the card (looking again
             // when there are none) and send when one is clicked.
             pending = (files, text, clipboard)
-            showChoose(refreshing: live.devices.isEmpty)
+            showChoose(refreshing: devices.isEmpty)
             return
         }
         deliver(files, text, clipboard: clipboard, to: device)
@@ -571,7 +598,7 @@ final class NearbySharing {
     /// then the devices nearby, then a hint.
     func providerSnapshot() -> ProviderSnapshot {
         let live = fresh(state)
-        let devices = live?.devices ?? []
+        let devices = self.devices
         let active = live?.transfers.last(where: \.isOpen)
         let headline: LimitWindow
         if let transfer = active {
@@ -869,8 +896,9 @@ final class NearbySharing {
         let title: String
         var detail: String
         if request.isMessage {
+            // The text itself is not shown until it is accepted.
             title = L10n.t("\(request.from) wants to send a message")
-            detail = request.preview ?? ""
+            detail = ""
         } else {
             let total = size(request.totalBytes)
             title = request.fileCount == 1
@@ -878,9 +906,15 @@ final class NearbySharing {
                 : L10n.t("\(request.from) wants to send \(request.fileCount) files (\(total))")
             detail = request.files?.first?.name ?? ""
         }
-        let place = URL(fileURLWithPath: folder ?? defaultFolder).lastPathComponent
-        if !detail.isEmpty { detail += " · " }
-        detail += L10n.t("Saves to \(place)")
+        if !request.isMessage {
+            let place = URL(fileURLWithPath: folder ?? defaultFolder).lastPathComponent
+            if !detail.isEmpty { detail += " · " }
+            detail += L10n.t("Saves to \(place)")
+        }
+        if request.verified == false {
+            if !detail.isEmpty { detail += " · " }
+            detail += L10n.t("Couldn't confirm who this is")
+        }
         cardTimer?.invalidate()
         show(DiskImagePrompt(iconPath: iconPath(folder), title: title, detail: detail, style: .ask,
                              primary: .init(choice: .install, label: L10n.t("Accept")),
@@ -1026,7 +1060,7 @@ final class NearbySharing {
 
     private func choosePrompt() -> DiskImagePrompt {
         let live = fresh(state)
-        let list = live?.devices ?? []
+        let list = devices
         let rows = list.map {
             SendCardContent.Row(id: $0.fingerprint, alias: $0.alias,
                                 model: $0.deviceModel ?? kind(of: $0), symbol: symbol(of: $0))
@@ -1043,7 +1077,7 @@ final class NearbySharing {
         lastChoose = prompt
         show(prompt, as: .choose)
         scheduleExpiry(after: 30)
-        if refreshing || fresh(state)?.devices.isEmpty == true { refreshDevices() }
+        if refreshing || devices.isEmpty { refreshDevices() }
     }
 
     /// Devices come and go, and a scan starts and ends, while the card is up.

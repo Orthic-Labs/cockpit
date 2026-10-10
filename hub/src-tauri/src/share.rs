@@ -6,13 +6,16 @@
 //! it is files plus payload-free Darwin notifications, so sharing follows that:
 //!
 //! * settings come from `notch-state.json` (`nearbyEnabled`, `nearbyAlias`,
-//!   `nearbySaveFolder`, `nearbyAcceptKnown`), re-read when the notch posts
+//!   `nearbySaveFolder`), re-read when the notch posts
 //!   `dev.orthic.pulse.notch.state`;
 //! * the notch asks for things (send, accept, decline, cancel) by dropping JSON
 //!   files into `share-commands/` and posting `dev.orthic.pulse.share.command`;
 //!   A `send` command carries `to` (device fingerprint), `paths` (files), `text`
 //!   and an optional `clipboard: true`, which asks the receiving Pulse to put
-//!   what was sent on its clipboard (paste and screenshot sends);
+//!   what was sent on its clipboard (paste and screenshot sends). Device trust
+//!   commands: `trust` (`fingerprint`, `state` allow|ask|deny), `trustLabel`
+//!   (`fingerprint`, `label`), `trustForget` (`fingerprint`) and `trustDefault`
+//!   (`state` ask|deny); the old `nearbyAcceptKnown` setting is ignored;
 //! * the hub publishes `share-state.json` and posts `dev.orthic.pulse.share.state`
 //!   whenever devices, requests or progress change, and every few seconds so the
 //!   notch can tell the hub is alive.
@@ -21,7 +24,7 @@
 //! notifications become named auto-reset events (`Local\dev.orthic.pulse.share.state`
 //! and `...share.command`, created by whichever side comes first), and the
 //! settings are read from the notch's `pill-settings.json` (`nearby_enabled`,
-//! `nearby_alias`, `nearby_save_folder`, `nearby_accept_known`), re-read when its
+//! `nearby_alias`, `nearby_save_folder`), re-read when its
 //! modified time changes. The notch (windows/src/send.rs) is the other end.
 //!
 //! The agent bridge (chats on this computer talking to chats on linked computers,
@@ -33,7 +36,7 @@
 //! `share-incoming-resolved`, `share-progress`, `share-state`.
 
 use pulse_core::bridge::deliver_claude::{self, ReplyHub};
-use pulse_core::localsend::{Config, Event, SendItem, Service};
+use pulse_core::localsend::{Config, Event, SendItem, Service, TrustState};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -311,7 +314,6 @@ fn settings_object() -> Value {
         "nearbyEnabled": file["nearby_enabled"],
         "nearbyAlias": file["nearby_alias"],
         "nearbySaveFolder": file["nearby_save_folder"],
-        "nearbyAcceptKnown": file["nearby_accept_known"],
     })
 }
 
@@ -345,7 +347,6 @@ fn wanted() -> Option<Config> {
         alias,
         port: pulse_core::localsend::proto::PORT,
         save_dir: folder,
-        accept_known: settings["nearbyAcceptKnown"].as_bool() == Some(true),
         state_dir: bridge_dir().join("localsend"),
         device_model: device_model().to_string(),
     })
@@ -399,7 +400,6 @@ fn reconcile() {
         }
         (Some(want), Some(running)) if same(&want, &running) => {
             if let Some(service) = current_service() {
-                service.set_accept_known(want.accept_known);
                 service.set_save_dir(want.save_dir.clone());
             }
             if let Ok(mut r) = RUNNING.lock() {
@@ -599,6 +599,7 @@ fn state_value() -> Value {
         None => json!({
             "devices": [], "incoming": [], "transfers": [], "warnings": [],
             "localNetwork": "unknown", "scanning": false,
+            "trust": {"defaultState": "ask", "devices": []},
         }),
     };
     if let Some(object) = value.as_object_mut() {
@@ -621,6 +622,9 @@ fn state_value() -> Value {
                 item["isMessageN"] = json!(message as u8);
             }
         }
+        if let Some(service) = current_service() {
+            publish_trust(&service, object);
+        }
         object.insert("bridge".into(), agent_bridge::state());
         object.insert("error".into(), error.map(Value::from).unwrap_or(Value::Null));
         object.insert(
@@ -640,6 +644,49 @@ fn state_value() -> Value {
         );
     }
     value
+}
+
+/// Device trust for the notch and the page: `trust` = `{defaultState, devices[]}` with one
+/// entry per device with a record (`present` when it is on the network now), and the
+/// effective `state` on every entry of the nearby `devices` list.
+fn publish_trust(service: &Service, object: &mut serde_json::Map<String, Value>) {
+    let entries = service.devices_trust();
+    let default = service.default_state();
+    let mut present = std::collections::HashSet::new();
+    if let Some(Value::Array(list)) = object.get_mut("devices") {
+        for device in list {
+            let fingerprint = device["fingerprint"].as_str().unwrap_or("").to_ascii_lowercase();
+            let state = entries
+                .iter()
+                .find(|e| e.fingerprint == fingerprint)
+                .map(|e| e.state)
+                .unwrap_or(default);
+            device["state"] = json!(state.as_str());
+            present.insert(fingerprint);
+        }
+    }
+    let devices: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            json!({
+                "fingerprint": e.fingerprint,
+                "label": e.label,
+                "alias": e.alias_seen,
+                "model": e.model,
+                "kind": e.kind,
+                "state": e.state.as_str(),
+                "present": present.contains(&e.fingerprint),
+                "verified": e.verified,
+                "firstSeenMs": e.first_seen_ms,
+                "lastSeenMs": e.last_seen_ms,
+                "refused": e.refused,
+            })
+        })
+        .collect();
+    object.insert(
+        "trust".into(),
+        json!({"defaultState": default.as_str(), "devices": devices}),
+    );
 }
 
 fn write_state() {
@@ -706,6 +753,25 @@ fn apply(command: &Value) {
             service.cancel(id);
         }
         Some("dismiss") => service.dismiss(id),
+        Some("trust") => {
+            if let Some(state) = command["state"].as_str().and_then(TrustState::parse) {
+                let _ = service.set_trust(command["fingerprint"].as_str().unwrap_or(""), state);
+            }
+        }
+        Some("trustLabel") => {
+            let _ = service.set_label(
+                command["fingerprint"].as_str().unwrap_or(""),
+                command["label"].as_str().unwrap_or(""),
+            );
+        }
+        Some("trustForget") => {
+            let _ = service.forget(command["fingerprint"].as_str().unwrap_or(""));
+        }
+        Some("trustDefault") => {
+            if let Some(state) = command["state"].as_str().and_then(TrustState::parse) {
+                let _ = service.set_default_state(state);
+            }
+        }
         Some("refresh") => service.refresh(),
         _ => {}
     }
@@ -827,6 +893,54 @@ pub fn share_dismiss(id: String) {
     if let Some(service) = current_service() {
         service.dismiss(&id);
     }
+}
+
+fn trust_service() -> Result<Arc<Service>, String> {
+    current_service().ok_or_else(|| "Nearby sharing isn't running.".to_string())
+}
+
+/// Publish the change and tell the page, which reloads the state on `share-devices`.
+fn trust_changed() {
+    DIRTY.store(true, Ordering::Relaxed);
+    if let Some(app) = APP.get() {
+        let _ = app.emit("share-devices", Value::Null);
+    }
+}
+
+fn parse_state(state: &str) -> Result<TrustState, String> {
+    TrustState::parse(state).ok_or_else(|| "Choose Allow, Ask or Deny.".to_string())
+}
+
+/// Set a device to "allow", "ask" or "deny".
+#[tauri::command]
+pub fn share_trust_set(fingerprint: String, state: String) -> Result<(), String> {
+    trust_service()?.set_trust(&fingerprint, parse_state(&state)?)?;
+    trust_changed();
+    Ok(())
+}
+
+/// Name a device (empty clears the name).
+#[tauri::command]
+pub fn share_trust_label(fingerprint: String, label: String) -> Result<(), String> {
+    trust_service()?.set_label(&fingerprint, &label)?;
+    trust_changed();
+    Ok(())
+}
+
+/// Forget a device that is not on the network now.
+#[tauri::command]
+pub fn share_trust_forget(fingerprint: String) -> Result<(), String> {
+    trust_service()?.forget(&fingerprint)?;
+    trust_changed();
+    Ok(())
+}
+
+/// How a device seen for the first time starts: "ask" or "deny".
+#[tauri::command]
+pub fn share_trust_default(state: String) -> Result<(), String> {
+    trust_service()?.set_default_state(parse_state(&state)?)?;
+    trust_changed();
+    Ok(())
 }
 
 /// Turn the agent bridge on or off (hub-owned switch, default on).

@@ -10,8 +10,10 @@ pub mod net;
 pub mod proto;
 mod receive;
 pub mod send;
+pub mod trust;
 
 pub use send::{Entry, Peer, SendItem};
+pub use trust::{TrustEntry, TrustState};
 
 use proto::DeviceInfo;
 use serde::{Deserialize, Serialize};
@@ -30,9 +32,7 @@ pub struct Config {
     pub port: u16,
     /// Where received files go.
     pub save_dir: PathBuf,
-    /// Accept without asking from a device the user accepted before.
-    pub accept_known: bool,
-    /// Holds the certificate and the list of known devices.
+    /// Holds the certificate and the device trust list (`nearby_devices.json`).
     pub state_dir: PathBuf,
     pub device_model: String,
 }
@@ -68,10 +68,12 @@ pub struct Incoming {
     pub file_count: usize,
     pub total_bytes: u64,
     pub is_message: bool,
+    /// Always None: a text message is not shown until it is accepted.
     pub preview: Option<String>,
-    /// The first few files, for display.
+    /// The first few files, for display (none for a message).
     pub files: Vec<IncomingFile>,
-    pub known: bool,
+    /// The sender proved it holds the key behind its fingerprint.
+    pub verified: bool,
 }
 
 /// One send or receive, from the first request to the last byte.
@@ -237,7 +239,7 @@ pub(crate) struct Inner {
     pub pending: Mutex<HashMap<String, Arc<Pending>>>,
     pub sessions: Mutex<HashMap<String, Session>>,
     pub cancels: Mutex<HashMap<String, Arc<CancelHandle>>>,
-    pub trusted: Mutex<HashSet<String>>,
+    pub trust: Mutex<trust::TrustStore>,
     pub on_event: Arc<dyn Fn(Event) + Send + Sync>,
     pub last_progress: Mutex<Instant>,
     pub connections: AtomicUsize,
@@ -298,6 +300,13 @@ impl Inner {
         {
             return false;
         }
+        lock(&self.trust).observe(
+            &info.fingerprint.to_ascii_lowercase(),
+            &info.alias,
+            info.device_model.as_deref(),
+            info.device_type.as_deref(),
+            false,
+        );
         let device = Device {
             fingerprint: info.fingerprint.clone(),
             alias: info.alias.clone(),
@@ -359,34 +368,17 @@ impl Inner {
         list
     }
 
-    /// A device the user accepted before, still at the address it was heard at.
-    pub fn is_known(&self, fingerprint: &str, ip: IpAddr) -> bool {
-        if fingerprint.is_empty() || !lock(&self.trusted).contains(fingerprint) {
-            return false;
-        }
-        lock(&self.devices)
-            .iter()
-            .any(|s| s.device.fingerprint == fingerprint && s.device.ip == ip.to_string())
+    /// Whether the device with this fingerprint is announcing itself from `ip`
+    /// right now. All a sender without a client certificate can show.
+    pub fn announced_at(&self, fingerprint: &str, ip: IpAddr) -> bool {
+        !fingerprint.is_empty()
+            && lock(&self.devices)
+                .iter()
+                .any(|s| s.device.fingerprint == fingerprint && s.device.ip == ip.to_string())
     }
 
-    pub fn trust(&self, fingerprint: &str) {
-        if fingerprint.is_empty() {
-            return;
-        }
-        let added = lock(&self.trusted).insert(fingerprint.to_string());
-        if added {
-            self.save_known();
-        }
-    }
-
-    /// Persist the accepted devices.
-    fn save_known(&self) {
-        let mut list: Vec<String> = lock(&self.trusted).iter().cloned().collect();
-        list.sort();
-        let path = self.config().state_dir.join("known-devices.json");
-        if let Ok(text) = serde_json::to_vec(&list) {
-            let _ = write_atomic(&path, &text);
-        }
+    pub fn trust_state(&self, fingerprint: &str) -> TrustState {
+        lock(&self.trust).state_of(fingerprint)
     }
 
     pub fn add_transfer(&self, transfer: Transfer) {
@@ -498,7 +490,8 @@ impl Service {
             .set_nonblocking(true)
             .map_err(|e| format!("Couldn't listen on port {}: {e}", config.port))?;
 
-        let trusted = load_known(&config.state_dir.join("known-devices.json"));
+        net::set_client_identity(&identity);
+        let trust = trust::TrustStore::load(&config.state_dir);
         let me = DeviceInfo {
             alias: config.alias.clone(),
             version: proto::VERSION.to_string(),
@@ -520,7 +513,7 @@ impl Service {
             pending: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
-            trusted: Mutex::new(trusted),
+            trust: Mutex::new(trust),
             on_event,
             last_progress: Mutex::new(Instant::now()),
             connections: AtomicUsize::new(0),
@@ -590,8 +583,83 @@ impl Service {
         self.inner.me.fingerprint.clone()
     }
 
-    pub fn set_accept_known(&self, on: bool) {
-        lock(&self.inner.cfg).accept_known = on;
+    /// Every device with a record, newest sighting first.
+    pub fn devices_trust(&self) -> Vec<TrustEntry> {
+        lock(&self.inner.trust).list()
+    }
+
+    /// What a never-seen device is subject to: Ask or Deny.
+    pub fn default_state(&self) -> TrustState {
+        lock(&self.inner.trust).default_state()
+    }
+
+    /// Set a device to Allow, Ask or Deny. Deny also withdraws what the device
+    /// has pending or in flight.
+    pub fn set_trust(&self, fingerprint: &str, state: TrustState) -> Result<(), String> {
+        lock(&self.inner.trust).set_state(fingerprint, state)?;
+        if state == TrustState::Deny {
+            self.revoke(fingerprint);
+        }
+        self.inner.emit(Event::Changed);
+        Ok(())
+    }
+
+    /// The owner's own name for a device (empty clears it).
+    pub fn set_label(&self, fingerprint: &str, label: &str) -> Result<(), String> {
+        lock(&self.inner.trust).set_label(fingerprint, label)?;
+        self.inner.emit(Event::Changed);
+        Ok(())
+    }
+
+    /// Drop the record of a device that is not on the network now.
+    pub fn forget(&self, fingerprint: &str) -> Result<(), String> {
+        if lock(&self.inner.devices)
+            .iter()
+            .any(|s| s.device.fingerprint == fingerprint)
+        {
+            return Err("That device is nearby now.".to_string());
+        }
+        lock(&self.inner.trust).forget(fingerprint)?;
+        self.inner.emit(Event::Changed);
+        Ok(())
+    }
+
+    /// How devices seen for the first time start: Ask or Deny.
+    pub fn set_default_state(&self, state: TrustState) -> Result<(), String> {
+        lock(&self.inner.trust).set_default(state)?;
+        self.inner.emit(Event::Changed);
+        Ok(())
+    }
+
+    /// Decline this device's waiting requests and cancel its receives in flight.
+    fn revoke(&self, fingerprint: &str) {
+        let waiting: Vec<Arc<Pending>> = lock(&self.inner.pending)
+            .values()
+            .filter(|p| p.incoming.fingerprint == fingerprint)
+            .cloned()
+            .collect();
+        for p in waiting {
+            *lock(&p.decision) = Some(false);
+            p.changed.notify_all();
+        }
+        let ended: Vec<String> = {
+            let mut sessions = lock(&self.inner.sessions);
+            let ids: Vec<String> = sessions
+                .iter()
+                .filter(|(_, s)| s.peer_fingerprint == fingerprint)
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.iter()
+                .filter_map(|id| sessions.remove(id))
+                .map(|session| {
+                    session.cancel.store(true, Ordering::Relaxed);
+                    session.transfer_id
+                })
+                .collect()
+        };
+        for transfer_id in ended {
+            self.inner.end_transfer(&transfer_id, "cancelled", None);
+        }
     }
 
     pub fn set_save_dir(&self, directory: PathBuf) {
@@ -628,6 +696,9 @@ impl Service {
         let device = self
             .find_device(target)
             .ok_or_else(|| "That device is no longer nearby.".to_string())?;
+        if self.inner.trust_state(&device.fingerprint) == TrustState::Deny {
+            return Err("That device is blocked.".to_string());
+        }
         let ip: IpAddr = device
             .ip
             .parse()

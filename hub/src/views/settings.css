@@ -145,3 +145,10 @@
 .ck-settings .ck-chats-status-busy { color: var(--rk-ink); }
 .ck-settings .ck-chats-more { padding-left: 60px; }
 .ck-settings .ck-chats-inbox { grid-column: 2 / -1; font-size: 11px; }
+
+/* Nearby devices: one row per device with a name, a note line and Allow / Ask / Deny. */
+.ck-settings .ck-device { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 48px; padding: 8px 14px; }
+.ck-settings .ck-device .ck-text { flex: 1 1 240px; min-width: 0; }
+.ck-settings .ck-device .ck-ctl { flex-wrap: nowrap; gap: 12px; }
+.ck-settings .ck-device:hover .ck-claude-name svg,
+.ck-settings .ck-device:hover .ck-forget { opacity: 1; }

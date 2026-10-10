@@ -547,7 +547,8 @@ pub fn run() {
             permissions::fda_status, permissions::fda_request, permissions::tcc_stale_scan, permissions::tcc_reset,
             permissions::windows_permissions, permissions::windows_permission_open,
             share::share_state, share::share_devices, share::share_send, share::share_accept, share::share_decline,
-            share::share_cancel, share::share_dismiss, share::open_local_network_settings,
+            share::share_cancel, share::share_dismiss, share::share_trust_set, share::share_trust_label,
+            share::share_trust_forget, share::share_trust_default, share::open_local_network_settings,
             share::bridge_set_enabled, share::bridge_install_skill
         ])
         .run(tauri::generate_context!())

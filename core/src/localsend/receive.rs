@@ -5,7 +5,8 @@
 use super::net::{self, Request, Wire};
 use super::proto::{self, DeviceInfo, FileMeta, PrepareUploadRequest, PrepareUploadResponse};
 use super::{
-    Event, Incoming, IncomingFile, Inner, Pending, Session, SessionFile, Transfer, lock, now_ms,
+    Event, Incoming, IncomingFile, Inner, Pending, Session, SessionFile, Transfer, TrustState,
+    lock, now_ms,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -48,7 +49,10 @@ pub(crate) fn handle_connection(inner: &Arc<Inner>, socket: TcpStream, address: 
     let Ok(request) = net::read_request(&mut reader) else {
         return;
     };
-    let (status, body) = route(inner, &mut reader, &request, address.ip());
+    // The certificate the peer presented in the handshake, if any: Pulse peers
+    // present theirs, other LocalSend apps do not.
+    let presented = reader.get_ref().peer_fingerprint();
+    let (status, body) = route(inner, &mut reader, &request, address.ip(), presented);
     let wire = reader.get_mut();
     let _ = net::write_response(wire, status, body.as_deref());
     wire.finish();
@@ -64,6 +68,7 @@ fn route(
     reader: &mut BufReader<Wire>,
     request: &Request,
     ip: IpAddr,
+    presented: Option<String>,
 ) -> Answer {
     let path = request.path.trim_end_matches('/');
     let Some(endpoint) = path.strip_prefix(proto::API) else {
@@ -77,7 +82,7 @@ fn route(
             json(200, &me)
         }
         ("POST", "/register") => register(inner, reader, request, ip),
-        ("POST", "/prepare-upload") => prepare_upload(inner, reader, request, ip),
+        ("POST", "/prepare-upload") => prepare_upload(inner, reader, request, ip, presented),
         ("POST", "/upload") => upload(inner, reader, request, ip),
         ("POST", "/cancel") => {
             discard(reader, request);
@@ -125,6 +130,7 @@ fn prepare_upload(
     reader: &mut BufReader<Wire>,
     request: &Request,
     ip: IpAddr,
+    presented: Option<String>,
 ) -> Answer {
     let Some(body) = read_json_body(reader, request, 16 * 1024 * 1024) else {
         return message(400, "Invalid body");
@@ -134,6 +140,39 @@ fn prepare_upload(
     };
     if parsed.files.is_empty() || parsed.files.len() > 20_000 {
         return message(400, "Invalid body");
+    }
+
+    // Who is asking. A device that presented a certificate has proved it holds
+    // that key; it must be the one its request names. A sender with none (the
+    // LocalSend phone app) is only its own claim.
+    let claimed = parsed.info.fingerprint.to_ascii_lowercase();
+    let verified = presented.as_deref().is_some_and(|p| p == claimed);
+    let (state, proven) = {
+        let mut store = lock(&inner.trust);
+        if let Some(actual) = presented.as_deref().filter(|p| *p != claimed) {
+            // Someone vouching with one key while naming another device's.
+            store.observe(actual, &parsed.info.alias, None, None, true);
+            store.refuse(actual);
+            drop(store);
+            inner.emit(Event::Changed);
+            return message(403, "Rejected");
+        }
+        store.observe(
+            &claimed,
+            &parsed.info.alias,
+            parsed.info.device_model.as_deref(),
+            parsed.info.device_type.as_deref(),
+            verified,
+        );
+        let state = store.state_of(&claimed);
+        if state == TrustState::Deny {
+            store.refuse(&claimed);
+        }
+        (state, store.has_proven(&claimed))
+    };
+    if state == TrustState::Deny {
+        inner.emit(Event::Changed);
+        return message(403, "Rejected");
     }
 
     // One transfer at a time; an abandoned one is cleared.
@@ -162,7 +201,6 @@ fn prepare_upload(
     let config = lock(&inner.cfg).clone();
     let total: u64 = parsed.files.values().map(|f| f.size).sum();
     let is_message = proto::is_message(&parsed.files);
-    let known = inner.is_known(&parsed.info.fingerprint, ip);
     let alias: String = parsed
         .info
         .alias
@@ -180,35 +218,37 @@ fn prepare_upload(
             alias.clone()
         },
         device_model: parsed.info.device_model.clone(),
-        fingerprint: parsed.info.fingerprint.clone(),
+        fingerprint: claimed.clone(),
         ip: ip.to_string(),
         file_count: parsed.files.len(),
         total_bytes: total,
         is_message,
-        preview: if is_message {
+        preview: None,
+        files: if is_message {
+            Vec::new()
+        } else {
             parsed
                 .files
                 .values()
-                .next()
-                .and_then(|f| f.preview.clone())
-                .map(|p| p.chars().take(300).collect())
-        } else {
-            None
+                .take(8)
+                .map(|f| IncomingFile {
+                    name: proto::sanitize_relative(&f.file_name).join("/"),
+                    size: f.size,
+                })
+                .collect()
         },
-        files: parsed
-            .files
-            .values()
-            .take(8)
-            .map(|f| IncomingFile {
-                name: proto::sanitize_relative(&f.file_name).join("/"),
-                size: f.size,
-            })
-            .collect(),
-        known,
+        verified,
     };
 
-    // A message needs no yes: it is shown, as the LocalSend app does.
-    let accepted = if is_message || (config.accept_known && known) {
+    // Allow skips the card, for text as for files. A sender that proved its key
+    // is always honoured. One that did not is honoured only while it is
+    // announced from this address, and never when the device has proved its key
+    // before (then a missing proof is a stranger using its name).
+    // TODO: other LocalSend apps cannot prove identity; Allow for them rests on
+    // the announced address alone.
+    let allowed = state == TrustState::Allow
+        && (verified || (!proven && inner.announced_at(&claimed, ip)));
+    let accepted = if allowed {
         true
     } else {
         let pending = Arc::new(Pending {
@@ -230,7 +270,8 @@ fn prepare_upload(
         };
         lock(&inner.pending).remove(&request_id);
         inner.emit(Event::IncomingResolved(request_id.clone()));
-        answer == Some(true)
+        // A device denied while its request waited stays denied.
+        answer == Some(true) && inner.trust_state(&claimed) != TrustState::Deny
     };
     if !accepted {
         return message(403, "Rejected");
@@ -241,7 +282,7 @@ fn prepare_upload(
         id: transfer_id.clone(),
         direction: "receive".into(),
         peer: incoming.from.clone(),
-        peer_fingerprint: parsed.info.fingerprint.clone(),
+        peer_fingerprint: claimed.clone(),
         state: "active".into(),
         total_bytes: total,
         done_bytes: 0,
@@ -260,13 +301,12 @@ fn prepare_upload(
     // A text message arrives in the request itself: hand it to the notch,
     // which shows it with Copy. Nothing is written to disk.
     if is_message {
-        let text = incoming.preview.clone().unwrap_or_default();
         let full: String = parsed
             .files
             .values()
             .next()
             .and_then(|f| f.preview.clone())
-            .unwrap_or(text)
+            .unwrap_or_default()
             .chars()
             .take(64 * 1024)
             .collect();
@@ -296,7 +336,7 @@ fn prepare_upload(
         Session {
             transfer_id,
             peer_ip: ip,
-            peer_fingerprint: parsed.info.fingerprint.clone(),
+            peer_fingerprint: claimed.clone(),
             remaining: files.len(),
             files,
             cancel,
@@ -503,7 +543,6 @@ fn finish_file(inner: &Arc<Inner>, session_id: &str, file_id: &str, path: PathBu
     let (transfer_id, completed) = finished;
     inner.update_transfer(&transfer_id, true, |t| t.files_done += 1);
     if let Some(session) = completed {
-        inner.trust(&session.peer_fingerprint);
         let folder = session.save_dir.to_string_lossy().into_owned();
         let saved: Vec<String> = session
             .saved

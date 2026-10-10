@@ -470,7 +470,6 @@ final class HubBridge {
         "nearbyEnabled": bool(\.nearbyEnabled),
         "nearbyAlias": text(\.nearbyAlias),
         "nearbySaveFolder": text(\.nearbySaveFolder),
-        "nearbyAcceptKnown": bool(\.nearbyAcceptKnown),
         "launcherEnabled": bool(\.launcherEnabled),
         "launcherHotkey": choice(\.launcherHotkey),
         "launcherConfig": text(\.launcherConfigJSON),

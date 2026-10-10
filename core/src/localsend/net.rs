@@ -3,8 +3,12 @@
 //! connection carries one request and is closed after the response.
 
 use super::proto;
+use rustls::DistinguishedName;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms};
+use rustls::crypto::{
+    CryptoProvider, WebPkiSupportedAlgorithms, verify_tls12_signature, verify_tls13_signature,
+};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::{
     ClientConfig, ClientConnection, DigitallySignedStruct, ServerConfig, ServerConnection,
@@ -14,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -96,13 +100,83 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     std::fs::write(path, bytes)
 }
 
+/// Asks a connecting device for its certificate without requiring one. Other
+/// LocalSend apps send none; Pulse sends its own. Any self-signed certificate
+/// is taken, but the handshake signature must be made by its key, so a device
+/// that presents one has proved it holds the key (`Wire::peer_fingerprint`
+/// then names it). The caller compares the fingerprint with the claimed one.
+#[derive(Debug)]
+struct OptionalClientCert {
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ClientCertVerifier for OptionalClientCert {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        false
+    }
+
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
+/// The certificate and key this process presents as a client, set by the
+/// running service so every connection it makes proves its identity.
+static CLIENT_IDENTITY: Mutex<Option<(Vec<u8>, Vec<u8>)>> = Mutex::new(None);
+
+pub fn set_client_identity(identity: &Identity) {
+    let mut slot = CLIENT_IDENTITY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some((identity.cert_der.clone(), identity.key_der.clone()));
+}
+
 pub fn server_config(identity: &Identity) -> io::Result<Arc<ServerConfig>> {
     let certificate = CertificateDer::from(identity.cert_der.clone());
     let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
-    let config = ServerConfig::builder_with_provider(provider())
+    let provider = provider();
+    let verifier = OptionalClientCert {
+        algorithms: provider.signature_verification_algorithms,
+    };
+    let config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(other)?
-        .with_no_client_auth()
+        .with_client_cert_verifier(Arc::new(verifier))
         .with_single_cert(vec![certificate], key)
         .map_err(other)?;
     Ok(Arc::new(config))
@@ -170,12 +244,24 @@ fn client_config(fingerprint: &str) -> io::Result<Arc<ClientConfig>> {
         expected,
         algorithms: provider.signature_verification_algorithms,
     };
-    let config = ClientConfig::builder_with_provider(provider)
+    let builder = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(other)?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth();
+        .with_custom_certificate_verifier(Arc::new(verifier));
+    let own = CLIENT_IDENTITY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let config = match own {
+        Some((cert, key)) => builder
+            .with_client_auth_cert(
+                vec![CertificateDer::from(cert)],
+                PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key)),
+            )
+            .map_err(other)?,
+        None => builder.with_no_client_auth(),
+    };
     Ok(Arc::new(config))
 }
 
@@ -220,6 +306,20 @@ impl Wire {
             Wire::Plain(s) => s,
             Wire::Server(s) => &s.sock,
             Wire::Client(s) => &s.sock,
+        }
+    }
+
+    /// SHA-256 of the certificate the peer presented in the handshake, when it
+    /// presented one (server side). The handshake has already checked that the
+    /// peer holds the matching key.
+    pub fn peer_fingerprint(&self) -> Option<String> {
+        match self {
+            Wire::Server(s) => s
+                .conn
+                .peer_certificates()
+                .and_then(|certs| certs.first())
+                .map(|cert| sha256_hex(cert.as_ref())),
+            _ => None,
         }
     }
 

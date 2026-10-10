@@ -216,7 +216,7 @@ fn notch_fixture() -> Value {
         "foldsForFullScreen", "usesCustomNotchScale", "showsNotchReadings", "weeklyRingDashed", "weeklyHeadline",
         "weeklyReading", "claudeDailyPaceRing", "showUsagePace", "showCodexExtraLimits", "announceSessionEnd",
         "sessionEndSound", "announceUsageReset", "usageResetSound", "announceSessionLimitReached",
-        "announceWeeklyLimitReached", "limitReachedSound", "launchAtLogin", "nearbyEnabled", "nearbyAcceptKnown",
+        "announceWeeklyLimitReached", "limitReachedSound", "launchAtLogin", "nearbyEnabled",
         "autoUpdateCheck", "launcherEnabled", "convFnCommand", "convFinderCutPaste", "convWindowMaximizer",
         "convDockClickMinimize", "convDiskImageInstaller", "convAutoQuit", "windowManagementEnabled",
         "asksProviderOnLook",

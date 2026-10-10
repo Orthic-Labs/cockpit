@@ -1,8 +1,29 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Button, Toggle } from "@rightkit/app-shell/react";
+import { Pencil, X } from "lucide-react";
+import { Button, SegmentedControl, Toggle } from "@rightkit/app-shell/react";
 import { isWindows } from "../api";
+
+export type TrustChoice = "allow" | "ask" | "deny";
+
+/** One device with a trust record (`trust.devices` in share-state.json). */
+export interface TrustDevice {
+  fingerprint: string;
+  /** The owner's name for it; empty until given. */
+  label: string;
+  /** What the device calls itself (a claim). */
+  alias: string;
+  model: string | null;
+  kind: string | null;
+  state: TrustChoice;
+  present: boolean;
+  /** It has proved it holds the key behind its fingerprint. */
+  verified: boolean;
+  firstSeenMs: number;
+  lastSeenMs: number;
+  refused: number;
+}
 
 /** What the sharing service reports (hub/src-tauri/src/share.rs). */
 export interface ShareState {
@@ -10,7 +31,9 @@ export interface ShareState {
   error: string | null;
   alias?: string;
   saveDir?: string;
-  devices: { fingerprint: string; alias: string; deviceType?: string | null; ip: string }[];
+  devices: { fingerprint: string; alias: string; deviceType?: string | null; ip: string; state?: TrustChoice }[];
+  /** Per-device Allow / Ask / Deny; new devices start as `defaultState`. */
+  trust?: { defaultState: "ask" | "deny"; devices: TrustDevice[] };
   warnings: string[];
   /** macOS Local Network access: "granted" once a multicast send worked, "blocked" when macOS refuses. */
   localNetwork: "unknown" | "granted" | "blocked";
@@ -207,6 +230,115 @@ function ChatList({ chats }: { chats: Chat[] }) {
   );
 }
 
+const KIND_NAMES: Record<string, string> = {
+  mobile: "Phone", desktop: "Computer", web: "Browser", headless: "Terminal", server: "Server",
+};
+
+const VERIFIED_NOTE = "Not verified: this app can't prove its identity. Allow applies only on this network address.";
+
+function DeviceRow({ d, run }: { d: TrustDevice; run: (command: string, args: Record<string, unknown>) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(d.label);
+  const cancelled = useRef(false);
+  useEffect(() => { if (!editing) setDraft(d.label); }, [d.label, editing]);
+  const name = d.label || d.alias || "Unnamed device";
+  const commit = () => {
+    if (cancelled.current) { cancelled.current = false; return; }
+    const next = draft.trim();
+    if (next !== d.label) run("share_trust_label", { fingerprint: d.fingerprint, label: next });
+    setEditing(false);
+  };
+  const what = [d.kind ? KIND_NAMES[d.kind] ?? "Device" : null, d.model].filter(Boolean).join(" · ");
+  const when = d.present ? "nearby now" : `last seen ${ageText(d.lastSeenMs)} ago`;
+  const refused = d.refused > 0 ? `refused ${d.refused} ${d.refused === 1 ? "time" : "times"}` : null;
+  return (
+    <div className="ck-device" data-device={d.fingerprint}>
+      <div className="ck-text">
+        <div className="ck-account-name">
+          {editing ? (
+            <input
+              className="ck-input ck-claude-edit"
+              autoFocus
+              value={draft}
+              placeholder={d.alias || "Name this device"}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onBlur={commit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                if (e.key === "Escape") { cancelled.current = true; setDraft(d.label); setEditing(false); }
+              }}
+              aria-label={`Name for ${name}`}
+              title="Enter saves, Escape cancels, empty restores the device's own name"
+            />
+          ) : (
+            <button type="button" className="ck-claude-name" onClick={() => setEditing(true)}
+              aria-label={`Rename ${name}`} title="Rename this device">
+              <span className="ck-claude-name-text">{name}</span>
+              <Pencil size={12} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          )}
+          <span className={`ck-status ck-status-${d.verified ? "granted" : "unknown"}`} title={d.verified ? "This device proved its identity." : VERIFIED_NOTE}>
+            {d.verified ? "verified" : "not verified"}
+          </span>
+        </div>
+        <div className="ck-sub">
+          {[what, when, refused].filter(Boolean).join(" · ")}
+        </div>
+        {!d.verified && d.state === "allow" && <div className="ck-sub">{VERIFIED_NOTE}</div>}
+      </div>
+      <div className="ck-ctl">
+        <span className="ck-ctls">
+          <SegmentedControl
+            label={`Trust for ${name}`}
+            value={d.state}
+            options={[{ value: "allow", label: "Allow" }, { value: "ask", label: "Ask" }, { value: "deny", label: "Deny" }]}
+            onChange={(v) => run("share_trust_set", { fingerprint: d.fingerprint, state: v })}
+          />
+          {!d.present && (
+            <button type="button" className="ck-forget" aria-label={`Forget ${name}`}
+              onClick={() => run("share_trust_forget", { fingerprint: d.fingerprint })}
+              title="Removes this device from the list; it returns when it is next seen.">
+              <X size={14} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Every device seen on the network or in a request, with Allow / Ask / Deny. */
+function DevicesGroup({ share }: { share: ShareState }) {
+  const trust = share.trust;
+  const [message, setMessage] = useState<string | null>(null);
+  const run = (command: string, args: Record<string, unknown>) => {
+    setMessage(null);
+    invoke<void>(command, args).catch((e) => setMessage(String(e)));
+  };
+  if (!trust) return null;
+  const devices = [...trust.devices].sort((a, b) =>
+    Number(b.present) - Number(a.present) || b.lastSeenMs - a.lastSeenMs);
+  return (
+    <Group title="Devices">
+      <Row
+        label="New devices"
+        note="What a device gets the first time it is seen. Allow sends and receives with no question; Ask asks every time; Deny refuses."
+      >
+        <SegmentedControl
+          label="New devices"
+          value={trust.defaultState}
+          options={[{ value: "ask", label: "Ask" }, { value: "deny", label: "Deny" }]}
+          onChange={(v) => run("share_trust_default", { state: v })}
+        />
+      </Row>
+      {devices.length === 0 && <div className="ck-sub ck-foot">No devices seen yet.</div>}
+      {devices.map((d) => <DeviceRow key={d.fingerprint} d={d} run={run} />)}
+      {message && <div className="error" role="alert">{message}</div>}
+    </Group>
+  );
+}
+
 /** General > Nearby sharing: send and receive files with LocalSend and other Pulse Macs. */
 export function NearbyGroup({ s, set }: {
   s: Record<string, unknown>;
@@ -238,6 +370,7 @@ export function NearbyGroup({ s, set }: {
   }
 
   return (
+    <>
     <Group title="Nearby sharing">
       <Row
         label="Send and receive files nearby"
@@ -264,19 +397,14 @@ export function NearbyGroup({ s, set }: {
               {folder && <Button size="sm" variant="ghost" onClick={() => set("nearbySaveFolder", "")}>Use Downloads</Button>}
             </span>
           </Row>
-          <Row
-            label="Accept from known devices automatically"
-            note="Devices you have accepted before skip the question. Anyone else always asks."
-          >
-            <Toggle checked={s.nearbyAcceptKnown === true} onChange={(v) => set("nearbyAcceptKnown", v)}
-              label="Accept from known devices automatically" />
-          </Row>
           <AgentBridge share={share} />
         </>
       )}
       <div className={share?.error ? "error" : "ck-sub ck-foot"} role={share?.error ? "alert" : "status"}>{status}</div>
       {enabled && share?.warnings.map((w) => <div key={w} className="ck-sub ck-foot">{w}</div>)}
     </Group>
+    {enabled && share?.running && <DevicesGroup share={share} />}
+    </>
   );
 }
 

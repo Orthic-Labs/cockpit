@@ -246,10 +246,6 @@ final class Preferences: ObservableObject {
     @Published var nearbySaveFolder: String {
         didSet { defaults.set(nearbySaveFolder, forKey: Keys.nearbySaveFolder) }
     }
-    /// Skip the question for devices accepted before (off by default).
-    @Published var nearbyAcceptKnown: Bool {
-        didSet { defaults.set(nearbyAcceptKnown, forKey: Keys.nearbyAcceptKnown) }
-    }
 
     /// Pulse fork: the launcher is off until switched on.
     @Published var launcherEnabled: Bool {
@@ -512,7 +508,6 @@ final class Preferences: ObservableObject {
         static let nearbyEnabled = "nearbyEnabled"
         static let nearbyAlias = "nearbyAlias"
         static let nearbySaveFolder = "nearbySaveFolder"
-        static let nearbyAcceptKnown = "nearbyAcceptKnown"
         static let launcherEnabled = "launcherEnabled"
         static let launcherHotkey = "launcherHotkey"
         static let launcherConfig = "launcherConfig"
@@ -713,7 +708,6 @@ final class Preferences: ObservableObject {
         self.nearbyEnabled = defaults.object(forKey: Keys.nearbyEnabled) as? Bool ?? true
         self.nearbyAlias = defaults.string(forKey: Keys.nearbyAlias) ?? ""
         self.nearbySaveFolder = defaults.string(forKey: Keys.nearbySaveFolder) ?? ""
-        self.nearbyAcceptKnown = defaults.bool(forKey: Keys.nearbyAcceptKnown)
         self.launcherEnabled = defaults.bool(forKey: Keys.launcherEnabled)
         self.launcherHotkey = defaults.string(forKey: Keys.launcherHotkey)
             .flatMap(LauncherHotkeyChoice.init(rawValue:)) ?? .optionSpace

@@ -50,8 +50,8 @@ pub enum Phase {
     /// Waiting for the other device to accept.
     Waiting,
     Sending,
-    /// A message (text only) is on the other device's screen. Its answer only
-    /// comes when someone closes it there, which nobody needs to wait for.
+    /// A message (text only) is on the other device's screen. No longer
+    /// reported early: a message waits for the other side's answer like a file.
     Delivered,
 }
 
@@ -243,23 +243,15 @@ pub fn deliver(
     let body = serde_json::to_vec(&PrepareUploadRequest { info, files, pulse })
         .map_err(|e| e.to_string())?;
     let prepare = format!("{}/prepare-upload", proto::API);
-    // The other person may take a while to say yes. A message is done once it
-    // is on their screen; the request stays open until they close it there.
-    let text_only = entries.iter().all(|e| matches!(e.source, Source::Text(_)));
+    // The other person may take a while to say yes. A message counts as sent
+    // only once they have accepted it (or allow this device), like a file.
     let reply = exchange(
         peer,
         &prepare,
         Some(&body),
         Duration::from_secs(190),
         register,
-        &mut || {
-            if text_only {
-                on(Progress {
-                    phase: Phase::Delivered,
-                    ..progress.clone()
-                });
-            }
-        },
+        &mut || {},
     );
     if cancel.load(Ordering::Relaxed) {
         return Ok(Outcome::Cancelled);
