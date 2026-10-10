@@ -668,7 +668,7 @@ fn windows_expectations(id: &str) -> (&'static [&'static str], &'static [&'stati
         }
         "accounts" => {
             const HAVE: &[&str] = &["Logins Pulse reads", "Claude", "Codex", "Shown", "Up to date"];
-            const LACK: &[&str] = &["Forget reading", "Allow access", "never seen signed in", "Hidden"];
+            const LACK: &[&str] = &["Allow access", "never seen signed in", "Hidden"];
             (HAVE, LACK)
         }
         "appearance" => {
@@ -840,8 +840,13 @@ fn windows_fixture_checks(ctl: &Control, sec: &Section, problems: &mut Vec<Strin
                     if row["shown"] != "Shown" || row["sub"] != "Up to date" || row["on"] != "true" || row["toggle"] != format!("Show {who}") {
                         problems.push(format!("{name}: {who} should be Shown, read \"Up to date\" and have its \"Show {who}\" switch on: {row}"));
                     }
-                    if row["claudeRows"] != 0 || row["buttons"].as_array().is_some_and(|b| b.iter().any(|t| t == "Forget reading" || t == "Allow access\u{2026}")) {
-                        problems.push(format!("{name}: {who} shows Mac-only account parts (per-account Claude rows, Forget reading, Allow access): {row}"));
+                    // "Forget reading" is a Windows action too since the notch handles forgetReading;
+                    // "Allow access" (Keychain consent) stays Mac-only.
+                    if row["claudeRows"] != 0 || row["buttons"].as_array().is_some_and(|b| b.iter().any(|t| t == "Allow access\u{2026}")) {
+                        problems.push(format!("{name}: {who} shows Mac-only account parts (per-account Claude rows, Allow access): {row}"));
+                    }
+                    if !row["buttons"].as_array().is_some_and(|b| b.iter().any(|t| t == "Forget reading")) {
+                        problems.push(format!("{name}: {who} should offer \"Forget reading\" (the Windows notch handles it): {row}"));
                     }
                 }
                 if claude["up"] != true || claude["down"] != false || codex["up"] != false || codex["down"] != true {
@@ -1401,7 +1406,7 @@ const STATE_ALLOWLIST_ROLES: &[&str] = &["textbox", "searchbox", "select", "comb
 /// Hover is blocking on both platforms. The pressed check is blocking on macOS only: whether a
 /// hidden WebView2 can produce `:active` is unmeasured (RightKit), so on Windows a control with no
 /// pressed state is printed as ADVISORY until the first CI evidence says it can be made blocking.
-const PRESSED_BLOCKING: bool = cfg!(target_os = "macos");
+const PRESSED_BLOCKING: bool = true;
 
 fn check_interaction_states(inventory: &[Value]) -> Vec<String> {
     let mut problems = Vec::new();
