@@ -105,3 +105,10 @@
   .st-card, .st-volume, .st-chip, .st-notice { border-color: CanvasText; }
   .st :focus-visible { outline-color: Highlight; }
 }
+
+/* The volume picker is a native select; give it the settings' control look on every platform
+   (Windows showed the bare system control). */
+.st-volume .st-select { min-height: 30px; padding: 3px 28px 3px 10px; border: 1px solid var(--ck-control-line, var(--rk-hairline)); border-radius: 8px; background: var(--rk-plane); color: var(--rk-ink); font: inherit; font-weight: 600; appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--rk-ink-2) 50%), linear-gradient(135deg, var(--rk-ink-2) 50%, transparent 50%); background-position: calc(100% - 15px) 12px, calc(100% - 10px) 12px; background-size: 5px 5px; background-repeat: no-repeat; cursor: pointer; }
+.st-volume .st-select:hover { border-color: var(--rk-ink-3); }
+.st-volume .st-select:focus-visible { border-color: var(--rk-accent); outline: none; }
+.st-volume .st-select:disabled { opacity: .5; cursor: default; }
