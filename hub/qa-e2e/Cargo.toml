@@ -11,5 +11,7 @@ description = "Headless QA of the Pulse hub on rightkit-qa: drives the debug qa-
 [workspace]
 
 [dev-dependencies]
-rightkit-qa = "=0.2.14"
+# Held at 0.2.12: under 0.2.14 the Windows hub journey loses hover on the Storage "Folders" radio
+# and then cannot find the controls after it (reported to RightKit 2026-10-11); the Mac leg is fine.
+rightkit-qa = "=0.2.12"
 serde_json = "1"
