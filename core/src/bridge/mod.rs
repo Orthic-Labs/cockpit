@@ -328,7 +328,11 @@ pub fn deliver_here(
     reply_socket: Option<&str>,
 ) -> Receipt {
     let needs_hub = session.kind == "claude" && !direct_post_trusted();
-    if needs_hub && control::hub_running(store) {
+    // The hub owns the reply listener on both platforms: a delivery it posts advertises a
+    // real reply address, one the CLI posts only a placeholder. So the hub is preferred
+    // whenever it runs; the direct post stays for when it does not (and is trusted).
+    let prefer_hub = session.kind == "claude" && control::hub_running(store);
+    if (needs_hub || prefer_hub) && control::hub_running(store) {
         let mut args = json!({"session": session.id, "envelope": links::encode_envelope(env)});
         if let Some(socket) = reply_socket {
             args["reply_socket"] = json!(socket);
