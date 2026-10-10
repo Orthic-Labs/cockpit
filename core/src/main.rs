@@ -151,7 +151,9 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         #[cfg(not(feature = "localsend"))]
         return Err("this build of pulse has no nearby sharing".into());
     }
-    let state_override = take_option(&mut arguments, "--state-dir")?.map(PathBuf::from);
+    let state_override = take_option(&mut arguments, "--state-dir")?
+        .map(|path| resolve_path(&path))
+        .transpose()?;
     #[cfg(target_os = "macos")]
     if state_override.is_none() {
         let home = std::env::var_os("HOME")
@@ -371,6 +373,15 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     r.risk == rules::Risk::Explanation && rule.as_ref().is_none_or(|id| &r.id == id)
                 })
                 .collect();
+            #[allow(unused_mut)]
+            let mut findings: Vec<serde_json::Value> = findings
+                .into_iter()
+                .map(|f| serde_json::to_value(f).map_err(|e| e.to_string()))
+                .collect::<Result<_, _>>()?;
+            // Windows has no other CLI cleanup scan: run the same rule pack the
+            // hub's Cleanup page runs (rules/cleanup.json) so both report alike.
+            #[cfg(windows)]
+            findings.extend(cleanup_findings(rule.as_deref())?);
             emit(
                 json!({"snapshot_id":history.last().map(|s| &s.id),"findings":findings,"explanations":explanations,"mode":"report_only","history_diagnostics":diagnostics,"capability_notes":notes}),
                 machine,
@@ -755,6 +766,33 @@ fn take_u64_option(args: &mut Vec<String>, flag: &str) -> Result<Option<u64>, St
         .map(|value| value.parse().map_err(|_| format!("invalid {flag}")))
         .transpose()
 }
+/// Cleanup-pack findings in the CLI's findings shape (same rows as the hub).
+#[cfg(windows)]
+fn cleanup_findings(rule: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .ok_or_else(|| "USERPROFILE is unset".to_string())?;
+    let running = pulse_core::cleanup_scan::running_process_names();
+    let report = pulse_core::cleanup_scan::scan(&home, &running)?;
+    report
+        .findings
+        .into_iter()
+        .filter(|f| rule.is_none_or(|r| f.rule_id == r))
+        .map(|f| {
+            let mut value = serde_json::to_value(&f).map_err(|e| e.to_string())?;
+            value["liveness"] = json!(f.reason);
+            value["route"] = json!(f.action);
+            value["logical_bytes"] = json!(f.apparent_bytes);
+            value["attributed_bytes"] = json!(f.bytes);
+            value["deletion_estimate_lower"] = json!(f.bytes);
+            if !f.partial {
+                value["deletion_estimate_upper"] = json!(f.bytes);
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
 fn resolve_path(value: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
     if path.is_absolute() {

@@ -96,6 +96,15 @@ export function Storage() {
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [active, setActive] = useState<string>("/");
   const [folder, setFolder] = useState<Folder | null>(null);
+  // The file access permission itself; null until the first answer.
+  const [access, setAccess] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.fullDiskAccessStatus().then((value) => live && setAccess(value)).catch(() => live && setAccess("unknown"));
+    return () => {
+      live = false;
+    };
+  }, [folder?.scanned_at]);
   const [results, setResults] = useState<Row[] | null>(null);
   const [query, setQuery] = useState("");
   const [growth, setGrowth] = useState<Growth | null>(null);
@@ -566,12 +575,20 @@ export function Storage() {
           </Button>
         </div>
       )}
-      {folder?.needs_access && !results && (
+      {folder?.needs_access && access !== null && access !== "granted" && !results && (
         <div className="st-notice st-notice--warn" role="status">
           <span>{isWindows ? "Some folders couldn't be read. Allow file system access in Windows Settings to include them." : "Some folders couldn't be read. Grant Full Disk Access to include them."}</span>
           <Button size="sm" onClick={() => api.openFullDiskAccess()}>
             {isWindows ? "Open File system settings" : "Open Full Disk Access"}
           </Button>
+        </div>
+      )}
+      {folder?.incomplete && !results && !(folder.needs_access && access !== null && access !== "granted") && (
+        <div className="st-sub">
+          {folder.unread
+            ? `${folder.unread.toLocaleString()} ${folder.unread === 1 ? "item" : "items"} couldn't be read`
+            : "Some items couldn't be read"}{" "}
+          (long paths, access denied, or the 2,000,000-entry limit)
         </div>
       )}
       {folder && !folder.needs_access && folder.limited && !results && (

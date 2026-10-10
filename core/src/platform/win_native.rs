@@ -59,11 +59,7 @@ pub(super) fn inspect(path: &Path, metadata: &fs::Metadata) -> NativeInfo {
     let std_attributes = std::os::windows::fs::MetadataExt::file_attributes(metadata);
     let mut is_placeholder = placeholder_attributes(std_attributes);
 
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide = wide_nul(path);
     let opened = unsafe {
         CreateFileW(
             PCWSTR(wide.as_ptr()),
@@ -203,8 +199,39 @@ impl Drop for VolumeFind {
     }
 }
 
+/// Extended-length form of a path, so Win32 opens work beyond MAX_PATH:
+/// drive paths become `\?\C:\...`, UNC paths `\?\UNC\server\share\...`;
+/// verbatim and device paths are kept. Display paths stay in normal form;
+/// only the open uses this.
+pub(super) fn verbatim_path(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut components = absolute.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return absolute;
+    };
+    let head = match prefix.kind() {
+        Prefix::Disk(letter) => format!("\\\\?\\{}:", char::from(letter)),
+        Prefix::UNC(server, share) => format!(
+            "\\\\?\\UNC\\{}\\{}",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        ),
+        _ => return absolute,
+    };
+    let mut out = PathBuf::from(head);
+    for component in components {
+        match component {
+            Component::RootDir => out.push("\\"),
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 fn wide_nul(path: &Path) -> Vec<u16> {
-    path.as_os_str()
+    verbatim_path(path)
+        .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect()

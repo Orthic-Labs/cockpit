@@ -80,6 +80,21 @@ fn listing_identity_matches_inspection() {
     // inspection identity is stable across the listing.
     let again = inspect(&dir.0, &fs::symlink_metadata(&dir.0).unwrap());
     assert_eq!(info.file_id, again.file_id);
+
+    // A file whose normal-form path exceeds MAX_PATH is still fully readable:
+    // file id and stable volume identity, no fallback reasons.
+    let mut deep = dir.0.clone();
+    while deep.as_os_str().len() < 300 {
+        deep.push("long-path-segment-0123456789");
+    }
+    fs::create_dir_all(&deep).unwrap();
+    let long_file = deep.join("f.txt");
+    fs::write(&long_file, b"x").unwrap();
+    let long = inspect(&long_file, &fs::symlink_metadata(&long_file).unwrap());
+    assert!(long.file_id.is_some(), "{:?}", long.unavailable);
+    assert!(long.volume_stable, "{:?}", long.unavailable);
+    assert!(long.unavailable.is_empty(), "{:?}", long.unavailable);
+    assert!(children_bounded(&deep, 10).is_ok());
 }
 
 #[test]

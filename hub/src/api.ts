@@ -92,6 +92,8 @@ export interface Folder {
   total_children: number;
   incomplete: boolean;
   needs_access: boolean;
+  /** Items the scan could not read (long paths, access denied, entry limit). */
+  unread?: number;
   limited: boolean;
   root_label: string;
   /** Unix seconds when this data was scanned. */
@@ -273,6 +275,7 @@ export const api = {
   eject: (mount: string) => invoke<void>("eject", { mount }),
   /** Opens the Full Disk Access pane in System Settings. */
   openFullDiskAccess: () => invoke<void>("fda_request"),
+  fullDiskAccessStatus: () => invoke<string>("fda_status"),
   cleanupScan: () => invoke<CleanupReport>("cleanup_scan"),
   /** The last saved findings, or null when none were saved. Never scans. */
   cleanupCached: () => invoke<CleanupReport | null>("cleanup_cached"),

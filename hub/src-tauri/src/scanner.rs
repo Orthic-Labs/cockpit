@@ -49,7 +49,9 @@ const STALE_FILE: &str = "storage-names-stale-v1.txt";
 
 /// Magic and version of the binary folder index.
 const INDEX_MAGIC: [u8; 4] = *b"PIX2";
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 3;
+/// The earlier layout, without the unread count, is still read.
+const INDEX_VERSION_V2: u32 = 2;
 /// Longest path or name a saved index may hold; a longer length means damage.
 const MAX_SAVED_TEXT: usize = 1 << 20;
 
@@ -168,6 +170,9 @@ pub struct Folder {
     incomplete: bool,
     /// Some folders could not be read (permission): Full Disk Access helps.
     needs_access: bool,
+    /// Items the scan could not read (long paths, access denied, ...).
+    #[serde(default)]
+    unread: u64,
     /// A size limit was reached, so totals may be a little low.
     limited: bool,
     /// Label for the scan root in the breadcrumbs.
@@ -203,6 +208,7 @@ struct Index {
     from_snapshot: bool,
     incomplete: bool,
     needs_access: bool,
+    unread: u64,
     limited: bool,
     nodes: HashMap<PathBuf, Node>,
 }
@@ -232,6 +238,28 @@ fn needs_access(report: &ScanReport) -> bool {
             .incomplete_reasons
             .iter()
             .any(|r| !r.to_lowercase().contains("placeholder") && denied(r))
+}
+
+/// How many distinct items could not be read: inspection errors plus the
+/// per-item reasons (one item can carry several), without limits, budgets and
+/// placeholders, which are not unreadable items.
+fn unread_items(report: &ScanReport) -> u64 {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut count = report.inspection_errors.len() as u64;
+    for reason in &report.incomplete_reasons {
+        let lower = reason.to_lowercase();
+        if lower.contains("placeholder") || lower.contains("limit") || lower.contains("budget") {
+            continue;
+        }
+        let item = reason
+            .strip_prefix("metadata unavailable: ")
+            .and_then(|rest| rest.split_once(": ").map(|(path, _)| path))
+            .unwrap_or(reason.as_str());
+        if seen.insert(item) {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn limited(report: &ScanReport) -> bool {
@@ -340,6 +368,7 @@ fn build(report: &ScanReport, scanned_at: u64, from_snapshot: bool) -> Index {
         from_snapshot,
         incomplete: report.accounting.incomplete && material(report),
         needs_access: needs_access(report),
+        unread: unread_items(report),
         limited: limited(report),
         nodes: fold_nodes(report, label),
     }
@@ -365,6 +394,7 @@ fn folder(index: &Index, path: &Path) -> Result<Folder, String> {
         total_children: node.children,
         incomplete: index.incomplete,
         needs_access: index.needs_access,
+        unread: index.unread,
         limited: index.limited,
         root_label: index.root_label.clone(),
         scanned_at: index.scanned_at,
@@ -454,6 +484,7 @@ fn write_index<W: Write>(out: &mut W, index: &Index) -> std::io::Result<()> {
         | (u8::from(index.limited) << 2)
         | (u8::from(index.from_snapshot) << 3);
     out.write_all(&[flags])?;
+    out.write_all(&index.unread.to_le_bytes())?;
     out.write_all(&(index.nodes.len() as u64).to_le_bytes())?;
     for (path, node) in &index.nodes {
         write_text(out, &path.to_string_lossy())?;
@@ -508,13 +539,15 @@ fn read_text<R: Read>(input: &mut R) -> std::io::Result<String> {
 fn read_index<R: Read>(input: &mut R) -> std::io::Result<Index> {
     let mut magic = [0u8; 4];
     input.read_exact(&mut magic)?;
-    if magic != INDEX_MAGIC || read_u32(input)? != INDEX_VERSION {
+    let version = if magic == INDEX_MAGIC { read_u32(input)? } else { 0 };
+    if version != INDEX_VERSION && version != INDEX_VERSION_V2 {
         return Err(invalid("not a storage index"));
     }
     let root = PathBuf::from(read_text(input)?);
     let root_label = read_text(input)?;
     let scanned_at = read_u64(input)?;
     let flags = read_u8(input)?;
+    let unread = if version == INDEX_VERSION { read_u64(input)? } else { 0 };
     let folders = read_u64(input)?;
     let mut nodes: HashMap<PathBuf, Node> = HashMap::new();
     for _ in 0..folders {
@@ -548,6 +581,7 @@ fn read_index<R: Read>(input: &mut R) -> std::io::Result<Index> {
         from_snapshot: flags & 8 != 0,
         incomplete: flags & 1 != 0,
         needs_access: flags & 2 != 0,
+        unread,
         limited: flags & 4 != 0,
         nodes,
     })
@@ -607,6 +641,7 @@ fn restored_index(saved: SavedIndex) -> Index {
         from_snapshot: true,
         incomplete: saved.incomplete,
         needs_access: saved.needs_access,
+        unread: 0,
         limited: saved.limited,
         nodes,
     }
