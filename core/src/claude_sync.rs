@@ -267,6 +267,12 @@ struct Rec {
     sig: Sig,
     /// Newest of lastActivityAt / lastFocusedAt / createdAt, milliseconds.
     ts: i64,
+    /// Which copy is further along: completed turns, then the last user
+    /// message time, then `ts`. Claude Desktop bumps `lastActivityAt` on a
+    /// stale copy merely by listing it after a sign-in, so time alone would let
+    /// a copy with a hundred fewer turns (and no archive flag) overwrite the
+    /// real one; progress cannot be faked by a touch.
+    rank: (i64, i64, i64),
     archived: bool,
     readable: bool,
 }
@@ -292,6 +298,10 @@ struct RecordMeta {
     created_at: Option<f64>,
     #[serde(rename = "isArchived")]
     is_archived: Option<bool>,
+    #[serde(rename = "completedTurns")]
+    completed_turns: Option<f64>,
+    #[serde(rename = "latestUserFrameAt")]
+    latest_user_frame_at: Option<f64>,
 }
 
 fn read_active_account(root: &Path) -> Option<String> {
@@ -391,6 +401,11 @@ fn load_folder(
                     Rec {
                         sig,
                         ts,
+                        rank: (
+                            meta.completed_turns.unwrap_or(0.0) as i64,
+                            meta.latest_user_frame_at.unwrap_or(0.0) as i64,
+                            ts,
+                        ),
                         archived: meta.is_archived.unwrap_or(false),
                         readable: true,
                     }
@@ -398,6 +413,7 @@ fn load_folder(
                 Err(_) => Rec {
                     sig,
                     ts: 0,
+                    rank: (0, 0, 0),
                     archived: false,
                     readable: false,
                 },
@@ -643,10 +659,11 @@ pub fn plan_for(root: &Path, only: Option<&BTreeSet<String>>) -> Result<Plan, Sy
             continue;
         }
 
+        let best_rank = holders.iter().map(|(_, r)| r.rank).max();
         let best_ts = holders.iter().map(|(_, r)| r.ts).max();
-        if let Some(best_ts) = best_ts {
+        if let Some(best_rank) = best_rank {
             let newest: Vec<&(usize, &Rec)> =
-                holders.iter().filter(|(_, r)| r.ts == best_ts).collect();
+                holders.iter().filter(|(_, r)| r.rank == best_rank).collect();
             let distinct: BTreeSet<(u64, u64)> = newest
                 .iter()
                 .map(|(_, r)| (r.sig.size, r.sig.hash))
@@ -654,7 +671,8 @@ pub fn plan_for(root: &Path, only: Option<&BTreeSet<String>>) -> Result<Plan, Sy
             if distinct.len() > 1 {
                 conflicts.push(Conflict {
                     session_id: session_id.clone(),
-                    reason: "same newest timestamp, different content; both left untouched".into(),
+                    reason: "same progress and timestamp, different content; both left untouched"
+                        .into(),
                     folders: involved(newest.iter().map(|(i, _)| *i).collect()),
                 });
                 keep_own(&mut final_archived, &session_id);
@@ -713,10 +731,10 @@ pub fn plan_for(root: &Path, only: Option<&BTreeSet<String>>) -> Result<Plan, Sy
             continue;
         }
 
-        // A record is the newest word on this session.
+        // A record is the newest word on this session: the furthest-along copy.
         let (winner_folder, winner) = holders
             .iter()
-            .filter(|(_, r)| Some(r.ts) == best_ts)
+            .filter(|(_, r)| Some(r.rank) == best_rank)
             .map(|(i, r)| (*i, *r))
             .next()
             .expect("a record exists when deletion did not win");

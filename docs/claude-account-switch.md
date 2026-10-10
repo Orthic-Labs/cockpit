@@ -29,7 +29,7 @@ Real per-account folders; transcripts are never read or written; metadata is mer
 
 Merge, per session id across all included accounts' folders:
 
-1. Record time = newest of `lastActivityAt`, `lastFocusedAt`, `createdAt`. The newest record wins and is copied verbatim to every folder (add or update). Archive state travels inside it.
+1. The furthest-along copy wins and is copied verbatim to every folder (add or update): most `completedTurns`, then newest `latestUserFrameAt`, then record time (newest of `lastActivityAt`, `lastFocusedAt`, `createdAt`). Time alone was wrong: Claude Desktop bumps `lastActivityAt` on a stale copy just by listing it after a sign-in, which let a copy with a hundred fewer turns and no archive flag overwrite the real, archived one (seen 2026-10-10). Archive state travels inside the winning record.
 2. Same newest time with different content: **conflict**. Every folder keeps its own file; nothing is added elsewhere; it is reported.
 3. Deletion marker newer than or equal to the newest record: delete the record everywhere and put the marker everywhere. A record newer than the marker wins; the stale marker is removed.
 4. `archived-sessions.idx` is rebuilt in each folder from the records that folder ends up with (sorted, Claude's exact byte format). An unrecognised index format is a blocker.
