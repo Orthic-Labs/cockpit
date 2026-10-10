@@ -333,7 +333,10 @@ pub fn on_local_reply(reply: ReplyMessage) {
     if device == alias {
         match sessions.iter().find(|s| s.id == session) {
             Some(target) => {
-                deliver_local_via(store, target, &envelope, None);
+                let receipt = deliver_local_via(store, target, &envelope, None);
+                if receipt.state != ReceiptState::Refused {
+                    store.note_sent();
+                }
             }
             None => note("A reply's chat is no longer open.".to_string()),
         }
@@ -345,6 +348,9 @@ pub fn on_local_reply(reply: ReplyMessage) {
     match links::post(&link, &envelope) {
         Ok(receipt) => {
             let status = receipt["status"].as_str().unwrap_or("");
+            if ReceiptState::parse(status) != Some(ReceiptState::Refused) {
+                store.note_sent();
+            }
             if ReceiptState::parse(status) != Some(ReceiptState::Delivered) {
                 note(format!(
                     "{}: reply {}: {}",
@@ -433,6 +439,8 @@ pub struct Status {
     /// Every chat, here and on linked computers, as "<name> on <device>" material.
     pub chats: Vec<StatusChat>,
     pub last_error: Option<String>,
+    /// Last send/receive times (ms) and counts; the notch pulses its Send ring on a change.
+    pub activity: super::store::Activity,
 }
 
 pub fn status() -> Status {
@@ -460,5 +468,6 @@ pub fn status() -> Status {
         local_chats: state.sessions.len(),
         links: state.link_state.clone(),
         last_error: state.last_error.clone(),
+        activity: store().map(|s| s.activity()).unwrap_or_default(),
     }
 }

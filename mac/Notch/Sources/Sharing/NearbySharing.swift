@@ -53,6 +53,24 @@ struct ShareNotice: Decodable, Equatable {
     let text: String
 }
 
+/// The agent bridge's last send and receive (`bridge.activity` in share-state.json).
+struct ShareBridgeActivity: Decodable, Equatable {
+    var sentMs: Double
+    var receivedMs: Double
+
+    /// When the last message went either way; nil before any.
+    var latest: Date? {
+        let ms = max(sentMs, receivedMs)
+        return ms > 0 ? Date(timeIntervalSince1970: ms / 1000) : nil
+    }
+
+    var lastWasSent: Bool { sentMs >= receivedMs }
+}
+
+struct ShareBridge: Decodable, Equatable {
+    var activity: ShareBridgeActivity?
+}
+
 struct ShareState: Decodable, Equatable {
     var running: Bool
     var error: String?
@@ -68,6 +86,8 @@ struct ShareState: Decodable, Equatable {
     var scanning: Bool?
     /// Milliseconds since 1970, when the hub last wrote this.
     var updatedAt: Double
+    /// The agent bridge, when the hub runs one.
+    var bridge: ShareBridge?
 }
 
 /// Pulse fork: the notch's side of nearby sharing (the LocalSend protocol).
@@ -99,6 +119,9 @@ final class NearbySharing {
     private var state: ShareState?
     private var started = false
     private var watchdog: Timer?
+    /// Ends the Send ring's pulse after a bridge message (`bridgeActivity`).
+    private var pulseTimer: Timer?
+    private var lastBridgeActivity: Date?
     private var hubLaunchedAt = Date.distantPast
     private var primed = false
     private var seenFinished = Set<String>()
@@ -180,7 +203,37 @@ final class NearbySharing {
         state = decoded
         process(decoded)
         updatePasteTap()
+        noteBridgeActivity(decoded)
         onChange?()
+    }
+
+    // MARK: - Bridge activity
+
+    /// How long the Send ring pulses after a bridge message is sent or received.
+    static let pulseWindow: TimeInterval = 6
+
+    /// A message just went through the agent bridge: the ring pulses for
+    /// `pulseWindow`, then the cell is refreshed once more so it stops.
+    private func noteBridgeActivity(_ new: ShareState) {
+        guard let at = new.bridge?.activity?.latest, at != lastBridgeActivity else { return }
+        lastBridgeActivity = at
+        pulseTimer?.invalidate()
+        let remaining = Self.pulseWindow - Date().timeIntervalSince(at)
+        guard remaining > 0 else { return }
+        pulseTimer = Timer.scheduledTimer(withTimeInterval: remaining + 0.2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onChange?() }
+        }
+    }
+
+    /// The Send ring's inner pulse: one "complete" session for `pulseWindow`
+    /// after the bridge sent or received a message, else nil (no indicator).
+    func bridgeActivity() -> ActivitySummary? {
+        guard let activity = fresh(state)?.bridge?.activity, let at = activity.latest,
+              Date().timeIntervalSince(at) < Self.pulseWindow else { return nil }
+        let name = activity.lastWasSent ? L10n.t("Message sent") : L10n.t("Message received")
+        return ActivitySummary(sessions: [AgentSession(
+            id: "bridge", name: name, detail: L10n.t("Agent bridge"),
+            state: .success, waitingFor: nil, since: at)])
     }
 
     // MARK: - Devices and the target
@@ -415,6 +468,12 @@ final class NearbySharing {
         }
 
         var windows = [headline]
+        // While the ring pulses the card says why; the row also makes the snapshot
+        // differ at both ends of the pulse, so the cell redraws.
+        if let pulse = bridgeActivity(), let session = pulse.sessions.first {
+            windows.append(LimitWindow(id: "bridge-activity", label: session.name,
+                                       detail: session.detail))
+        }
         for device in devices {
             windows.append(LimitWindow(
                 id: "nearby:" + device.fingerprint, label: device.alias, detail: kind(of: device)))

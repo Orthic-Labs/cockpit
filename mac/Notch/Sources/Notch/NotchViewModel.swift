@@ -1131,6 +1131,8 @@ final class NotchViewModel: ObservableObject {
         // on the Claude card nor drawn as an arc on its ring; both follow
         // usage limits only.
         if ClaudeProfile.isClaude(providerID: providerID) { return nil }
+        // The Send ring pulses for a few seconds after an agent-bridge message.
+        if providerID == NearbySharing.providerID { return NearbySharing.shared.bridgeActivity() }
         return ActivitySummary(sessions: sessions[providerID] ?? [])
     }
 

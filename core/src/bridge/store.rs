@@ -1,6 +1,7 @@
 //! Files the bridge keeps under `<Pulse state dir>/bridge`: per-chat inboxes
 //! (JSON lines with a read cursor), linked computers (`links.json`),
-//! registered chats, and the hub's heartbeat. Every replacement is a
+//! registered chats, the hub's heartbeat, and the last send/receive times
+//! (`activity.json`, which the notch rings pulse on). Every replacement is a
 //! temporary file renamed into place; inbox appends happen under a lock file.
 
 use super::envelope::{Envelope, now_ms};
@@ -17,6 +18,21 @@ use std::time::{Duration, Instant};
 pub const INBOX_CAP_BYTES: u64 = 10 * 1024 * 1024;
 /// A hub that has not written its heartbeat for this long counts as stopped.
 pub const RELAY_STALE_MS: u64 = 30_000;
+
+/// When this computer last sent or received a bridge message, and how many so far.
+/// The hub publishes it; the notch pulses the Send ring for a few seconds after either.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    #[serde(default)]
+    pub sent_ms: u64,
+    #[serde(default)]
+    pub received_ms: u64,
+    #[serde(default)]
+    pub sent: u64,
+    #[serde(default)]
+    pub received: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InboxEntry {
@@ -396,5 +412,40 @@ impl Store {
     pub fn relay_alive(&self) -> bool {
         self.relay_status()
             .is_some_and(|s| now_ms().saturating_sub(s.ts) < RELAY_STALE_MS)
+    }
+
+    // ---- activity ----------------------------------------------------------
+
+    fn activity_path(&self) -> PathBuf {
+        self.root.join("activity.json")
+    }
+
+    /// The last send and receive on this computer (zeros when there were none).
+    pub fn activity(&self) -> Activity {
+        read_json(&self.activity_path()).unwrap_or_default()
+    }
+
+    /// A bridge message left this computer (or went between two chats here).
+    pub fn note_sent(&self) {
+        self.note_activity(true);
+    }
+
+    /// A bridge message arrived from a linked computer.
+    pub fn note_received(&self) {
+        self.note_activity(false);
+    }
+
+    fn note_activity(&self, sent: bool) {
+        let path = self.activity_path();
+        let Ok(_lock) = self.lock(&path) else { return };
+        let mut activity = self.activity();
+        if sent {
+            activity.sent_ms = now_ms();
+            activity.sent += 1;
+        } else {
+            activity.received_ms = now_ms();
+            activity.received += 1;
+        }
+        let _ = write_json(&path, &activity);
     }
 }

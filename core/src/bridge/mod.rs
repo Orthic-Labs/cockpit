@@ -413,6 +413,9 @@ pub fn send_text(
             .find(|s| s.id == peer.session)
             .ok_or_else(|| BridgeError::NotFound(to.to_string()))?;
         let receipt = deliver_here(store, session, &env, from.reply_socket.as_deref());
+        if receipt.state != ReceiptState::Refused {
+            store.note_sent();
+        }
         return Ok(SendOutcome {
             msg_id: env.id,
             to: peer,
@@ -423,6 +426,10 @@ pub fn send_text(
     let link = links::find(store, &peer.device)
         .ok_or_else(|| BridgeError::NotFound(format!("no link named {}", peer.device)))?;
     let receipt = links::post(&link, &env).map_err(BridgeError::Delivery)?;
+    let status = ReceiptState::parse(receipt["status"].as_str().unwrap_or(""));
+    if status != Some(ReceiptState::Refused) {
+        store.note_sent();
+    }
     Ok(SendOutcome {
         msg_id: env.id,
         to: peer,
@@ -436,7 +443,13 @@ pub fn send_text(
 pub fn receive(store: &Store, env: &Envelope) -> Receipt {
     let sessions = roster::local_sessions(store);
     match sessions.iter().find(|s| s.id == env.to.session) {
-        Some(session) => deliver_here(store, session, env, None),
+        Some(session) => {
+            let receipt = deliver_here(store, session, env, None);
+            if receipt.state != ReceiptState::Refused {
+                store.note_received();
+            }
+            receipt
+        }
         None => Receipt {
             msg_id: env.id.clone(),
             session: env.to.session.clone(),
