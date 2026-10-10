@@ -48,6 +48,8 @@ const DONE_SHOWN: Duration = Duration::from_secs(2);
 const FRAME_CLASS: &str = "Chrome_WidgetWin_1";
 const ERROR_MAX_BYTES: usize = 64 * 1024;
 const REMEMBER_EVERY: Duration = Duration::from_secs(60);
+const SYNC_ATTEMPTS: u32 = 12;
+const SYNC_RETRY_STEP: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -95,7 +97,10 @@ pub fn start() {
                     }
                 }
                 Some(reason) => {
-                    diag::info("claude_restart", &[("result", "failed")]);
+                    diag::info(
+                        "claude_restart",
+                        &[("result", "failed"), ("reason", &reason)],
+                    );
                     set(Phase::Failed(reason));
                 }
             }
@@ -133,7 +138,23 @@ fn sequence() -> Option<String> {
             return Some("Claude is still open".to_string());
         }
     }
-    let failure = run_cli();
+    // Desktop's helper processes (crash handler, GPU) can outlive its windows by a few
+    // seconds, and the CLI refuses while any of them runs: retry.
+    let mut failure = None;
+    for attempt in 0..SYNC_ATTEMPTS {
+        failure = run_cli();
+        match &failure {
+            Some(f) if f.code.as_deref() == Some("claude_running") => {
+                diag::info(
+                    "claude_restart",
+                    &[("sync", "claude_running"), ("attempt", &(attempt + 1).to_string())],
+                );
+                std::thread::sleep(SYNC_RETRY_STEP);
+            }
+            _ => break,
+        }
+    }
+    let failure = failure.map(|f| f.reason);
     // Claude comes back whatever the sync said.
     let reopened = launch.as_deref().is_some_and(reopen);
     if reopened {
@@ -196,11 +217,24 @@ fn cli_path() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Runs `pulse claude sync --apply --json` hidden; `None` on success, else the reason (the
-/// CLI's own `error` text when it gave one).
-fn run_cli() -> Option<String> {
+/// Why the sync failed: the reason the card shows, and the CLI's stable `code` when it
+/// gave one (`claude_running` is retried).
+struct SyncFailure {
+    reason: String,
+    code: Option<String>,
+}
+
+impl SyncFailure {
+    fn plain(reason: impl Into<String>) -> Self {
+        Self { reason: reason.into(), code: None }
+    }
+}
+
+/// Runs `pulse claude sync --apply --json` hidden; `None` on success, else the failure (the
+/// CLI's own `error` text and `code` when it gave them).
+fn run_cli() -> Option<SyncFailure> {
     let Some(cli) = cli_path() else {
-        return Some("The Pulse command line tool is missing".to_string());
+        return Some(SyncFailure::plain("The Pulse command line tool is missing"));
     };
     let output = Command::new(cli)
         .args(["claude", "sync", "--apply", "--json"])
@@ -212,25 +246,30 @@ fn run_cli() -> Option<String> {
     let output = match output {
         Ok(output) => output,
         Err(error) => {
-            return Some(format!(
+            return Some(SyncFailure::plain(format!(
                 "Could not run the Pulse command line tool: {error}"
-            ));
+            )));
         }
     };
     if output.status.success() {
         return None;
     }
     // The CLI prints `{"error": ..., "code": ...}`; which stream carries it is not relied on.
-    let reason = [&output.stdout, &output.stderr]
+    let printed = [&output.stdout, &output.stderr]
         .into_iter()
-        .find_map(|bytes| {
-            json::parse(bytes, ERROR_MAX_BYTES)?
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .filter(|reason| !reason.is_empty());
-    Some(reason.unwrap_or_else(|| "Claude sync failed".to_string()))
+        .find_map(|bytes| json::parse(bytes, ERROR_MAX_BYTES));
+    let text = |key: &str| {
+        printed
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    Some(SyncFailure {
+        reason: text("error").unwrap_or_else(|| "Claude sync failed".to_string()),
+        code: text("code"),
+    })
 }
 
 // ------------------------------------------------------------------ Claude Desktop
