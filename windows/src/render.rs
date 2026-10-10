@@ -851,6 +851,9 @@ fn button_spans(
 
 /// Least gap between the bar's two buttons: the Mac's HStack spacing, spacer and spacing.
 const BAR_GAP: f32 = 20.0;
+/// Room left on a bar plate beyond its label's measured width, so float rounding between the
+/// measured plate and the drawn one can never make "Paste" lose a letter to an ellipsis.
+const BAR_SLACK: f32 = 2.0;
 /// Off-card span of a bar button that is not there, so no pointer ever lands on it.
 const NO_SPAN: (f32, f32) = (-10_000.0, 0.0);
 
@@ -865,7 +868,7 @@ fn bar_spans(
 ) -> Vec<(f32, f32)> {
     let mut plate = |label: &str| {
         let label = dip_width(text, label, BODY_SIZE, false, s);
-        2.0 * BUTTON_PAD + BUTTON_SYMBOL + BUTTON_INNER + label
+        2.0 * BUTTON_PAD + BUTTON_SYMBOL + BUTTON_INNER + label + BAR_SLACK
     };
     let paste_width = paste.then(|| plate("Paste"));
     let copy_span = copy.map_or(NO_SPAN, |label| {
@@ -1643,7 +1646,9 @@ impl Pen<'_> {
             detail_text = self.fit(detail, quiet, (room / 2.0) as i32);
             room -= self.width(&detail_text, quiet) as f32 + BUTTON_INNER * s;
         }
-        let label = self.fit(label, ink, room.max(0.0) as i32);
+        // Half a pixel of tolerance: the plate's width came from a measured label through
+        // DIPs and back, and a truncating cast must not cost a letter.
+        let label = self.fit(label, ink, (room + 0.5).max(0.0) as i32);
         let label_width = self.width(&label, ink) as f32;
         let start = if detail.is_empty() {
             (left + right - icon - label_width) / 2.0
@@ -2141,6 +2146,16 @@ pub fn render_card(
 const HOVER_ALPHA: f32 = 0.16;
 /// A pressed pill or round button reads lighter than a hovered one.
 const PRESS_ALPHA: f32 = 0.26;
+/// How far the hover plate of a text row that acts reaches beyond its text, and its corners.
+const ROW_HOVER_X: f32 = 6.0;
+const ROW_HOVER_Y: f32 = 3.0;
+const ROW_HOVER_RADIUS: f32 = 10.0;
+/// The Quit item's plate: the Send bar plate's grey (the 0.176 track) lifted by the same +0.22
+/// (hover) and +0.32 (pressed), as white laid over the menu's black.
+const MENU_HOVER_ALPHA: f32 = TRACK_ALPHA + 0.22;
+const MENU_PRESS_ALPHA: f32 = TRACK_ALPHA + 0.32;
+/// Inset of the Quit plate from the menu's edge.
+const MENU_PLATE_INSET: f32 = 4.0;
 /// The Send bar's plates under the Mac's `CardButtonStyle`: its +0.22 (hover) and +0.32
 /// (pressed) brightness on the 0.176 plate, as white laid over that plate.
 const BAR_HOVER_ALPHA: f32 = 0.22 / (1.0 - TRACK_ALPHA);
@@ -2189,7 +2204,7 @@ pub fn render_card_hover(
                 Hit::Row(index, _) => content.rows.get(index),
                 Hit::Head(_) => None,
             }),
-            Some(Row::Bar { .. })
+            Some(Row::Bar { .. } | Row::Button { .. })
         );
         let alpha = match (bar, pressed) {
             (true, true) => BAR_PRESS_ALPHA,
@@ -2236,6 +2251,26 @@ fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32,
                     placed.height,
                     DEVICE_RADIUS,
                 )),
+                // A plain button row (the Send card's Cancel) is a plate over its whole width.
+                Row::Button { .. } => Some((
+                    CARD_PAD,
+                    placed.top,
+                    laid.width - 2.0 * CARD_PAD,
+                    placed.height,
+                    BUTTON_RADIUS,
+                )),
+                // A nearby device on the Send card's hover card is a text row that acts: the
+                // Mac's row hover, a plate a little wider and taller than the text.
+                Row::Pair { .. } => {
+                    let height = placed.height + 2.0 * ROW_HOVER_Y;
+                    Some((
+                        CARD_PAD - ROW_HOVER_X,
+                        placed.top - ROW_HOVER_Y,
+                        laid.width - 2.0 * (CARD_PAD - ROW_HOVER_X),
+                        height,
+                        ROW_HOVER_RADIUS.min(height / 2.0),
+                    ))
+                }
                 _ => None,
             }
         }
@@ -2266,10 +2301,33 @@ pub fn menu_size(dpi: u32) -> (i32, i32) {
 
 /// The right-click menu: a single "Quit" item in the card style.
 pub fn render_menu(dpi: u32, text: &mut TextPainter) -> Canvas {
+    render_menu_hover(dpi, text, false)
+}
+
+/// `render_menu` with the Quit plate drawn when the pointer is `over` it (lighter while the
+/// primary button is held, as the Send bar's buttons).
+pub fn render_menu_hover(dpi: u32, text: &mut TextPainter, over: bool) -> Canvas {
     let s = layout::scale(dpi);
     let (width, height) = menu_size(dpi);
     let mut canvas = Canvas::new(width as usize, height as usize);
     menu_background(&mut canvas, s);
+    if over {
+        let alpha = if PRESSED.load(Ordering::Relaxed) {
+            MENU_PRESS_ALPHA
+        } else {
+            MENU_HOVER_ALPHA
+        };
+        let inset = MENU_PLATE_INSET * s;
+        canvas.fill_round_rect(
+            inset,
+            inset,
+            width as f32 - 2.0 * inset,
+            height as f32 - 2.0 * inset,
+            [BUTTON_RADIUS * s; 4],
+            0xFFFFFF,
+            alpha,
+        );
+    }
     draw_text(
         &mut canvas,
         text,

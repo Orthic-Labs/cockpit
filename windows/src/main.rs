@@ -156,6 +156,8 @@ struct Interaction {
     drag: Option<Drag>,
     /// Quit menu: owning panel and its screen rectangle.
     menu: Option<(isize, RECT)>,
+    /// The pointer is over the Quit menu (its plate is drawn lit).
+    menu_hot: bool,
     /// What the card window shows.
     card_shown: Option<Shown>,
     /// Pointer is over the card window (only the Send card takes the pointer).
@@ -190,6 +192,7 @@ impl Interaction {
             press_orb: None,
             drag: None,
             menu: None,
+            menu_hot: false,
             card_shown: None,
             card_hover: false,
             card_tracking: false,
@@ -1674,8 +1677,65 @@ fn set_card_pressed(down: bool) {
     if !render::set_pressed(down) {
         return;
     }
-    if let Some((panel, dpi, window)) = shown_card() {
+    if lock_state().ui.menu.is_some() {
+        redraw_menu();
+    } else if let Some((panel, dpi, window)) = shown_card() {
         redraw_card(&panel, dpi, window);
+    }
+}
+
+/// The pointer entered or left the Quit menu: its plate lights or goes out.
+fn set_menu_hot(hot: bool) {
+    {
+        let mut app = lock_state();
+        if app.ui.menu_hot == hot {
+            return;
+        }
+        app.ui.menu_hot = hot;
+    }
+    redraw_menu();
+}
+
+/// Draws the open Quit menu again in place (hover and pressed states).
+fn redraw_menu() {
+    let (dpi, window, hot) = {
+        let app = lock_state();
+        let Some((key, _)) = app.ui.menu else {
+            return;
+        };
+        let Some(dpi) = app
+            .panels
+            .iter()
+            .find(|p| p.window.key() == key)
+            .map(|p| p.slot.dpi)
+        else {
+            return;
+        };
+        let Some(window) = app.card.as_ref().map(OwnedWindow::key) else {
+            return;
+        };
+        (dpi, window, app.ui.menu_hot)
+    };
+    let Some(canvas) = with_text(|text| render::render_menu_hover(dpi, text, hot)) else {
+        return;
+    };
+    let _ = present(hwnd_from_key(window), &canvas, None);
+}
+
+/// The pointer moved over the open Quit menu: lights its plate and asks for the leave message.
+fn on_menu_mouse_move(hwnd: HWND) {
+    set_menu_hot(true);
+    let armed = std::mem::replace(&mut lock_state().ui.card_tracking, true);
+    if !armed {
+        let mut request = TRACKMOUSEEVENT {
+            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+        };
+        if unsafe { TrackMouseEvent(&mut request) }.is_err() {
+            lock_state().ui.card_tracking = false;
+        }
     }
 }
 
@@ -2399,7 +2459,11 @@ fn open_menu(hwnd: HWND) {
 }
 
 fn close_menu() {
-    lock_state().ui.menu = None;
+    {
+        let mut app = lock_state();
+        app.ui.menu = None;
+        app.ui.menu_hot = false;
+    }
     stop_menu_timer();
     hide_card();
     sync_card(); // a sharing popup that waited behind the menu comes back
@@ -2657,6 +2721,8 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                     on_card_mouse_move(hwnd);
                     let (x, y) = lparam_point(lparam);
                     set_card_hit(card_hit_at(x, y));
+                } else {
+                    on_menu_mouse_move(hwnd);
                 }
                 return LRESULT(0);
             }
@@ -2674,6 +2740,14 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                 return LRESULT(1);
             }
             MSG_MOUSELEAVE => {
+                if lock_state().ui.menu.is_some() {
+                    // The Quit menu: the plate goes out; the card's hover bookkeeping is not
+                    // involved.
+                    lock_state().ui.card_tracking = false;
+                    set_card_pressed(false);
+                    set_menu_hot(false);
+                    return LRESULT(0);
+                }
                 set_card_pressed(false);
                 set_card_hit(None);
                 on_card_mouse_leave();

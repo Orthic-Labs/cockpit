@@ -260,6 +260,10 @@ static FAST_UNTIL: AtomicU64 = AtomicU64::new(0);
 static REFETCH: AtomicBool = AtomicBool::new(false);
 /// "Refresh now": every provider is to be read at once.
 static REFRESH_ALL: AtomicBool = AtomicBool::new(false);
+/// Where the last Claude poll got (or failed to get) its reading, and why Desktop's cache was
+/// not usable when it was not, for the refresh log line. Written and read by the one polling
+/// thread.
+static CLAUDE_SOURCE: Mutex<(&'static str, &'static str)> = Mutex::new(("none", ""));
 /// The `Retry-After` seconds of the last 429 seen by `classify` (0: the server gave none).
 /// Written and read by the one polling thread, one provider at a time.
 static SERVER_RETRY: AtomicU64 = AtomicU64::new(0);
@@ -307,10 +311,10 @@ pub fn notify() {
     }
 }
 
-/// After Claude was reopened: read the Claude usage at once, and look at Desktop's account
-/// every second for a minute (the owner may be signing in to another account).
 /// "Refresh now" from the hub (the Mac's `refresh`): reads Claude and Codex at once. A
-/// provider inside its rate-limit back-off still waits it out, as on the Mac.
+/// provider inside its rate-limit back-off still waits it out (Claude's endpoint, that is:
+/// Desktop's cache file is re-read regardless), as on the Mac. Each re-read is logged as
+/// `usage_refresh`.
 pub fn refresh_now() {
     REFRESH_ALL.store(true, Ordering::Relaxed);
     // Taking the lock first means the polling thread is either before its check (and sees
@@ -338,6 +342,8 @@ pub fn forget(provider: Provider) {
     notify();
 }
 
+/// After Claude was reopened: read the Claude usage at once, and look at Desktop's account
+/// every second for a minute (the owner may be signing in to another account).
 pub fn refetch_claude_soon() {
     FAST_UNTIL.store(now_secs() + FAST_WINDOW_SECONDS, Ordering::Relaxed);
     REFETCH.store(true, Ordering::Relaxed);
@@ -417,6 +423,8 @@ enum Pause {
     Stopped,
     /// The poll interval ran out: every provider.
     Due,
+    /// "Refresh now": every provider, and each re-read is logged.
+    Refresh,
     /// Claude Desktop started, quit or changed account: the Claude reading only.
     Claude,
 }
@@ -437,7 +445,7 @@ fn pause() -> Pause {
             return Pause::Stopped;
         }
         if REFRESH_ALL.swap(false, Ordering::Relaxed) {
-            return Pause::Due;
+            return Pause::Refresh;
         }
         if REFETCH.swap(false, Ordering::Relaxed) {
             return Pause::Claude;
@@ -457,6 +465,7 @@ fn worker(controller_key: isize) {
     let mut trackers = [Tracker::default(), Tracker::default()];
     let mut saved_backoff = restore(&mut trackers);
     let mut only_claude = false;
+    let mut manual = false;
     loop {
         let now = now_secs();
         let mut changed = false;
@@ -476,9 +485,26 @@ fn worker(controller_key: isize) {
                 Provider::Codex => Some(poll_codex(now)),
             };
             let Some(outcome) = outcome else {
+                if manual {
+                    // A manual refresh never skips the 429 back-off; say that it waited.
+                    log_refresh(
+                        provider,
+                        source_for(provider, "backoff"),
+                        "waiting",
+                        tracker.backoff_until.saturating_sub(now),
+                    );
+                }
                 continue;
             };
             let next = apply_outcome(provider, tracker, outcome, now);
+            if manual {
+                log_refresh(
+                    provider,
+                    source_for(provider, "endpoint"),
+                    next.status.text(),
+                    next.updated.map_or(0, |at| now.saturating_sub(at)),
+                );
+            }
             // A back-off that began or ended is kept across a restart.
             if saved_backoff[provider.index()] != tracker.backoff_until {
                 saved_backoff[provider.index()] = tracker.backoff_until;
@@ -511,12 +537,48 @@ fn worker(controller_key: isize) {
                 )
             };
         }
+        manual = false;
         match pause() {
             Pause::Stopped => return,
             Pause::Due => only_claude = false,
+            Pause::Refresh => {
+                only_claude = false;
+                manual = true;
+            }
             Pause::Claude => only_claude = true,
         }
     }
+}
+
+/// Records where the Claude reading of the current poll came from.
+fn set_claude_source(source: &'static str) {
+    *CLAUDE_SOURCE.lock().unwrap_or_else(PoisonError::into_inner) = (source, "");
+}
+
+/// The source and detail to log for `provider`: Claude's as the poll noted them, Codex's
+/// `fallback`.
+fn source_for(provider: Provider, fallback: &'static str) -> (&'static str, &'static str) {
+    if provider == Provider::Claude {
+        *CLAUDE_SOURCE.lock().unwrap_or_else(PoisonError::into_inner)
+    } else {
+        (fallback, "")
+    }
+}
+
+/// One line per provider for every "Refresh now": the reading is logged even when it did not
+/// change (`usage_reading` only logs changes, and a Desktop-cache reading keeps its date).
+/// `seconds` is the reading's age, or for a wait the seconds left in the back-off.
+fn log_refresh(provider: Provider, (source, detail): (&str, &str), result: &str, seconds: u64) {
+    diag::info(
+        "usage_refresh",
+        &[
+            ("provider", provider.name()),
+            ("source", source),
+            ("detail", detail),
+            ("result", result),
+            ("seconds", seconds.to_string().as_str()),
+        ],
+    );
 }
 
 // ------------------------------------------------------------------ across restarts
@@ -998,6 +1060,7 @@ fn poll_claude(now: u64, tracker: &mut Tracker) -> Option<Outcome> {
 }
 
 fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<Outcome> {
+    set_claude_source("none");
     let desktop_account = desktop::signed_in_account();
     let tracked = desktop_account.clone().or_else(|| cli.id.clone());
     *CLAUDE_IDS.lock().unwrap_or_else(PoisonError::into_inner) = ClaudeIds {
@@ -1016,6 +1079,7 @@ fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<
     if let Some(id) = desktop_account.as_deref()
         && cli.id.as_deref() != Some(id)
     {
+        set_claude_source("desktop_cache");
         return Some(desktop_only(id, now, tracker));
     }
     if now < tracker.backoff_until {
@@ -1024,12 +1088,15 @@ fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<
         if let Some(id) = desktop_account.as_deref()
             && let Some(cached) = desktop_cache_outcome(id, now, tracker)
         {
+            set_claude_source("desktop_cache");
             return Some(cached);
         }
+        set_claude_source("backoff");
         return tracker
             .account_changed
             .then_some(Outcome::Failed(Status::RateLimited));
     }
+    set_claude_source("endpoint");
     let mut outcome = poll_claude_endpoint(now);
     if matches!(outcome, Outcome::Failed(Status::RateLimited)) {
         // Begun here, not only when the failure is published: a cached or CLI reading below
@@ -1048,6 +1115,7 @@ fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<
         )
         && let Some(cached) = desktop_cache_outcome(id, now, tracker)
     {
+        set_claude_source("desktop_cache");
         outcome = cached;
     }
     // Still nothing: ask `claude /usage` (the Mac's ClaudeUsageCLI), which answers off the
@@ -1063,6 +1131,7 @@ fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<
         )
     ) && let Some(reading) = claude_usage_cli(now)
     {
+        set_claude_source("claude_cli");
         outcome = reading;
     }
     Some(outcome)
@@ -1100,6 +1169,8 @@ fn desktop_only(id: &str, now: u64, tracker: &mut Tracker) -> Outcome {
             }
         }
         Err(why) => {
+            set_claude_source("desktop_cache");
+            CLAUDE_SOURCE.lock().unwrap_or_else(PoisonError::into_inner).1 = why;
             if tracker.note != why {
                 tracker.note = why;
                 diag::info("claude_desktop_cache", &[("result", why)]);
