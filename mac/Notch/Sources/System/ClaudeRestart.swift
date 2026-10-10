@@ -4,8 +4,11 @@ import SwiftUI
 /// Pulse fork: the Claude card's "Restart Claude and sync chats" button. The
 /// owner presses it after signing in to a new account. `ClaudeAccountWatcher`
 /// then notices the account Claude opens with and refreshes usage at once.
-/// Quit Claude politely (never a force-kill, up to 20 s), run the bundled
-/// `pulse claude sync --apply --json` over every account, reopen Claude.
+/// Quit Claude politely (up to 20 s), force-quit what is left (up to 10 s
+/// more), run the bundled `pulse claude sync --apply --json` over every
+/// account, retrying while Claude's helper processes are still winding down,
+/// then reopen Claude. A failure stays on the button (red mark, message in
+/// its tooltip) until the next press, and is logged.
 @MainActor
 final class ClaudeRestart: ObservableObject {
     enum Phase: Equatable { case idle, running, done, failed(String) }
@@ -34,6 +37,7 @@ final class ClaudeRestart: ObservableObject {
             }
             return
         }
+        Log.usage.error("claude restart: \(error, privacy: .public)")
         phase = .failed(error)
     }
 
@@ -41,20 +45,17 @@ final class ClaudeRestart: ObservableObject {
     /// CLI runs off the main thread; the waits are async sleeps.
     private static func sequence(cli: URL) async -> String? {
         let claudeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        if !running.isEmpty {
-            for app in running { _ = app.terminate() }
-            var closed = false
-            for _ in 0..<80 {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
-                    closed = true
-                    break
-                }
-            }
-            if !closed { return "Claude is still open" }
+        if let error = await quitClaude() { return error }
+        // Claude's helper processes (crashpad, GPU) can outlive the app by a
+        // few seconds, and the CLI refuses while any of them runs: retry.
+        var failure: String?
+        for attempt in 0..<12 {
+            let result = await Task.detached(priority: .userInitiated) { runCLI(cli) }.value
+            failure = result.message
+            if result.code != "claude_running" { break }
+            Log.usage.info("claude restart: helpers still running, retry \(attempt + 1, privacy: .public)")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
-        let failure = await Task.detached(priority: .userInitiated) { runCLI(cli) }.value
         // Claude comes back whatever the sync said.
         if let claudeURL {
             NSWorkspace.shared.openApplication(at: claudeURL,
@@ -66,9 +67,35 @@ final class ClaudeRestart: ObservableObject {
         return failure
     }
 
-    nonisolated private static func runCLI(_ cli: URL) -> String? {
+    /// Polite quit, 20 s; then a force quit, 10 s. Nil when Claude is gone.
+    private static func quitClaude() async -> String? {
+        var running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        guard !running.isEmpty else { return nil }
+        for app in running { _ = app.terminate() }
+        if await gone(within: 80) { return nil }
+        running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        Log.usage.info("claude restart: Claude did not quit in 20 s, force quitting")
+        for app in running { _ = app.forceTerminate() }
+        if await gone(within: 40) { return nil }
+        return "Claude is still open"
+    }
+
+    /// Polls every 250 ms up to `ticks` times for the app to be gone.
+    private static func gone(within ticks: Int) async -> Bool {
+        for _ in 0..<ticks {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+                return true
+            }
+        }
+        return false
+    }
+
+    struct CLIResult { let message: String?; let code: String? }
+
+    nonisolated private static func runCLI(_ cli: URL) -> CLIResult {
         guard FileManager.default.isExecutableFile(atPath: cli.path) else {
-            return "The Pulse command line tool is missing"
+            return CLIResult(message: "The Pulse command line tool is missing", code: nil)
         }
         let process = Process()
         process.executableURL = cli
@@ -77,12 +104,15 @@ final class ClaudeRestart: ObservableObject {
         process.standardOutput = out
         process.standardError = out
         process.standardInput = FileHandle.nullDevice
-        do { try process.run() } catch { return error.localizedDescription }
+        do { try process.run() } catch {
+            return CLIResult(message: error.localizedDescription, code: nil)
+        }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus != 0 else { return nil }
+        guard process.terminationStatus != 0 else { return CLIResult(message: nil, code: nil) }
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        return (object?["error"] as? String) ?? "Claude sync failed"
+        return CLIResult(message: (object?["error"] as? String) ?? "Claude sync failed",
+                         code: object?["code"] as? String)
     }
 }
 
