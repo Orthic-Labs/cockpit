@@ -7,7 +7,8 @@ import SwiftUI
 /// Quit Claude politely (up to 20 s), force-quit what is left (up to 10 s
 /// more), run the bundled `pulse claude sync --apply --json` over every
 /// account, retrying while Claude's helper processes are still winding down,
-/// then reopen Claude. A failure stays on the button (red mark, message in
+/// then reopen Claude and, detached, the chats that were running (`remember`
+/// before the quit, `reopen` after). A failure stays on the button (red mark, message in
 /// its tooltip) until the next press, and is logged.
 @MainActor
 final class ClaudeRestart: ObservableObject {
@@ -45,6 +46,10 @@ final class ClaudeRestart: ObservableObject {
     /// CLI runs off the main thread; the waits are async sleeps.
     private static func sequence(cli: URL) async -> String? {
         let claudeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        // Note the running chats once (up to 5 s) so `reopen` can bring them back.
+        _ = await Task.detached(priority: .userInitiated) {
+            ClaudePulseCLI.run(["claude", "remember", "--json"], timeout: 5)
+        }.value
         if let error = await quitClaude() { return error }
         // Claude's helper processes (crashpad, GPU) can outlive the app by a
         // few seconds, and the CLI refuses while any of them runs: retry.
@@ -61,6 +66,8 @@ final class ClaudeRestart: ObservableObject {
             NSWorkspace.shared.openApplication(at: claudeURL,
                                                configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
             NotificationCenter.default.post(name: ClaudeAccountWatcher.claudeReopened, object: nil)
+            // Detached: it opens the chats one at a time and can take minutes.
+            ClaudePulseCLI.launchDetached(["claude", "reopen", "--json"])
         } else if failure == nil {
             return "Synced, but Claude could not be found to reopen"
         }

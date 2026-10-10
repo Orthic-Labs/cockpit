@@ -53,7 +53,7 @@ fn emit(value: &Value, machine: bool) {
 pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
     if args.is_empty() {
         return Err(plain(
-            "claude requires accounts, known, auto, include, exclude, sync, backups, restore,              remember or reopen",
+            "claude requires accounts, known, auto, include, exclude, sync, backups, restore,              remember, reopen or mirror",
         ));
     }
     let sub = args.remove(0);
@@ -171,6 +171,16 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
             )
             .map_err(fail)?;
             emit(&json!({"restored": result}), machine);
+        }
+        "mirror" => {
+            no_more(&args)?;
+            let registry = registry_override
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(sync::registry_path)
+                .map_err(fail)?;
+            let result = sync::mirror(&root().map_err(fail)?, &registry).map_err(fail)?;
+            emit(&json!({"mirror": result}), machine);
         }
         "remember" => {
             let file = take_option(&mut args, "--file")?.map(PathBuf::from);

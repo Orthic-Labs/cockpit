@@ -377,3 +377,161 @@ fn account_sync_journey() {
     assert!(names(&fe).is_empty());
     let _ = fs::remove_dir_all(&base);
 }
+
+fn ranked(id: &str, turns: u64, activity: u64, archived: bool, variant: &str) -> String {
+    format!(
+        "{{\"sessionId\":\"local_{id}\",\"createdAt\":100,\"lastActivityAt\":{activity},\"completedTurns\":{turns},\"isArchived\":{archived},\"title\":\"{variant}\"}}"
+    )
+}
+
+/// The one-way mirror while Claude "runs": the signed-in account's folder is
+/// only read, other included accounts' folders receive its records, and
+/// excluded, folderless and fresher destinations are left alone.
+#[test]
+fn chat_mirror_journey() {
+    let base = std::env::temp_dir().join(format!("pulse-claude-mirror-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let root = base.join("Claude");
+    let registry = base.join("Pulse").join("claude-accounts.json");
+    let (a, b, c, d, e) = (uuid(0xa1), uuid(0xb2), uuid(0xc3), uuid(0xd4), uuid(0xe5));
+    let org = uuid(0x01);
+    let dir = |acct: &str| root.join("claude-code-sessions").join(acct).join(&org);
+    let (fa, fb, fc, fe) = (dir(&a), dir(&b), dir(&c), dir(&e));
+    for f in [&fa, &fb, &fc, &fe] {
+        fs::create_dir_all(f).unwrap();
+    }
+    // D has an account folder but no org folder yet: it gets nothing.
+    fs::create_dir_all(root.join("claude-code-sessions").join(&d)).unwrap();
+    let config = |active: &str| {
+        fs::write(
+            root.join("config.json"),
+            format!("{{\"lastKnownAccountUuid\":\"{active}\",\"oauth:tokenCache\":\"SECRET\"}}"),
+        )
+        .unwrap()
+    };
+    config(&a);
+    let (new, up, tie, high, gone, arch) = (
+        uuid(0x21),
+        uuid(0x22),
+        uuid(0x23),
+        uuid(0x24),
+        uuid(0x25),
+        uuid(0x26),
+    );
+    let put = |f: &Path, id: &str, body: String| {
+        fs::write(f.join(format!("local_{id}.json")), body).unwrap()
+    };
+    put(&fa, &new, ranked(&new, 3, 500, false, "new"));
+    put(&fa, &up, ranked(&up, 9, 900, false, "further"));
+    put(&fb, &up, ranked(&up, 4, 400, false, "behind"));
+    put(&fa, &tie, ranked(&tie, 5, 500, false, "x"));
+    put(&fb, &tie, ranked(&tie, 5, 500, false, "y"));
+    put(&fa, &high, ranked(&high, 2, 200, false, "behind in A"));
+    put(&fb, &high, ranked(&high, 8, 800, true, "ahead in B"));
+    fs::write(fa.join(format!("deleted_{gone}")), "3000").unwrap();
+    put(&fb, &gone, ranked(&gone, 1, 1000, false, "deleted in A"));
+    put(&fa, &arch, ranked(&arch, 1, 100, true, "archived"));
+    // B's index is old (and stale); C has none. E is excluded.
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    fs::write(
+        fb.join("archived-sessions.idx"),
+        "{\"v\":1,\"archived\":[]}",
+    )
+    .unwrap();
+    fs::File::options()
+        .write(true)
+        .open(fb.join("archived-sessions.idx"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    sync::discover(&root, &registry, 10).unwrap();
+    sync::set_included(&registry, &e, false).unwrap();
+
+    let before = snapshot(&root);
+    let first = sync::mirror(&root, &registry).unwrap();
+    assert_eq!(first.active.as_deref(), Some(a.as_str()));
+    assert!(first.aborted.is_none());
+    // B: new, up, arch, and gone removed (marker written). C: all but the deleted one.
+    assert_eq!((first.folders, first.copied, first.skipped), (2, 9, 1));
+    let after = snapshot(&root);
+    // The signed-in account's folder, the excluded one and the folderless one never change.
+    for (path, bytes) in &before {
+        if path.starts_with(&fa) || path.starts_with(&fe) {
+            assert_eq!(after.get(path), Some(bytes));
+        }
+    }
+    assert_eq!(names(&fe), Vec::<String>::new());
+    assert!(
+        fs::read_dir(root.join("claude-code-sessions").join(&d))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let l = |id: &str| format!("local_{id}.json");
+    assert_eq!(
+        fs::read(fb.join(l(&new))).unwrap(),
+        fs::read(fa.join(l(&new))).unwrap()
+    );
+    assert_eq!(
+        fs::read(fb.join(l(&up))).unwrap(),
+        fs::read(fa.join(l(&up))).unwrap()
+    );
+    assert!(
+        fs::read_to_string(fb.join(l(&tie)))
+            .unwrap()
+            .contains("\"y\"")
+    );
+    assert!(
+        fs::read_to_string(fb.join(l(&high)))
+            .unwrap()
+            .contains("ahead in B")
+    );
+    assert!(!fb.join(l(&gone)).exists());
+    assert_eq!(
+        fs::read_to_string(fb.join(format!("deleted_{gone}"))).unwrap(),
+        "3000"
+    );
+    assert!(
+        fs::read_to_string(fc.join(l(&tie)))
+            .unwrap()
+            .contains("\"x\"")
+    );
+    assert!(fc.join(l(&arch)).exists());
+    // C was empty, so it gets every live record; its index lists the archived one.
+    assert_eq!(
+        fs::read_to_string(fc.join("archived-sessions.idx")).unwrap(),
+        format!("{{\"v\":1,\"archived\":[\"local_{arch}\"]}}")
+    );
+    // B keeps its own archived record in its rebuilt index.
+    let mut want = [format!("local_{arch}"), format!("local_{high}")];
+    want.sort();
+    assert_eq!(
+        fs::read_to_string(fb.join("archived-sessions.idx")).unwrap(),
+        format!("{{\"v\":1,\"archived\":[\"{}\",\"{}\"]}}", want[0], want[1])
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("config.json"))
+            .unwrap()
+            .matches("SECRET")
+            .count(),
+        1
+    );
+
+    // Nothing changed: the pass does no writes (the tie is still skipped).
+    let settled = snapshot(&root);
+    let second = sync::mirror(&root, &registry).unwrap();
+    assert_eq!((second.copied, second.folders, second.skipped), (0, 0, 1));
+    assert_eq!(snapshot(&root), settled);
+
+    // Signed out: no pass. Switched account: the pass copies from the new one.
+    fs::write(root.join("config.json"), "{}").unwrap();
+    let none = sync::mirror(&root, &registry).unwrap();
+    assert_eq!(none.aborted.as_deref(), Some("no signed-in account"));
+    assert_eq!(snapshot(&root), settled);
+    config(&b);
+    let back = sync::mirror(&root, &registry).unwrap();
+    assert_eq!(back.active.as_deref(), Some(b.as_str()));
+    assert!(back.copied > 0);
+    assert!(fa.join(l(&high)).exists());
+    let _ = fs::remove_dir_all(&base);
+}

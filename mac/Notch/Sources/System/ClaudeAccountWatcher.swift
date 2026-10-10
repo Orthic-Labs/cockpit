@@ -19,6 +19,10 @@ final class ClaudeAccountWatcher {
     /// Posted by `ClaudeRestart` once it has reopened Claude.
     static let claudeReopened = Notification.Name("dev.orthic.pulse.claudeReopened")
 
+    /// Posted when the signed-in account changes; `userInfo["afterRestart"]`
+    /// is true when the restart button reopened Claude in the last minute.
+    static let accountChanged = Notification.Name("dev.orthic.pulse.claudeAccountChanged")
+
     init(onSwitch: @escaping () -> Void) {
         self.configURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Claude/config.json")
@@ -65,6 +69,8 @@ final class ClaudeAccountWatcher {
         // A missing id (signed out mid-write) is not a switch.
         guard let account, account != lastAccount else { return }
         lastAccount = account
+        NotificationCenter.default.post(name: Self.accountChanged, object: nil,
+                                        userInfo: ["afterRestart": fastUntil != .distantPast])
         onSwitch()
     }
 

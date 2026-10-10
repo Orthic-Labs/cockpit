@@ -85,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// protocol has no business carrying that.
     private var claudeProviders: [ClaudeOAuthProvider] = []
     private var claudeAccountWatcher: ClaudeAccountWatcher?
+    private var claudeChatMirror: ClaudeChatMirror?
+    private var claudeChatRemember: ClaudeChatRemember?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set here, not in the Info.plist: this call is applied at launch and
@@ -443,6 +445,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 watcher.start()
                 claudeAccountWatcher = watcher
+            }
+            // Pulse fork: every Claude account keeps the chats of the others.
+            if !isRunningTests {
+                let mirror = ClaudeChatMirror()
+                mirror.start()
+                claudeChatMirror = mirror
+                let remember = ClaudeChatRemember()
+                remember.start()
+                claudeChatRemember = remember
             }
 
             // Pulse fork: share settings and accounts with the hub.

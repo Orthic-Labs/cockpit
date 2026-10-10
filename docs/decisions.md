@@ -42,6 +42,8 @@ Owner decisions, in Adrian's words where it matters, with the date they were mad
 
 ## Claude accounts
 - The restart button quits Claude politely for 20 s, force-quits for 10 s more, retries the sync while helpers wind down, and keeps a failure visible. The sync prefers the copy of a session that is further along (turns, then last message, then time), never the newest timestamp alone. (2026-10-10)
+- The chat mirror is change-driven (FSEvents on the signed-in account's folder, plus the account change), with no timer. It copies one way, from the signed-in account to the others; the button stays as the restart and the full two-way merge. (2026-10-10)
+- Pulse chat (the roster) lists in-app chats only; CLI sessions are reached over ssh (Adrian's words to the Dell chat). (2026-10-10)
 
 ## Working rules (how the chats operate)
 - The Mac chat owns Mac, core, hub and docs; the Dell chat owns windows/src; one pushes at a time and tells the other first; CI runs must not cancel each other. (2026-10-10)

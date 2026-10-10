@@ -357,6 +357,88 @@ fn load_folder(
     path: &Path,
     blockers: &mut Vec<String>,
 ) -> Result<Folder, SyncError> {
+    load_folder_inner(account, org, path, blockers, &mut None)
+}
+
+/// Read one body. With `skipped` set (the mirror, which reads a folder Claude
+/// is writing) a file that cannot be read is counted and left out instead of
+/// failing the whole read.
+fn read_or_skip(file: &Path, skipped: &mut Option<usize>) -> Result<Option<Vec<u8>>, SyncError> {
+    match read_all(file) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) => match skipped {
+            Some(n) => {
+                *n += 1;
+                Ok(None)
+            }
+            None => Err(e),
+        },
+    }
+}
+
+fn parse_record(sig: Sig, bytes: &[u8]) -> Rec {
+    match serde_json::from_slice::<RecordMeta>(bytes) {
+        Ok(meta) => {
+            let ts = [meta.last_activity_at, meta.last_focused_at, meta.created_at]
+                .into_iter()
+                .flatten()
+                .fold(0f64, f64::max) as i64;
+            Rec {
+                sig,
+                ts,
+                rank: (
+                    meta.completed_turns.unwrap_or(0.0) as i64,
+                    meta.latest_user_frame_at.unwrap_or(0.0) as i64,
+                    ts,
+                ),
+                archived: meta.is_archived.unwrap_or(false),
+                readable: true,
+            }
+        }
+        Err(_) => Rec {
+            sig,
+            ts: 0,
+            rank: (0, 0, 0),
+            archived: false,
+            readable: false,
+        },
+    }
+}
+
+fn parse_index(sig: Sig, bytes: &[u8]) -> Index {
+    let parsed = serde_json::from_slice::<Value>(bytes).ok();
+    let (archived, compatible) = match parsed.as_ref().and_then(Value::as_object) {
+        Some(map)
+            if map.get("v") == Some(&Value::from(1))
+                && map.len() == 2
+                && map.get("archived").is_some_and(Value::is_array) =>
+        {
+            let set = map["archived"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            (set, true)
+        }
+        _ => (BTreeSet::new(), false),
+    };
+    Index {
+        sig,
+        archived,
+        compatible,
+    }
+}
+
+fn load_folder_inner(
+    account: &str,
+    org: &str,
+    path: &Path,
+    blockers: &mut Vec<String>,
+    skipped: &mut Option<usize>,
+) -> Result<Folder, SyncError> {
     let mut folder = Folder {
         account: account.to_string(),
         org: org.to_string(),
@@ -386,70 +468,27 @@ fn load_folder(
             Ok(Some(s)) => s,
             Ok(None) => continue,
             Err(e) => {
-                blockers.push(e.to_string());
+                match skipped {
+                    Some(n) => *n += 1,
+                    None => blockers.push(e.to_string()),
+                }
                 continue;
             }
         };
+        let Some(bytes) = read_or_skip(&file, skipped)? else {
+            continue;
+        };
         if let Some(id) = record {
-            let bytes = read_all(&file)?;
-            let rec = match serde_json::from_slice::<RecordMeta>(&bytes) {
-                Ok(meta) => {
-                    let ts = [meta.last_activity_at, meta.last_focused_at, meta.created_at]
-                        .into_iter()
-                        .flatten()
-                        .fold(0f64, f64::max) as i64;
-                    Rec {
-                        sig,
-                        ts,
-                        rank: (
-                            meta.completed_turns.unwrap_or(0.0) as i64,
-                            meta.latest_user_frame_at.unwrap_or(0.0) as i64,
-                            ts,
-                        ),
-                        archived: meta.is_archived.unwrap_or(false),
-                        readable: true,
-                    }
-                }
-                Err(_) => Rec {
-                    sig,
-                    ts: 0,
-                    rank: (0, 0, 0),
-                    archived: false,
-                    readable: false,
-                },
-            };
-            folder.recs.insert(id.to_string(), rec);
+            folder
+                .recs
+                .insert(id.to_string(), parse_record(sig, &bytes));
         } else if let Some(id) = tomb {
-            let ms = String::from_utf8(read_all(&file)?)
+            let ms = String::from_utf8(bytes)
                 .ok()
                 .and_then(|s| s.trim().parse::<i64>().ok());
             folder.tombs.insert(id.to_string(), Tomb { sig, ms });
         } else {
-            let bytes = read_all(&file)?;
-            let parsed = serde_json::from_slice::<Value>(&bytes).ok();
-            let (archived, compatible) = match parsed.as_ref().and_then(Value::as_object) {
-                Some(map)
-                    if map.get("v") == Some(&Value::from(1))
-                        && map.len() == 2
-                        && map.get("archived").is_some_and(Value::is_array) =>
-                {
-                    let set = map["archived"]
-                        .as_array()
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|v| v.as_str().map(str::to_string))
-                                .collect::<BTreeSet<_>>()
-                        })
-                        .unwrap_or_default();
-                    (set, true)
-                }
-                _ => (BTreeSet::new(), false),
-            };
-            folder.index = Some(Index {
-                sig,
-                archived,
-                compatible,
-            });
+            folder.index = Some(parse_index(sig, &bytes));
         }
     }
     Ok(folder)
@@ -1489,4 +1528,268 @@ pub fn auto_sync(
         Err(error) => result.error = Some(error.to_string()),
     }
     Ok(result)
+}
+
+// ---------------------------------------------------------------------- mirror
+
+/// What one [`mirror`] pass did.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct MirrorResult {
+    /// The signed-in account the pass copied from.
+    pub active: Option<String>,
+    /// Records copied into, or removed from, other accounts' folders.
+    pub copied: usize,
+    /// Files left alone because they could not be read or written, changed
+    /// underfoot, tie with different content, have an unknown format, or are
+    /// an archive index written in the last 5 s.
+    pub skipped: usize,
+    /// Destination folders that were written to.
+    pub folders: usize,
+    /// Why the pass stopped early, when it did.
+    pub aborted: Option<String>,
+}
+
+fn account_dirs(root: &Path) -> Vec<(String, PathBuf)> {
+    sorted_dirs(&root.join(SESSIONS_DIR), &mut Vec::new())
+}
+
+/// One-way copy from the signed-in account's folders into every other included
+/// account's existing org folders. Safe while Claude runs: it never writes the
+/// signed-in account's folder, which is the only one Claude writes. Accounts
+/// and org folders are never created, and nothing is backed up per pass; the
+/// full two-way merge stays the restart button's job. Included means what
+/// [`Registry::sync_set`] means: on disk and not explicitly excluded.
+pub fn mirror(root: &Path, registry_file: &Path) -> Result<MirrorResult, SyncError> {
+    let mut result = MirrorResult {
+        active: read_active_account(root),
+        ..MirrorResult::default()
+    };
+    let Some(active) = result.active.clone() else {
+        result.aborted = Some("no signed-in account".into());
+        return Ok(result);
+    };
+    let excluded: BTreeSet<String> = load_registry(registry_file)
+        .accounts
+        .into_iter()
+        .filter(|a| !a.included)
+        .map(|a| a.id)
+        .collect();
+    if excluded.contains(&active) {
+        result.aborted = Some("the signed-in account is excluded".into());
+        return Ok(result);
+    }
+    let accounts = account_dirs(root);
+    let mut skipped = 0usize;
+    let Some((_, active_path)) = accounts.iter().find(|(id, _)| *id == active) else {
+        result.aborted = Some("the signed-in account has no sessions folder".into());
+        return Ok(result);
+    };
+    let (sources, bad) = mirror_scan(&active, active_path);
+    skipped += bad;
+    let mut moved = false;
+    'dest: for (account, path) in accounts
+        .iter()
+        .filter(|(id, _)| *id != active && !excluded.contains(id))
+    {
+        let (dests, bad) = mirror_scan(account, path);
+        skipped += bad;
+        for dest in dests {
+            if read_active_account(root).as_deref() != Some(active.as_str()) {
+                moved = true;
+                break 'dest;
+            }
+            let (copied, bad, wrote) = mirror_into(&sources, &dest);
+            result.copied += copied;
+            skipped += bad;
+            result.folders += usize::from(wrote);
+        }
+    }
+    result.skipped = skipped;
+    if moved || read_active_account(root).as_deref() != Some(active.as_str()) {
+        result.aborted = Some("the signed-in account changed during the pass".into());
+    }
+    Ok(result)
+}
+
+/// An account's org folders, read leniently (Claude may be writing them), and
+/// how many files could not be read.
+fn mirror_scan(account: &str, path: &Path) -> (Vec<Folder>, usize) {
+    let mut blockers = Vec::new();
+    let mut loose = Some(0usize);
+    let mut skipped = 0usize;
+    let mut out = Vec::new();
+    for (org, org_path) in sorted_dirs(path, &mut blockers) {
+        match load_folder_inner(account, &org, &org_path, &mut blockers, &mut loose) {
+            Ok(f) => out.push(f),
+            Err(_) => skipped += 1,
+        }
+    }
+    (out, skipped + blockers.len() + loose.unwrap_or(0))
+}
+
+/// Bring one destination folder up to the sources. Returns (records copied or
+/// removed, files skipped, whether anything was written).
+fn mirror_into(sources: &[Folder], dest: &Folder) -> (usize, usize, bool) {
+    let (mut copied, mut skipped) = (0usize, 0usize);
+    let mut ids: BTreeSet<&String> = BTreeSet::new();
+    for s in sources {
+        ids.extend(s.recs.keys().chain(s.tombs.keys()));
+    }
+    let mut archived: BTreeMap<String, bool> = dest
+        .recs
+        .iter()
+        .map(|(id, r)| (id.clone(), r.archived))
+        .collect();
+    let mut changed = false;
+    for id in ids {
+        // The source's word on this session: its furthest-along live record,
+        // or a deletion at least as new as that record.
+        let live = sources
+            .iter()
+            .filter_map(|s| s.recs.get(id).map(|r| (s, r)))
+            .filter(|(_, r)| r.readable)
+            .max_by_key(|(_, r)| r.rank);
+        let unreadable = sources.iter().any(|s| {
+            s.recs.get(id).is_some_and(|r| !r.readable)
+                || s.tombs.get(id).is_some_and(|t| t.ms.is_none())
+        });
+        let deleted = sources
+            .iter()
+            .filter_map(|s| s.tombs.get(id).and_then(|t| t.ms))
+            .max()
+            .filter(|d| live.is_none_or(|(_, r)| *d >= r.ts));
+        if unreadable && live.is_none() && deleted.is_none() {
+            skipped += 1;
+            continue;
+        }
+        let name = format!("local_{id}.json");
+        let target = dest.path.join(&name);
+        let tomb_target = dest.path.join(format!("deleted_{id}"));
+        if let Some(d) = deleted {
+            let Some(rec) = dest.recs.get(id) else {
+                continue;
+            };
+            if !rec.readable {
+                skipped += 1;
+                continue;
+            }
+            if d < rec.ts {
+                continue;
+            }
+            // Marker first: a crash leaves marker and record, and the marker
+            // is the newer word, so the next pass or merge finishes the job.
+            let older = dest
+                .tombs
+                .get(id)
+                .is_none_or(|t| t.ms.is_some_and(|m| m < d));
+            let still = sig_of(&target)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.same_content(&rec.sig));
+            if !still {
+                skipped += 1;
+                continue;
+            }
+            let unmarked =
+                older && write_atomic(&tomb_target, d.to_string().as_bytes(), None).is_err();
+            if unmarked || remove_file(&target).is_err() {
+                skipped += 1;
+                continue;
+            }
+            archived.remove(id);
+            copied += 1;
+            changed = true;
+            continue;
+        }
+        let Some((src, rec)) = live else {
+            continue;
+        };
+        let newer_tomb = dest
+            .tombs
+            .get(id)
+            .is_some_and(|t| t.ms.is_none_or(|m| m >= rec.ts));
+        let wanted = match dest.recs.get(id) {
+            None => !newer_tomb,
+            Some(d) if !d.readable => {
+                skipped += 1;
+                false
+            }
+            Some(d) if rec.rank > d.rank => true,
+            Some(d) if rec.rank == d.rank && !d.sig.same_content(&rec.sig) => {
+                skipped += 1;
+                false
+            }
+            Some(_) => false,
+        };
+        if !wanted {
+            continue;
+        }
+        let from = src.path.join(&name);
+        let bytes = match read_all(&from) {
+            Ok(b) if b.len() as u64 == rec.sig.size && hash_bytes(&b) == rec.sig.hash => b,
+            _ => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let expect = dest.recs.get(id).map(|d| d.sig);
+        let now = sig_of(&target).ok();
+        let untouched = match (now, expect) {
+            (Some(None), None) => true,
+            (Some(Some(n)), Some(e)) => n.same_content(&e),
+            _ => false,
+        };
+        if !untouched || write_atomic(&target, &bytes, expect.map(|_| target.as_path())).is_err() {
+            skipped += 1;
+            continue;
+        }
+        archived.insert(id.clone(), rec.archived);
+        copied += 1;
+        changed = true;
+    }
+    if changed {
+        if mirror_index(dest, &archived) == Some(false) {
+            skipped += 1;
+        }
+    }
+    (copied, skipped, changed)
+}
+
+/// Rebuild the folder's archive index from the records it holds. `None` when
+/// nothing needed writing, `Some(false)` when it was left alone (unrecognised
+/// format or a failed write).
+fn mirror_index(dest: &Folder, archived: &BTreeMap<String, bool>) -> Option<bool> {
+    if dest.index.as_ref().is_some_and(|ix| !ix.compatible) {
+        return Some(false);
+    }
+    let mut wanted: BTreeSet<String> = archived
+        .iter()
+        .filter(|(_, a)| **a)
+        .map(|(id, _)| format!("local_{id}"))
+        .collect();
+    // A record this pass could not read keeps whatever the old index said.
+    if let Some(ix) = &dest.index {
+        for (id, r) in &dest.recs {
+            let key = format!("local_{id}");
+            if !r.readable && ix.archived.contains(&key) {
+                wanted.insert(key);
+            }
+        }
+    }
+    if dest.index.as_ref().is_some_and(|ix| ix.archived == wanted) {
+        return None;
+    }
+    // Desktop rewrites the index of the account it just left a moment after a
+    // switch; a fresh index is its write in flight, so leave it this pass.
+    let now_ns = now_ms().saturating_mul(1_000_000);
+    if dest
+        .index
+        .as_ref()
+        .is_some_and(|ix| ix.sig.mtime_ns.saturating_add(5_000_000_000) > now_ns)
+    {
+        return Some(false);
+    }
+    let target = dest.path.join(INDEX_FILE);
+    let like = dest.index.as_ref().map(|_| target.as_path());
+    Some(write_atomic(&target, &index_bytes(&wanted), like).is_ok())
 }
