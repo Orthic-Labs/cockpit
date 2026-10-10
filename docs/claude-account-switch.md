@@ -78,7 +78,7 @@ Quitting Desktop, or switching account inside it, ends every Code chat's CLI. De
 
 - **`pulse claude remember`** records the running chats in `claude-open-chats.json`, next to `claude-sync-backups`.
   - What it records: the Desktop-hosted chats in `~/.claude/sessions/*.json` (`entrypoint: claude-desktop`, live pid, matching start time), keyed by Desktop's record id `hostSessionId` (`local_<uuid>`).
-  - When it runs: the notch calls it about once a minute while Desktop runs, and once more just before the restart's close. An account switch inside Desktop ends the chats before the button is pressed, so the earlier records are what it uses.
+  - When it runs: the notch watches `~/.claude/sessions` and calls it a few seconds after a chat's file appears or goes (no timer; on Windows `claude_watch.rs`), and once more just before the restart's close. An account switch inside Desktop ends the chats before the button is pressed, so the earlier records are what it uses.
   - Chats not seen for a day are forgotten.
 - **`pulse claude reopen [--dry-run]`** runs after the restart reopens Desktop, and opens the last running set again.
   - Which chats: those seen within 3 minutes of the newest record. Each chat is recorded with the account Desktop was signed in to. If the newest record is under a different account than the one signed in now, the chats were ended by an account switch, and they are reopened for up to a day. Otherwise nothing is reopened if the newest record is more than 30 minutes old, because those chats were closed on purpose. No step is needed before signing out.

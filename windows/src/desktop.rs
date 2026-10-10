@@ -57,7 +57,8 @@ pub struct Reading {
     pub captured: u64,
 }
 
-fn data_dir() -> Option<PathBuf> {
+/// Claude Desktop's data folder, `%APPDATA%\Claude`.
+pub fn data_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())

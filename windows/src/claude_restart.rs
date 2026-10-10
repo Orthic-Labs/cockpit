@@ -9,7 +9,7 @@
 //!
 //! Chats: quitting Desktop (or switching account inside it) ends every Code chat's CLI, and
 //! Desktop starts one again only when its page is shown. `pulse claude remember` notes the
-//! running chats about once a minute while Desktop runs and once more just before the close;
+//! running chats whenever one starts or ends (`claude_watch`) and once more just before the close;
 //! after the reopen, `pulse claude reopen` shows the last running set one by one with
 //! Desktop's own `claude://code/continue` link, so each resumes without being sent anything.
 //!
@@ -29,7 +29,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -47,7 +47,7 @@ const DONE_SHOWN: Duration = Duration::from_secs(2);
 /// The window class of Chromium's (Electron's) top-level frames.
 const FRAME_CLASS: &str = "Chrome_WidgetWin_1";
 const ERROR_MAX_BYTES: usize = 64 * 1024;
-const REMEMBER_EVERY: Duration = Duration::from_secs(60);
+const REOPEN_GAP: Duration = Duration::from_secs(90);
 const SYNC_ATTEMPTS: u32 = 12;
 const SYNC_RETRY_STEP: Duration = Duration::from_secs(1);
 
@@ -170,16 +170,11 @@ fn sequence() -> Option<String> {
 
 // ------------------------------------------------------------------ the chats
 
-/// Notes the running Code chats about once a minute while Desktop runs.
-pub fn remember_in_background() {
-    std::thread::spawn(|| {
-        loop {
-            if !desktop_pids().is_empty() {
-                remember_chats();
-            }
-            std::thread::sleep(REMEMBER_EVERY);
-        }
-    });
+/// Runs a Pulse command hidden and waits for it; its output is not read.
+pub fn run_cli_quiet(args: &[&str]) {
+    if let Some(mut command) = hidden_cli(args) {
+        let _ = command.status();
+    }
 }
 
 fn hidden_cli(args: &[&str]) -> Option<Command> {
@@ -194,17 +189,25 @@ fn hidden_cli(args: &[&str]) -> Option<Command> {
 }
 
 fn remember_chats() {
-    if let Some(mut command) = hidden_cli(&["claude", "remember", "--json"]) {
-        let _ = command.status();
-    }
+    run_cli_quiet(&["claude", "remember", "--json"]);
 }
 
 /// Runs on its own: it waits for Desktop to come up and for each chat's CLI, which can take
-/// minutes, and the button is done once Desktop is open.
-fn reopen_chats() {
+/// minutes, and the button is done once Desktop is open. A second call within
+/// `REOPEN_GAP` (the button's reopen and the account change it causes) is dropped.
+pub fn reopen_chats() {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    {
+        let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+        if last.is_some_and(|at| at.elapsed() < REOPEN_GAP) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
     if let Some(mut command) = hidden_cli(&["claude", "reopen", "--json"]) {
         let _ = command.spawn();
     }
+}
 }
 
 // ------------------------------------------------------------------ the sync

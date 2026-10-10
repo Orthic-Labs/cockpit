@@ -18,6 +18,7 @@ mod canvas;
 mod card;
 mod claude_accounts;
 mod claude_restart;
+mod claude_watch;
 mod desktop;
 mod diag;
 mod drive_health;
@@ -504,7 +505,7 @@ fn run_pill() -> Result<(), Error> {
     let _keys = keys::start(mac_shortcuts, screenshot_shortcuts);
 
     usage::start(controller.key());
-    claude_restart::remember_in_background();
+    claude_watch::start();
     bridge::start(
         controller.key(),
         bridge::Hooks {
