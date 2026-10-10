@@ -532,7 +532,11 @@ fn list_with_shell_fallback(
 ) -> Result<(RemoteListing, Option<String>), String> {
     match list_chats_identified(link) {
         Err(error) if wrong_shell(&error) && std::env::var_os("PULSE_BRIDGE_SSH").is_none() => {
-            let other = if link.shell == "powershell" { "posix" } else { "powershell" };
+            let other = if link.shell == "powershell" {
+                "posix"
+            } else {
+                "powershell"
+            };
             let mut retry = link.clone();
             retry.shell = other.to_string();
             match list_chats_identified(&retry) {

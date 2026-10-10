@@ -210,7 +210,7 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     let cancel = AtomicBool::new(false);
     let interactive = std::io::stderr().is_terminal();
     let mut last = Instant::now() - Duration::from_secs(1);
-    let outcome = send::deliver(&me, peer, &entries, &cancel, &|_| {}, &mut |p| {
+    let outcome = send::deliver(&me, peer, &entries, false, &cancel, &|_| {}, &mut |p| {
         if p.phase != Phase::Sending || last.elapsed() < Duration::from_millis(250) {
             return;
         }
