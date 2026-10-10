@@ -2366,7 +2366,7 @@ fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32,
                     let (x, w) = *placed.spans.get(button)?;
                     Some((x, placed.top, w, placed.height, BUTTON_RADIUS))
                 }
-                Row::Device { .. } | Row::Pair { .. } => Some((
+                Row::Device { .. } => Some((
                     CARD_PAD,
                     placed.top,
                     laid.width - 2.0 * CARD_PAD,
@@ -2393,6 +2393,7 @@ fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32,
                         ROW_HOVER_RADIUS.min(height / 2.0),
                     ))
                 }
+                _ => None,
             }
         }
     }
