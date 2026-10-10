@@ -446,7 +446,7 @@ pub fn add(store: &Store, mut link: Link) -> Result<RemoteListing, String> {
         .filter(|l| !l.device.eq_ignore_ascii_case(&link.device))
         .collect();
     links.push(link);
-    links.sort_by(|a, b| a.device.to_lowercase().cmp(&b.device.to_lowercase()));
+    links.sort_by_key(|a| a.device.to_lowercase());
     store.save_links(&links).map_err(|e| e.to_string())?;
     Ok(listing)
 }

@@ -522,7 +522,13 @@ fn defuse_tags(text: &str) -> String {
                 .chars()
                 .take(96)
                 .filter(|&c| c.is_ascii_alphanumeric() || c == '/' || c == '-' || c == '_')
-                .map(|c| if c == '_' { '-' } else { c.to_ascii_lowercase() })
+                .map(|c| {
+                    if c == '_' {
+                        '-'
+                    } else {
+                        c.to_ascii_lowercase()
+                    }
+                })
                 .collect();
             if ahead.starts_with(CLOSING) || ahead.starts_with(&CLOSING[1..]) {
                 out.push_str("&lt;");

@@ -91,7 +91,9 @@ fn claude_accepts(content: &str) -> Result<(), String> {
     let rest = content
         .strip_prefix("<cross-session-message")
         .ok_or("no opening tag")?;
-    let (mut head, body) = rest.split_once(">\n").ok_or("the opening tag does not end")?;
+    let (mut head, body) = rest
+        .split_once(">\n")
+        .ok_or("the opening tag does not end")?;
     let body = body
         .strip_suffix("\n</cross-session-message>")
         .ok_or("no closing tag at the end")?;
@@ -116,13 +118,19 @@ fn claude_accepts(content: &str) -> Result<(), String> {
             .ok_or_else(|| format!("{wanted} is missing"))
     };
     let from = value("from")?;
-    if from.is_empty() || !from.chars().all(|c| c.is_ascii_alphanumeric() || "%:_/.\\-".contains(c)) {
+    if from.is_empty()
+        || !from
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "%:_/.\\-".contains(c))
+    {
         return Err(format!("from has characters Claude refuses: {from}"));
     }
     let session = value("from-session")?;
     if session.is_empty()
         || session.len() > 80
-        || !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return Err(format!("from-session is not a plain id: {session}"));
     }
@@ -136,9 +144,14 @@ fn claude_accepts(content: &str) -> Result<(), String> {
     }
     let mode = value("from-mode")?;
     if mode != "bypass" {
-        return Err(format!("from-mode {mode} is held by a chat that bypasses permissions"));
+        return Err(format!(
+            "from-mode {mode} is held by a chat that bypasses permissions"
+        ));
     }
-    if body.to_ascii_lowercase().contains("</cross-session-message") {
+    if body
+        .to_ascii_lowercase()
+        .contains("</cross-session-message")
+    {
         return Err("the text holds a closing tag".to_string());
     }
     Ok(())
