@@ -1253,7 +1253,7 @@ fn find_installed_app<'a>(
 
 #[cfg(windows)]
 fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
-    use pulse_core::apps_windows::{self, Installed, updates};
+    use pulse_core::apps_windows::{self, updates};
     if arguments.is_empty() {
         return Err("apps requires list, updates, detail or uninstall".into());
     }
