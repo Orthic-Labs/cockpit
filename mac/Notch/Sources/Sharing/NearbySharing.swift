@@ -126,8 +126,6 @@ final class NearbySharing {
     /// The Send card's bottom bar: `label` is the "Copy last" text (empty when there is
     /// nothing to copy), `detail` the "Paste" text (nil when there is no device).
     static let actionsRowID = "action:bar"
-    /// The Send card's second bar: Snip · Screen · Window.
-    static let shotsRowID = "action:shots"
 
     /// The Send cell has something new to show.
     var onChange: (() -> Void)?
@@ -658,9 +656,6 @@ final class NearbySharing {
             windows.append(LimitWindow(id: Self.actionsRowID, label: copy?.label ?? "",
                                        detail: live.joined(separator: ",")))
         }
-        if !devices.isEmpty {
-            windows.append(LimitWindow(id: Self.shotsRowID, label: "", detail: "target"))
-        }
         return ProviderSnapshot(id: Self.providerID, displayName: L10n.t("Send"), glyph: .send,
                                 fidelity: .official, status: .ok, windows: windows,
                                 headlineID: "transfer", kind: .system)
@@ -680,6 +675,8 @@ final class NearbySharing {
     static let lastTextCap = 64 * 1024
     static let copyLastRowID = "action:copylast"
     private var last: Last?
+    /// Whether there is a received item for "Copy last" to put on the clipboard.
+    var hasLast: Bool { last.flatMap(copyLastRow) != nil }
 
     private static var lastURL: URL {
         HubBridge.directory.appendingPathComponent("nearby-last.json")
@@ -979,7 +976,7 @@ final class NearbySharing {
         }
     }
 
-    private func showNote(title: String, detail: String, problem: Bool) {
+    func showNote(title: String, detail: String, problem: Bool) {
         show(DiskImagePrompt(iconPath: iconPath(nil), title: title, detail: detail,
                              style: problem ? .problem : .done),
              as: .note)

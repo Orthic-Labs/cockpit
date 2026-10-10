@@ -498,25 +498,21 @@ private struct LimitWindowRow: View {
                     NearbySharing.shared.pasteClipboard()
                 }
             }
-            }
-        } else if window.id == NearbySharing.shotsRowID {
-            // Pulse fork: the Send card's second bar. Each takes a screenshot and sends it
-            // to the other computer's clipboard: a dragged region, the main display, or a
-            // clicked window (⌘⇧4, ⌘⇧5's first and second options).
-            let enabled = (window.detail ?? "").contains("target")
-            HStack(spacing: 8) {
-                sendBarButton(icon: "rectangle.dashed", title: L10n.t("Snip"), enabled: enabled,
-                              help: L10n.t("Drag a region; it is sent and lands on the other clipboard")) {
-                    NearbySharing.shared.screenshot(.snip)
+        } else if window.id.hasPrefix("tool:") {
+            // Pulse fork: the Tools cell's card. The first tool row draws the whole grid of
+            // equal buttons from the shared action list; the other tool rows draw nothing.
+            if window.id == "tool:" + (ToolKit.shared.tools.first?.id ?? "") {
+                let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(ToolKit.shared.tools, id: \.id) { tool in
+                        sendBarButton(icon: tool.symbol, title: L10n.t(tool.title),
+                                      enabled: tool.enabled(), help: tool.help) {
+                            ToolKit.shared.run(tool.id)
+                        }
+                    }
                 }
-                sendBarButton(icon: "rectangle.inset.filled", title: L10n.t("Screen"), enabled: enabled,
-                              help: L10n.t("The whole main display, sent to the other clipboard")) {
-                    NearbySharing.shared.screenshot(.screen)
-                }
-                sendBarButton(icon: "macwindow", title: L10n.t("Window"), enabled: enabled,
-                              help: L10n.t("Click a window; it is sent to the other clipboard")) {
-                    NearbySharing.shared.screenshot(.window)
-                }
+            } else {
+                EmptyView()
             }
         } else if window.id == NearbySharing.copyLastRowID {
             Button {

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var limitWatcher: UsageLimitWatcher?
     private var hubBridge: HubBridge?
     private var conveniences: ConveniencesService?
+    private var toolWheel: ToolWheel?
     private var launcher: LauncherController?
     /// Keeps the Claude keychain token from ageing out on a Mac where the CLI
     /// is never run by hand. See `ClaudeTokenRefresher`.
@@ -500,7 +501,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let sharing = NearbySharing.shared
             sharing.enabled = { [weak preferences] in preferences?.nearbyEnabled ?? true }
             sharing.present = { [weak fleet] in fleet?.apply(diskImagePrompt: $0) ?? false }
-            sharing.onChange = { [weak store] in _ = store?.refresh(providerID: NearbySharing.providerID) }
+            sharing.onChange = { [weak store] in
+                _ = store?.refresh(providerID: NearbySharing.providerID)
+                _ = store?.refresh(providerID: SystemProviders.toolsID)
+            }
             // Switching sharing off takes the cell away; on brings it back.
             preferences.$nearbyEnabled
                 .removeDuplicates()
@@ -508,6 +512,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .sink { [weak preferences] on in preferences?.setConnected(on, for: SystemProviders.sendID) }
                 .store(in: &cancellables)
             if !isRunningTests { sharing.start() }
+            // The sixth cell, Tools: system-* cells are on by default (see
+            // `Preferences.isDefaultOnFamily`), so it needs no switch of its own.
+            ToolKit.shared.onChange = { [weak store] in _ = store?.refresh(providerID: SystemProviders.toolsID) }
+            if !isRunningTests {
+                let wheel = ToolWheel(preferences: preferences)
+                wheel.start()
+                self.toolWheel = wheel
+            }
             fleet.onRefresh = { [weak store] in store?.refreshNow(freshness: .fromSource) }
             fleet.onLook = { [weak store] in store?.refreshBecauseSomeoneIsLooking() }
             fleet.onRefreshProvider = { [weak store] id in

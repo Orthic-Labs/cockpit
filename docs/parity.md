@@ -83,7 +83,7 @@ Evidence rules: the Windows CI leg (`scripts/gate.sh`) runs `cargo fmt`, `cargo 
 
 ## A. Notch cells (rings)
 
-Mac: five cells (Claude, Codex, System, Disks, Send) in `S/Notch/NotchViewModel.swift` / `NotchLayout.swift`, each a `ProviderRing` (`S/Features/ProviderRing.swift`) with an optional thin inner ring. Windows: the same five cells in the same order (Claude, Codex, System, Disks, Send) since `fc0d91a6` (`Cell::ALL` in `W/layout.rs`; System = memory main + CPU inner, Disks = external main + system drive inner).
+Mac: five cells (Claude, Codex, System, Disks, Send) in `S/Notch/NotchViewModel.swift` / `NotchLayout.swift`, each a `ProviderRing` (`S/Features/ProviderRing.swift`) with an optional thin inner ring. A sixth Mac-only cell, Tools (`S/Conveniences/Tools.swift`, `S/Sharing/ToolsProvider.swift`), lists the screenshot, paste, copy-last and lock actions as buttons and shares them with a middle-click wheel (`S/Conveniences/ToolWheel.swift`); Windows has no equivalent yet. Windows: the same five cells in the same order (Claude, Codex, System, Disks, Send) since `fc0d91a6` (`Cell::ALL` in `W/layout.rs`; System = memory main + CPU inner, Disks = external main + system drive inner).
 
 | ID | Feature | Mac implementation | Windows equivalent | Windows status | Windows files |
 | --- | --- | --- | --- | --- | --- |

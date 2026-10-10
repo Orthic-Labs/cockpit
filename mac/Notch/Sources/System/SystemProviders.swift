@@ -17,11 +17,13 @@ enum SystemProviders {
     static let disksID = "system-disks"
     /// Nearby sharing: the Send cell (see Sharing/NearbySharing.swift).
     static let sendID = "system-send"
+    /// The Tools cell: one-tap utilities (see Conveniences/Tools.swift).
+    static let toolsID = "system-tools"
 
     static func isSystem(providerID: String) -> Bool { providerID.hasPrefix("system-") }
 
     static func all() -> [UsageProvider] {
-        [SystemLoadProvider(), DisksProvider(), SendProvider()]
+        [SystemLoadProvider(), DisksProvider(), SendProvider(), ToolsProvider()]
     }
 
     static func bytes(_ value: Int64) -> String {

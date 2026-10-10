@@ -228,6 +228,12 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(convAutoQuitApps, forKey: Keys.convAutoQuitApps) }
     }
 
+    /// Pulse fork: the middle-click tool wheel (Conveniences/ToolWheel.swift).
+    var toolWheelEnabled: Bool {
+        get { defaults.object(forKey: "toolWheelEnabled") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "toolWheelEnabled") }
+    }
+
     /// Nearby sharing (LocalSend protocol, run by the hub): on by default.
     @Published var nearbyEnabled: Bool {
         didSet { defaults.set(nearbyEnabled, forKey: Keys.nearbyEnabled) }
