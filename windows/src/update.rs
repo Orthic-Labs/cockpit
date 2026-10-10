@@ -39,6 +39,9 @@ pub const MSG_UPDATE: u32 = WM_APP + 0x75;
 pub const ASSET_NAME: &str = "Pulse-Setup-x64.exe";
 const FEED_HOST: &str = "api.github.com";
 const FEED_PATH: &str = "/repos/Orthic-Labs/pulse/releases/latest";
+/// What the status says while the feed has no release at all (GitHub answers 404 until the
+/// first one is published).
+const NO_RELEASE_TEXT: &str = "No release published yet";
 const DOWNLOAD_HOST: &str = "github.com";
 const CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 const TICK: Duration = Duration::from_secs(30 * 60);
@@ -157,6 +160,7 @@ fn reason_text(code: &str) -> String {
     match code {
         "unreachable" => "GitHub could not be reached. Check the connection and try again.",
         "rate_limited" => "GitHub is limiting update checks right now. Try again later.",
+        "no_release" => NO_RELEASE_TEXT,
         "bad_status" | "unreadable" | "no_tag" | "bad_version" => {
             "GitHub's answer could not be read."
         }
@@ -540,9 +544,24 @@ fn fetch_release() -> Result<Option<Release>, &'static str> {
         200 => {}
         // `releases/latest` answers 404 while the repository has no published (non-draft,
         // non-prerelease) release at all.
-        404 => return Err("no_release"),
+        404 => {
+            diag::info(
+                "update_check_status",
+                &[("status", "404"), ("url", &format!("https://{FEED_HOST}{FEED_PATH}"))],
+            );
+            return Err("no_release");
+        }
         403 | 429 => return Err("rate_limited"),
-        _ => return Err("bad_status"),
+        other => {
+            diag::info(
+                "update_check_status",
+                &[
+                    ("status", &other.to_string()),
+                    ("url", &format!("https://{FEED_HOST}{FEED_PATH}")),
+                ],
+            );
+            return Err("bad_status");
+        }
     }
     let root = json::parse(&response.body, 512 * 1024).ok_or("unreadable")?;
     let tag = root

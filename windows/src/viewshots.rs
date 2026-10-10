@@ -739,6 +739,7 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     if copy.is_some() || paste {
         panel.rows.push(Row::Bar {
             copy: copy.map(str::to_string),
+            copy_detail: copy.map_or_else(String::new, |_| "3 min ago".to_string()),
             paste,
         });
         panel.actions.push(vec![
@@ -833,7 +834,14 @@ fn build(id: &str, area: &str, fixture: &Value, text: &mut TextPainter) -> Outco
         Some("card") => Ok(vec![(card_canvas(&prompt_panel(fixture), text), 0, 0)]),
         Some("update") => Ok(vec![(card_canvas(&update_panel(fixture), text), 0, 0)]),
         Some("alert") => Ok(vec![(card_canvas(&alert_panel(fixture), text), 0, 0)]),
-        Some("menu") => Ok(vec![(render::render_menu(DPI, text), 0, 0)]),
+        Some("menu") => {
+            let state = str_of(fixture, "state");
+            let pressed = state == Some("pressed");
+            render::set_pressed(pressed);
+            let canvas = render::render_menu_hover(DPI, text, state != None && state != Some("rest"));
+            render::set_pressed(false);
+            Ok(vec![(canvas, 0, 0)])
+        }
         Some("notch") => notch(id, fixture, text),
         _ => Err("Unknown fixture kind"),
     }

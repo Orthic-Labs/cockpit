@@ -1651,16 +1651,20 @@ impl Model {
         }
         // One bottom row, two buttons: "Copy last: <preview>" at the left when there is a last
         // item, "Paste" at the right when a device is listed.
-        let copy = self
-            .last
-            .as_ref()
-            .and_then(Last::row_label)
-            .map(|(label, _)| label);
+        let copy = self.last.as_ref().and_then(Last::row_label);
+        let (copy, copy_detail) = match copy {
+            Some((label, age)) => (Some(label), age),
+            None => (None, String::new()),
+        };
         let paste = !devices.is_empty();
         if copy.is_some() || paste {
             let copy_action = copy.is_some().then_some(Action::CopyLast);
             let paste_action = paste.then_some(Action::Paste);
-            rows.push(Row::Bar { copy, paste });
+            rows.push(Row::Bar {
+                copy,
+                copy_detail,
+                paste,
+            });
             actions.push(vec![copy_action, paste_action]);
         }
         Panel {

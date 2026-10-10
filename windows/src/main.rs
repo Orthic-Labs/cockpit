@@ -125,7 +125,15 @@ struct Panel {
 
 /// What a notch's bitmap was drawn from: cells, edge, folded, DPI, badges and the settings
 /// handle part shown out.
-type Drawn = (Vec<CellView>, Edge, bool, u32, Badges, Option<Handle>);
+type Drawn = (
+    Vec<CellView>,
+    Edge,
+    bool,
+    u32,
+    Badges,
+    Option<Handle>,
+    Option<render::Press>,
+);
 
 struct Drag {
     panel: isize,
@@ -153,6 +161,8 @@ struct Interaction {
     handle: Option<(isize, Handle)>,
     /// Panel where a left press started on the settings button (click on release on it).
     press_orb: Option<isize>,
+    /// Panel and part the button is held down on (drawn pressed until release or leave).
+    pressed: Option<(isize, render::Press)>,
     drag: Option<Drag>,
     /// Quit menu: owning panel and its screen rectangle.
     menu: Option<(isize, RECT)>,
@@ -190,6 +200,7 @@ impl Interaction {
             press: None,
             handle: None,
             press_orb: None,
+            pressed: None,
             drag: None,
             menu: None,
             menu_hot: false,
@@ -497,6 +508,7 @@ fn run_pill() -> Result<(), Error> {
             },
             check_updates: update::check_now,
             primary_monitor: primary_monitor_id,
+            machine: || lock_state().machine.clone(),
         },
     );
     update::start(controller.key(), lock_state().settings.auto_update_check);
@@ -1059,7 +1071,7 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
 /// changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     let ring = send::ring();
-    let (views, slot, badges, handle) =
+    let (views, slot, badges, handle, press) =
         {
             let app = lock_state();
             let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
@@ -1077,6 +1089,11 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
                 .handle
                 .filter(|h| h.0 == key && !panel.slot.folded)
                 .map(|h| h.1);
+            let press = app
+                .ui
+                .pressed
+                .filter(|p| p.0 == key && !panel.slot.folded)
+                .map(|p| p.1);
             let drawn = (
                 &views,
                 panel.slot.edge,
@@ -1084,13 +1101,14 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
                 panel.slot.dpi,
                 app.badges,
                 handle,
+                press,
             );
             if panel.drawn.as_ref().is_some_and(|shown| {
-                (&shown.0, shown.1, shown.2, shown.3, shown.4, shown.5) == drawn
+                (&shown.0, shown.1, shown.2, shown.3, shown.4, shown.5, shown.6) == drawn
             }) {
                 return;
             }
-            (views, panel.slot, app.badges, handle)
+            (views, panel.slot, app.badges, handle, press)
         };
     let Some(canvas) = with_text(|text| {
         render::render_notch(
@@ -1100,7 +1118,7 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
             badges,
             slot.dpi,
             text,
-            handle,
+            (handle, press),
         )
     }) else {
         return;
@@ -1112,7 +1130,15 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
                 .iter_mut()
                 .find(|p| p.window.key() == key)
             {
-                panel.drawn = Some((views, slot.edge, slot.folded, slot.dpi, badges, handle));
+                panel.drawn = Some((
+                    views,
+                    slot.edge,
+                    slot.folded,
+                    slot.dpi,
+                    badges,
+                    handle,
+                    press,
+                ));
             }
         }
         // `drawn` stays stale, so the next refresh retries.
@@ -2035,6 +2061,9 @@ fn update_handle(key: isize, x: i32, y: i32) -> bool {
 
 fn on_mouse_leave(hwnd: HWND) {
     let key = hwnd_key(hwnd);
+    if lock_state().ui.drag.is_none() {
+        clear_pressed_part();
+    }
     // The pointer left the notch: the grip goes back into the button's arc.
     let handle_was_out = {
         let mut app = lock_state();
@@ -2189,22 +2218,51 @@ fn on_lbutton_down(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
     // Alt-drag takes the notch from anywhere; the grip takes it without Alt.
     if alt_down() {
-        begin_drag(hwnd);
+        begin_drag(hwnd, false);
         return;
     }
     match handle_under(key, x, y) {
-        Some(Handle::Grip) => begin_drag(hwnd),
-        Some(Handle::Orb) => lock_state().ui.press_orb = Some(key),
+        Some(Handle::Grip) => {
+            set_pressed_part(key, Some(render::Press::Grip));
+            begin_drag(hwnd, true);
+        }
+        Some(Handle::Orb) => {
+            lock_state().ui.press_orb = Some(key);
+            set_pressed_part(key, Some(render::Press::Orb));
+        }
         None => {
             if let Some(cell) = cell_under(key, x, y) {
                 lock_state().ui.press = Some((key, cell));
+                set_pressed_part(key, Some(render::Press::Cell(cell)));
             }
         }
     }
 }
 
+/// Marks the part of notch `key` the button is held on (or none) and redraws the notch.
+fn set_pressed_part(key: isize, part: Option<render::Press>) {
+    {
+        let mut app = lock_state();
+        let now = part.map(|part| (key, part));
+        if app.ui.pressed == now {
+            return;
+        }
+        app.ui.pressed = now;
+    }
+    redraw_panel(key, &usage::snapshot());
+}
+
+/// Puts any pressed look away, redrawing the notch that wore it.
+fn clear_pressed_part() {
+    let key = lock_state().ui.pressed.map(|p| p.0);
+    if let Some(key) = key {
+        set_pressed_part(key, None);
+    }
+}
+
 fn on_lbutton_up(hwnd: HWND, x: i32, y: i32) {
     let key = hwnd_key(hwnd);
+    clear_pressed_part();
     let (drag, press, press_orb) = {
         let mut app = lock_state();
         (
@@ -2237,6 +2295,7 @@ fn on_lbutton_up(hwnd: HWND, x: i32, y: i32) {
 }
 
 fn on_capture_lost() {
+    clear_pressed_part();
     let drag = lock_state().ui.drag.take();
     if let Some(drag) = drag {
         finish_drag(drag);
@@ -2245,7 +2304,7 @@ fn on_capture_lost() {
 
 /// Alt-drag: captures the pointer and carries the notch along its edge; moved near another
 /// edge of the same monitor, it docks there (and turns its rings on their side).
-fn begin_drag(hwnd: HWND) {
+fn begin_drag(hwnd: HWND, grip: bool) {
     let key = hwnd_key(hwnd);
     let mut cursor = POINT::default();
     let mut rect = RECT::default();
@@ -2282,8 +2341,11 @@ fn begin_drag(hwnd: HWND) {
         app.ui.hover = None;
         app.ui.press = None;
         app.ui.press_orb = None;
-        // The grip goes back into the button while the notch is carried.
-        app.ui.handle = None;
+        // The grip goes back into the button while the notch is carried, unless it was
+        // grabbed: it stays out, pressed, until released.
+        if !grip {
+            app.ui.handle = None;
+        }
     }
     redraw_panel(key, &usage::snapshot());
     hide_card();

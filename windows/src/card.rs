@@ -126,8 +126,12 @@ pub enum Row {
     },
     /// The Send card's bottom bar (the Mac's `action:bar`): "Copy last: <preview>" as a plate
     /// at the left when there is a label, "Paste" as a plate at the right when `paste`. Two
-    /// buttons in one row: slot 0 is Copy last, slot 1 is Paste.
-    Bar { copy: Option<String>, paste: bool },
+    /// buttons in one row: slot 0 is Copy last (with its age as `copy_detail`), slot 1 is Paste.
+    Bar {
+        copy: Option<String>,
+        copy_detail: String,
+        paste: bool,
+    },
     /// One metered window: label and trailing text on a line, a bar (none without a share),
     /// then the summary line.
     Meter {

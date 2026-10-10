@@ -87,6 +87,8 @@ pub struct Hooks {
     /// Device name of the primary monitor: the edge published for the hub's Edge control is
     /// that monitor's.
     pub primary_monitor: fn() -> Option<String>,
+    /// The latest machine sample (for the `system` readings block).
+    pub machine: fn() -> Option<crate::sensors::Machine>,
 }
 
 /// Windows Firewall for Nearby sharing, as the hub's share service reports it
@@ -334,6 +336,62 @@ fn sign_in_guidance(id: &str, reading: &usage::Usage) -> String {
     }
 }
 
+/// The `system` block the Mac publishes (`SystemReadingsStore`): network, battery, fans,
+/// temperatures and the memory pressure word, each present only when this PC gave a reading.
+/// Windows has no battery cycle count or health through the unelevated API, so those stay out.
+fn system_json(machine: Option<&crate::sensors::Machine>) -> String {
+    use crate::sensors::Reading;
+    let number = |value: f64| if value.is_finite() { value } else { 0.0 };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(machine) = machine {
+        if let Reading::Value(rate) = &machine.network {
+            let mut kind = String::new();
+            esc(&mut kind, &rate.kind);
+            parts.push(format!(
+                "\"network\":{{\"interface\":{kind},\"kind\":{kind},\"down\":{},\"up\":{}}}",
+                number(rate.down),
+                number(rate.up)
+            ));
+        }
+        if let Reading::Value(fans) = &machine.fans
+            && !fans.is_empty()
+        {
+            let rows: Vec<String> = fans
+                .iter()
+                .enumerate()
+                .map(|(n, rpm)| format!("{{\"name\":\"Fan {}\",\"rpm\":{rpm}}}", n + 1))
+                .collect();
+            parts.push(format!("\"fans\":[{}]", rows.join(",")));
+        }
+        if let Reading::Value(temps) = &machine.temperature
+            && !temps.is_empty()
+        {
+            let rows: Vec<String> = temps
+                .iter()
+                .map(|t| {
+                    let mut name = String::new();
+                    esc(&mut name, t.source);
+                    format!(
+                        "{{\"name\":{name},\"celsius\":{:.1}}}",
+                        number(f64::from(t.celsius))
+                    )
+                })
+                .collect();
+            parts.push(format!("\"temperatures\":[{}]", rows.join(",")));
+        }
+        if let Some(pressure) = machine.memory.as_ref().and_then(|m| m.pressure()) {
+            parts.push(format!("\"memoryPressure\":\"{pressure}\""));
+        }
+    }
+    if let Reading::Value(battery) = crate::sensors::battery() {
+        parts.push(format!(
+            "\"battery\":{{\"percent\":{},\"charging\":{}}}",
+            battery.percent, battery.charging
+        ));
+    }
+    format!("{{{}}}", parts.join(","))
+}
+
 /// The snapshot in the Mac's shape (`product`, `settings`, `accounts`, `providerOrder`,
 /// `permissions`, `updates`, ...). Mac key names carry the settings that exist on both; the
 /// Windows-only ones keep their `pill-settings.json` names.
@@ -505,6 +563,8 @@ fn state_json(hooks: &Hooks) -> String {
     }
     out.push_str("],\"permissionErrors\":{},\"updates\":");
     out.push_str(&update::hub_json());
+    out.push_str(",\"system\":");
+    out.push_str(&system_json((hooks.machine)().as_ref()));
     out.push_str("}\n");
     out
 }

@@ -195,10 +195,26 @@ pub fn render_notch(
     badges: Badges,
     dpi: u32,
     text: &mut TextPainter,
-    handle: Option<Handle>,
+    (handle, press): (Option<Handle>, Option<Press>),
 ) -> Canvas {
-    draw_notch(views, edge, folded, badges, dpi, text, (false, handle))
+    draw_notch(views, edge, folded, badges, dpi, text, (false, handle, press))
 }
+
+/// The part of the notch the primary button is held down on: it reads pressed until release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// A ring cell (its index in `Cell::ALL`).
+    Cell(usize),
+    /// The settings gear.
+    Orb,
+    /// The move grip.
+    Grip,
+}
+
+/// A pressed ring cell reads dimmer, as the Mac's pressed orb does.
+const CELL_PRESS_DIM: f32 = 0.55;
+/// White laid over the gear disc or the grip plate while pressed.
+const HANDLE_PRESS_ALPHA: f32 = 0.2;
 
 /// `render_notch` with the bezel band kept: the Mac's view renders show the 2 pt the shape
 /// pushes past the screen edge as a thin strip along the welded side.
@@ -210,7 +226,7 @@ pub fn render_notch_shot(
     dpi: u32,
     text: &mut TextPainter,
 ) -> Canvas {
-    draw_notch(views, edge, folded, badges, dpi, text, (true, None))
+    draw_notch(views, edge, folded, badges, dpi, text, (true, None, None))
 }
 
 /// `keep_band` and the handle part shown out: the live notch keeps no band and carries the
@@ -222,7 +238,7 @@ fn draw_notch(
     badges: Badges,
     dpi: u32,
     _text: &mut TextPainter,
-    (keep_band, handle): (bool, Option<Handle>),
+    (keep_band, handle, press): (bool, Option<Handle>, Option<Press>),
 ) -> Canvas {
     let s = layout::scale(dpi);
     let (width, height) = layout::panel_size(edge, folded, dpi);
@@ -288,10 +304,10 @@ fn draw_notch(
     }
     for (index, view) in views.iter().enumerate() {
         let centre = frame.shift(layout::ring_center(edge, index, dpi));
-        draw_cell(&mut canvas, view, centre, s);
+        draw_cell(&mut canvas, view, centre, s, press == Some(Press::Cell(index)));
     }
     if let Some(part) = handle {
-        draw_handle(&mut canvas, frame, s, part);
+        draw_handle(&mut canvas, frame, s, (part, press));
     }
     // One badge dot on the middle of the arc: permissions (amber) wins over update (red).
     let reach = (layout::CURL - layout::ORB_GAP) * s * std::f32::consts::FRAC_1_SQRT_2;
@@ -356,7 +372,12 @@ fn draw_handle_zone(canvas: &mut Canvas, frame: Frame, s: f32, grip_out: bool) {
 /// The settings button (the disc the resting arc fills into, with a gear) and the move grip
 /// beside it on a black plate. The grip is out whenever the pointer is on either; `part` is
 /// the one it is on, drawn brighter.
-fn draw_handle(canvas: &mut Canvas, frame: Frame, s: f32, part: Handle) {
+fn draw_handle(
+    canvas: &mut Canvas,
+    frame: Frame,
+    s: f32,
+    (part, press): (Handle, Option<Press>),
+) {
     let (along, depth) = (layout::SHAPE_LENGTH * s, layout::CURL * s);
     let centre = frame.at(along, depth);
     let radius = layout::ORB_RADIUS * s;
@@ -366,9 +387,32 @@ fn draw_handle(canvas: &mut Canvas, frame: Frame, s: f32, part: Handle) {
     let (first, last) = ((along, depth - half), (end, depth + half));
     fill_frame_rect(canvas, frame, first, last, half, (0x000000, 1.0));
     dot(canvas, centre, radius, 0x000000);
+    if press == Some(Press::Orb) {
+        canvas.fill_round_rect(
+            centre.0 - radius,
+            centre.1 - radius,
+            2.0 * radius,
+            2.0 * radius,
+            [radius; 4],
+            0xFFFFFF,
+            HANDLE_PRESS_ALPHA,
+        );
+    }
     let orb_ink = if part == Handle::Orb { 1.0 } else { 0.7 };
     draw_gear(canvas, centre, radius * 0.52, INK_PRIMARY, orb_ink);
-    let (grip_ink, growth) = if part == Handle::Grip {
+    if press == Some(Press::Grip) {
+        fill_frame_rect(
+            canvas,
+            frame,
+            (along + radius, depth - half),
+            (end, depth + half),
+            half,
+            (0xFFFFFF, HANDLE_PRESS_ALPHA),
+        );
+    }
+    let (grip_ink, growth) = if press == Some(Press::Grip) {
+        (1.0, 1.45)
+    } else if part == Handle::Grip {
         (0.95, 1.3)
     } else {
         (0.55, 1.0)
@@ -441,8 +485,17 @@ fn dot(canvas: &mut Canvas, (x, y): (f32, f32), radius: f32, colour: u32) {
 
 /// One cell: track ring, arcs and the glyph, the ring centred on `(cx, cy)`. The Mac notch
 /// draws no percentage under its rings.
-fn draw_cell(canvas: &mut Canvas, view: &CellView, (cx, cy): (f32, f32), s: f32) {
-    let dim = if view.stale { STALE_DIM } else { 1.0 };
+fn draw_cell(
+    canvas: &mut Canvas,
+    view: &CellView,
+    (cx, cy): (f32, f32),
+    s: f32,
+    pressed: bool,
+) {
+    let mut dim = if view.stale { STALE_DIM } else { 1.0 };
+    if pressed {
+        dim *= CELL_PRESS_DIM;
+    }
     let radius = (RING / 2.0 - TRACK_STROKE / 2.0) * s;
     canvas.stroke_arc(
         cx,
@@ -514,7 +567,13 @@ pub fn render_cell(view: &CellView, dpi: u32, _text: &mut TextPainter) -> Canvas
     let s = layout::scale(dpi);
     let size = (RING * s).round() as usize;
     let mut canvas = Canvas::new(size, size);
-    draw_cell(&mut canvas, view, (size as f32 / 2.0, size as f32 / 2.0), s);
+    draw_cell(
+        &mut canvas,
+        view,
+        (size as f32 / 2.0, size as f32 / 2.0),
+        s,
+        false,
+    );
     canvas
 }
 
@@ -860,20 +919,25 @@ const NO_SPAN: (f32, f32) = (-10_000.0, 0.0);
 /// Left edge and width of the Send bar's two plates: "Copy last: ..." at `left` (cut to what
 /// "Paste" leaves), "Paste" against `right`. A missing button has `NO_SPAN`.
 fn bar_spans(
-    copy: Option<&str>,
+    copy: Option<(&str, &str)>,
     paste: bool,
     (left, right): (f32, f32),
     text: &mut TextPainter,
     s: f32,
 ) -> Vec<(f32, f32)> {
-    let mut plate = |label: &str| {
+    let mut plate = |label: &str, detail: &str| {
         let label = dip_width(text, label, BODY_SIZE, false, s);
-        2.0 * BUTTON_PAD + BUTTON_SYMBOL + BUTTON_INNER + label + BAR_SLACK
+        let detail = if detail.is_empty() {
+            0.0
+        } else {
+            dip_width(text, detail, BODY_SIZE, false, s) + BUTTON_INNER
+        };
+        2.0 * BUTTON_PAD + BUTTON_SYMBOL + BUTTON_INNER + label + detail + BAR_SLACK
     };
-    let paste_width = paste.then(|| plate("Paste"));
-    let copy_span = copy.map_or(NO_SPAN, |label| {
+    let paste_width = paste.then(|| plate("Paste", ""));
+    let copy_span = copy.map_or(NO_SPAN, |(label, detail)| {
         let reserved = paste_width.map_or(0.0, |w| w + BAR_GAP);
-        (left, plate(label).min((right - left - reserved).max(0.0)))
+        (left, plate(label, detail).min((right - left - reserved).max(0.0)))
     });
     let paste_span = paste_width.map_or(NO_SPAN, |w| (right - w, w));
     vec![copy_span, paste_span]
@@ -947,11 +1011,15 @@ fn flow_row(
     };
     match row {
         Row::Button { .. } => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
-        Row::Bar { copy, paste } => (
+        Row::Bar {
+            copy,
+            copy_detail,
+            paste,
+        } => (
             BUTTON_HEIGHT,
             Vec::new(),
             bar_spans(
-                copy.as_deref(),
+                copy.as_deref().map(|label| (label, copy_detail.as_str())),
                 *paste,
                 (CARD_PAD, CARD_PAD + room),
                 text,
@@ -1904,16 +1972,24 @@ impl Pen<'_> {
                     (*symbol, label.as_str(), detail.as_str()),
                     on,
                 ),
-                Row::Bar { copy, paste } => {
+                Row::Bar {
+                    copy,
+                    copy_detail,
+                    paste,
+                } => {
                     for (n, (x, width)) in placed.spans.iter().enumerate() {
-                        let (label, shown) = match n {
-                            0 => (copy.as_deref().unwrap_or(""), copy.is_some()),
-                            _ => ("Paste", *paste),
+                        let (label, detail, shown) = match n {
+                            0 => (
+                                copy.as_deref().unwrap_or(""),
+                                copy_detail.as_str(),
+                                copy.is_some(),
+                            ),
+                            _ => ("Paste", "", *paste),
                         };
                         if shown {
                             self.button_plate(
                                 (ox + x * s, ox + (x + width) * s, y),
-                                (Some(Symbol::Copy), label, ""),
+                                (Some(Symbol::Copy), label, detail),
                                 live.row(index, n),
                             );
                         }
@@ -2244,7 +2320,7 @@ fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32,
                     let (x, w) = *placed.spans.get(button)?;
                     Some((x, placed.top, w, placed.height, BUTTON_RADIUS))
                 }
-                Row::Device { .. } => Some((
+                Row::Device { .. } | Row::Pair { .. } => Some((
                     CARD_PAD,
                     placed.top,
                     laid.width - 2.0 * CARD_PAD,

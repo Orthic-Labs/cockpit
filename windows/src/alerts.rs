@@ -439,7 +439,8 @@ fn info_card(alert: &Alert, notice: &Notice) -> CardContent {
     };
     CardContent {
         head: vec![Head::Dismiss],
-        height: Some(ALERT_HEIGHT),
+        // Sized to its content (title, one line, close): no blank lower half.
+        height: None,
         subtitle: (!notice.subtitle.is_empty()).then(|| notice.subtitle.clone()),
         mark: match alert.kind {
             Kind::Finished if alert.provider == "Codex" => Mark::Codex,
