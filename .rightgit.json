@@ -24,7 +24,8 @@
       "hub/src-tauri",
       "hub/qa-e2e"
     ],
-    "requiredForGate": true
+    "requiredForGate": true,
+    "keySuffix": "r1"
   },
   "gate": {
     "path": "scripts/gate.sh"
@@ -63,6 +64,11 @@
     "windows": "unsigned",
     "retentionDays": 7,
     "macAppPath": "dist/dev/Pulse.app",
-    "windowsGlob": "dist/dev/windows/**"
+    "windowsGlob": "dist/dev/windows/**",
+    "parallel": true,
+    "buildScript": "dev:artifact"
+  },
+  "concurrency": {
+    "mainPushes": "queue"
   }
 }

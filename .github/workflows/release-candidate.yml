@@ -142,6 +142,7 @@ jobs:
             hub/qa-e2e -> target
           shared-key: pulse-rust
           add-job-id-key: false
+          key: release-candidate-r1
           cache-workspace-crates: false
           cache-on-failure: true
           save-if: true
@@ -198,14 +199,14 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: ${{ runner.temp }}/cockpit-candidate/**
           if-no-files-found: error
       - name: Upload candidate stage summary
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: ${{ runner.temp }}/right-git-stage-summary/stage-summary.json
           if-no-files-found: error
 
@@ -260,7 +261,7 @@ jobs:
       - name: Download exact unsigned Windows candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: ${{ runner.temp }}/unsigned-windows-candidate
       - name: Authenticate to Azure with GitHub OIDC
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
@@ -315,7 +316,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-signed-windows-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-signed-windows-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: |
             dist/releases/windows/**
             .right-release/receipts/windows-*.json
@@ -324,7 +325,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-windows-sign-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-windows-sign-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: ${{ runner.temp }}/right-git-stage-summary/stage-summary.json
           if-no-files-found: error
 
@@ -378,7 +379,7 @@ jobs:
       - name: Download exact unsigned macOS candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-candidate-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: ${{ runner.temp }}/unsigned-macos-candidate
       - name: Install Apple signing identity in temporary keychain
         shell: bash
@@ -432,7 +433,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-signed-macos-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-signed-macos-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: |
             dist/releases/mac/**
             .right-release/receipts/macos-*.json
@@ -441,7 +442,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-macos-sign-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}
+          name: pulse-${{ github.run_id }}-${{ github.run_attempt }}-summary-macos-sign-${{ matrix.architecture }}-${{ needs.admission.outputs.version }}-${{ needs.admission.outputs.source_revision }}${{ needs.admission.outputs.artifact_suffix }}
           path: ${{ runner.temp }}/right-git-stage-summary/stage-summary.json
           if-no-files-found: error
       - name: Remove Apple signing material

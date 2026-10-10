@@ -18,7 +18,8 @@
     "rightkit:package:mac": "node scripts/release/mac-payload.mjs package",
     "rightkit:prepare:win": "node scripts/release/windows-payload.mjs prepare",
     "rightkit:package:win": "node scripts/release/windows-payload.mjs package",
-    "postinstall": "node scripts/release/dispatch-env.mjs"
+    "postinstall": "node scripts/release/dispatch-env.mjs",
+    "dev:artifact": "bash scripts/dev-artifact.sh"
   },
   "devDependencies": {
     "@rightkit/release": "0.2.151",

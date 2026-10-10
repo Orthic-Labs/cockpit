@@ -38,11 +38,11 @@ gate_exit() {
   exit "$result"
 }
 trap gate_exit EXIT
-# Dev artifact (RightKit devArtifact lane): on push to main, or PULSE_DEV_ARTIFACT=1.
+# Dev artifact inside the gate only with PULSE_DEV_ARTIFACT=1: on push to main the dev app is
+# built by scripts/dev-artifact.sh in RightKit's parallel dev-artifact job.
 # PULSE_DEV_ARTIFACT=0 forces it off (the release candidate build runs this gate too).
 dev_artifact() {
-  [[ "${PULSE_DEV_ARTIFACT:-}" == "1" ]] && return 0
-  [[ -z "${PULSE_DEV_ARTIFACT:-}" && "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF:-}" == "refs/heads/main" ]]
+  [[ "${PULSE_DEV_ARTIFACT:-}" == "1" ]]
 }
 node --test scripts/upstream-report.test.mjs scripts/probes/footprint-report.test.mjs
 # A path in the form a native (non-MSYS) process wants: C:\... under the Windows runner's Git Bash, unchanged elsewhere.
