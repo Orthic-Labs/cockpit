@@ -482,42 +482,25 @@ private struct LimitWindowRow: View {
 
     var body: some View {
         if window.id == NearbySharing.actionsRowID {
-            // Pulse fork: the Send card's bottom bar, "Copy last" left and "Paste" right.
+            // Pulse fork: the Send card's bottom bar, three equal buttons. A button that
+            // has nothing to do is drawn dimmed and does nothing; see `NearbySharing`'s
+            // actions row for the state words in `detail`.
+            let live = (window.detail ?? "").split(separator: ",").map(String.init)
+            let hasTarget = live.contains("target")
             HStack(spacing: 8) {
-                if !window.label.isEmpty {
-                    Button {
-                        MainActor.assumeIsolated { NearbySharing.shared.copyLast() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "doc.on.clipboard")
-                            Text(window.label).lineLimit(1)
-                        }
-                        .font(Typography.cardBody)
-                        .foregroundStyle(Palette.textPrimary)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(CardButtonStyle())
+                sendBarButton(icon: "doc.on.clipboard", title: L10n.t("Copy last"),
+                              enabled: !window.label.isEmpty, help: window.label) {
+                    NearbySharing.shared.copyLast()
                 }
-                Spacer(minLength: 4)
-                if let paste = window.detail {
-                    Button {
-                        MainActor.assumeIsolated { NearbySharing.shared.pasteClipboard() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.up.doc.on.clipboard")
-                            Text(paste)
-                        }
-                        .font(Typography.cardBody)
-                        .foregroundStyle(Palette.textPrimary)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(CardButtonStyle())
+                sendBarButton(icon: "arrow.up.doc.on.clipboard", title: L10n.t("Paste"),
+                              enabled: hasTarget && live.contains("clip"),
+                              help: L10n.t("Send the clipboard: files, an image or text")) {
+                    NearbySharing.shared.pasteClipboard()
+                }
+                sendBarButton(icon: "camera.viewfinder", title: L10n.t("Screenshot"),
+                              enabled: hasTarget,
+                              help: L10n.t("Pick a region and send it; nothing is saved")) {
+                    NearbySharing.shared.screenshot()
                 }
             }
         } else if window.id == NearbySharing.copyLastRowID {
@@ -544,6 +527,31 @@ private struct LimitWindowRow: View {
                     }
                 }
         }
+    }
+
+    /// One of the Send bar's equal buttons.
+    private func sendBarButton(icon: String, title: String, enabled: Bool, help: String,
+                               action: @escaping @MainActor () -> Void) -> some View {
+        Button {
+            if enabled { MainActor.assumeIsolated { action() } }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(title).lineLimit(1)
+            }
+            .font(Typography.cardBody)
+            .foregroundStyle(Palette.textPrimary)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.barTrack))
+            .opacity(enabled ? 1 : 0.4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(CardButtonStyle())
+        .disabled(!enabled)
+        .help(help)
+        .accessibilityLabel(title)
     }
 
     @ViewBuilder private var rows: some View {

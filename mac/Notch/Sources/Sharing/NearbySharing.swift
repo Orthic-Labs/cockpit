@@ -431,7 +431,81 @@ final class NearbySharing {
     func hoverChanged(_ controller: ObjectIdentifier, overSend: Bool) {
         if overSend { hovering.insert(controller) } else { hovering.remove(controller) }
         updatePasteTap()
+        updateClipboardWatch()
         onChange?()
+    }
+
+    // MARK: - Clipboard state (the Paste button)
+
+    /// Whether Paste has anything to send: files, an image, or text.
+    var clipboardHasContent: Bool {
+        let board = NSPasteboard.general
+        if let urls = board.readObjects(forClasses: [NSURL.self],
+                                        options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty { return true }
+        if board.canReadObject(forClasses: [NSImage.self], options: nil) { return true }
+        if let text = board.string(forType: .string),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        return false
+    }
+
+    private var clipboardWatch: Timer?
+    private var clipboardChange = NSPasteboard.general.changeCount
+
+    /// While the pointer is on the Send cell the clipboard is polled once a second (its
+    /// change count, no content) so the Paste button turns on the moment something is
+    /// copied, and off when it is cleared. No polling otherwise.
+    private func updateClipboardWatch() {
+        let wanted = !hovering.isEmpty
+        if wanted, clipboardWatch == nil {
+            clipboardChange = NSPasteboard.general.changeCount
+            clipboardWatch = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let now = NSPasteboard.general.changeCount
+                    if now != self.clipboardChange {
+                        self.clipboardChange = now
+                        self.onChange?()
+                    }
+                }
+            }
+        } else if !wanted {
+            clipboardWatch?.invalidate()
+            clipboardWatch = nil
+        }
+    }
+
+    // MARK: - Screenshot
+
+    /// The Screenshot button: the system's region picker (`screencapture -i`), the image
+    /// written to a temporary file and sent like a pasted file, nothing saved to the
+    /// Desktop and nothing put on the clipboard. Escape in the picker sends nothing.
+    func screenshot() {
+        guard !devices.isEmpty else { return }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Pulse Clipboard", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stamp = Int(Date().timeIntervalSince1970)
+        let file = folder.appendingPathComponent("Screenshot \(stamp).png")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-i", "-x", "-t", "png", file.path]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in
+            Task { @MainActor in
+                let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+                guard size > 0 else { return }  // cancelled in the picker
+                self.send(urls: [file])
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            showNote(title: L10n.t("Couldn't take a screenshot"),
+                     detail: error.localizedDescription, problem: true)
+        }
     }
 
     var canPasteWithKeyboard: Bool { AXIsProcessTrusted() }
@@ -553,12 +627,18 @@ final class NearbySharing {
                                            detail: L10n.t("⌘V sends the clipboard · drop files here")))
             }
         }
-        // The bottom bar: "Copy last" on the left (when there is something to copy),
-        // "Paste" on the right (when there is somewhere to send). One row, two buttons.
+        // The bottom bar: three equal buttons, Copy last · Paste · Screenshot. `label` is
+        // the Copy last preview (empty when there is nothing to copy); `detail` lists which
+        // buttons are live: "target" (a device to send to), "clip" (the clipboard has
+        // files, an image or text). The view reads both; the string changes whenever a
+        // state does, so the card redraws.
         let copy = last.flatMap(copyLastRow)
         if copy != nil || !devices.isEmpty {
+            var live: [String] = []
+            if !devices.isEmpty { live.append("target") }
+            if clipboardHasContent { live.append("clip") }
             windows.append(LimitWindow(id: Self.actionsRowID, label: copy?.label ?? "",
-                                       detail: devices.isEmpty ? nil : L10n.t("Paste")))
+                                       detail: live.joined(separator: ",")))
         }
         return ProviderSnapshot(id: Self.providerID, displayName: L10n.t("Send"), glyph: .send,
                                 fidelity: .official, status: .ok, windows: windows,
