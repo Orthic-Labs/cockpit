@@ -213,6 +213,9 @@ impl Usage {
     /// One line saying where the reading stands, for the hub's account row.
     pub fn summary(&self) -> String {
         let text = match (&self.account, self.status) {
+            (_, Status::NoReading) if !self.windows.is_empty() => {
+                "Last reading from Claude Desktop".to_string()
+            }
             (Some(name), Status::NoReading) => format!("No reading for {name} yet"),
             (_, status) => status.text().to_string(),
         };
@@ -786,6 +789,13 @@ enum Outcome {
     NoReading {
         account: String,
     },
+    /// Claude Desktop's last cached reading for its account, older than the freshness
+    /// allowance: shown as stale with its age.
+    Aged {
+        windows: Vec<LimitWindow>,
+        updated: u64,
+        account: String,
+    },
 }
 
 /// Folds one poll into the published reading: fresh data replaces it; a failure keeps the
@@ -827,6 +837,19 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
                 extras,
             }
         }
+        Outcome::Aged {
+            windows,
+            updated,
+            account,
+        } => Usage {
+            status: Status::NoReading,
+            plan: previous.plan,
+            windows,
+            updated: Some(updated),
+            block: None,
+            account: Some(account),
+            extras: Extras::default(),
+        },
         Outcome::NoReading { account } => Usage {
             status: Status::NoReading,
             plan: None,
@@ -1140,7 +1163,9 @@ fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<
 /// Desktop's cached reading for `id` as a fresh outcome, when it has a usable one.
 fn desktop_cache_outcome(id: &str, now: u64, tracker: &Tracker) -> Option<Outcome> {
     let organizations = desktop::organizations(id);
-    let reading = desktop::cached_usage(&organizations, now, tracker.account_since).ok()?;
+    let reading = desktop::cached_usage(&organizations, now, tracker.account_since)
+        .ok()
+        .filter(|reading| !reading.aged)?;
     Some(Outcome::Fresh {
         windows: reading.windows,
         plan: None,
@@ -1157,6 +1182,16 @@ fn desktop_only(id: &str, now: u64, tracker: &mut Tracker) -> Outcome {
     let account = account_label(id);
     let organizations = desktop::organizations(id);
     match desktop::cached_usage(&organizations, now, tracker.account_since) {
+        // Desktop has not refreshed lately: the account's last numbers stay, dated and
+        // dimmed, until a window resets or the account changes. No alert fires from them.
+        Ok(reading) if reading.aged => {
+            tracker.note = "";
+            Outcome::Aged {
+                windows: reading.windows,
+                updated: reading.captured.min(now),
+                account,
+            }
+        }
         Ok(reading) => {
             tracker.note = "";
             Outcome::Fresh {

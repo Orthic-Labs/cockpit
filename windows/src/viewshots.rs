@@ -524,6 +524,7 @@ fn ring_from(cell: Option<&Value>) -> send::Ring {
                 active: true,
                 problem: false,
                 label: percent_text(fraction),
+                complete: false,
             }
         }
         None => {
@@ -533,6 +534,7 @@ fn ring_from(cell: Option<&Value>) -> send::Ring {
                 active: false,
                 problem: false,
                 label: if off { "Off" } else { "Idle" }.to_string(),
+                complete: false,
             }
         }
     }

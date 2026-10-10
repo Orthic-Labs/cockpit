@@ -301,7 +301,8 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -
             stale: false,
             problem: ring.problem,
             blocked: false,
-            band: None,
+            // A send or received paste that just ended well: the full ring in green.
+            band: ring.complete.then_some(BAND_AMPLE),
         },
     ]
 }

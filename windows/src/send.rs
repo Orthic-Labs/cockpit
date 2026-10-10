@@ -69,6 +69,9 @@ struct Incoming {
     first_file: Option<String>,
 }
 
+/// How long the ring shows "complete" after a send or a received paste ends well.
+const COMPLETE_SHOWN: Duration = Duration::from_secs(3);
+
 #[derive(Clone, Debug, PartialEq)]
 struct Transfer {
     id: String,
@@ -323,6 +326,8 @@ pub struct Ring {
     pub problem: bool,
     /// Text under the ring: "Idle", "Off", "Starting…" or the percentage.
     pub label: String,
+    /// A send or a received paste just ended well: a full green ring for `COMPLETE_SHOWN`.
+    pub complete: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -740,6 +745,11 @@ struct Model {
     prompt: Option<Prompt>,
     expiry: Option<(Instant, Card)>,
     card_hovered: bool,
+    /// The card up is a plain confirmation (no buttons, not a problem): it closes on its
+    /// timer even under the pointer.
+    card_plain: bool,
+    /// Until when the ring shows "complete".
+    complete_until: Option<Instant>,
     pending: Option<Pending>,
     last_choose: Option<Prompt>,
     /// How many devices the Send-to card is scrolled past.
@@ -771,6 +781,8 @@ impl Model {
             prompt: None,
             expiry: None,
             card_hovered: false,
+            card_plain: false,
+            complete_until: None,
             pending: None,
             last_choose: None,
             choose_scroll: 0,
@@ -841,6 +853,7 @@ impl Model {
     }
 
     fn show(&mut self, prompt: Prompt, card: Card) {
+        self.card_plain = false;
         self.card = card;
         self.prompt = Some(prompt);
     }
@@ -872,11 +885,23 @@ impl Model {
     }
 
     fn show_note(&mut self, title: &str, detail: &str, problem: bool) {
+        self.show_note_for(title, detail, problem, if problem { 8.0 } else { 4.0 });
+    }
+
+    /// A note that closes after `seconds`. A plain confirmation (not a problem) closes on
+    /// that timer even while the pointer is over it; a problem waits for the pointer to leave.
+    fn show_note_for(&mut self, title: &str, detail: &str, problem: bool, seconds: f32) {
         self.show(
             Prompt::plain(title.to_string(), detail.to_string(), problem),
             Card::Note,
         );
-        self.schedule_expiry(if problem { 8.0 } else { 4.0 });
+        self.card_plain = !problem;
+        self.schedule_expiry(seconds);
+    }
+
+    /// The ring shows a full green "complete" for `COMPLETE_SHOWN`.
+    fn mark_complete(&mut self) {
+        self.complete_until = Some(Instant::now() + COMPLETE_SHOWN);
     }
 
     fn tick(&mut self) {
@@ -884,12 +909,15 @@ impl Model {
             && Instant::now() >= deadline
         {
             self.expiry = None;
-            if self.card == card && !self.card_hovered {
+            if self.card == card && (!self.card_hovered || self.card_plain) {
                 if card == Card::Choose {
                     self.pending = None;
                 }
                 self.clear_card();
             }
+        }
+        if self.complete_until.is_some_and(|until| Instant::now() >= until) {
+            self.complete_until = None;
         }
         self.watch_hub();
     }
@@ -898,6 +926,8 @@ impl Model {
     fn popup_hover(&mut self, on: bool) {
         self.card_hovered = on;
         match self.card.clone() {
+            // A plain confirmation keeps its own timer whatever the pointer does.
+            Card::Note if self.card_plain => {}
             Card::Saved(_) | Card::Note => {
                 self.expiry = None;
                 if !on {
@@ -1069,7 +1099,16 @@ impl Model {
                     }
                 };
                 if copied {
-                    self.show_note(&format!("Copied from {}", transfer.peer), &detail, false);
+                    self.mark_complete();
+                    let title = format!("Copied from {}", transfer.peer);
+                    if transfer.message.is_some() {
+                        self.show_note_for(&title, &detail, false, 2.5);
+                    } else {
+                        let mut prompt = Prompt::plain(title, detail, false);
+                        prompt.buttons = vec![("Show".into(), Action::Show)];
+                        self.show(prompt, Card::Saved(files));
+                        self.schedule_expiry(4.0);
+                    }
                 } else {
                     self.show_note(
                         &format!("Received from {}", transfer.peer),
@@ -1128,14 +1167,17 @@ impl Model {
                     ("Close".into(), Action::Close),
                 ];
                 self.show(prompt, Card::Saved(files));
-                self.schedule_expiry(8.0);
+                self.schedule_expiry(6.0);
             }
             ("send", "done") => {
+                // A send that no card followed (the hot key, a tool).
                 let count = transfer.files_total.max(1);
-                self.show_note(
+                self.mark_complete();
+                self.show_note_for(
                     &format!("Sent to {}", transfer.peer),
                     &files_text(count),
                     false,
+                    2.5,
                 );
             }
             (_, "declined") => {
@@ -1374,8 +1416,10 @@ impl Model {
                 self.seen_finished.insert(transfer.id.clone());
                 self.send_finished = true;
                 if transfer.state == "done" {
-                    // Sent: the card has nothing more to say; it goes at once (the Mac's).
+                    // Sent: the card has nothing more to say; it goes at once and the ring
+                    // shows the outcome (the Mac's).
                     self.clear_card();
+                    self.mark_complete();
                 } else {
                     self.prompt = Some(self.sending_prompt(Some(transfer), &peer));
                     if !self.card_hovered {
@@ -1559,6 +1603,15 @@ impl Model {
 
     fn ring(&self) -> Ring {
         let live = self.fresh();
+        if self.complete_until.is_some_and(|until| Instant::now() < until) {
+            return Ring {
+                fraction: Some(1.0),
+                active: true,
+                problem: false,
+                label: "Done".to_string(),
+                complete: true,
+            };
+        }
         if let Some(transfer) = live.and_then(|s| s.transfers.iter().rev().find(|t| t.is_open())) {
             let fraction = transfer.fraction();
             return Ring {
@@ -1570,6 +1623,7 @@ impl Model {
                 } else {
                     percent(fraction)
                 },
+                complete: false,
             };
         }
         let (label, problem) = if !self.enabled {
@@ -1584,6 +1638,7 @@ impl Model {
             active: false,
             problem,
             label: label.to_string(),
+            complete: false,
         }
     }
 

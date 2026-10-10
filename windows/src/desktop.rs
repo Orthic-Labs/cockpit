@@ -55,6 +55,8 @@ pub struct Reading {
     pub windows: Vec<LimitWindow>,
     /// Unix seconds from the response's own `Date:` header: when the numbers were true.
     pub captured: u64,
+    /// Older than `FRESH_SECONDS`.
+    pub aged: bool,
 }
 
 /// Claude Desktop's data folder, `%APPDATA%\Claude`.
@@ -271,8 +273,9 @@ pub fn object_member<'a>(text: &'a [u8], key: &str) -> Option<&'a [u8]> {
 
 // ------------------------------------------------------------------ the usage cache
 
-/// The newest fresh usage response Desktop cached for any of `organizations`, or why there
-/// is none. `not_before` (unix seconds) rejects a response from before the account was last
+/// The newest usage response Desktop cached for any of `organizations`, or why there is
+/// none. `Reading::aged` is set when it is older than `FRESH_SECONDS`: still that account's
+/// last numbers, to be shown dated and dimmed rather than as current. `not_before` (unix seconds) rejects a response from before the account was last
 /// seen to change, because organizations can be shared between accounts. A response with a
 /// window already past its reset is a description of a finished period and is rejected too.
 pub fn cached_usage(
@@ -300,13 +303,11 @@ pub fn cached_usage(
             newest = Some(reading);
         }
     }
-    let reading = newest.ok_or("no usage response is cached for the account")?;
+    let mut reading = newest.ok_or("no usage response is cached for the account")?;
     if reading.captured > now + FUTURE_SLACK_SECONDS {
         return Err("the cached reading is dated in the future");
     }
-    if now.saturating_sub(reading.captured) > FRESH_SECONDS {
-        return Err("the cached reading is older than 30 minutes");
-    }
+    reading.aged = now.saturating_sub(reading.captured) > FRESH_SECONDS;
     if reading.captured < not_before {
         return Err("the cached reading predates the account change");
     }
@@ -541,5 +542,9 @@ fn read_entry(dir: &Path, candidate: &Candidate) -> Option<Reading> {
     if windows.is_empty() {
         return None;
     }
-    Some(Reading { windows, captured })
+    Some(Reading {
+        windows,
+        captured,
+        aged: false,
+    })
 }
