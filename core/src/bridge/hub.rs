@@ -98,8 +98,14 @@ pub fn is_known_local_session(id: &str) -> bool {
     store().is_some_and(|s| {
         local_chats(s, SESSION_SCAN_EVERY)
             .iter()
-            .any(|c| c.id == id)
+            .any(|c| is_chat(c, id))
     })
+}
+
+/// Is `id` this chat? A Claude Desktop chat signs its replies with the Desktop record id
+/// (`hostSessionId` in its registry entry, `local_…`), not the session id the roster uses.
+fn is_chat(chat: &LocalSession, id: &str) -> bool {
+    chat.id == id || chat.raw["hostSessionId"].as_str() == Some(id)
 }
 
 // ---- registration ------------------------------------------------------------------
@@ -467,8 +473,8 @@ pub fn on_local_reply(reply: ReplyMessage) {
         return note(off);
     }
     let sessions = local_chats(store, Duration::from_secs(10));
-    let Some(from) = sessions.iter().find(|s| s.id == reply.from_session_id) else {
-        return;
+    let Some(from) = sessions.iter().find(|s| is_chat(s, &reply.from_session_id)) else {
+        return note("A reply came from a chat Pulse does not list here; it was not relayed.".to_string());
     };
     let routed = [reply.in_reply_to.as_deref(), Some(reply.msg_id.as_str())]
         .into_iter()

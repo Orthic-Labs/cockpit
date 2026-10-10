@@ -632,6 +632,10 @@ pub fn deliver_via(
         Some(address) => ReplyRoute::Listening(address.to_string()),
         None => {
             note_last_peer(&session.id, peer_key);
+            // A Desktop chat signs its replies with its Desktop record id.
+            if let Some(host) = session.raw["hostSessionId"].as_str() {
+                note_last_peer(host, peer_key);
+            }
             reply_route(peer_key)
         }
     };
