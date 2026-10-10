@@ -462,7 +462,7 @@ impl TrustStore {
     /// Newest sighting first.
     pub fn list(&self) -> Vec<TrustEntry> {
         let mut list = self.devices.clone();
-        list.sort_by(|a, b| b.last_seen_ms.cmp(&a.last_seen_ms));
+        list.sort_by_key(|a| std::cmp::Reverse(a.last_seen_ms));
         list
     }
 }

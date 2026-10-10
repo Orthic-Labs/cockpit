@@ -305,8 +305,7 @@ pub fn check(installed: &[Installed], on_row: &dyn Fn(&AppUpdate)) -> Result<Fou
 fn last_message(text: &str) -> String {
     text.split('\n')
         .map(clean)
-        .filter(|line| !line.trim().is_empty() && !is_rule(line))
-        .next_back()
+        .rfind(|line| !line.trim().is_empty() && !is_rule(line))
         .unwrap_or_default()
 }
 

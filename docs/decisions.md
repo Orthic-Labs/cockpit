@@ -38,6 +38,8 @@ Owner decisions, in Adrian's words where it matters, with the date they were mad
 - Codex threads come from the Codex state database (not archived, newest first) with folder and age. (2026-10-10)
 - "Bridge off" is a core policy every path checks. (2026-10-10)
 
+- **What Claude gets is in Claude's exact form.** Claude Code takes a message from another chat only when its wrapper has Claude's own attributes and nothing else, a sender class it knows that matches the chat's own (the owner's chats bypass permissions, so `bypass`), and a sender name of 64 characters at most; anything else is held for an approval and dropped while the sender sees "sent". "via Pulse" in the name marks forwarded text. Found after a security-review change lost every message for twelve hours. (2026-10-11)
+
 ## Phone
 - **No Pulse phone app and no Telegram.** The phone side is CodeRight's Connected Computer mode, extended to attach to already-running Claude chats; Codex stays in its own app; sharing moves into ScrapeRight's iPhone app (see Send above); terminal work stays in Moshi. Pulse supplies the laptop connector pieces (chat discovery across accounts, transcript tailing, delivery into the original session). Handoff: docs/coderight-handoff.md. History: docs/phone-gateway-*.md. (2026-10-10)
 - Laptops connect out to Hetzner; Hetzner never holds a key that opens a laptop. (2026-10-10)
@@ -48,6 +50,8 @@ Owner decisions, in Adrian's words where it matters, with the date they were mad
 ## Builds
 - Dev builds from CI are signed but not notarized, and macOS will not register an app extension from such an app: the Finder menu (Cut, Copy Path, Open in Terminal) is absent on every dev install and returns with a notarized build. The Permissions row says so instead of "Off". (2026-10-10)
 - **Dev builds stay sign-only, on purpose.** Notarizing and stapling take minutes per build and dev builds happen many times an hour; release builds are notarized. Do not turn on RightKit's `devArtifact.mac: "notarize"` for Pulse. Adrian: ask before requesting build-pipeline changes. (2026-10-10)
+
+- **Pulse is fully on RightKit.** Every capability RightKit owns comes from its published package; Pulse keeps its own copy only until RightKit publishes an owner that does the same job, and a regression from a port is RightKit's to fix. The workspace is on Rust 1.98, which every RightKit crate needs. Ported: SQLite (rightkit-db), filename search (rightkit-search), the hub shell, platform check and release tooling at their published versions. Waiting on RightKit versions: local services, framing, directory listing and file watching, single instance, Swift keychain, overlay and file watching, Windows overlay and key sending, Mac signing and disk image. (2026-10-11)
 
 ## Claude accounts
 - The restart button quits Claude politely for 20 s, force-quits for 10 s more, retries the sync while helpers wind down, and keeps a failure visible. The sync prefers the copy of a session that is further along (turns, then last message, then time), never the newest timestamp alone. (2026-10-10)

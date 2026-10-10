@@ -370,8 +370,10 @@ fn list_with_class(
                 return Err(malformed());
             }
             let units: Vec<u16> = name
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair))
                 .collect();
             let is_dot = units == [u16::from(b'.')] || units == [u16::from(b'.'); 2];
             if !is_dot {
