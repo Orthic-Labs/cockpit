@@ -1,0 +1,36 @@
+# Installed-app probe (stage "installed"): launch the INSTALLED hub under rightkit-qa and render its shell.
+# Mac:     RIGHTKIT_QA_UI_BINARY=/Applications/Pulse.app/Contents/Helpers/Pulse.app   (or --ui-binary)
+# Windows: RIGHTKIT_QA_UI_BINARY=%LOCALAPPDATA%\Programs\Pulse\pulse-hub.exe
+# Mandatory: without the variable the run fails rather than falling back to the debug qa-native hub in
+# rightkit-qa.toml, which would make a passing receipt that never exercised the installed build.
+# KNOWN GAP: rightkit-qa drives an app only through rightkit-control, and the release hub has none (qa-native is
+# compile_error!'d outside debug, hub/src-tauri/src/lib.rs). Until Pulse has a release-safe driver this fails at
+# ui_launch with "control service did not answer"; that failure is the accurate record. Maps to smoke.launch.
+name = "app.launch"
+tier = "fast"
+target = "ui"
+requires = ["env:RIGHTKIT_QA_UI_BINARY"]
+
+[[step]]
+kind = "ui_launch"
+label = "launch the installed hub hidden"
+mode = "hidden"
+  [[step.expect]]
+  path = "health.ok"
+  eq = true
+
+[[step]]
+kind = "ui_wait_eval"
+label = "navigation rendered"
+timeout_s = 30
+js = 'return !!document.querySelector("nav.rk-nav")'
+
+[[step]]
+kind = "ui_stop"
+label = "hub exits and its control endpoint closes"
+  [[step.expect]]
+  path = "endpoint_closed"
+  eq = true
+  [[step.expect]]
+  path = "process_gone"
+  eq = true

@@ -1,0 +1,20 @@
+# rightkit-qa plan for `right-release qa` (see right-release.config.mjs `qa` and docs/testing.md).
+# Evidence check names are the scenario `name`s; right-release maps them onto the QA floor.
+# Source stage: the debug qa-native hub, built the way scripts/gate.sh builds it:
+#   (cd hub/src-tauri && cargo build --features qa-native,custom-protocol)   [CI only; page bundled first]
+# RIGHTKIT_QA_UI_BINARY (or --ui-binary) overrides the binary, e.g. a CARGO_TARGET_DIR build.
+app = "pulse"
+app_root = "."
+scenarios = ["qa/release/source"]
+default_tier = "fast"
+
+[ui]
+binaries = { darwin = "hub/src-tauri/target/debug/pulse-hub", windows = "hub/src-tauri/target/debug/pulse-hub.exe" }
+window_label = "main"
+mode = "hidden"
+feature = "qa-native"
+package = "pulse-hub"
+cargo_toml = "hub/src-tauri/Cargo.toml"
+rust_sources = ["hub/src-tauri/src/lib.rs"]
+package_json = "hub/package.json"
+startup_timeout_s = 90

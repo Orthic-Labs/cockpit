@@ -5,6 +5,20 @@ export default {
  distribution:{provider:'github-releases',repository:'Orthic-Labs/pulse'},
  // Pulse's native workspace is the repo-root Cargo.toml (core + CLI); the
  // hub's Tauri crate is a separate workspace under hub/src-tauri.
+ // QA receipts (warn-and-record, @rightkit/release >= 0.2.146): `right-release qa --stage source|installed` runs
+ // rightkit-qa on rightkit-qa.toml and maps its evidence check names (= each scenario's `name`) onto the
+ // protected floor ids. Source drives the debug qa-native hub (hub/src-tauri, built by CI like scripts/gate.sh).
+ // Installed has no passing plan yet: a release hub has no control server (qa-native is compile-time barred
+ // from release), so its one probe records a failed app.launch until Pulse has a release-safe driver. See
+ // docs/testing.md "Release QA receipts".
+ qa:{
+  version:'1', config:'rightkit-qa.toml',
+  args:{
+   source:['qa/release/source/app-launch.scenario.toml','qa/release/source/hub-sections.scenario.toml'],
+   installed:['qa/release/installed/app-launch.scenario.toml']
+  },
+  checks:{'smoke.launch':['app.launch'],journey:['journey.*']}
+ },
  nativeAssembly:{cargoManifest:'Cargo.toml',cargoLockSource:'manifest'},
  buildInputs:{include:['mac/**','windows/**','core/**','third_party/**','NOTICE','LICENSE','rules/**','hub/**','scripts/**','release/**','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','pnpm-workspace.yaml','.rightgit.json','.github/workflows/**','right-release.config.mjs'],required:['Cargo.lock','pnpm-lock.yaml','right-release.config.mjs']},
  targets:{win:{

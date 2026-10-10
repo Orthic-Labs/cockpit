@@ -1,0 +1,331 @@
+# Journey: the hub opens every section in turn and each renders its title with no error text and no
+# undefined/NaN/[object Object]/panicked text (the section tour of hub_tour() in hub/qa-e2e/tests/ui.rs, minus
+# its notch-state fixture, geometry, per-control crawl and Windows-only checks, which stay in the cargo test).
+# Storage must also list the fixture folder. Maps to floor id journey (journey.*).
+name = "journey.hub-sections"
+tier = "fast"
+target = "ui"
+timeout_s = 300
+
+[[step]]
+kind = "write_file"
+label = "fixture home (the scenario data dir): one folder for Storage to list"
+path = "alpha-folder/fixture.txt"
+content = "pulse release QA fixture"
+
+[[step]]
+kind = "ui_launch"
+label = "launch the hub hidden"
+mode = "hidden"
+  [step.env]
+  RIGHTKIT_PULSE_QA_HOME = "${data_dir}"
+  [[step.expect]]
+  path = "health.ok"
+  eq = true
+
+[[step]]
+kind = "ui_wait_eval"
+label = "navigation rendered"
+timeout_s = 30
+js = 'return !!document.querySelector("nav.rk-nav")'
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Overview"
+timeout_s = 20
+js = 'const t = "Overview"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Overview shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Overview"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "01-overview"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Storage"
+timeout_s = 20
+js = 'const t = "Storage"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "ui_wait_eval"
+label = "Storage lists the fixture folder (Folders pane)"
+timeout_s = 60
+js = 'const b = [...document.querySelectorAll("button,[role=radio],[role=tab]")].find((e) => e.textContent.trim() === "Folders"); if (b && !document.body.innerText.includes("alpha-folder")) b.click(); return document.body.innerText.includes("alpha-folder");'
+
+[[step]]
+kind = "ui_eval"
+label = "Storage shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Storage"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "02-storage"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Cleanup"
+timeout_s = 20
+js = 'const t = "Cleanup"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Cleanup shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Cleanup"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "03-cleanup"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Monitor"
+timeout_s = 20
+js = 'const t = "Monitor"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Monitor shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Monitor"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "04-monitor"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Apps"
+timeout_s = 20
+js = 'const t = "Apps"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Apps shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Apps"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "05-apps"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Permissions"
+timeout_s = 20
+js = 'const t = "Permissions"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Permissions shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Permissions"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "06-permissions"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Accounts"
+timeout_s = 20
+js = 'const t = "Accounts"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Accounts shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Accounts"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "07-accounts"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Appearance"
+timeout_s = 20
+js = 'const t = "Appearance"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Appearance shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Appearance"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "08-appearance"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open Notifications"
+timeout_s = 20
+js = 'const t = "Notifications"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "Notifications shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "Notifications"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "09-notifications"
+
+[[step]]
+kind = "ui_wait_eval"
+label = "open General"
+timeout_s = 20
+js = 'const t = "General"; if (document.querySelector(".rk-top__title")?.textContent?.trim() !== t) { const b = [...document.querySelectorAll("nav.rk-nav button")].find((e) => e.textContent.trim() === t); if (b) b.click(); return false; } return true;'
+
+[[step]]
+kind = "sleep"
+label = "let the first load settle"
+ms = 1500
+
+[[step]]
+kind = "ui_eval"
+label = "General shows no error or broken text"
+js = 'const m = document.body.innerText.match(/\b(undefined|NaN|Unhandled|panicked)\b|\[object Object\]/); return { title: document.querySelector(".rk-top__title")?.textContent?.trim() ?? "", errors: [...document.querySelectorAll(".error")].map((e) => e.textContent.trim()), broken: m ? m[0] : "" };'
+  [[step.expect]]
+  path = "title"
+  eq = "General"
+  [[step.expect]]
+  path = "errors"
+  len_eq = 0
+  [[step.expect]]
+  path = "broken"
+  eq = ""
+
+[[step]]
+kind = "ui_screenshot"
+name = "10-general"
+
+[[step]]
+kind = "ui_stop"
+label = "hub exits and its control endpoint closes"
+  [[step.expect]]
+  path = "endpoint_closed"
+  eq = true
+  [[step.expect]]
+  path = "process_gone"
+  eq = true
