@@ -40,6 +40,9 @@ Owner decisions, in Adrian's words where it matters, with the date they were mad
 ## Permissions
 - The hub's Permissions page states exactly which enabled feature needs which permission ("Needed for: …"), and "Not needed by anything you have on" otherwise. Entries: Accessibility, Screen Recording, Full Disk Access, Local Network, Background helper, Finder menu, Launch at login. (2026-10-10)
 
+## Builds
+- Dev builds from CI are signed but not notarized, and macOS will not register an app extension from such an app: the Finder menu (Cut, Copy Path, Open in Terminal) is absent on every dev install and returns with a notarized build. The Permissions row says so instead of "Off". Reported to the RightKit chat (dev-lane notarization). (2026-10-10)
+
 ## Claude accounts
 - The restart button quits Claude politely for 20 s, force-quits for 10 s more, retries the sync while helpers wind down, and keeps a failure visible. The sync prefers the copy of a session that is further along (turns, then last message, then time), never the newest timestamp alone. (2026-10-10)
 - The chat mirror is change-driven (FSEvents on the signed-in account's folder, plus the account change), with no timer. It copies one way, from the signed-in account to the others; the button stays as the restart and the full two-way merge. (2026-10-10)

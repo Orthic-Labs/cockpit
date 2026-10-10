@@ -13,7 +13,7 @@ final class PulsePermissions {
     struct Entry: Equatable, Sendable {
         let id: String
         let title: String
-        let why: String
+        var why: String
         var status: Status
         let required: Bool
         /// The features that need this permission, from what is switched on now.
@@ -121,7 +121,10 @@ final class PulsePermissions {
             for index in updated.indices {
                 if updated[index].id == "fullDiskAccess" { updated[index].status = statuses.0 }
                 if updated[index].id == "automation" { updated[index].status = statuses.1 }
-                if updated[index].id == "finderMenu" { updated[index].status = statuses.2 }
+                if updated[index].id == "finderMenu" {
+                    updated[index].status = statuses.2
+                    if statuses.2 == .unknown { updated[index].why = PermissionProbe.finderMenuUnregistered }
+                }
             }
             self.update(updated)
             self.refreshing = false
@@ -298,9 +301,18 @@ private enum PermissionProbe {
         process.waitUntilExit()
         let line = String(decoding: data, as: UTF8.self)
             .split(separator: "\n").first { $0.contains("dev.orthic.pulse.finder") }
-        guard let line else { return .off }
+        // Not listed at all: macOS never registered the extension. That is what an
+        // app that is signed but not notarized gets (every dev build), and no switch
+        // here or in System Settings can turn it on, so it is not "off".
+        guard let line else { return .unknown }
         return line.drop { $0 == " " }.first == "+" ? .granted : .off
     }
+
+    /// The reason shown when the Finder menu's status is unknown: the system does not
+    /// list the extension, which on a dev build means the app is not notarized.
+    static let finderMenuUnregistered =
+        "Not available in this build: macOS has not registered Pulse's Finder extension "
+        + "(dev builds are signed but not notarized). A notarized build brings it back."
 
     static func finder(ask: Bool) -> PulsePermissions.Status {
         let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.finder")
