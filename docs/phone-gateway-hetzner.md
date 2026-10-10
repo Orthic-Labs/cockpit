@@ -1,9 +1,29 @@
 # Proposal B: Pulse relay on Hetzner, own phone app, one transport for files and agent messages
 
-Status: proposal, 2026-10-10, not approved. Supersedes the Telegram proposal (docs/phone-gateway-proposal.md) if accepted. Written against docs/bridge-astra-review.md; every finding it answers is cited as Bnn.
+Status: proposal v2, 2026-10-10, Telegram dropped by the owner. Written against docs/bridge-astra-review.md (Bnn) and revised after docs/phone-gateway-hetzner-review.md (Hnn). Owner decisions folded in: ship the own app, no Telegram; the phone app is an ssh client first; nearby sharing gets a device trust model (allow / ask / deny) in the hub.
 
 ## Goal
 From a phone anywhere, Adrian messages any Claude Code or Codex chat on the Mac Mini or the Dell, gets replies and "input needed" pushes, and sends files or the clipboard to either computer. The same transport replaces LocalSend between the two computers and the phone, so there is one path to make correct instead of three.
+
+## Owner decisions (2026-10-10)
+- **Names.** The product has two sections: **Send** (nearby sharing: files and clipboard to a device) and **Chat** (messages between agent chats on any of the owner's machines, and from the phone). "Chat" replaces "agent bridge" everywhere user-facing; the CLI becomes `pulse chat …` (one rename commit after the current batch), with `pulse bridge` kept as an alias for a while.
+- **Terminal** is the third phone section, behind FaceID like Chat: an ssh terminal to Hetzner first (the owner's sudo work, today done in a third-party app), laptops later. Built from SwiftTerm (MIT, terminal view) and swift-nio-ssh / Citadel (Apache 2 / MIT, ssh client) so Chat and Terminal share one key, one FaceID gate and one connection manager; licences verified against the donor inventory before import. Every Terminal connect attaches to a named tmux session on the host (`tmux new -A -s pulse`; tmux 3.4 is already on Hetzner), so the shell survives drops and app restarts. mosh (GPLv3; mosh-server is already on Hetzner, needs UDP 60000–61000 open) is an option for the Terminal section only if the phone app is released under a GPL-compatible licence; Pulse's repository is all-rights-reserved, so this is an owner decision, not a default.
+- **FaceID only on Chat and Terminal.** The phone app opens into Send with no FaceID: pick a device from the Allow list, paste or choose a file, send. Chat is the section that can act on the owner's machines, so it alone asks for FaceID, and the ssh key is used only there.
+- No Telegram. The app ships first.
+- The phone app is an ssh client with a FaceID-gated key (the key in the Secure Enclave), like the Moshi app the owner already uses for Hetzner, with Pulse screens on top. It runs `pulse bridge peers|send|reply|inbox` on Hetzner and draws the results; a terminal tab to Hetzner comes from the same client.
+- Hetzner is a linked computer in the existing bridge (a third device beside the Mac and the Dell), not a new protocol. The relay service in the first slice is the existing `pulse` CLI plus the hub's bridge store, headless.
+- Direction: the laptops connect out to Hetzner and keep that link; Hetzner holds no key that opens a laptop. Where Hetzner must deliver into a laptop, its key on that laptop is restricted to the forced command `pulse bridge post` (H04, B10). Today Hetzner has no path into either laptop; that stays the rule.
+- Nearby sharing (files, clipboard) keeps the LocalSend protocol until the Pulse transport passes its journeys (H20), but gets the device trust model below now.
+
+## Device trust for nearby sharing (hub settings)
+The hub's Nearby page lists every device seen on the network (alias, kind, model, address, first seen, last seen) and the owner sets each one to one of three states:
+- **Allow** (owner's own devices): send and receive without a prompt, files and text alike. A device is identified by its LocalSend fingerprint (the certificate hash it presents) plus its alias; a changed fingerprint under a known alias drops back to Ask with a notice.
+- **Ask**: an incoming file or text raises the notch card and nothing lands until accepted; a send from here to that device is allowed.
+- **Deny** (the default for every unknown device): requests are refused at the protocol level (`403`), no card, no toast; the hub page counts refused attempts per device so the owner can see "Neo tried 3 times" and switch it to Ask or Allow.
+Revocation is one click (Allow → Deny) and takes effect on the next request. Text messages follow the same rule as files; the LocalSend-app habit of showing text without asking is gone. The notch Send card lists only Allow and Ask devices as targets. The policy lives in the hub's share settings (`nearby_devices.json`: fingerprint → {alias, state, first_seen, last_seen, refused}) and is published in share-state.json so the notch cards and the Windows notch read one truth. The owner's phone, once the app exists, is just an Allow device.
+
+## Remote laptop later (one laptop away from home)
+When the Dell is away and must reach the Mac Mini, the two are no longer on one network. The answer is the same meeting point: both laptops already link to Hetzner, so an agent message from the Dell to a Mac chat goes Dell → Hetzner → Mac through the bridge store on Hetzner, with no change to the chats. Nearby sharing over the internet (files to the other laptop) is the file leg of the relay, scheduled after text (H20). Nothing in the first slice blocks it; it is a second link in `links.json` and a retention policy on Hetzner.
 
 ## Topology
 - **Relay** (`pulse relay`, the Rust core built headless) runs on Adrian's Hetzner server as a systemd service behind Caddy (TLS). It is a store-and-forward message service and blob store. It never executes anything on a laptop.
