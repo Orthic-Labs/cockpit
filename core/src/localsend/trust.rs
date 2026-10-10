@@ -122,7 +122,12 @@ impl TrustEntry {
 
     /// Whether the record may be dropped to make room.
     fn evictable(&self) -> bool {
-        !self.decided && self.label.is_empty() && self.state != TrustState::Allow
+        // A device that has proved its key keeps that memory: forgetting it would let a
+        // later request for the same fingerprint fall back to the weaker callback.
+        !self.decided
+            && self.label.is_empty()
+            && self.state != TrustState::Allow
+            && self.proof.is_none()
     }
 }
 
