@@ -273,7 +273,7 @@ fn build_rows(snaps: &[Snap]) -> Vec<ProcessRow> {
             refusal,
         });
     }
-    rows.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.memory_bytes));
     rows
 }
 

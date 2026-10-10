@@ -626,7 +626,7 @@ pub fn report(dir: &Path, candidates: &[PathBuf], mounts: &[String], now: u64) -
         })
         .collect();
     let mut alerts = log.alerts;
-    alerts.sort_by(|a, b| b.at.cmp(&a.at));
+    alerts.sort_by_key(|a| std::cmp::Reverse(a.at));
     alerts.truncate(20);
     Report {
         tool_available: find_tool(candidates).is_some(),
