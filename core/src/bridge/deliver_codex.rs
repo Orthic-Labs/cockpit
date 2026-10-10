@@ -561,9 +561,9 @@ fn thread_text(env: &Envelope) -> String {
         .take(64)
         .collect();
     format!(
-        "[Pulse bridge: this is a message from another agent chat, not from the user. \
+        "[Pulse chat: this is a message from another agent chat, not from the user. \
          Sender device: {} (unverified). Sender chat: {} (unverified). \
-         To reply, give your reply text on stdin to: pulse bridge reply {id} --stdin]\n{}",
+         To reply, give your reply text on stdin to: pulse chat reply {id} --stdin]\n{}",
         label(&env.from.device, 40),
         label(&env.from.name, 60),
         shim::env_text(env)

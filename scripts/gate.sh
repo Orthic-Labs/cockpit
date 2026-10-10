@@ -190,6 +190,17 @@ if [[ "$RUNNER_OS" == "macOS" ]]; then
   pnpm --dir hub exec tsc --noEmit
   pnpm --dir hub run build
   (cd hub/src-tauri && cargo check)
+  # Dev artifact, compile half: the release hub and the release CLI build in the background while
+  # the notch builds, the views render and the hub QA runs below (those wait on the UI, not on
+  # the compiler). tauri's own page build runs first, within seconds, long before the QA build
+  # embeds hub/dist. Release and debug use separate target folders, so nothing waits on a lock.
+  dev_build_pid=""
+  dev_build_log="$RUNNER_TEMP/pulse-dev-build.log"
+  if dev_artifact; then
+    (pnpm --dir hub exec tauri build --bundles app --no-sign &&
+      cargo build --locked --release --bin pulse) > "$dev_build_log" 2>&1 &
+    dev_build_pid=$!
+  fi
   # Pulse notch: Codenotch fork, built unsigned (release signing is RightKit's).
   xcodebuild -version
   command -v xcodegen >/dev/null || brew install xcodegen
@@ -226,12 +237,14 @@ PY
   # Headless dogfood of the hub on rightkit-qa (see run_hub_qa).
   run_hub_qa
   # Dev artifact: the complete unsigned Pulse.app at dist/dev/Pulse.app (the same bundle the release
-  # candidate assembles, via mac-payload.mjs). Reuses the notch built above; builds only the release CLI
-  # and the release hub (real frontend). RightKit's dev-mac-sign job signs and uploads it.
+  # candidate assembles, via mac-payload.mjs). Reuses the notch built above and the release CLI and
+  # release hub (real frontend) compiled in the background. RightKit's dev-mac-sign job signs and uploads it.
   if dev_artifact; then
+    dev_build_rc=0
+    wait "$dev_build_pid" || dev_build_rc=$?
+    cat "$dev_build_log"
+    [[ $dev_build_rc -eq 0 ]] || { echo "Dev artifact release build failed ($dev_build_rc)" >&2; exit "$dev_build_rc"; }
     rm -rf dist/dev/Pulse.app
-    cargo build --locked --release --bin pulse
-    pnpm --dir hub exec tauri build --bundles app --no-sign
     node scripts/release/mac-payload.mjs dev
     test -x dist/dev/Pulse.app/Contents/MacOS/Pulse
   fi

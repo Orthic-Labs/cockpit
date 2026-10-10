@@ -143,10 +143,10 @@ function AgentBridge({ share }: { share: ShareState | null }) {
   return (
     <>
       <Row
-        label="Agent bridge"
-        note="Lets Claude and Codex chats on this computer message chats on linked computers over ssh. Link one with: pulse bridge link <device> <ssh-host>"
+        label="Chat"
+        note="Lets Claude and Codex chats on this computer message chats on linked computers over ssh. Link one with: pulse chat link <device> <ssh-host>"
       >
-        <Toggle checked={enabled} onChange={toggle} label="Agent bridge" />
+        <Toggle checked={enabled} onChange={toggle} label="Chat" />
       </Row>
       {enabled && (
         <Row
@@ -223,7 +223,7 @@ function ChatList({ chats }: { chats: Chat[] }) {
             <ul className="ck-chats-list">
               {claude.map((c, i) => <ChatRow key={`c-${i}-${c.name}`} c={c} kind="claude" />)}
               {codex.slice(0, 8).map((c, i) => <ChatRow key={`x-${i}-${c.name}`} c={c} kind="codex" />)}
-              {codex.length > 8 && <li className="ck-sub ck-chats-more">+{codex.length - 8} more Codex threads (`pulse bridge peers` lists all)</li>}
+              {codex.length > 8 && <li className="ck-sub ck-chats-more">+{codex.length - 8} more Codex threads (`pulse chat peers` lists all)</li>}
             </ul>
           </section>
         );

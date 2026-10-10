@@ -209,7 +209,7 @@ fn refuse_link(path: &Path) -> io::Result<()> {
         Ok(meta) if meta.file_type().is_symlink() => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "{} is a link; the bridge does not follow links",
+                "{} is a link; the chat store does not follow links",
                 path.display()
             ),
         )),

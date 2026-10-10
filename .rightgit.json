@@ -21,7 +21,8 @@
     "workspaces": [
       ".",
       "windows",
-      "hub/src-tauri"
+      "hub/src-tauri",
+      "hub/qa-e2e"
     ],
     "requiredForGate": true
   },

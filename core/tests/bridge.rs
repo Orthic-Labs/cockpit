@@ -81,6 +81,69 @@ fn roster_and_wire_format() {
     assert!(links::decode_envelope("!!not base64!!").is_err());
 }
 
+/// What a real Claude chat (Claude Code 2.1.295) demands of the wrapper before it takes the
+/// message as one from a peer: exactly these attributes in this order, a class it knows
+/// that matches a chat bypassing permissions, a sender name it would not rewrite (64
+/// characters at most, no control characters, trimmed) and no closing tag inside the text.
+/// A real chat parks anything else for an approval and drops it without an answer, which
+/// the fake chat below (it answers "delivered" to every line) would never show.
+fn claude_accepts(content: &str) -> Result<(), String> {
+    let rest = content
+        .strip_prefix("<cross-session-message")
+        .ok_or("no opening tag")?;
+    let (mut head, body) = rest.split_once(">\n").ok_or("the opening tag does not end")?;
+    let body = body
+        .strip_suffix("\n</cross-session-message>")
+        .ok_or("no closing tag at the end")?;
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for key in ["from", "from-session", "from-name", "from-mode"] {
+        let prefix = format!(" {key}=\"");
+        if let Some(after) = head.strip_prefix(prefix.as_str()) {
+            let (value, tail) = after
+                .split_once('"')
+                .ok_or_else(|| format!("{key} is not closed"))?;
+            seen.push((key, value));
+            head = tail;
+        }
+    }
+    if !head.is_empty() {
+        return Err(format!("attributes Claude does not know: {head}"));
+    }
+    let value = |wanted: &str| {
+        seen.iter()
+            .find(|(key, _)| *key == wanted)
+            .map(|(_, value)| *value)
+            .ok_or_else(|| format!("{wanted} is missing"))
+    };
+    let from = value("from")?;
+    if from.is_empty() || !from.chars().all(|c| c.is_ascii_alphanumeric() || "%:_/.\\-".contains(c)) {
+        return Err(format!("from has characters Claude refuses: {from}"));
+    }
+    let session = value("from-session")?;
+    if session.is_empty()
+        || session.len() > 80
+        || !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(format!("from-session is not a plain id: {session}"));
+    }
+    let name = value("from-name")?;
+    if name.is_empty()
+        || name != name.trim()
+        || name.chars().count() > 64
+        || name.chars().any(|c| c.is_control() || c == '<' || c == '>')
+    {
+        return Err(format!("Claude would rewrite from-name: {name}"));
+    }
+    let mode = value("from-mode")?;
+    if mode != "bypass" {
+        return Err(format!("from-mode {mode} is held by a chat that bypasses permissions"));
+    }
+    if body.to_ascii_lowercase().contains("</cross-session-message") {
+        return Err("the text holds a closing tag".to_string());
+    }
+    Ok(())
+}
+
 /// Computer B's Claude chat: a messaging socket that forwards every line it reads.
 /// Returns the socket path and the lines received.
 #[cfg(unix)]
@@ -481,6 +544,7 @@ fn journey() {
     let frame: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     let content = frame["message"]["content"].as_str().unwrap();
     assert!(content.contains("<cross-session-message"), "{content}");
+    assert_eq!(claude_accepts(content), Ok(()), "{content}");
     assert!(content.contains("from-name=\"Driver on "), "{content}");
     assert!(content.contains(" via Pulse\""), "{content}");
     assert!(content.contains("hello from A"), "{content}");

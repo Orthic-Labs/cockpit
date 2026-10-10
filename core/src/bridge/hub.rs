@@ -569,7 +569,7 @@ fn session_lock(session: &str) -> Arc<Mutex<()>> {
 /// "unknown: hub busy"), and requests for one chat run one at a time.
 pub fn handle_control(request: &Request) -> Value {
     let Some(store) = store() else {
-        return json!({"ok": false, "error": "The bridge store is not available."});
+        return json!({"ok": false, "error": "The chat store is not available."});
     };
     if let Some(detail) = super::bridge_off_detail(store) {
         return json!({"ok": true, "status": "refused", "detail": detail});

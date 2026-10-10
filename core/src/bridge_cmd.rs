@@ -25,7 +25,7 @@ const COMMANDS: &str = "peers, send, reply, link, unlink, status, install, unins
 
 pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
     if args.is_empty() {
-        return Err(format!("bridge needs a command: {COMMANDS}"));
+        return Err(format!("chat needs a command: {COMMANDS}"));
     }
     let command = args.remove(0);
     match command.as_str() {
@@ -79,13 +79,13 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), String> {
             [encoded] => post(encoded),
             _ => Err("post needs one base64 envelope".into()),
         },
-        other => Err(format!("unknown bridge command: {other}; use {COMMANDS}")),
+        other => Err(format!("unknown chat command: {other}; use {COMMANDS}")),
     }
 }
 
-const SEND_USAGE: &str = "send needs <chat> and text: pulse bridge send <chat> [<text>…] \
+const SEND_USAGE: &str = "send needs <chat> and text: pulse chat send <chat> [<text>…] \
      [--from CHAT] [--stdin] [--json] [--]";
-const REPLY_USAGE: &str = "reply needs <message-id> and text: pulse bridge reply <message-id> \
+const REPLY_USAGE: &str = "reply needs <message-id> and text: pulse chat reply <message-id> \
      [<text>…] [--stdin] [--json] [--]";
 
 /// Arguments split at the first `--`: before it options and positionals, after it literal text.
@@ -419,11 +419,11 @@ fn status(machine: bool) -> Result<(), String> {
         }
     );
     if !store.bridge_enabled() {
-        println!("Bridge off: sends are refused (turn it on in Pulse).");
+        println!("Chat off: sends are refused (turn it on in Pulse).");
     }
     println!("{here} chats on {}", me.alias);
     if remotes.is_empty() {
-        println!("No linked computers (link one with `pulse bridge link <device> <ssh-host>`).");
+        println!("No linked computers (link one with `pulse chat link <device> <ssh-host>`).");
     }
     for r in &remotes {
         match &r.listing {

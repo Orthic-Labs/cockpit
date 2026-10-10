@@ -14,8 +14,7 @@
 //!
 //! `{"msgV":1,"msg_id":..,"type":"user","message":{"role":"user","content":
 //! "<cross-session-message from=\"uds:<reply>\" from-session=\"..\"
-//! from-name=\"<peer> via Pulse\" from-mode=\"bridge\"
-//! provenance=\"agent-unverified\">\n<text>\n</cross-session-message>"},
+//! from-name=\"<peer> via Pulse\" from-mode=\"bypass\">\n<text>\n</cross-session-message>"},
 //! "priority":"next","from":"uds:<reply>"}`
 //!
 //! On macOS/Linux no auth line is sent. On native Windows the auth frame
@@ -460,16 +459,95 @@ fn attr_safe(value: &str) -> String {
         .collect()
 }
 
-/// The content a chat sees: the text inside the wrapper tag the real client
-/// uses, with any wrapper tag inside the text neutralised. The sender attributes
-/// are labels the sending side chose; `provenance` says they are not verified.
+/// Unicode format characters and the line and paragraph separators, which Claude
+/// strips from a sender name.
+fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
+/// The sender name as Claude itself would write it: no control or format characters,
+/// trimmed, 64 characters at most. A longer chat name is cut here so "via Pulse" stays.
+/// (Claude rebuilds the wrapper from what it parsed and drops the message unless the
+/// result is the same text, so a name it would rewrite loses the message.)
+fn sender_label(name: &str) -> String {
+    const MAX: usize = 64;
+    const SUFFIX: &str = " via Pulse";
+    let clean: String = attr_safe(name)
+        .chars()
+        .filter(|&c| !c.is_control() && !is_format_char(c))
+        .collect();
+    let clean = clean.trim();
+    let room = MAX - SUFFIX.chars().count();
+    let label = if clean.chars().count() <= room {
+        format!("{clean}{SUFFIX}")
+    } else {
+        let head: String = clean.chars().take(room - 1).collect();
+        format!("{}…{SUFFIX}", head.trim_end())
+    };
+    label.trim().to_string()
+}
+
+/// `text` with every wrapper tag inside it defused: a `<` whose following letters, ignoring
+/// case and anything between them, spell the tag or its closing form. Claude rewrites such
+/// a closing tag itself and then drops the message for differing from what was sent.
+fn defuse_tags(text: &str) -> String {
+    const CLOSING: &str = "/cross-session-message";
+    let mut out = String::with_capacity(text.len());
+    for (at, c) in text.char_indices() {
+        if c == '<' {
+            let ahead: String = text[at + 1..]
+                .chars()
+                .take(96)
+                .filter(|&c| c.is_ascii_alphanumeric() || c == '/' || c == '-' || c == '_')
+                .map(|c| if c == '_' { '-' } else { c.to_ascii_lowercase() })
+                .collect();
+            if ahead.starts_with(CLOSING) || ahead.starts_with(&CLOSING[1..]) {
+                out.push_str("&lt;");
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The content a chat sees: the text inside the wrapper tag the real client uses, with
+/// any wrapper tag inside the text neutralised. The sender attributes are labels the
+/// sending side chose.
+///
+/// Claude (2.1.295) takes the wrapper only in its own exact form: these four attributes
+/// in this order and no other, a `from-mode` it knows (`bypass` or `prompting`) that
+/// matches the chat's own class, and a name it would not rewrite. Anything else is
+/// parked for an approval and then dropped without a word to the sender, which loses the
+/// message while the receipt says Sent. The owner's chats bypass permissions, so that is
+/// the class; "via Pulse" in the name is what marks the text as forwarded.
 fn wrap_content(from: &str, session: &str, name: &str, text: &str) -> String {
-    let text = text
-        .replace(TAG_OPEN, "&lt;cross-session-message")
-        .replace(TAG_CLOSE, "&lt;/cross-session-message>");
+    let text = defuse_tags(text);
     format!(
-        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bridge\" \
-         provenance=\"agent-unverified\">\n{text}\n{TAG_CLOSE}",
+        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bypass\">\n{text}\n{TAG_CLOSE}",
         attr_safe(from),
         attr_safe(session),
         attr_safe(name),
@@ -547,7 +625,7 @@ pub fn deliver_via(
         .filter(char::is_ascii_alphanumeric)
         .take(12)
         .collect();
-    let sender = format!("{} via Pulse", shim::env_from_name(env));
+    let sender = sender_label(shim::env_from_name(env));
     let session_id = format!("pulse-{short}");
     // A frame without a reply address is dropped by the chat without a word. When no
     // reply route exists, a stable placeholder is advertised so the message is still
@@ -557,7 +635,7 @@ pub fn deliver_via(
     let reply_from = Some(match route {
         ReplyRoute::Listening(address) => format!("uds:{address}"),
         ReplyRoute::Unavailable(why) => {
-            eprintln!("pulse bridge: reply route unavailable ({why}); advertising a placeholder");
+            eprintln!("pulse chat: reply route unavailable ({why}); advertising a placeholder");
             reply_note = Some(format!("Replies are unavailable ({why})."));
             if cfg!(windows) {
                 r"uds:\\.\pipe\pulse-bridge-noreply".to_string()
@@ -775,7 +853,7 @@ impl ConnectionSlot {
         if taken {
             Some(ConnectionSlot)
         } else {
-            eprintln!("pulse bridge: too many open reply connections; refusing one");
+            eprintln!("pulse chat: too many open reply connections; refusing one");
             None
         }
     }

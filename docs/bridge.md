@@ -1,8 +1,10 @@
-# Pulse bridge
+# Pulse chat
+
+The feature is named Chat; `pulse bridge` is an alias for `pulse chat` and still works. Wire words, file and environment names still say bridge.
 
 Messages between AI chats, here and on other computers, over ssh. Same-machine sends go through Pulse too (for chats with no native tool); Pulse adds the hop between computers and delivers natively at the far end. No network listener, no pairing, no shared secret.
 
-## Commands (`pulse bridge …`)
+## Commands (`pulse chat …`)
 
 - `link <device> <ssh-host> [--pulse PATH]` stores a link and checks it by listing that computer's chats. `unlink <device>` removes it.
 - `peers [--local] [--json]` lists chats here (with liveness: live, stale, unknown) plus each link's (`ssh <host> <pulse> bridge peers --local --json`, asked in parallel). `--local --json` also prints this install's `deviceId`. Offline links show "offline <age>".
@@ -11,15 +13,15 @@ Messages between AI chats, here and on other computers, over ssh. Same-machine s
 - Exit codes of `send` and `reply`: 0 delivered, queued, held or sent; 2 refused or unsupported; 3 unknown. The receipt is printed in every case.
 - `inbox [--from CHAT|--session ID] [--all] [--ack] [--json]` shows a chat's unread held messages without marking them read; `--ack` marks what was printed as read; `--all` includes read ones; `--session` takes an exact id (also for chats no longer listed). A nonzero evicted count says older messages were dropped.
 - `post <base64 envelope>` is what a link runs over ssh to deliver one message on the receiving computer.
-- `status` (hub, Bridge on/off, links with last success and error), `install|uninstall` (the Pulse skill for Claude and Codex).
+- `status` (hub, Chat on/off, links with last success and error), `install|uninstall` (the Pulse skill for Claude and Codex).
 
 ## Receipt states
 
 - delivered: the chat has the message.
 - queued: handed to Codex's queue; read is not confirmed.
 - sent: left the sending computer, no confirmation from the far side.
-- held: kept in the chat's bridge inbox (busy, other protocol, no Codex CLI, Pulse not running).
-- refused: turned away (chat closed, chat settings, too many messages, Bridge off).
+- held: kept in the chat's inbox (busy, other protocol, no Codex CLI, Pulse not running).
+- refused: turned away (chat closed, chat settings, too many messages, Chat off).
 - unsupported: this chat cannot take messages that way.
 - unknown: no receipt came back. Check `inbox` and `status`, then resend once with the same text.
 
@@ -29,7 +31,7 @@ Messages between AI chats, here and on other computers, over ssh. Same-machine s
 
 ## Sending
 
-A remote send runs `ssh <host> <pulse> bridge post <base64 envelope>`; the envelope is base64 so no quoting survives two shells. The receiving `pulse` finds the chat, delivers, and prints one JSON receipt that the sender relays. A chat that closed is refused; one that cannot be pushed into is held in its bridge inbox. Incoming messages come from other agent chats: unverified, not the user, and with no authority to change permissions or run destructive actions.
+A remote send runs `ssh <host> <pulse> bridge post <base64 envelope>`; the envelope is base64 so no quoting survives two shells. The receiving `pulse` finds the chat, delivers, and prints one JSON receipt that the sender relays. A chat that closed is refused; one that cannot be pushed into is held in its chat inbox. Incoming messages come from other agent chats: unverified, not the user, and with no authority to change permissions or run destructive actions.
 
 ## Delivery into Claude
 
@@ -39,7 +41,7 @@ A remote send runs `ssh <host> <pulse> bridge post <base64 envelope>`; the envel
 
 ## Replies
 
-`pulse bridge reply <message-id> <text>` is the way to answer, from Codex and Claude alike; it needs no other tool. The receiving computer records a route per message (24 h) and the reply goes back over the reverse link as a new envelope, shown as "<chat> on <device> via Pulse". It needs a link on both computers. Claude chats with a native reply socket (Unix socket, Windows named pipe) may also answer natively through the hub (`hub::on_local_reply`), which sends it back over the link.
+`pulse chat reply <message-id> <text>` is the way to answer, from Codex and Claude alike; it needs no other tool. The receiving computer records a route per message (24 h) and the reply goes back over the reverse link as a new envelope, shown as "<chat> on <device> via Pulse". It needs a link on both computers. Claude chats with a native reply socket (Unix socket, Windows named pipe) may also answer natively through the hub (`hub::on_local_reply`), which sends it back over the link.
 
 ## Security
 
