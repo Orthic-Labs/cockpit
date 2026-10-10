@@ -20,7 +20,7 @@ export interface ShareState {
     active?: boolean;
     localChats?: number;
     links?: { device: string; ssh: string; chats: number | null; error: string | null }[];
-    chats?: { name: string; kind: "claude" | "codex"; status: string; device: string; local: boolean }[];
+    chats?: { name: string; kind: "claude" | "codex"; status: string; device: string; local: boolean; cwd?: string; updatedMs?: number | null }[];
     lastError?: string | null;
     device?: string;
   };
@@ -135,8 +135,35 @@ function AgentBridge({ share }: { share: ShareState | null }) {
   );
 }
 
+/** "42s", "5min", "3h" or "2d" since `ms`. */
+function ageText(ms: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}min`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+  return `${Math.floor(secs / 86400)}d`;
+}
+
+type Chat = NonNullable<NonNullable<ShareState["bridge"]>["chats"]>[number];
+
+function ChatRow({ c, kind }: { c: Chat; kind: "claude" | "codex" }) {
+  const cwd = c.cwd ?? "";
+  const folder = cwd.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  return (
+    <li className="ck-chats-row">
+      <span className={`ck-chats-kind ck-chats-kind-${kind}`}>{kind === "claude" ? "Claude" : "Codex"}</span>
+      <span className="ck-chats-name" title={c.name}>{c.name}</span>
+      <span className="ck-chats-folder" title={cwd || undefined}>{folder}</span>
+      <span className="ck-chats-when">
+        {c.updatedMs ? <span className="ck-chats-age">{ageText(c.updatedMs)} ago</span> : null}
+        <span className={`ck-chats-status ck-chats-status-${c.status}`}>{c.status}</span>
+      </span>
+    </li>
+  );
+}
+
 /** Every chat Pulse can message, grouped by computer: Claude chats live; Codex threads active when written to in the last ten minutes. */
-function ChatList({ chats }: { chats: NonNullable<NonNullable<ShareState["bridge"]>["chats"]> }) {
+function ChatList({ chats }: { chats: Chat[] }) {
   const devices = Array.from(new Set(chats.map((c) => c.device)));
   const ordered = [...devices.filter((d) => chats.some((c) => c.device === d && c.local)), ...devices.filter((d) => !chats.some((c) => c.device === d && c.local))];
   return (
@@ -149,20 +176,8 @@ function ChatList({ chats }: { chats: NonNullable<NonNullable<ShareState["bridge
           <section key={device} className="ck-chats-device">
             <h3 className="ck-chats-head">{device} <span className="ck-sub">{claude.length} Claude · {codex.length} Codex</span></h3>
             <ul className="ck-chats-list">
-              {claude.map((c) => (
-                <li key={`c-${c.name}`} className="ck-chats-row">
-                  <span className="ck-chats-kind ck-chats-kind-claude">Claude</span>
-                  <span className="ck-chats-name">{c.name}</span>
-                  <span className={`ck-chats-status ck-chats-status-${c.status}`}>{c.status}</span>
-                </li>
-              ))}
-              {codex.slice(0, 8).map((c) => (
-                <li key={`x-${c.name}`} className="ck-chats-row">
-                  <span className="ck-chats-kind ck-chats-kind-codex">Codex</span>
-                  <span className="ck-chats-name">{c.name}</span>
-                  <span className={`ck-chats-status ck-chats-status-${c.status}`}>{c.status}</span>
-                </li>
-              ))}
+              {claude.map((c, i) => <ChatRow key={`c-${i}-${c.name}`} c={c} kind="claude" />)}
+              {codex.slice(0, 8).map((c, i) => <ChatRow key={`x-${i}-${c.name}`} c={c} kind="codex" />)}
               {codex.length > 8 && <li className="ck-sub ck-chats-more">+{codex.length - 8} more Codex threads (`pulse bridge peers` lists all)</li>}
             </ul>
           </section>

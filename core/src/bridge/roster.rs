@@ -1,7 +1,7 @@
 //! Which chats can be messaged: live Claude chats read from
 //! `~/.claude/sessions/*.json`, registered chats (and Claude without a session
 //! file), the most recent Codex threads from
-//! `~/.codex/session_index.jsonl`, and the chats linked computers list over
+//! the Codex state database (`deliver_codex`), and the chats linked computers list over
 //! ssh. A peer is shown as "<chat title> on <device>".
 
 use super::BridgeError;
@@ -23,6 +23,9 @@ pub struct RosterEntry {
     pub cwd: String,
     #[serde(default)]
     pub status: String,
+    /// Milliseconds since the epoch of the chat's last activity, when known.
+    #[serde(default)]
+    pub updated_ms: Option<u64>,
 }
 
 /// A chat on this computer, with what a delivery needs to reach it.
@@ -34,6 +37,7 @@ pub struct LocalSession {
     pub name: String,
     pub cwd: String,
     pub status: String,
+    pub updated_ms: Option<u64>,
     pub pid: Option<u32>,
     /// Claude's per-chat inbox socket (named pipe on Windows), when it has one.
     pub messaging_socket: Option<String>,
@@ -51,6 +55,7 @@ impl LocalSession {
             kind: self.kind.clone(),
             cwd: self.cwd.clone(),
             status: self.status.clone(),
+            updated_ms: self.updated_ms,
         }
     }
 }
@@ -71,6 +76,7 @@ pub struct Peer {
     pub kind: String,
     pub cwd: String,
     pub status: String,
+    pub updated_ms: Option<u64>,
 }
 
 /// `~/.claude/sessions` (or `$CLAUDE_CONFIG_DIR/sessions`).
@@ -120,6 +126,9 @@ fn parse_claude(value: Value, alive: &dyn Fn(u32) -> bool) -> Option<LocalSessio
         name,
         cwd,
         status: text("status").unwrap_or_else(|| "unknown".to_string()),
+        updated_ms: ["statusUpdatedAt", "updatedAt"]
+            .iter()
+            .find_map(|k| value.get(*k).and_then(Value::as_u64)),
         pid: Some(pid),
         messaging_socket: text("messagingSocketPath").filter(|s| !s.is_empty()),
         peer_protocol: value.get("peerProtocol").and_then(Value::as_u64),
@@ -166,6 +175,7 @@ pub fn local_sessions_in(
             kind: registered.kind.clone(),
             cwd: registered.cwd.clone(),
             status: "unknown".to_string(),
+            updated_ms: None,
             pid: Some(registered.pid),
             messaging_socket: None,
             peer_protocol: None,
@@ -176,8 +186,8 @@ pub fn local_sessions_in(
     sessions
 }
 
-/// How many Codex threads from the session index are listed.
-pub const CODEX_THREAD_LIMIT: usize = 50;
+/// How many Codex threads (newest first, not archived) are listed.
+pub const CODEX_THREAD_LIMIT: usize = 100;
 
 /// Add the Codex threads in `threads` that are not already listed. Whether a
 /// thread is open is unknown, so its status is "idle".
@@ -192,11 +202,13 @@ pub fn add_codex_threads(sessions: &mut Vec<LocalSession>, threads: Vec<CodexThr
                 "id": thread.id,
                 "thread_name": thread.name,
                 "updated_at": thread.updated_at,
+                "updated_at_ms": thread.updated_ms,
             }),
             id: thread.id,
             kind: "codex".to_string(),
-            cwd: String::new(),
-            status: codex_status(&thread.updated_at),
+            cwd: thread.cwd,
+            status: codex_status(thread.updated_ms),
+            updated_ms: Some(thread.updated_ms).filter(|m| *m > 0),
             pid: None,
             messaging_socket: None,
             peer_protocol: None,
@@ -207,14 +219,13 @@ pub fn add_codex_threads(sessions: &mut Vec<LocalSession>, threads: Vec<CodexThr
 
 /// Codex keeps no registry of open chats; a thread written to in the last ten minutes is
 /// shown as active, anything else as idle (its liveness is unknown either way).
-pub fn codex_status(updated_at: &str) -> String {
-    let active = iso_epoch(updated_at)
-        .is_some_and(|t| super::envelope::now_ms() / 1000 <= t + 10 * 60);
+pub fn codex_status(updated_ms: u64) -> String {
+    let active = updated_ms > 0 && super::envelope::now_ms() <= updated_ms + 10 * 60 * 1000;
     if active { "active".to_string() } else { "idle".to_string() }
 }
 
 /// Seconds since the epoch of an ISO-8601 `YYYY-MM-DDTHH:MM:SS…` UTC stamp.
-fn iso_epoch(text: &str) -> Option<u64> {
+pub(super) fn iso_epoch(text: &str) -> Option<u64> {
     let b = text.as_bytes();
     if b.len() < 19 {
         return None;
@@ -263,6 +274,7 @@ pub fn merge(local: &[LocalSession], local_alias: &str, remotes: &[RemoteChats])
             kind: s.kind.clone(),
             cwd: s.cwd.clone(),
             status: s.status.clone(),
+            updated_ms: s.updated_ms,
         })
         .collect();
     for remote in remotes {
@@ -281,6 +293,7 @@ pub fn merge(local: &[LocalSession], local_alias: &str, remotes: &[RemoteChats])
                 kind: entry.kind.clone(),
                 cwd: entry.cwd.clone(),
                 status: entry.status.clone(),
+                updated_ms: entry.updated_ms,
             });
         }
     }

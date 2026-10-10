@@ -19,9 +19,12 @@
 //!   `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`. A packaged (WindowsApps)
 //!   install is not readable and is not searched.
 //!
-//! Thread discovery: `~/.codex/session_index.jsonl` (one `{id, thread_name,
-//! updated_at}` per line, read-only). The roster lists the most recent threads
-//! as reachable peers (`roster::local_sessions`).
+//! Thread discovery: the highest `~/.codex/state_<N>.sqlite` (table `threads`,
+//! opened read-only; the Codex app holds it open in WAL mode), not archived,
+//! newest first. Only when no state database exists does it fall back to
+//! `~/.codex/session_index.jsonl` (one `{id, thread_name, updated_at}` per
+//! line), which lags and has no archived flag. The roster lists the most recent
+//! threads as reachable peers (`roster::local_sessions`).
 
 use super::deliver_claude::shim;
 use super::{BridgeError, Envelope, LocalSession, Receipt};
@@ -92,10 +95,93 @@ pub struct CodexThread {
     pub id: String,
     pub name: String,
     pub updated_at: String,
+    pub cwd: String,
+    /// Milliseconds since the epoch of the last write (0 when unknown).
+    pub updated_ms: u64,
 }
+
+/// The SQL read from the Codex state database.
+const THREADS_SQL: &str = "SELECT id, name, title, first_user_message, preview, cwd, updated_at_ms \
+     FROM threads WHERE archived = 0 ORDER BY updated_at_ms DESC LIMIT ?1";
+
+/// The highest-numbered `state_<N>.sqlite` in the Codex home.
+fn state_db() -> Option<PathBuf> {
+    std::fs::read_dir(codex_home())
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let n = name
+                .strip_prefix("state_")?
+                .strip_suffix(".sqlite")?
+                .parse::<u64>()
+                .ok()?;
+            Some((n, e.path()))
+        })
+        .max_by_key(|(n, _)| *n)
+        .map(|(_, p)| p)
+}
+
+fn display_name(name: &str, title: &str, first: &str, preview: &str) -> String {
+    for candidate in [name, title, first, preview] {
+        let line = candidate.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !line.is_empty() {
+            return line.chars().take(60).collect();
+        }
+    }
+    String::new()
+}
+
+fn read_state(path: &Path, limit: usize) -> Result<Vec<CodexThread>, rusqlite::Error> {
+    use rusqlite::{Connection, OpenFlags};
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(Duration::from_millis(250))?;
+    let mut stmt = conn.prepare(THREADS_SQL)?;
+    let rows = stmt.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+        let text = |i: usize| -> rusqlite::Result<String> {
+            Ok(row.get::<_, Option<String>>(i)?.unwrap_or_default())
+        };
+        let ms = row.get::<_, Option<i64>>(6)?.unwrap_or(0).max(0) as u64;
+        Ok(CodexThread {
+            id: text(0)?,
+            name: display_name(&text(1)?, &text(2)?, &text(3)?, &text(4)?),
+            updated_at: String::new(),
+            cwd: text(5)?,
+            updated_ms: ms,
+        })
+    })?;
+    Ok(rows
+        .filter_map(Result::ok)
+        .filter(|t| !t.id.is_empty())
+        .collect())
+}
+
+static LAST_GOOD: std::sync::Mutex<Option<(PathBuf, Vec<CodexThread>)>> =
+    std::sync::Mutex::new(None);
 
 /// The most recently updated threads (newest first, at most `limit`).
 pub fn list_threads(limit: usize) -> Vec<CodexThread> {
+    let Some(db) = state_db() else {
+        return list_threads_from_index(limit);
+    };
+    let mut last = LAST_GOOD.lock().unwrap_or_else(|e| e.into_inner());
+    match read_state(&db, limit) {
+        Ok(threads) => {
+            *last = Some((db, threads.clone()));
+            threads
+        }
+        // Locked or busy: the last good list for this database, else nothing.
+        Err(_) => match last.as_ref() {
+            Some((path, threads)) if *path == db => threads.iter().take(limit).cloned().collect(),
+            _ => Vec::new(),
+        },
+    }
+}
+
+fn list_threads_from_index(limit: usize) -> Vec<CodexThread> {
     let path = codex_home().join("session_index.jsonl");
     let Ok(mut file) = std::fs::File::open(&path) else {
         return Vec::new();
@@ -128,6 +214,8 @@ pub fn list_threads(limit: usize) -> Vec<CodexThread> {
             id: id.to_string(),
             name: entry["thread_name"].as_str().unwrap_or("").to_string(),
             updated_at: entry["updated_at"].as_str().unwrap_or("").to_string(),
+            cwd: String::new(),
+            updated_ms: 0,
         };
         let newer = latest
             .get(id)
@@ -139,6 +227,9 @@ pub fn list_threads(limit: usize) -> Vec<CodexThread> {
     let mut threads: Vec<CodexThread> = latest.into_values().collect();
     threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     threads.truncate(limit);
+    for t in &mut threads {
+        t.updated_ms = super::roster::iso_epoch(&t.updated_at).map_or(0, |s| s * 1000);
+    }
     threads
 }
 

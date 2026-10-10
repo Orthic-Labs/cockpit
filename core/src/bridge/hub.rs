@@ -269,6 +269,8 @@ pub fn tick(alias: &str) {
                     status: chat_status(&c.kind, &c.status),
                     device: r.link.device.clone(),
                     local: false,
+                    cwd: c.cwd.clone(),
+                    updated_ms: c.updated_ms,
                 }));
             }
         }
@@ -411,6 +413,9 @@ pub struct StatusChat {
     pub status: String,
     pub device: String,
     pub local: bool,
+    pub cwd: String,
+    /// Milliseconds since the epoch of the last activity, when known.
+    pub updated_ms: Option<u64>,
 }
 
 /// Claude: busy/idle from its registry. Codex: active when its thread was written to in the
@@ -445,6 +450,8 @@ pub fn status() -> Status {
             status: chat_status(&s.kind, &s.status),
             device: alias.clone(),
             local: true,
+            cwd: s.cwd.clone(),
+            updated_ms: s.updated_ms,
         })
         .collect();
     chats.extend(state.remote_chats.iter().cloned());

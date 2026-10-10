@@ -88,7 +88,7 @@ fn peers(local: bool, machine: bool) -> Result<(), String> {
             .map(|p| {
                 json!({"chat": p.display, "name": p.name, "device": p.device_alias,
                        "kind": p.kind, "status": p.status, "local": p.local, "id": p.id,
-                       "session": p.session, "cwd": p.cwd})
+                       "session": p.session, "cwd": p.cwd, "updatedMs": p.updated_ms})
             })
             .collect();
         // `chats` is what a linked computer reads (links::RemoteListing).
@@ -97,7 +97,7 @@ fn peers(local: bool, machine: bool) -> Result<(), String> {
             json!({"device": me.alias, "peers": rows,
                    "chats": list.iter().filter(|p| p.local).map(|p| json!({
                        "session": p.session, "name": p.name, "kind": p.kind,
-                       "cwd": p.cwd, "status": p.status})).collect::<Vec<_>>(),
+                       "cwd": p.cwd, "status": p.status, "updated_ms": p.updated_ms})).collect::<Vec<_>>(),
                    "hubRunning": store.relay_alive()})
         );
         return Ok(());
@@ -106,7 +106,18 @@ fn peers(local: bool, machine: bool) -> Result<(), String> {
         println!("No chats found.");
     }
     for peer in &list {
-        println!("{}\t{}\t{}", peer.display, peer.kind, peer.status);
+        let folder = std::path::Path::new(&peer.cwd)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let age = peer
+            .updated_ms
+            .map(|ms| format!("{} ago", age_text(ms)))
+            .unwrap_or_default();
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            peer.display, peer.kind, peer.status, folder, age
+        );
     }
     if cfg!(unix) && !store.relay_alive() {
         eprintln!("Pulse is not running: messages into Claude chats here are kept until it is.");
@@ -253,4 +264,15 @@ fn post(encoded: &str) -> Result<(), String> {
         json!({"msg_id": receipt.msg_id, "status": receipt.state.as_str(), "detail": receipt.detail})
     );
     Ok(())
+}
+
+/// "42s", "5min", "3h" or "2d" since `ms` (milliseconds since the epoch).
+fn age_text(ms: u64) -> String {
+    let secs = bridge::envelope::now_ms().saturating_sub(ms) / 1000;
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}min", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
 }
