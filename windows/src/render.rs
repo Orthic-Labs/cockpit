@@ -237,7 +237,15 @@ pub fn render_notch(
     text: &mut TextPainter,
     (handle, press): (Option<Handle>, Option<Press>),
 ) -> Canvas {
-    draw_notch(views, edge, folded, badges, dpi, text, (false, handle, press))
+    draw_notch(
+        views,
+        edge,
+        folded,
+        badges,
+        dpi,
+        text,
+        (false, handle, press),
+    )
 }
 
 /// The part of the notch the primary button is held down on: it reads pressed until release.
@@ -344,7 +352,13 @@ fn draw_notch(
     }
     for (index, view) in views.iter().enumerate() {
         let centre = frame.shift(layout::ring_center(edge, index, dpi));
-        draw_cell(&mut canvas, view, centre, s, press == Some(Press::Cell(index)));
+        draw_cell(
+            &mut canvas,
+            view,
+            centre,
+            s,
+            press == Some(Press::Cell(index)),
+        );
     }
     if let Some(part) = handle {
         draw_handle(&mut canvas, frame, s, (part, press));
@@ -412,12 +426,7 @@ fn draw_handle_zone(canvas: &mut Canvas, frame: Frame, s: f32, grip_out: bool) {
 /// The settings button (the disc the resting arc fills into, with a gear) and the move grip
 /// beside it on a black plate. The grip is out whenever the pointer is on either; `part` is
 /// the one it is on, drawn brighter.
-fn draw_handle(
-    canvas: &mut Canvas,
-    frame: Frame,
-    s: f32,
-    (part, press): (Handle, Option<Press>),
-) {
+fn draw_handle(canvas: &mut Canvas, frame: Frame, s: f32, (part, press): (Handle, Option<Press>)) {
     let (along, depth) = (layout::SHAPE_LENGTH * s, layout::CURL * s);
     let centre = frame.at(along, depth);
     let radius = layout::ORB_RADIUS * s;
@@ -525,13 +534,7 @@ fn dot(canvas: &mut Canvas, (x, y): (f32, f32), radius: f32, colour: u32) {
 
 /// One cell: track ring, arcs and the glyph, the ring centred on `(cx, cy)`. The Mac notch
 /// draws no percentage under its rings.
-fn draw_cell(
-    canvas: &mut Canvas,
-    view: &CellView,
-    (cx, cy): (f32, f32),
-    s: f32,
-    pressed: bool,
-) {
+fn draw_cell(canvas: &mut Canvas, view: &CellView, (cx, cy): (f32, f32), s: f32, pressed: bool) {
     let mut dim = if view.stale { STALE_DIM } else { 1.0 };
     if pressed {
         dim *= CELL_PRESS_DIM;
@@ -977,7 +980,10 @@ fn bar_spans(
     let paste_width = paste.then(|| plate("Paste", ""));
     let copy_span = copy.map_or(NO_SPAN, |(label, detail)| {
         let reserved = paste_width.map_or(0.0, |w| w + BAR_GAP);
-        (left, plate(label, detail).min((right - left - reserved).max(0.0)))
+        (
+            left,
+            plate(label, detail).min((right - left - reserved).max(0.0)),
+        )
     });
     let paste_span = paste_width.map_or(NO_SPAN, |w| (right - w, w));
     vec![copy_span, paste_span]
@@ -2387,7 +2393,6 @@ fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32,
                         ROW_HOVER_RADIUS.min(height / 2.0),
                     ))
                 }
-                _ => None,
             }
         }
     }

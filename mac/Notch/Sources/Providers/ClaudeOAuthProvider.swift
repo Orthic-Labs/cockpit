@@ -223,14 +223,13 @@ actor ClaudeOAuthProvider: UsageProvider {
         if let desktopAccount, desktopAccount != profile.accountID() {
             return await desktopOnlySnapshot(account: desktopAccount, freshness: freshness)
         }
-        let desktopAllowance: TimeInterval
+        // Pulse fork: Desktop's cache is not gated by freshness any more (see
+        // below), so only the CLI allowance follows it.
         let cliAllowance: TimeInterval
         switch freshness {
         case .standard:
-            desktopAllowance = desktopFreshness
             cliAllowance = cliRefreshInterval
         case .live:
-            desktopAllowance = min(liveDesktopFreshness, desktopFreshness)
             cliAllowance = min(liveCLIRefreshInterval, cliRefreshInterval)
         case .fromSource:
             // Zero, which no reading can be inside: whatever is held is skipped,
@@ -239,7 +238,6 @@ actor ClaudeOAuthProvider: UsageProvider {
             // deliberately, because somebody asked for the source itself. The
             // spacing that keeps that affordable is the caller's; see
             // `UsageStore.refreshBecauseSomeoneIsLooking`.
-            desktopAllowance = 0
             cliAllowance = 0
         }
         // A Deny is honoured by every source, not only the keychain (#98).
@@ -271,7 +269,18 @@ actor ClaudeOAuthProvider: UsageProvider {
             $0.isFresh(at: now, within: desktopFreshness)
                 && !Self.hasExpiredWindow($0.windows, at: now)
         } ?? false
-        if let desktop, showable, desktop.isFresh(at: now, within: desktopAllowance) {
+        // Pulse fork: a showable Desktop reading wins at every freshness, the
+        // `.fromSource` of a hover or the hub's Refresh included. It is the
+        // response Claude Desktop's own usage panel draws, so it is the number
+        // the person compares the ring against; `claude /usage` is an estimate
+        // from local sessions and the endpoint is read with Claude Code's
+        // credential, and either can disagree with Desktop by tens of points
+        // (seen: session 0% / weekly 33% against Desktop's 32% / 55%). Asking
+        // them "from source" then replaced the right number with a wrong one
+        // every time somebody looked. The allowance still bounds how old a
+        // reading may be before the other sources are asked at all
+        // (`desktopFreshness`, inside `showable`).
+        if let desktop, showable {
             // The cache carries no plan, so the reading would say nothing about
             // whose it is — the one thing worth knowing when two Claude rings
             // sit side by side.
@@ -311,10 +320,6 @@ actor ClaudeOAuthProvider: UsageProvider {
             // emptier than not asking would have. Only when something was
             // actually skipped: at `.standard` the reading was already offered
             // above, so there is nothing here to reconsider.
-            if let desktop, showable, desktopAllowance < desktopFreshness {
-                return snapshot(windows: desktop.windows, plan: profile.organizationPlan(),
-                                resetCredits: resets)
-            }
             // Pulse fork: when Claude Desktop's cache is the only source (the
             // standalone CLI is not signed in and has no keychain login), an
             // older reading is still the account's last known numbers. Show it,

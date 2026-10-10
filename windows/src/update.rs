@@ -512,7 +512,10 @@ fn check(offering: bool) {
             Err(reason @ ("no_release" | "no_installer")) => {
                 st.release = None;
                 st.stage = Stage::NoRelease;
-                diag::info("update_check", &[("result", "no_release"), ("reason", reason)]);
+                diag::info(
+                    "update_check",
+                    &[("result", "no_release"), ("reason", reason)],
+                );
             }
             Err(reason) => {
                 st.stage = Stage::Failed(reason_text(reason));
@@ -547,7 +550,10 @@ fn fetch_release() -> Result<Option<Release>, &'static str> {
         404 => {
             diag::info(
                 "update_check_status",
-                &[("status", "404"), ("url", &format!("https://{FEED_HOST}{FEED_PATH}"))],
+                &[
+                    ("status", "404"),
+                    ("url", &format!("https://{FEED_HOST}{FEED_PATH}")),
+                ],
             );
             return Err("no_release");
         }
