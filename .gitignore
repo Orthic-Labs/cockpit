@@ -24,3 +24,4 @@ hub/.cache/
 
 # Local Swift build cache (never committed)
 mac/.build/
+docs/parity-screens/

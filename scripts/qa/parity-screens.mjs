@@ -55,7 +55,8 @@ function parseArgs(argv) {
 
 const slugify = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const surfaceKey = (text) => slugify(text).replace(/^(hub|settings|section)-/, '');
-const screenKey = (file) => slugify(file.replace(/\.png$/i, '').replace(/^\d+-/, ''));
+// `notch-render__<id>.png` is a Windows render of view <id> (the Mac keeps views/mac/<id>.png).
+const screenKey = (file) => slugify(file.replace(/\.png$/i, '').replace(/^notch-render__/, '').replace(/^\d+-/, ''));
 
 function walk(dir, out = []) {
   if (!existsSync(dir)) fail(`${dir} does not exist`);
