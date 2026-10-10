@@ -80,6 +80,8 @@ const IDLE_UNLOAD: Duration = Duration::from_secs(120);
 const IDLE_CHECK: Duration = Duration::from_secs(15);
 /// A folder that changed is read again at most this often.
 const RETRY: Duration = Duration::from_secs(10);
+/// A folder found too large to read again is left alone for this long.
+const OVERSIZED_PAUSE: Duration = Duration::from_secs(600);
 /// Changes waiting for the index: more than this and they are reported as stale.
 const WAITING_MAX: usize = 100_000;
 /// Folders that may be waiting for their name rows. More than this and the
@@ -130,6 +132,10 @@ static STALE: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 static WAITING: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 /// When each folder was last read again (only those within `RETRY` are kept).
 static ATTEMPTED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
+/// Folders whose subtree was too large to read again, and when. Changes that
+/// land directly in one (a dotfile in home, a hive file) are not read again for
+/// `OVERSIZED_PAUSE`; each try would read `LIVE_MAX_ENTRIES` entries for nothing.
+static OVERSIZED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
 static LAST_SAVE: Mutex<Option<Instant>> = Mutex::new(None);
 /// When the Storage page last used the index.
 static LAST_USE: Mutex<Option<Instant>> = Mutex::new(None);
@@ -1026,6 +1032,7 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>, app: AppHandle) -> 
         lock(&STALE).clear();
         lock(&WAITING).clear();
         lock(&ATTEMPTED).clear();
+        lock(&OVERSIZED).clear();
         NAMES_BROKEN.store(false, Ordering::SeqCst);
         SCANNED.store(true, Ordering::SeqCst);
         INDEX_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
@@ -1102,8 +1109,8 @@ pub fn scan_status() -> Status {
         root: shown.as_ref().map(|s| s.root.clone()),
         scanned_at: shown.as_ref().map(|s| s.scanned_at),
         from_snapshot: shown.as_ref().is_some_and(|s| s.from_snapshot),
-        // FSEvents is the only change journal `watch` has; see its fallback module.
-        live_refresh: cfg!(target_os = "macos"),
+        // FSEvents (macOS) and ReadDirectoryChangesW (Windows) feed `watch`.
+        live_refresh: watch::live_refresh(),
     }
 }
 
@@ -1425,13 +1432,19 @@ pub(crate) fn apply_changes(paths: Vec<PathBuf>, epoch: u64) -> Applied {
         return Applied { folders: Vec::new(), stale };
     };
     let raw: Vec<PathBuf> = std::mem::take(&mut *lock(&WAITING)).into_iter().collect();
-    let indexed: Vec<PathBuf> = raw
+    let mut indexed: Vec<PathBuf> = raw
         .iter()
         .filter_map(|path| nearest_indexed(&index, path))
         .collect();
     drop(index);
     let now = Instant::now();
     lock(&ATTEMPTED).retain(|_, at| now.duration_since(*at) < RETRY);
+    // Before the covering step: an oversized outer folder must not hide the small ones in it.
+    {
+        let mut oversized = lock(&OVERSIZED);
+        oversized.retain(|_, at| now.duration_since(*at) < OVERSIZED_PAUSE);
+        indexed.retain(|folder| !oversized.contains_key(folder));
+    }
     let mut read: Vec<String> = Vec::new();
     for folder in covering_folders(indexed) {
         if lock(&ATTEMPTED).contains_key(&folder) {
@@ -1441,7 +1454,10 @@ pub(crate) fn apply_changes(paths: Vec<PathBuf>, epoch: u64) -> Applied {
         lock(&ATTEMPTED).insert(folder.clone(), now);
         match refresh_subtree(&folder, epoch) {
             Refresh::Applied => read.push(folder.to_string_lossy().into_owned()),
-            Refresh::TooLarge => stale = true,
+            Refresh::TooLarge => {
+                lock(&OVERSIZED).insert(folder, now);
+                stale = true;
+            }
             Refresh::Skipped => {}
             Refresh::Busy => {
                 lock(&ATTEMPTED).remove(&folder);

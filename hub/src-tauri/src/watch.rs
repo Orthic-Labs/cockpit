@@ -7,16 +7,26 @@
 //!
 //! Adapted from Petal's `src/watch.rs` (MIT, Copyright (c) 2026 Henry Dennis;
 //! see `docs/donors.md`). Petal hands changes to its GPUI window; this version
-//! hands them to the hub's scanner.
+//! hands them to the hub's scanner. On Windows the same updates come from
+//! `ReadDirectoryChangesW` (`watch_windows.rs`).
 
 #[cfg(target_os = "macos")]
-pub use mac::{current_event_id, start, stop};
+pub use mac::{current_event_id, live_refresh, start, stop};
 
-/// Off macOS there is no FSEvents; the index is refreshed by the next scan.
-#[cfg(not(target_os = "macos"))]
-pub use fallback::{current_event_id, start, stop};
+/// On Windows, `ReadDirectoryChangesW` feeds the same index updates (see
+/// `watch_windows.rs`).
+#[cfg(windows)]
+pub use win::{current_event_id, live_refresh, start, stop};
 
-#[cfg(not(target_os = "macos"))]
+/// Elsewhere there is no change source; the index is refreshed by the next scan.
+#[cfg(not(any(target_os = "macos", windows)))]
+pub use fallback::{current_event_id, live_refresh, start, stop};
+
+#[cfg(windows)]
+#[path = "watch_windows.rs"]
+mod win;
+
+#[cfg(not(any(target_os = "macos", windows)))]
 mod fallback {
     use std::path::PathBuf;
 
@@ -24,6 +34,10 @@ mod fallback {
 
     pub fn current_event_id() -> u64 {
         0
+    }
+
+    pub fn live_refresh() -> bool {
+        false
     }
 
     pub fn start(_app: AppHandle, _root: PathBuf, _since: u64, _epoch: u64) {
@@ -59,6 +73,11 @@ struct Pending {
     /// FSEvents lost track (the root moved, or events were dropped): nothing it
     /// reports can be trusted any more.
     lost: bool,
+}
+
+/// FSEvents is always available; the index is kept current while the hub runs.
+pub fn live_refresh() -> bool {
+    true
 }
 
 /// The FSEvents position now. Taken before a scan, so changes made during the
