@@ -64,22 +64,27 @@ use surface::{TextPainter, present};
 use usage::Usage;
 use visibility::{Occupancy, classify_window, is_shell_class_name, is_tool_window_ex_style};
 use windows::Win32::Foundation::{
-    ERROR_SUCCESS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SetLastError,
-    WPARAM,
+    E_FAIL, ERROR_SUCCESS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT,
+    SetLastError, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
     MONITORINFOEXW, MonitorFromRect, ScreenToClient, ValidateRect,
 };
+use windows::Win32::System::Com::{
+    CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
     TrackMouseEvent, VK_LBUTTON, VK_MBUTTON, VK_MENU, VK_RBUTTON,
 };
+use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, Error, PCWSTR, s, w};
+use windows::core::{BOOL, Error, IUnknown, PCWSTR, s, w};
 
 const PANEL_CLASS: PCWSTR = w!("PulseM1Notch");
 const CONTROLLER_CLASS: PCWSTR = w!("PulseM1Controller");
@@ -120,6 +125,10 @@ struct Panel {
     visibility: Retry<bool>,
     /// What the layered bitmap currently shows (cell views + DPI); `None` forces a redraw.
     drawn: Option<Drawn>,
+    /// When the layered bitmap was last published successfully (self-heal staleness clock).
+    published: Option<Instant>,
+    /// When the self-heal last re-homed or raised this window (rate limit).
+    healed: Option<Instant>,
     window: OwnedWindow,
 }
 
@@ -762,6 +771,14 @@ fn redock_panels() {
                 SWP_NOACTIVATE | SWP_NOZORDER,
             )
         };
+        // A resized layered window shows nothing until its bitmap is published again.
+        if let Some(panel) = lock_state()
+            .panels
+            .iter_mut()
+            .find(|p| p.window.key() == key)
+        {
+            panel.drawn = None;
+        }
     }
     let interval = refresh_panels(None);
     if let Some(controller) = controller_hwnd() {
@@ -948,6 +965,8 @@ fn create_panel(placed: &Placed) -> Result<Panel, Error> {
         slot: placed.slot,
         visibility: Retry::new(true),
         drawn: None,
+        published: None,
+        healed: None,
         window,
     })
 }
@@ -1023,6 +1042,9 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
         if hidden {
             dismiss_card_for(key);
         } else {
+            if !visibility.applied() {
+                heal_panel(key, &own);
+            }
             redraw_panel(key, &usage);
         }
         if visibility.needs(hidden) {
@@ -1047,6 +1069,18 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
                 ),
                 RetryReport::Applied | RetryReport::StillFailing(_) => {}
             }
+            if ok && !hidden {
+                // A window that was hidden may come back without its layered contents: publish
+                // the bitmap again now that it is shown, whatever `drawn` says.
+                if let Some(panel) = lock_state()
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.window.key() == key)
+                {
+                    panel.drawn = None;
+                }
+                redraw_panel(key, &usage);
+            }
         }
         outcomes.push((key, visibility));
     }
@@ -1065,6 +1099,208 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
     };
     sync_card();
     interval_ms(cadence, total, hidden_count)
+}
+
+/// Seconds a shown notch may go without a successful publish before it is redrawn anyway.
+const REPUBLISH_AFTER: Duration = Duration::from_secs(300);
+/// Least time between two re-homes or raises of one notch.
+const HEAL_EVERY: Duration = Duration::from_secs(120);
+
+/// Cheap self-heal for a notch that is shown and not suppressed but may not be on screen:
+/// a window cloaked off the current virtual desktop is moved back to it, a window that lost
+/// the top of the topmost band (or is covered by another process's window) is raised again,
+/// and a bitmap not published for `REPUBLISH_AFTER` is rendered and published again. Every
+/// action leaves one `panel_self_heal` line in `notch.log`. Never activates anything.
+fn heal_panel(key: isize, own: &[isize]) {
+    let hwnd = hwnd_from_key(key);
+    let now = Instant::now();
+    let (monitor, stale, may_act) = {
+        let app = lock_state();
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
+        };
+        (
+            panel.id.clone(),
+            panel
+                .published
+                .map(|at| now.duration_since(at))
+                .filter(|age| *age >= REPUBLISH_AFTER),
+            panel
+                .healed
+                .is_none_or(|at| now.duration_since(at) >= HEAL_EVERY),
+        )
+    };
+    let mut acted = false;
+    if may_act {
+        let mut cloaked = 0u32;
+        // SAFETY: `cloaked` outlives the call and has the size the attribute needs.
+        let known = unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut _ as *mut _,
+                size_of::<u32>() as u32,
+            )
+        }
+        .is_ok();
+        if known && cloaked != 0 {
+            // DWM_CLOAKED_SHELL (2) is the shell hiding it: the window sits on another
+            // virtual desktop. Follow the desktop of the foreground window.
+            let moved = if cloaked & 2 != 0 {
+                let card = lock_state().card.as_ref().map(OwnedWindow::key);
+                let mut targets = vec![hwnd];
+                targets.extend(card.map(hwnd_from_key));
+                move_to_foreground_desktop(&targets)
+            } else {
+                Err(Error::from(E_FAIL))
+            };
+            diag::info(
+                "panel_self_heal",
+                &[
+                    ("reason", "cloaked"),
+                    ("monitor", monitor.as_str()),
+                    ("cloaked", cloaked.to_string().as_str()),
+                    ("moved", moved.is_ok().to_string().as_str()),
+                ],
+            );
+            acted = true;
+        } else if let Some(cover) = covering_window(hwnd, own) {
+            // SAFETY: re-stacks our own window only; no move, size or activation.
+            let raised = unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            };
+            diag::info(
+                "panel_self_heal",
+                &[
+                    ("reason", "covered"),
+                    ("monitor", monitor.as_str()),
+                    ("by", cover.as_str()),
+                    ("raised", raised.is_ok().to_string().as_str()),
+                ],
+            );
+            acted = true;
+        }
+    }
+    let republish = acted || stale.is_some();
+    if let Some(panel) = lock_state()
+        .panels
+        .iter_mut()
+        .find(|p| p.window.key() == key)
+        .filter(|_| republish)
+    {
+        panel.drawn = None;
+        if acted {
+            panel.healed = Some(now);
+        }
+    }
+    if let Some(age) = stale {
+        diag::info(
+            "panel_self_heal",
+            &[
+                ("reason", "stale"),
+                ("monitor", monitor.as_str()),
+                ("age_s", age.as_secs().to_string().as_str()),
+            ],
+        );
+    }
+}
+
+/// Moves our windows to the virtual desktop the foreground window is on (the one the user
+/// is looking at). `IVirtualDesktopManager::MoveWindowToDesktop` only accepts windows of
+/// this process, which these are.
+fn move_to_foreground_desktop(targets: &[HWND]) -> Result<(), Error> {
+    static COM_STARTED: AtomicBool = AtomicBool::new(false);
+    // SAFETY: plain COM calls on the UI thread; the interface is released on drop and the
+    // GUID outlives the calls.
+    unsafe {
+        if !COM_STARTED.swap(true, Ordering::Relaxed) {
+            // S_FALSE or a changed apartment mode still leave COM usable on this thread.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let manager: IVirtualDesktopManager =
+            CoCreateInstance(&VirtualDesktopManager, None::<&IUnknown>, CLSCTX_ALL)?;
+        let front = GetForegroundWindow();
+        if front.0.is_null() {
+            return Err(Error::from(E_FAIL));
+        }
+        let desktop = manager.GetWindowDesktopId(front)?;
+        let mut result = Ok(());
+        for target in targets {
+            if let Err(error) = manager.MoveWindowToDesktop(*target, &desktop) {
+                result = Err(error);
+            }
+        }
+        result
+    }
+}
+
+/// The class of a window of another process that sits above `hwnd` and overlaps it, or
+/// `"not_topmost"` when `hwnd` lost its topmost flag; `None` when nothing covers it.
+fn covering_window(hwnd: HWND, own: &[isize]) -> Option<String> {
+    let style = query_window_style(hwnd, GWL_EXSTYLE)?;
+    if style & WS_EX_TOPMOST.0 == 0 {
+        return Some("not_topmost".to_string());
+    }
+    let mut mine = RECT::default();
+    // SAFETY: `mine` outlives the call.
+    unsafe { GetWindowRect(hwnd, &mut mine) }.ok()?;
+    // SAFETY: no arguments.
+    let pid = unsafe { GetCurrentProcessId() };
+    let mut above = hwnd;
+    // Only the windows stacked above ours: a short walk (the topmost band is small).
+    for _ in 0..64 {
+        // SAFETY: GW_HWNDPREV on a live handle; Err means nothing is above.
+        above = unsafe { GetWindow(above, GW_HWNDPREV) }.ok()?;
+        if above.0.is_null() {
+            return None;
+        }
+        // SAFETY: `above` came from the window list just now.
+        let visible = unsafe { IsWindowVisible(above) }.as_bool();
+        if !visible || own.contains(&hwnd_key(above)) {
+            continue;
+        }
+        let mut other = 0u32;
+        // SAFETY: `other` outlives the call.
+        unsafe { GetWindowThreadProcessId(above, Some(&mut other)) };
+        if other == pid {
+            continue;
+        }
+        let mut cloaked = 0u32;
+        // SAFETY: `cloaked` outlives the call and has the size the attribute needs.
+        let cloak_ok = unsafe {
+            DwmGetWindowAttribute(
+                above,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut _ as *mut _,
+                size_of::<u32>() as u32,
+            )
+        }
+        .is_ok();
+        let mut rect = RECT::default();
+        // SAFETY: `rect` outlives the call.
+        if (cloak_ok && cloaked != 0) || unsafe { GetWindowRect(above, &mut rect) }.is_err() {
+            continue;
+        }
+        let overlaps = rect.left < mine.right
+            && rect.right > mine.left
+            && rect.top < mine.bottom
+            && rect.bottom > mine.top;
+        if overlaps {
+            let mut class = [0u16; 128];
+            // SAFETY: the buffer outlives the call.
+            let length = unsafe { GetClassNameW(above, &mut class) }.max(0) as usize;
+            return Some(String::from_utf16_lossy(&class[..length]));
+        }
+    }
+    None
 }
 
 /// Draws the panel's bitmap when what it shows (cells, edge, folded state, DPI, badges)
@@ -1124,6 +1360,19 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     }) else {
         return;
     };
+    // A bitmap with no visible pixel would blank the notch while `drawn` called it current:
+    // never publish one; `drawn` stays stale so the next refresh renders again.
+    if canvas.pixels.iter().all(|pixel| pixel >> 24 == 0) {
+        diag::info(
+            "panel_empty_bitmap",
+            &[
+                ("width", canvas.width.to_string().as_str()),
+                ("height", canvas.height.to_string().as_str()),
+                ("folded", slot.folded.to_string().as_str()),
+            ],
+        );
+        return;
+    }
     match present(hwnd_from_key(key), &canvas, None) {
         Ok(()) => {
             if let Some(panel) = lock_state()
@@ -1131,6 +1380,7 @@ fn redraw_panel(key: isize, usage: &[Usage; 2]) {
                 .iter_mut()
                 .find(|p| p.window.key() == key)
             {
+                panel.published = Some(Instant::now());
                 panel.drawn = Some((
                     views,
                     slot.edge,
