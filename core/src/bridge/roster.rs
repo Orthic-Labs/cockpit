@@ -132,10 +132,13 @@ fn parse_claude(value: Value, alive: &dyn Fn(u32) -> bool) -> Option<LocalSessio
     };
     let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
     let id = text("sessionId").filter(|s| !s.is_empty())?;
-    // The Pulse hub registers itself so Claude accepts its posts; it is not a chat.
+    // App chats only (Claude Desktop, or the IDE extension): terminal (`cli`) and SDK
+    // sessions are reached over ssh, not the bridge. The Pulse hub registers itself so
+    // Claude accepts its posts; it is not a chat either. A file without the key is older
+    // Claude's and is kept.
     if text("entrypoint")
         .as_deref()
-        .is_some_and(|e| e == super::hub::ENTRYPOINT || e == "cc-post")
+        .is_some_and(|e| e != "claude-desktop" && e != "claude-vscode")
     {
         return None;
     }

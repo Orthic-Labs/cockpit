@@ -399,7 +399,7 @@ fn journey() {
         serde_json::json!({
             "pid": pid, "sessionId": "chat-b", "name": "Planner",
             "cwd": b.to_string_lossy(), "status": "idle", "peerProtocol": 1,
-            "messagingSocketPath": socket, "entrypoint": "cli",
+            "messagingSocketPath": socket, "entrypoint": "claude-desktop",
         })
         .to_string(),
     )

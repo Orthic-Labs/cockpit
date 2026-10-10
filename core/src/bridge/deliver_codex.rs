@@ -27,7 +27,9 @@
 //!
 //! Thread discovery: the highest `~/.codex/state_<N>.sqlite` (table `threads`,
 //! opened read-only; the Codex app holds it open in WAL mode), not archived,
-//! newest first. Only when no state database exists does it fall back to
+//! newest first, app chats only (`source = 'vscode'` with originator `Codex Desktop`, or
+//! none on older threads): `exec` runs, terminal (`cli`, `codex-tui`) sessions, the Chrome
+//! side panel, sub-agents and reviews are left out; terminal work is reached over ssh. Only when no state database exists does it fall back to
 //! `~/.codex/session_index.jsonl` (one `{id, thread_name, updated_at}` per
 //! line), which lags and has no archived flag. Failures are explicit
 //! (`DiscoveryError`, `codex_discovery_status`); the last good list is kept with its
@@ -365,7 +367,8 @@ fn open_state(path: &Path) -> Result<rusqlite::Connection, rusqlite::Error> {
 fn read_state(path: &Path, limit: usize) -> Result<Vec<CodexThread>, rusqlite::Error> {
     let conn = open_state(path)?;
     let sql = format!(
-        "SELECT {THREAD_COLUMNS} FROM threads WHERE archived = 0 \
+        "SELECT {THREAD_COLUMNS} FROM threads WHERE archived = 0 AND source = 'vscode' \
+         AND (originator IS NULL OR originator = 'Codex Desktop') \
          ORDER BY updated_at_ms DESC LIMIT ?1"
     );
     let mut stmt = conn.prepare(&sql)?;
