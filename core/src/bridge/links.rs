@@ -1,29 +1,37 @@
 //! Linked computers: how this computer reaches another one's `pulse` over ssh.
 //!
-//! A link is `{device, ssh, pulse}`: the name chats are shown under
+//! A link is `{device, ssh, pulse, shell, deviceId?}`: the name chats are shown under
 //! ("<chat> on <device>"), the ssh destination (a host alias from
-//! `~/.ssh/config`, or `user@host`), and the path of `pulse` on that computer.
-//! Links live in `<state>/bridge/links.json` and are made with
+//! `~/.ssh/config`, or `user@host`), the path of `pulse` on that computer, the
+//! family of shell ssh lands in there (`posix` or `powershell`, found when the link
+//! is made) and the peer's stable device id (learned from its chat listing and then
+//! pinned). Links live in `<state>/bridge/links.json` and are made with
 //! `pulse bridge link <device> <ssh-host> [--pulse PATH]`.
 //!
 //! Two remote commands exist: `pulse bridge peers --local --json` (that
 //! computer's chats) and `pulse bridge post <base64 envelope>` (deliver one
-//! message there). The envelope is base64 so no quoting survives two shells.
-//! ssh must already work without a prompt (keys, BatchMode); nothing here
-//! sets ssh up. `PULSE_BRIDGE_SSH` names another program to run instead of
-//! `ssh` (tests).
+//! message there). The remote command is one string, every word quoted for the
+//! remote shell family, and the destination follows `--` so it cannot be read as
+//! an ssh option. ssh must already work without a prompt (keys, BatchMode);
+//! nothing here sets ssh up. `PULSE_BRIDGE_SSH` names another program to run
+//! instead of `ssh` (tests); it gets the destination and the words as separate
+//! arguments, unquoted. Each poll of a link is recorded in `links-status.json`.
 
-use super::envelope::Envelope;
+use super::envelope::{Envelope, now_ms};
 use super::roster::RosterEntry;
 use super::store::Store;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// How long one remote command may take, ssh connection included.
 pub const REMOTE_TIMEOUT: Duration = Duration::from_secs(25);
+/// Most output kept from one remote command, per stream.
+const OUTPUT_CAP: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
@@ -32,10 +40,32 @@ pub struct Link {
     /// The `pulse` binary there; "pulse" means on PATH.
     #[serde(default = "default_pulse")]
     pub pulse: String,
+    /// The shell ssh lands in there: "posix" (default) or "powershell".
+    #[serde(default = "default_shell")]
+    pub shell: String,
+    /// The peer's stable device id, learned from its chat listing and pinned.
+    #[serde(default, rename = "deviceId", skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
+impl Default for Link {
+    fn default() -> Link {
+        Link {
+            device: String::new(),
+            ssh: String::new(),
+            pulse: default_pulse(),
+            shell: default_shell(),
+            device_id: None,
+        }
+    }
 }
 
 fn default_pulse() -> String {
     "pulse".to_string()
+}
+
+fn default_shell() -> String {
+    "posix".to_string()
 }
 
 /// What `pulse bridge peers --local --json` prints on a linked computer.
@@ -54,6 +84,40 @@ pub struct RemoteChats {
     pub listing: Result<RemoteListing, String>,
 }
 
+/// How the last polls of a linked computer went.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkStatus {
+    #[serde(default)]
+    pub device: String,
+    /// When a poll last succeeded (ms); none when it never has.
+    #[serde(default)]
+    pub last_ok_ms: Option<u64>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub last_error_ms: Option<u64>,
+    /// When the link was last polled (ms); 0 when never.
+    #[serde(default)]
+    pub last_attempt_ms: u64,
+}
+
+impl LinkStatus {
+    /// Whether the most recent poll succeeded.
+    pub fn online(&self) -> bool {
+        match (self.last_ok_ms, self.last_error_ms) {
+            (Some(ok), Some(err)) => ok >= err,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    /// How long ago (ms) the link last answered, when it ever did.
+    pub fn age_ms(&self, now: u64) -> Option<u64> {
+        self.last_ok_ms.map(|t| now.saturating_sub(t))
+    }
+}
+
 fn ssh_program() -> String {
     std::env::var("PULSE_BRIDGE_SSH")
         .ok()
@@ -61,12 +125,95 @@ fn ssh_program() -> String {
         .unwrap_or_else(|| "ssh".to_string())
 }
 
+/// An ssh destination is a host alias or `user@host`: never an option, never a command.
+fn validate_ssh(ssh: &str) -> Result<(), String> {
+    let ok = !ssh.is_empty()
+        && !ssh.starts_with('-')
+        && ssh.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '@' | '.' | '_' | '-' | ':' | '[' | ']' | '+' | '~')
+        });
+    if ok {
+        Ok(())
+    } else {
+        Err("the ssh host must be a host alias or user@host (no spaces, ';' or leading '-')".into())
+    }
+}
+
+fn validate_pulse(pulse: &str) -> Result<(), String> {
+    if pulse.trim().is_empty() || pulse.contains(['\n', '\r', '\0']) {
+        Err("the pulse path is empty or has a line break".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// `text` as one POSIX shell word.
+fn posix_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// `text` as one PowerShell single-quoted string.
+fn powershell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// The one thing PowerShell may expand: the installed-app candidate below.
+fn powershell_pulse(pulse: &str) -> String {
+    if pulse == PULSE_CANDIDATES[2] {
+        format!("& \"{pulse}\"")
+    } else {
+        format!("& {}", powershell_quote(pulse))
+    }
+}
+
+/// `<pulse> bridge <args…>` as one command string for the remote shell family.
+fn remote_command(link: &Link, args: &[&str]) -> String {
+    let powershell = link.shell == "powershell";
+    let mut command = if powershell {
+        powershell_pulse(&link.pulse)
+    } else {
+        posix_quote(&link.pulse)
+    };
+    command.push_str(" bridge");
+    for arg in args {
+        command.push(' ');
+        command.push_str(&if powershell {
+            powershell_quote(arg)
+        } else {
+            posix_quote(arg)
+        });
+    }
+    command
+}
+
+/// Read a stream to its end on its own thread, keeping at most `OUTPUT_CAP` bytes.
+fn drain<R: Read + Send + 'static>(stream: Option<R>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        if let Some(mut stream) = stream {
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let room = OUTPUT_CAP.saturating_sub(kept.len());
+                kept.extend_from_slice(&chunk[..n.min(room)]);
+            }
+        }
+        let _ = tx.send(String::from_utf8_lossy(&kept).into_owned());
+    });
+    rx
+}
+
 /// Run `<pulse> bridge <args…>` on the linked computer; stdout on exit 0.
 fn run(link: &Link, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut remote = vec![link.pulse.clone(), "bridge".to_string()];
-    remote.extend(args.iter().map(|a| a.to_string()));
-    let mut command = Command::new(ssh_program());
-    if ssh_program() == "ssh" {
+    validate_ssh(&link.ssh)?;
+    validate_pulse(&link.pulse)?;
+    let program = ssh_program();
+    let mut command = Command::new(&program);
+    if program == "ssh" {
         command.args([
             "-o",
             "BatchMode=yes",
@@ -74,10 +221,14 @@ fn run(link: &Link, args: &[&str], timeout: Duration) -> Result<String, String> 
             "ConnectTimeout=10",
             "-o",
             "LogLevel=ERROR",
+            "--",
         ]);
+        command.arg(&link.ssh);
+        command.arg(remote_command(link, args));
+    } else {
+        command.arg(&link.ssh);
+        command.arg(&link.pulse).arg("bridge").args(args);
     }
-    command.arg(&link.ssh);
-    command.args(&remote);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -91,20 +242,8 @@ fn run(link: &Link, args: &[&str], timeout: Duration) -> Result<String, String> 
     let mut child = command
         .spawn()
         .map_err(|e| format!("couldn't run ssh: {e}"))?;
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = String::new();
-        let mut err = String::new();
-        if let Some(s) = stdout.as_mut() {
-            let _ = s.read_to_string(&mut out);
-        }
-        if let Some(s) = stderr.as_mut() {
-            let _ = s.read_to_string(&mut err);
-        }
-        let _ = tx.send((out, err));
-    });
+    let out_rx = drain(child.stdout.take());
+    let err_rx = drain(child.stderr.take());
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -112,6 +251,10 @@ fn run(link: &Link, args: &[&str], timeout: Duration) -> Result<String, String> 
             Ok(None) if started.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // The pipes close with the child; a stray grandchild holding one
+                // must not hold this call too.
+                let _ = out_rx.recv_timeout(Duration::from_secs(2));
+                let _ = err_rx.recv_timeout(Duration::from_secs(2));
                 return Err(format!(
                     "{} did not answer within {} s",
                     link.device,
@@ -122,7 +265,12 @@ fn run(link: &Link, args: &[&str], timeout: Duration) -> Result<String, String> 
             Err(e) => return Err(format!("ssh failed: {e}")),
         }
     };
-    let (out, err) = rx.recv().unwrap_or_default();
+    let out = out_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_default();
+    let err = err_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_default();
     if status.success() {
         Ok(out)
     } else {
@@ -210,6 +358,14 @@ pub fn find(store: &Store, device: &str) -> Option<Link> {
         .find(|l| l.device.to_lowercase() == wanted)
 }
 
+/// The link whose peer reported this stable device id.
+pub fn find_by_device_id(store: &Store, device_id: &str) -> Option<Link> {
+    store
+        .links()
+        .into_iter()
+        .find(|l| l.device_id.as_deref() == Some(device_id))
+}
+
 /// Where `pulse` lives when the link does not say: PATH, then the installed app on a Mac,
 /// then the installed app on Windows (PowerShell expands `$env:`; ssh to Windows lands in
 /// PowerShell by default).
@@ -219,8 +375,10 @@ const PULSE_CANDIDATES: [&str; 3] = [
     "$env:LOCALAPPDATA\\Programs\\Pulse\\Helpers\\pulse.exe",
 ];
 
-/// Add or replace a link, then check it by listing that computer's chats. With no
-/// explicit `pulse` path, the first candidate that answers is stored.
+/// Add or replace a link, then check it by listing that computer's chats. The remote
+/// shell family is found by trying POSIX quoting first, then PowerShell, and the one
+/// that answered is stored; with no explicit `pulse` path, so is the first candidate
+/// that answers. The peer's device id, when it reports one, is pinned.
 pub fn add(store: &Store, mut link: Link) -> Result<RemoteListing, String> {
     if link.device.trim().is_empty() || link.ssh.trim().is_empty() {
         return Err("a link needs a device name and an ssh host".to_string());
@@ -228,23 +386,60 @@ pub fn add(store: &Store, mut link: Link) -> Result<RemoteListing, String> {
     if link.device.contains(':') {
         return Err("the device name can't contain ':'".to_string());
     }
-    let listing = if link.pulse == "pulse" {
-        let mut found = None;
-        let mut last = String::new();
-        for candidate in PULSE_CANDIDATES {
+    validate_ssh(&link.ssh)?;
+    validate_pulse(&link.pulse)?;
+    link.device_id = None;
+    let explicit = link.pulse != "pulse";
+    let first_shell = if link.shell == "powershell" {
+        "powershell"
+    } else {
+        "posix"
+    };
+    let other_shell = if first_shell == "posix" {
+        "powershell"
+    } else {
+        "posix"
+    };
+    // The test hook ignores quoting, so one shell family is enough there.
+    let shells: Vec<&str> = if ssh_program() == "ssh" {
+        vec![first_shell, other_shell]
+    } else {
+        vec![first_shell]
+    };
+    let requested = link.pulse.clone();
+    let mut found = None;
+    let mut first_error = None;
+    'search: for shell in shells {
+        link.shell = shell.to_string();
+        let candidates: Vec<&str> = if explicit {
+            vec![requested.as_str()]
+        } else if shell == "powershell" {
+            vec![PULSE_CANDIDATES[0], PULSE_CANDIDATES[2]]
+        } else {
+            vec![PULSE_CANDIDATES[0], PULSE_CANDIDATES[1]]
+        };
+        for candidate in candidates {
             link.pulse = candidate.to_string();
-            match list_chats(&link) {
-                Ok(listing) => {
-                    found = Some(listing);
-                    break;
+            match list_chats_identified(&link) {
+                Ok(answer) => {
+                    found = Some(answer);
+                    break 'search;
                 }
-                Err(e) => last = e,
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
             }
         }
-        found.ok_or_else(|| format!("{last} (pass --pulse <path of pulse on {}>)", link.device))?
-    } else {
-        list_chats(&link)?
-    };
+    }
+    let (listing, device_id) = found.ok_or_else(|| {
+        let last = first_error.unwrap_or_default();
+        if explicit {
+            last
+        } else {
+            format!("{last} (pass --pulse <path of pulse on {}>)", link.device)
+        }
+    })?;
+    link.device_id = device_id;
     let mut links: Vec<Link> = store
         .links()
         .into_iter()
@@ -270,15 +465,92 @@ pub fn remove(store: &Store, device: &str) -> Result<bool, String> {
     Ok(removed)
 }
 
+fn last_json_line(out: &str) -> Option<&str> {
+    out.lines().rev().find(|l| l.trim_start().starts_with('{'))
+}
+
 /// The chats open on a linked computer.
 pub fn list_chats(link: &Link) -> Result<RemoteListing, String> {
+    list_chats_identified(link).map(|(listing, _)| listing)
+}
+
+/// The chats open on a linked computer and the stable device id it reported
+/// (`"deviceId"` in the listing), when it reports one.
+pub fn list_chats_identified(link: &Link) -> Result<(RemoteListing, Option<String>), String> {
     let out = run(link, &["peers", "--local", "--json"], REMOTE_TIMEOUT)?;
-    let line = out
-        .lines()
-        .rev()
-        .find(|l| l.trim_start().starts_with('{'))
-        .ok_or_else(|| format!("{} printed no chat list", link.device))?;
-    serde_json::from_str(line).map_err(|e| format!("{} printed something else: {e}", link.device))
+    let line =
+        last_json_line(&out).ok_or_else(|| format!("{} printed no chat list", link.device))?;
+    let value: Value = serde_json::from_str(line)
+        .map_err(|e| format!("{} printed something else: {e}", link.device))?;
+    let device_id = value["deviceId"]
+        .as_str()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let listing = serde_json::from_value(value)
+        .map_err(|e| format!("{} printed something else: {e}", link.device))?;
+    Ok((listing, device_id))
+}
+
+const STATUS_FILE: &str = "links-status.json";
+
+fn record_status(store: &Store, device: &str, error: Option<&str>) {
+    let now = now_ms();
+    let _ = store.update_state(STATUS_FILE, |all: &mut BTreeMap<String, LinkStatus>| {
+        let entry = all.entry(device.to_lowercase()).or_default();
+        entry.device = device.to_string();
+        entry.last_attempt_ms = now;
+        match error {
+            None => {
+                entry.last_ok_ms = Some(now);
+                entry.last_error = None;
+            }
+            Some(text) => {
+                entry.last_error = Some(text.to_string());
+                entry.last_error_ms = Some(now);
+            }
+        }
+    });
+}
+
+/// Poll one link: list its chats, pin or check its device id, record how it went.
+fn poll(store: &Store, mut link: Link) -> RemoteChats {
+    let pinned = link.device_id.clone();
+    let listing = list_chats_identified(&link).and_then(|(listing, seen)| match (pinned, seen) {
+        (Some(pinned), Some(seen)) if pinned != seen => Err(format!(
+            "{} is not the computer this link was made with (device id changed); \
+             link it again if it was reinstalled",
+            link.device
+        )),
+        (None, Some(seen)) => Ok((listing, Some(seen))),
+        _ => Ok((listing, None)),
+    });
+    let listing = listing.map(|(listing, learned)| {
+        if let Some(id) = learned {
+            let device = link.device.clone();
+            let stored = id.clone();
+            let _ = store.update_state("links.json", move |links: &mut Vec<Link>| {
+                for l in links.iter_mut() {
+                    if l.device.eq_ignore_ascii_case(&device) && l.device_id.is_none() {
+                        l.device_id = Some(stored.clone());
+                    }
+                }
+            });
+            link.device_id = Some(id);
+        }
+        listing
+    });
+    record_status(
+        store,
+        &link.device,
+        listing.as_ref().err().map(String::as_str),
+    );
+    RemoteChats { link, listing }
+}
+
+/// One linked computer's chats (`None` when no such link), asked now.
+pub fn list_chats_for(store: &Store, device: &str) -> Option<RemoteChats> {
+    find(store, device).map(|link| poll(store, link))
 }
 
 /// Every link's chats, asked in parallel.
@@ -286,13 +558,29 @@ pub fn list_all(store: &Store) -> Vec<RemoteChats> {
     let handles: Vec<_> = all(store)
         .into_iter()
         .map(|link| {
-            std::thread::spawn(move || RemoteChats {
-                listing: list_chats(&link),
-                link,
-            })
+            let store = store.clone();
+            std::thread::spawn(move || poll(&store, link))
         })
         .collect();
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
+}
+
+/// How each link's last poll went: a link that is down shows as offline, with when
+/// it last answered, instead of being missing. Links never polled report no success.
+pub fn link_status(store: &Store) -> Vec<LinkStatus> {
+    let recorded: BTreeMap<String, LinkStatus> = store.read_state(STATUS_FILE).unwrap_or_default();
+    all(store)
+        .into_iter()
+        .map(|link| {
+            recorded
+                .get(&link.device.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| LinkStatus {
+                    device: link.device.clone(),
+                    ..LinkStatus::default()
+                })
+        })
+        .collect()
 }
 
 /// Deliver `env` to the chat it names on the linked computer. The result is
@@ -300,11 +588,7 @@ pub fn list_all(store: &Store) -> Vec<RemoteChats> {
 pub fn post(link: &Link, env: &Envelope) -> Result<Value, String> {
     let encoded = encode_envelope(env);
     let out = run(link, &["post", &encoded], REMOTE_TIMEOUT)?;
-    let line = out
-        .lines()
-        .rev()
-        .find(|l| l.trim_start().starts_with('{'))
-        .ok_or_else(|| format!("{} printed no receipt", link.device))?;
+    let line = last_json_line(&out).ok_or_else(|| format!("{} printed no receipt", link.device))?;
     serde_json::from_str(line).map_err(|e| format!("{} printed something else: {e}", link.device))
 }
 

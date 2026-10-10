@@ -16,9 +16,16 @@
 //! * `install`: puts the Pulse bridge skill where Claude and Codex load it.
 //!
 //! The agent-facing surface is the CLI (`pulse bridge peers|send|link|status`),
-//! built on `all_peers`, `identify` and `send_text`. `Receipt` carries
-//! `ReceiptState::{Delivered, Held, Refused}`; `Held` and `Refused` leave the
-//! message in the chat's bridge inbox (`pulse bridge inbox`).
+//! built on `all_peers`, `identify` and `send_text`. `Receipt` carries a
+//! `ReceiptState`: `Delivered` (the chat has it), `Queued` (the chat's own
+//! queue has it), `Sent` (posted, not confirmed), `Held` (stored in the chat's
+//! bridge inbox, `pulse bridge inbox`; returned only after that write was
+//! verified), `Refused`, `Unsupported` (this chat can't be pushed to) and
+//! `Unknown` (the outcome could not be established).
+//!
+//! The bridge switch: when the bridge is off on a computer (`Store::bridge_enabled`),
+//! `send_text`, `receive`, `deliver_here` and the hub's control and reply paths
+//! return `Refused` ("The agent bridge is off on <device>") and keep no inbox copy.
 
 pub mod control;
 pub mod deliver_claude;
@@ -34,6 +41,7 @@ pub use envelope::{Envelope, EnvelopeError, Sender, Target};
 pub use roster::{LocalSession, Peer, RosterEntry};
 pub use store::Store;
 
+use deliver_codex::DiscoveryError;
 use serde::Serialize;
 use serde_json::json;
 use std::time::Duration;
@@ -77,26 +85,42 @@ impl From<EnvelopeError> for BridgeError {
 pub enum ReceiptState {
     /// The chat has the message.
     Delivered,
-    /// The chat's side kept it without showing it yet.
+    /// The chat's own queue has it (it shows it at its next turn).
+    Queued,
+    /// Posted to the chat; receipt not confirmed.
+    Sent,
+    /// Stored in the chat's bridge inbox, not shown yet.
     Held,
     /// The chat's side turned it away (for example too many messages).
     Refused,
+    /// The chat can't be pushed to (other protocol, no Codex CLI, Windows).
+    Unsupported,
+    /// The outcome could not be established; it may or may not have arrived.
+    Unknown,
 }
 
 impl ReceiptState {
     pub fn as_str(self) -> &'static str {
         match self {
             ReceiptState::Delivered => "delivered",
+            ReceiptState::Queued => "queued",
+            ReceiptState::Sent => "sent",
             ReceiptState::Held => "held",
             ReceiptState::Refused => "refused",
+            ReceiptState::Unsupported => "unsupported",
+            ReceiptState::Unknown => "unknown",
         }
     }
 
     pub fn parse(text: &str) -> Option<ReceiptState> {
         match text {
             "delivered" => Some(ReceiptState::Delivered),
+            "queued" => Some(ReceiptState::Queued),
+            "sent" => Some(ReceiptState::Sent),
             "held" => Some(ReceiptState::Held),
             "refused" => Some(ReceiptState::Refused),
+            "unsupported" => Some(ReceiptState::Unsupported),
+            "unknown" => Some(ReceiptState::Unknown),
             _ => None,
         }
     }
@@ -133,10 +157,22 @@ impl Receipt {
         Receipt::with(ReceiptState::Refused, detail)
     }
 
-    /// The chat can't be pushed to (other protocol, no Codex CLI, Windows):
-    /// the message stays pending in the bridge inbox, so it counts as held.
+    pub fn queued(detail: impl Into<String>) -> Receipt {
+        Receipt::with(ReceiptState::Queued, detail)
+    }
+
+    pub fn sent(detail: impl Into<String>) -> Receipt {
+        Receipt::with(ReceiptState::Sent, detail)
+    }
+
+    pub fn unknown(detail: impl Into<String>) -> Receipt {
+        Receipt::with(ReceiptState::Unknown, detail)
+    }
+
+    /// The chat can't be pushed to (other protocol, no Codex CLI, Windows). The
+    /// delivery path then stores the message in the bridge inbox and reports `Held`.
     pub fn unsupported(detail: impl Into<String>) -> Receipt {
-        Receipt::with(ReceiptState::Held, detail)
+        Receipt::with(ReceiptState::Unsupported, detail)
     }
 }
 
@@ -148,7 +184,21 @@ pub struct Identity {
 
 fn default_alias() -> String {
     let host = sysinfo::System::host_name().unwrap_or_else(|| "Computer".to_string());
-    host.trim_end_matches(".local").to_string()
+    clean_alias(host.trim_end_matches(".local"))
+}
+
+/// A computer name safe to use in `<device>:<session>` ids: no `:`.
+pub fn clean_alias(alias: &str) -> String {
+    let cleaned: String = alias
+        .chars()
+        .map(|c| if c == ':' || c.is_control() { '-' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() {
+        "Computer".to_string()
+    } else {
+        cleaned
+    }
 }
 
 /// This computer's name: what the running hub recorded, else the host name.
@@ -157,6 +207,7 @@ pub fn local_identity(store: &Store) -> Result<Identity, BridgeError> {
         .relay_status()
         .map(|s| s.alias)
         .filter(|a| !a.is_empty())
+        .map(|a| clean_alias(&a))
         .unwrap_or_else(default_alias);
     Ok(Identity { alias })
 }
@@ -176,11 +227,33 @@ pub fn local_peers(store: &Store, me: &Identity) -> Vec<Peer> {
     roster::merge(&roster::local_sessions(store), &me.alias, &[])
 }
 
+/// The refusal every entry point gives while the bridge is off here.
+fn bridge_off(store: &Store, msg_id: &str, session: &str) -> Option<Receipt> {
+    if store.bridge_enabled() {
+        return None;
+    }
+    let device = local_identity(store)
+        .map(|me| me.alias)
+        .unwrap_or_else(|_| default_alias());
+    Some(Receipt {
+        msg_id: msg_id.to_string(),
+        session: session.to_string(),
+        ..Receipt::refused(format!("The agent bridge is off on {device}"))
+    })
+}
+
+/// `bridge_off` for the hub (`hub::handle_control`, `hub::on_local_reply`).
+pub(crate) fn bridge_off_detail(store: &Store) -> Option<String> {
+    bridge_off(store, "", "").map(|r| r.detail)
+}
+
 /// Put `env` into a chat on this computer from this process: Claude and Codex
 /// chats are pushed directly (`deliver_claude::deliver_via`,
-/// `deliver_codex::deliver`); anything not `Delivered` keeps the message in
-/// the chat's inbox for `pulse bridge inbox`. `reply_socket` (the sending
-/// Claude chat's own messaging socket) is where a Claude target replies.
+/// `deliver_codex::deliver`); anything not delivered keeps the message in the
+/// chat's inbox for `pulse bridge inbox`, and says `Held` only once that write
+/// succeeded. `reply_socket` (the sending Claude chat's own messaging socket)
+/// is where a Claude target replies; without one the hub's reply listener is
+/// used, and the route back is saved for it.
 pub fn deliver_local_via(
     store: &Store,
     session: &LocalSession,
@@ -193,6 +266,15 @@ pub fn deliver_local_via(
         state,
         detail,
     };
+    if session.kind == "claude" && reply_socket.is_none() {
+        let _ = store.save_reply_route(&store::ReplyRoute {
+            msg_id: env.id.clone(),
+            from_device: env.from.device.clone(),
+            from_session: env.from.session.clone(),
+            to_session: session.id.clone(),
+            created_ms: envelope::now_ms(),
+        });
+    }
     let pushed = match session.kind.as_str() {
         "claude" => deliver_claude::deliver_via(session, env, reply_socket),
         "codex" => deliver_codex::deliver(session, env),
@@ -201,7 +283,7 @@ pub fn deliver_local_via(
         ))),
     };
     let (state, detail) = match pushed {
-        Ok(r) if r.state == ReceiptState::Delivered => {
+        Ok(r) if reached_chat(r.state) => {
             return Receipt {
                 msg_id: env.id.clone(),
                 session: session.id.clone(),
@@ -212,16 +294,32 @@ pub fn deliver_local_via(
         Err(e) => (ReceiptState::Held, e.to_string()),
     };
     match store.append_inbox(&session.id, env) {
-        Ok(_) => receipt(state, format!("{detail} (kept in the bridge inbox)")),
-        Err(e) => receipt(ReceiptState::Refused, format!("couldn't store it: {e}")),
+        Ok(_) => {
+            let state = match state {
+                ReceiptState::Refused | ReceiptState::Unknown => state,
+                _ => ReceiptState::Held,
+            };
+            receipt(state, format!("{detail} (kept in the bridge inbox)"))
+        }
+        Err(e) => receipt(
+            ReceiptState::Unknown,
+            format!("could not store the message: {e} ({detail})"),
+        ),
     }
+}
+
+fn reached_chat(state: ReceiptState) -> bool {
+    matches!(
+        state,
+        ReceiptState::Delivered | ReceiptState::Queued | ReceiptState::Sent
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SendOutcome {
     pub msg_id: String,
     pub to: Peer,
-    /// delivered, held or refused (as above), from whichever computer the chat is on.
+    /// A `ReceiptState` word, from whichever computer the chat is on.
     pub status: String,
     pub detail: String,
 }
@@ -320,13 +418,17 @@ fn direct_post_trusted() -> bool {
 
 /// Put `env` into a chat on this computer the way that works here: through
 /// the running hub (a registered peer) when a direct post would be dropped,
-/// else directly. `reply_socket` as in `deliver_local_via`.
+/// else directly. `reply_socket` as in `deliver_local_via`. Refused while the
+/// bridge is off.
 pub fn deliver_here(
     store: &Store,
     session: &LocalSession,
     env: &Envelope,
     reply_socket: Option<&str>,
 ) -> Receipt {
+    if let Some(off) = bridge_off(store, &env.id, &session.id) {
+        return off;
+    }
     let needs_hub = session.kind == "claude" && !direct_post_trusted();
     // The hub owns the reply listener on both platforms: a delivery it posts advertises a
     // real reply address, one the CLI posts only a placeholder. So the hub is preferred
@@ -337,49 +439,140 @@ pub fn deliver_here(
         if let Some(socket) = reply_socket {
             args["reply_socket"] = json!(socket);
         }
+        let result = |state: ReceiptState, detail: String| Receipt {
+            msg_id: env.id.clone(),
+            session: session.id.clone(),
+            state,
+            detail,
+        };
         return match control::call(store, "deliver", args, Duration::from_secs(20)) {
-            Ok(reply) if reply["ok"].as_bool() == Some(true) => Receipt {
-                msg_id: env.id.clone(),
-                session: session.id.clone(),
-                state: reply["status"]
+            Ok(reply) if reply["ok"].as_bool() == Some(true) => result(
+                reply["status"]
                     .as_str()
                     .and_then(ReceiptState::parse)
-                    .unwrap_or(ReceiptState::Held),
-                detail: reply["detail"].as_str().unwrap_or("").to_string(),
-            },
-            Ok(reply) => Receipt {
+                    .unwrap_or(ReceiptState::Unknown),
+                reply["detail"].as_str().unwrap_or("").to_string(),
+            ),
+            Ok(reply) => result(
+                ReceiptState::Unknown,
+                reply["error"]
+                    .as_str()
+                    .unwrap_or("Pulse refused")
+                    .to_string(),
+            ),
+            Err(e) => result(ReceiptState::Unknown, e),
+        };
+    }
+    if needs_hub {
+        return match store.append_inbox(&session.id, env) {
+            Ok(_) => Receipt {
                 msg_id: env.id.clone(),
                 session: session.id.clone(),
                 state: ReceiptState::Held,
-                detail: reply["error"]
-                    .as_str()
-                    .unwrap_or("Pulse refused")
+                detail: "Pulse isn't running here; Claude only takes messages posted by it. Kept in the bridge inbox."
                     .to_string(),
             },
             Err(e) => Receipt {
                 msg_id: env.id.clone(),
                 session: session.id.clone(),
-                state: ReceiptState::Held,
-                detail: e,
+                state: ReceiptState::Unknown,
+                detail: format!("could not store the message: {e}"),
             },
-        };
-    }
-    if needs_hub {
-        let _ = store.append_inbox(&session.id, env);
-        return Receipt {
-            msg_id: env.id.clone(),
-            session: session.id.clone(),
-            state: ReceiptState::Held,
-            detail: "Pulse isn't running here; Claude only takes messages posted by it. Kept in the bridge inbox."
-                .to_string(),
         };
     }
     deliver_local_via(store, session, env, reply_socket)
 }
 
+/// Whether `text` names a chat exactly: `<kind>:<id>` or a bare 36-character uuid.
+fn exact_local_id(text: &str) -> Option<&str> {
+    let text = text.trim();
+    if let Some((kind, id)) = text.split_once(':')
+        && matches!(kind, "claude" | "codex")
+        && !id.is_empty()
+    {
+        return Some(id);
+    }
+    let uuid_shaped = text.len() == 36
+        && text.char_indices().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        });
+    uuid_shaped.then_some(text)
+}
+
+/// The chat `to` names, with its local session when it is on this computer.
+/// Exact ids are resolved without asking any link; `<device>:<chat>` and
+/// "<chat> on <device>" ask only that device's link; everything else (fuzzy
+/// titles) falls back to full discovery.
+fn resolve_target(
+    store: &Store,
+    me: &Identity,
+    to: &str,
+) -> Result<(Peer, Option<LocalSession>), BridgeError> {
+    let local_peer = |s: &LocalSession| {
+        roster::merge(std::slice::from_ref(s), &me.alias, &[])
+            .into_iter()
+            .next()
+    };
+    if let Some(id) = exact_local_id(to) {
+        let mut found = roster::local_sessions(store)
+            .into_iter()
+            .find(|s| s.id.eq_ignore_ascii_case(id));
+        if found.is_none() {
+            found = match roster::resolve_exact_codex(id) {
+                Ok(session) => session,
+                Err(DiscoveryError::NoSource) => None,
+                Err(e) => {
+                    return Err(BridgeError::Delivery(format!(
+                        "couldn't look up the Codex chat \"{id}\": {e}"
+                    )));
+                }
+            };
+        }
+        if let Some(session) = found
+            && let Some(peer) = local_peer(&session)
+        {
+            return Ok((peer, Some(session)));
+        }
+    }
+    let mut devices: Vec<String> = to
+        .match_indices(':')
+        .map(|(i, _)| to[..i].to_string())
+        .collect();
+    if let Some((_, device)) = to.rsplit_once(" on ") {
+        devices.push(device.trim().to_string());
+    }
+    for device in devices {
+        if device.eq_ignore_ascii_case(&me.alias) {
+            continue;
+        }
+        let Some(link) = links::find(store, &device) else {
+            continue;
+        };
+        let listing = links::list_chats(&link);
+        if let Err(e) = &listing
+            && to.contains(':')
+            && !to.contains(" on ")
+        {
+            return Err(BridgeError::Delivery(e.clone()));
+        }
+        let remote = [links::RemoteChats { link, listing }];
+        let peers = roster::merge(&[], &me.alias, &remote);
+        if let Ok(peer) = roster::resolve(&peers, to) {
+            return Ok((peer, None));
+        }
+    }
+    let peers = all_peers(store, me);
+    let peer = roster::resolve(&peers, to)?;
+    Ok((peer, None))
+}
+
 /// Send `text` from `from` to the chat `to` names. A chat on this computer
 /// gets it at once; a chat on a linked computer gets it over ssh, and this
-/// waits for that computer's receipt.
+/// waits for that computer's receipt. Refused while the bridge is off here.
 pub fn send_text(
     store: &Store,
     me: &Identity,
@@ -387,8 +580,29 @@ pub fn send_text(
     to: &str,
     text: &str,
 ) -> Result<SendOutcome, BridgeError> {
-    let peers = all_peers(store, me);
-    let peer = roster::resolve(&peers, to)?;
+    if let Some(off) = bridge_off(store, "", "") {
+        let peer = Peer {
+            id: to.to_string(),
+            session: to.to_string(),
+            name: to.to_string(),
+            display: to.to_string(),
+            device: me.alias.clone(),
+            device_alias: me.alias.clone(),
+            local: true,
+            kind: String::new(),
+            cwd: String::new(),
+            status: String::new(),
+            updated_ms: None,
+            liveness: "unknown".to_string(),
+        };
+        return Ok(SendOutcome {
+            msg_id: String::new(),
+            to: peer,
+            status: off.state.as_str().to_string(),
+            detail: off.detail,
+        });
+    }
+    let (peer, known) = resolve_target(store, me, to)?;
     if peer.local && peer.session == from.id {
         return Err(BridgeError::Invalid(
             "that is this chat; pick another one".to_string(),
@@ -407,14 +621,16 @@ pub fn send_text(
         text,
     )?;
     if peer.local {
-        let sessions = roster::local_sessions(store);
-        let session = sessions
-            .iter()
-            .find(|s| s.id == peer.session)
-            .ok_or_else(|| BridgeError::NotFound(to.to_string()))?;
-        let receipt = deliver_here(store, session, &env, from.reply_socket.as_deref());
+        let session = match known {
+            Some(session) => session,
+            None => roster::local_sessions(store)
+                .into_iter()
+                .find(|s| s.id == peer.session)
+                .ok_or_else(|| BridgeError::NotFound(to.to_string()))?,
+        };
+        let receipt = deliver_here(store, &session, &env, from.reply_socket.as_deref());
         if receipt.state != ReceiptState::Refused {
-            store.note_sent();
+            store.note_sent(receipt.state.as_str());
         }
         return Ok(SendOutcome {
             msg_id: env.id,
@@ -428,33 +644,47 @@ pub fn send_text(
     let receipt = links::post(&link, &env).map_err(BridgeError::Delivery)?;
     let status = ReceiptState::parse(receipt["status"].as_str().unwrap_or(""));
     if status != Some(ReceiptState::Refused) {
-        store.note_sent();
+        store.note_sent(status.unwrap_or(ReceiptState::Unknown).as_str());
     }
     Ok(SendOutcome {
         msg_id: env.id,
         to: peer,
-        status: receipt["status"].as_str().unwrap_or("held").to_string(),
+        status: status.unwrap_or(ReceiptState::Unknown).as_str().to_string(),
         detail: receipt["detail"].as_str().unwrap_or("").to_string(),
     })
 }
 
+/// Envelopes older than this are refused (a replayed or very late post).
+const ENVELOPE_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
+
 /// A linked computer posted an envelope here (`pulse bridge post`): put it
-/// into the chat it names.
+/// into the chat it names. Refused while the bridge is off, when the envelope
+/// is older than 24 hours, and when its id was already received (the same
+/// content again is a duplicate, other content under the same id a conflict).
 pub fn receive(store: &Store, env: &Envelope) -> Receipt {
-    let sessions = roster::local_sessions(store);
-    match sessions.iter().find(|s| s.id == env.to.session) {
-        Some(session) => {
-            let receipt = deliver_here(store, session, env, None);
-            if receipt.state != ReceiptState::Refused {
-                store.note_received();
-            }
-            receipt
-        }
-        None => Receipt {
-            msg_id: env.id.clone(),
-            session: env.to.session.clone(),
-            state: ReceiptState::Refused,
-            detail: "That chat isn't open on this computer any more.".to_string(),
-        },
+    let refuse = |detail: &str| Receipt {
+        msg_id: env.id.clone(),
+        session: env.to.session.clone(),
+        ..Receipt::refused(detail)
+    };
+    if let Some(off) = bridge_off(store, &env.id, &env.to.session) {
+        return off;
     }
+    if envelope::now_ms().saturating_sub(env.ts) > ENVELOPE_MAX_AGE_MS {
+        return refuse("expired");
+    }
+    let sessions = roster::local_sessions(store);
+    let Some(session) = sessions.iter().find(|s| s.id == env.to.session) else {
+        return refuse("That chat isn't open on this computer any more.");
+    };
+    match store.journal_seen(&env.from.device, &env.id, &store::payload_hash(env)) {
+        store::Seen::New => {}
+        store::Seen::Duplicate => return refuse("duplicate of a message already received"),
+        store::Seen::Conflict => return refuse("message id reused with different content"),
+    }
+    let receipt = deliver_here(store, session, env, None);
+    if receipt.state != ReceiptState::Refused {
+        store.note_received(receipt.state.as_str());
+    }
+    receipt
 }

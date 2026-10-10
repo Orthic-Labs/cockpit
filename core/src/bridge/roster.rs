@@ -5,7 +5,8 @@
 //! ssh. A peer is shown as "<chat title> on <device>".
 
 use super::BridgeError;
-use super::deliver_codex::{CodexThread, list_threads};
+use super::deliver_claude::{start_identity, text_of};
+use super::deliver_codex::{CodexThread, DiscoveryError, find_thread_by_id, list_threads};
 use super::links::RemoteChats;
 use super::store::Store;
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,13 @@ pub struct RosterEntry {
     /// Milliseconds since the epoch of the chat's last activity, when known.
     #[serde(default)]
     pub updated_ms: Option<u64>,
+    /// "live" (process identity verified), "stale" or "unknown" (no way to tell).
+    #[serde(default = "unknown_liveness")]
+    pub liveness: String,
+}
+
+fn unknown_liveness() -> String {
+    "unknown".to_string()
 }
 
 /// A chat on this computer, with what a delivery needs to reach it.
@@ -38,6 +46,8 @@ pub struct LocalSession {
     pub cwd: String,
     pub status: String,
     pub updated_ms: Option<u64>,
+    /// "live" (process and its start time verified), "stale" or "unknown".
+    pub liveness: String,
     pub pid: Option<u32>,
     /// Claude's per-chat inbox socket (named pipe on Windows), when it has one.
     pub messaging_socket: Option<String>,
@@ -56,6 +66,7 @@ impl LocalSession {
             cwd: self.cwd.clone(),
             status: self.status.clone(),
             updated_ms: self.updated_ms,
+            liveness: self.liveness.clone(),
         }
     }
 }
@@ -77,6 +88,8 @@ pub struct Peer {
     pub cwd: String,
     pub status: String,
     pub updated_ms: Option<u64>,
+    /// "live", "stale" or "unknown"; a Codex chat is always "unknown".
+    pub liveness: String,
 }
 
 /// `~/.claude/sessions` (or `$CLAUDE_CONFIG_DIR/sessions`).
@@ -109,6 +122,14 @@ fn parse_claude(value: Value, alive: &dyn Fn(u32) -> bool) -> Option<LocalSessio
     if !alive(pid) {
         return None;
     }
+    // A reused pid is not this chat: the process must have started when the file says.
+    let recorded_start = text_of(&value["procStart"]);
+    let domain = text_of(&value["pidDomain"]);
+    let liveness = match start_identity(pid, recorded_start.as_deref(), domain.as_deref()) {
+        Some(true) => "live",
+        Some(false) => return None,
+        None => "unknown",
+    };
     let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
     let id = text("sessionId").filter(|s| !s.is_empty())?;
     // The Pulse hub registers itself so Claude accepts its posts; it is not a chat.
@@ -129,6 +150,7 @@ fn parse_claude(value: Value, alive: &dyn Fn(u32) -> bool) -> Option<LocalSessio
         updated_ms: ["statusUpdatedAt", "updatedAt"]
             .iter()
             .find_map(|k| value.get(*k).and_then(Value::as_u64)),
+        liveness: liveness.to_string(),
         pid: Some(pid),
         messaging_socket: text("messagingSocketPath").filter(|s| !s.is_empty()),
         peer_protocol: value.get("peerProtocol").and_then(Value::as_u64),
@@ -176,6 +198,7 @@ pub fn local_sessions_in(
             cwd: registered.cwd.clone(),
             status: "unknown".to_string(),
             updated_ms: None,
+            liveness: "unknown".to_string(),
             pid: Some(registered.pid),
             messaging_socket: None,
             peer_protocol: None,
@@ -189,40 +212,65 @@ pub fn local_sessions_in(
 /// How many Codex threads (newest first, not archived) are listed.
 pub const CODEX_THREAD_LIMIT: usize = 100;
 
-/// Add the Codex threads in `threads` that are not already listed. Whether a
-/// thread is open is unknown, so its status is "idle".
+/// A Codex thread as a chat here. Whether the thread is open is unknown, so its
+/// liveness is "unknown" and its status only says how recently it was written.
+fn codex_session(thread: CodexThread) -> LocalSession {
+    let status = if thread.archived {
+        "archived".to_string()
+    } else {
+        codex_status(thread.updated_ms)
+    };
+    LocalSession {
+        name: title_for(&thread.name, "", "Codex chat"),
+        raw: serde_json::json!({
+            "id": thread.id,
+            "thread_name": thread.name,
+            "updated_at": thread.updated_at,
+            "updated_at_ms": thread.updated_ms,
+            "archived": thread.archived,
+        }),
+        id: thread.id,
+        kind: "codex".to_string(),
+        cwd: thread.cwd,
+        status,
+        updated_ms: Some(thread.updated_ms).filter(|m| *m > 0 && !in_future(*m)),
+        liveness: "unknown".to_string(),
+        pid: None,
+        messaging_socket: None,
+        peer_protocol: None,
+        entrypoint: None,
+    }
+}
+
+/// Add the Codex threads in `threads` that are not already listed.
 pub fn add_codex_threads(sessions: &mut Vec<LocalSession>, threads: Vec<CodexThread>) {
     for thread in threads {
         if sessions.iter().any(|s| s.id == thread.id) {
             continue;
         }
-        sessions.push(LocalSession {
-            name: title_for(&thread.name, "", "Codex chat"),
-            raw: serde_json::json!({
-                "id": thread.id,
-                "thread_name": thread.name,
-                "updated_at": thread.updated_at,
-                "updated_at_ms": thread.updated_ms,
-            }),
-            id: thread.id,
-            kind: "codex".to_string(),
-            cwd: thread.cwd,
-            status: codex_status(thread.updated_ms),
-            updated_ms: Some(thread.updated_ms).filter(|m| *m > 0),
-            pid: None,
-            messaging_socket: None,
-            peer_protocol: None,
-            entrypoint: None,
-        });
+        sessions.push(codex_session(thread));
     }
 }
 
-/// Codex keeps no registry of open chats; a thread written to in the last ten minutes is
-/// shown as active, anything else as idle (its liveness is unknown either way).
+/// The Codex thread with exactly this id (archived ones too), whether or not it is
+/// among the recent threads the roster lists. `Ok(None)` when it does not exist.
+pub fn resolve_exact_codex(id: &str) -> Result<Option<LocalSession>, DiscoveryError> {
+    Ok(find_thread_by_id(id)?.map(codex_session))
+}
+
+/// A stamp more than a minute ahead of this computer's clock is not believable.
+fn in_future(updated_ms: u64) -> bool {
+    updated_ms > super::envelope::now_ms() + 60_000
+}
+
+/// Codex keeps no registry of open chats, so this only says how recently a thread was
+/// written: "recent" within the last ten minutes, otherwise "idle". A future timestamp
+/// is never "recent". Neither word says the chat is open or waiting (see `liveness`).
 pub fn codex_status(updated_ms: u64) -> String {
-    let active = updated_ms > 0 && super::envelope::now_ms() <= updated_ms + 10 * 60 * 1000;
-    if active {
-        "active".to_string()
+    let now = super::envelope::now_ms();
+    let recent = updated_ms > 0 && updated_ms <= now + 60_000 && now <= updated_ms + 10 * 60 * 1000;
+    if recent {
+        "recent".to_string()
     } else {
         "idle".to_string()
     }
@@ -286,6 +334,7 @@ pub fn merge(local: &[LocalSession], local_alias: &str, remotes: &[RemoteChats])
             cwd: s.cwd.clone(),
             status: s.status.clone(),
             updated_ms: s.updated_ms,
+            liveness: s.liveness.clone(),
         })
         .collect();
     for remote in remotes {
@@ -305,6 +354,7 @@ pub fn merge(local: &[LocalSession], local_alias: &str, remotes: &[RemoteChats])
                 cwd: entry.cwd.clone(),
                 status: entry.status.clone(),
                 updated_ms: entry.updated_ms,
+                liveness: entry.liveness.clone(),
             });
         }
     }

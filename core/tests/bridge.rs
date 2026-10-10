@@ -22,6 +22,7 @@ fn entry(session: &str, name: &str) -> RosterEntry {
         cwd: String::new(),
         status: "idle".into(),
         updated_ms: None,
+        liveness: "unknown".into(),
     }
 }
 
@@ -31,6 +32,7 @@ fn remote(device: &str, chats: Vec<RosterEntry>) -> RemoteChats {
             device: device.into(),
             ssh: "fake".into(),
             pulse: "pulse".into(),
+            ..Default::default()
         },
         listing: Ok(RemoteListing {
             device: device.into(),
@@ -83,7 +85,7 @@ fn roster_and_wire_format() {
 /// Returns the socket path and the lines received.
 #[cfg(unix)]
 fn fake_chat(b: &std::path::Path) -> (String, std::sync::mpsc::Receiver<String>) {
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
     let socket = b.join("cc.sock");
     let listener = UnixListener::bind(&socket).unwrap();
@@ -91,8 +93,13 @@ fn fake_chat(b: &std::path::Path) -> (String, std::sync::mpsc::Receiver<String>)
     std::thread::spawn(move || {
         while let Ok((stream, _)) = listener.accept() {
             let mut line = String::new();
-            if BufReader::new(stream).read_line(&mut line).is_ok() && !line.is_empty() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            if reader.read_line(&mut line).is_ok() && !line.is_empty() {
                 let _ = line_tx.send(line);
+                // Claude answers a frame with a status; without one Pulse reports "sent".
+                let ack = "{\"type\":\"control\",\"action\":\"peer_message_status\",\
+                           \"status\":\"delivered\"}\n";
+                let _ = (&stream).write_all(ack.as_bytes());
             }
         }
     });
@@ -261,6 +268,7 @@ fn windows_replies(
         cwd: String::new(),
         status: "idle".into(),
         updated_ms: None,
+        liveness: "unknown".into(),
         pid: Some(pid),
         messaging_socket: None,
         peer_protocol: Some(1),
@@ -417,6 +425,7 @@ fn journey() {
             device: "B".into(),
             ssh: "fake".into(),
             pulse: pulse.into(),
+            ..Default::default()
         },
     )
     .expect("link B");
