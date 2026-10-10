@@ -35,7 +35,7 @@ tauri-plugin-os = "2"
 # Whole-disk name index and folder sizes (FSEvents, getattrlistbulk). Content search stays off:
 # the `content` feature is deliberately not enabled.
 [target.'cfg(target_os = "macos")'.dependencies]
-rightkit-fsindex = "=0.1.0"
+rightkit-fsindex = "=0.1.1"
 
 # Uninstall-key inventory for the Apps page (apps_windows.rs).
 [target.'cfg(windows)'.dependencies]

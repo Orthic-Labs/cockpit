@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@rightkit/app-shell':
-        specifier: 0.4.1
-        version: 0.4.1(@rightkit/platform-ui@0.2.0(@tauri-apps/plugin-os@2.4.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 0.5.0
+        version: 0.5.0(@rightkit/platform-ui@0.2.1(@tauri-apps/plugin-os@2.4.0)(react@19.3.0))(@tauri-apps/plugin-os@2.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@rightkit/platform-ui':
-        specifier: 0.2.0
-        version: 0.2.0(@tauri-apps/plugin-os@2.4.0)(react@19.3.0)
+        specifier: 0.2.1
+        version: 0.2.1(@tauri-apps/plugin-os@2.4.0)(react@19.3.0)
       '@tauri-apps/api':
         specifier: ^2.11.1
         version: 2.12.1
@@ -54,15 +54,16 @@ packages:
   '@oxc-project/types@0.152.0':
     resolution: {integrity: sha512-oM/5rLBm2tPkg0iBgkH/FOeR3PCDpY19GTgAZjMFM8h9WI9VW7cLgzp6nwtarYKmovavIQZ+Fe/RKX/8C8O/Rw==}
 
-  '@rightkit/app-shell@0.4.1':
-    resolution: {integrity: sha512-mQznNvLefqbSY2kgnWjo2Mog7mWInHbetGM3deC/xPOnk9xhOnVVvzaVwk+nTmsvAlO+WZgd4xu8OhHR3+cZgA==}
+  '@rightkit/app-shell@0.5.0':
+    resolution: {integrity: sha512-d0Y3HDUlfxHPH9bSXaz2TwGeHept4VoIOSvLabDdgXdG/bybxOZ3cX5o4srSYSyI1ugw/n1Ty4acZazn+8YB1Q==}
     peerDependencies:
-      '@rightkit/platform-ui': '>=0.1.1 <1'
+      '@rightkit/platform-ui': '>=0.2.1 <1'
+      '@tauri-apps/plugin-os': '>=2 <3'
       react: '>=18 <21'
       react-dom: '>=18 <21'
 
-  '@rightkit/platform-ui@0.2.0':
-    resolution: {integrity: sha512-hZpzHOgPWcu3/V3Lw7zjuxY9OLF3crEdXCU17c1uV0zdKo58Ytf5+x0H80tDo7HFJMx6qP1oiOez0F7D9W9nAg==}
+  '@rightkit/platform-ui@0.2.1':
+    resolution: {integrity: sha512-/ouPSrrvO1LmJNTFVY9NfF50G56JVtn/L4W1mgt2yqznNt1jA79s6uj1kXtsZFBYtJx+9pRhVjBhCYqMwWEPLw==}
     peerDependencies:
       '@tauri-apps/plugin-os': '>=2 <3'
       react: '>=18 <21'
@@ -469,13 +470,14 @@ snapshots:
 
   '@oxc-project/types@0.152.0': {}
 
-  '@rightkit/app-shell@0.4.1(@rightkit/platform-ui@0.2.0(@tauri-apps/plugin-os@2.4.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@rightkit/app-shell@0.5.0(@rightkit/platform-ui@0.2.1(@tauri-apps/plugin-os@2.4.0)(react@19.3.0))(@tauri-apps/plugin-os@2.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@rightkit/platform-ui': 0.2.0(@tauri-apps/plugin-os@2.4.0)(react@19.3.0)
+      '@rightkit/platform-ui': 0.2.1(@tauri-apps/plugin-os@2.4.0)(react@19.3.0)
+      '@tauri-apps/plugin-os': 2.4.0
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 
-  '@rightkit/platform-ui@0.2.0(@tauri-apps/plugin-os@2.4.0)(react@19.3.0)':
+  '@rightkit/platform-ui@0.2.1(@tauri-apps/plugin-os@2.4.0)(react@19.3.0)':
     dependencies:
       '@tauri-apps/plugin-os': 2.4.0
       react: 19.3.0
