@@ -129,3 +129,16 @@
   .ck-settings .ck-card, .ck-settings .ck-status, .ck-settings .ck-select, .ck-settings .ck-input, .ck-settings .ck-mini { border: 1px solid CanvasText; }
   .ck-settings :focus-visible { outline: 2px solid Highlight; }
 }
+
+/* The Agent bridge chat list: grouped by computer, Claude live, Codex recent. */
+.ck-settings .ck-chats { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 12px; }
+.ck-settings .ck-chats-head { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--rk-ink); display: flex; gap: 8px; align-items: baseline; }
+.ck-settings .ck-chats-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ck-settings .ck-chats-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 24px; font-size: 12px; }
+.ck-settings .ck-chats-kind { font-size: 10px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; text-align: center; }
+.ck-settings .ck-chats-kind-claude { background: color-mix(in srgb, var(--rk-accent) 18%, transparent); color: var(--rk-ink); }
+.ck-settings .ck-chats-kind-codex { background: var(--rk-fill-2); color: var(--rk-ink-2); }
+.ck-settings .ck-chats-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-settings .ck-chats-status { font-size: 11px; color: var(--rk-ink-3); }
+.ck-settings .ck-chats-status-busy { color: var(--rk-ink); }
+.ck-settings .ck-chats-more { padding-left: 60px; }

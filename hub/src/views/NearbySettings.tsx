@@ -20,6 +20,7 @@ export interface ShareState {
     active?: boolean;
     localChats?: number;
     links?: { device: string; ssh: string; chats: number | null; error: string | null }[];
+    chats?: { name: string; kind: "claude" | "codex"; status: string; device: string; local: boolean }[];
     lastError?: string | null;
     device?: string;
   };
@@ -129,7 +130,45 @@ function AgentBridge({ share }: { share: ShareState | null }) {
       <div className={bridge?.lastError ? "error" : "ck-sub ck-foot"} role="status">
         {bridge?.lastError ?? status}
       </div>
+      {enabled && (bridge?.chats?.length ?? 0) > 0 && <ChatList chats={bridge!.chats!} />}
     </>
+  );
+}
+
+/** Every chat Pulse can message, grouped by computer: Claude chats live, Codex threads recent. */
+function ChatList({ chats }: { chats: NonNullable<NonNullable<ShareState["bridge"]>["chats"]> }) {
+  const devices = Array.from(new Set(chats.map((c) => c.device)));
+  const ordered = [...devices.filter((d) => chats.some((c) => c.device === d && c.local)), ...devices.filter((d) => !chats.some((c) => c.device === d && c.local))];
+  return (
+    <div className="ck-chats" aria-label="Chats Pulse can message">
+      {ordered.map((device) => {
+        const here = chats.filter((c) => c.device === device);
+        const claude = here.filter((c) => c.kind === "claude");
+        const codex = here.filter((c) => c.kind === "codex");
+        return (
+          <section key={device} className="ck-chats-device">
+            <h3 className="ck-chats-head">{device} <span className="ck-sub">{claude.length} Claude · {codex.length} Codex</span></h3>
+            <ul className="ck-chats-list">
+              {claude.map((c) => (
+                <li key={`c-${c.name}`} className="ck-chats-row">
+                  <span className="ck-chats-kind ck-chats-kind-claude">Claude</span>
+                  <span className="ck-chats-name">{c.name}</span>
+                  <span className={`ck-chats-status ck-chats-status-${c.status}`}>{c.status}</span>
+                </li>
+              ))}
+              {codex.slice(0, 8).map((c) => (
+                <li key={`x-${c.name}`} className="ck-chats-row">
+                  <span className="ck-chats-kind ck-chats-kind-codex">Codex</span>
+                  <span className="ck-chats-name">{c.name}</span>
+                  <span className="ck-chats-status ck-chats-status-recent">recent</span>
+                </li>
+              ))}
+              {codex.length > 8 && <li className="ck-sub ck-chats-more">+{codex.length - 8} more Codex threads (`pulse bridge peers` lists all)</li>}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 

@@ -106,7 +106,10 @@ fn parse_claude(value: Value, alive: &dyn Fn(u32) -> bool) -> Option<LocalSessio
     let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
     let id = text("sessionId").filter(|s| !s.is_empty())?;
     // The Pulse hub registers itself so Claude accepts its posts; it is not a chat.
-    if text("entrypoint").as_deref() == Some(super::hub::ENTRYPOINT) {
+    if text("entrypoint")
+        .as_deref()
+        .is_some_and(|e| e == super::hub::ENTRYPOINT || e == "cc-post")
+    {
         return None;
     }
     let cwd = text("cwd").unwrap_or_default();

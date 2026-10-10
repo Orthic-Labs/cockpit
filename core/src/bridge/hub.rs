@@ -40,6 +40,8 @@ struct State {
     key_file: Option<std::path::PathBuf>,
     /// What each link answered last (chats, or the error).
     link_state: Vec<StatusLink>,
+    /// The chats each link listed last, for the page's list.
+    remote_chats: Vec<StatusChat>,
     links_asked: Option<Instant>,
 }
 
@@ -257,7 +259,20 @@ pub fn tick(alias: &str) {
         .is_none_or(|at| at.elapsed() >= Duration::from_secs(60));
     if due {
         state().links_asked = Some(Instant::now());
-        let polled: Vec<StatusLink> = links::list_all(store)
+        let answers = links::list_all(store);
+        let mut remote: Vec<StatusChat> = Vec::new();
+        for r in &answers {
+            if let Ok(listing) = &r.listing {
+                remote.extend(listing.chats.iter().map(|c| StatusChat {
+                    name: c.name.clone(),
+                    kind: c.kind.clone(),
+                    status: chat_status(&c.kind, &c.status),
+                    device: r.link.device.clone(),
+                    local: false,
+                }));
+            }
+        }
+        let polled: Vec<StatusLink> = answers
             .into_iter()
             .map(|r| StatusLink {
                 device: r.link.device,
@@ -266,7 +281,9 @@ pub fn tick(alias: &str) {
                 error: r.listing.err(),
             })
             .collect();
-        state().link_state = polled;
+        let mut st = state();
+        st.link_state = polled;
+        st.remote_chats = remote;
     }
 }
 
@@ -383,18 +400,59 @@ pub struct StatusLink {
     pub error: Option<String>,
 }
 
+/// One chat as the page lists it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusChat {
+    pub name: String,
+    /// "claude" or "codex".
+    pub kind: String,
+    /// Claude: busy or idle (live). Codex: "recent" (no open-chat registry exists).
+    pub status: String,
+    pub device: String,
+    pub local: bool,
+}
+
+/// Codex threads come from the session index, so their status is "recent", not a liveness.
+fn chat_status(kind: &str, status: &str) -> String {
+    if kind == "codex" {
+        "recent".to_string()
+    } else {
+        status.to_string()
+    }
+}
+
 /// What the hub's page shows.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub local_chats: usize,
     pub links: Vec<StatusLink>,
+    /// Every chat, here and on linked computers, as "<name> on <device>" material.
+    pub chats: Vec<StatusChat>,
     pub last_error: Option<String>,
 }
 
 pub fn status() -> Status {
     let state = state();
+    let alias = store()
+        .and_then(|s| s.relay_status())
+        .map(|s| s.alias)
+        .unwrap_or_else(|| "this computer".to_string());
+    let mut chats: Vec<StatusChat> = state
+        .sessions
+        .iter()
+        .map(|s| StatusChat {
+            name: s.name.clone(),
+            kind: s.kind.clone(),
+            status: chat_status(&s.kind, &s.status),
+            device: alias.clone(),
+            local: true,
+        })
+        .collect();
+    chats.extend(state.remote_chats.iter().cloned());
     Status {
+        chats,
         local_chats: state.sessions.len(),
         links: state.link_state.clone(),
         last_error: state.last_error.clone(),
