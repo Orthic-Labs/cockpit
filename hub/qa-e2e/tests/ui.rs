@@ -1019,7 +1019,10 @@ const enumerate = () => {
     found.add(el);
   });
   const all = [...found];
-  const leaves = all.filter((el) => !all.some((o) => o !== el && el.contains(o)));
+  // A focusable region (tabindex on a list container) is not a control unless it looks
+  // clickable: no pointer cursor and no click handler means keyboard focus only.
+  const isControl = (el) => roleOf(el) !== 'clickable' || getComputedStyle(el).cursor === 'pointer' || typeof el.onclick === 'function' || el.hasAttribute('onclick');
+  const leaves = all.filter((el) => isControl(el) && !all.some((o) => o !== el && el.contains(o)));
   leaves.sort((a, b) => (a.compareDocumentPosition(b) & 4 ? -1 : 1));
   return leaves;
 };
