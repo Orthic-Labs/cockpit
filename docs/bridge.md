@@ -19,9 +19,9 @@ Messages between AI chats, here and on other computers, over ssh. Same-machine s
 
 - delivered: the chat has the message.
 - queued: handed to Codex's queue; read is not confirmed.
-- sent: left the sending computer, no confirmation from the far side.
+- sent: posted to the chat, which raised no objection (a Claude chat says nothing when it takes a message; it does say so when it holds or refuses one).
 - held: kept in the chat's inbox (busy, other protocol, no Codex CLI, Pulse not running).
-- refused: turned away (chat closed, chat settings, too many messages, Chat off).
+- refused: turned away (chat closed, chat settings, too many messages, Chat off), or a Claude chat is holding it for its owner's approval: the detail gives Claude's reason, and the message is kept in the chat inbox.
 - unsupported: this chat cannot take messages that way.
 - unknown: no receipt came back. Check `inbox` and `status`, then resend once with the same text.
 
@@ -35,7 +35,9 @@ A remote send runs `ssh <host> <pulse> bridge post <base64 envelope>`; the envel
 
 ## Delivery into Claude
 
-- macOS: a Claude chat accepts a peer message only from a process descending from a registered session. `pulse` started by sshd has no such ancestor and would be dropped silently. So the running Pulse hub registers itself as a Claude peer, and `post` hands the delivery to the hub through control files in the state folder. If the hub is not running the message is held and `status` says "open Pulse".
+- What Claude takes (Claude Code 2.1.295, read from its code and proven with hand-built messages): the wrapper in Claude's exact form (attributes `from`, `from-session`, `from-name`, `from-mode` in that order and no other; a name of 64 characters at most) with a `from-mode` equal to the chat's own class (`bypass` for a chat that bypasses permissions, else `prompting`). Anything else is held for its owner's approval and dropped if nobody approves. The sending process needs no registration.
+- What Claude says back: nothing when it takes the message; a `peer_message_status` notice (held, refused, expired, dropped) within a moment otherwise. It sends that notice to the reply address, only when that address is a socket inside its own socket folder, and only to the process that posted the message. So the running Pulse hub posts every message and listens for replies and notices on sockets it keeps beside the chats' own (`/tmp/cc-socks` on the Mac; its private folder if it can't listen there, which loses the notices but not replies). `pulse` started by sshd hands the delivery to the hub through control files in the state folder. If the hub is not running the message is held and `status` says "open Pulse".
+- A held or refused message comes back as `refused` with Claude's reason and is kept in the chat inbox.
 - Windows: the chat's named pipe takes an auth frame with its peer token, so `pulse` posts directly.
 - Codex threads get `codex queue`; the receipt is queued, never delivered, because consumption is not confirmed. Liveness comes from recent activity (live, stale or unknown).
 

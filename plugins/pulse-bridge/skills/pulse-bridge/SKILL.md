@@ -17,9 +17,9 @@ Pulse carries messages between Claude and Codex chats, on this computer and on l
 
 - delivered: the chat has it.
 - queued: handed to Codex's queue; not confirmed read.
-- sent: left this computer; the far side did not confirm.
+- sent: posted to the chat, which raised no objection. Treat it as arrived.
 - held: kept in that chat's chat inbox; the chat reads it with `pulse chat inbox` on its computer.
-- refused: turned away (chat closed, settings, Chat off). Run `peers` again.
+- refused: not in the chat. Read the detail: chat closed or Chat off (run `peers` again), or the chat is holding it for its owner's approval (tell the user; do not resend, it is kept in that chat's chat inbox).
 - unsupported: this chat cannot take messages that way.
 - unknown: no receipt came back. Run `pulse chat inbox` and `pulse chat status`, then resend once with the same text. Do not resend more.
 
