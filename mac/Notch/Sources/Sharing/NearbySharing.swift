@@ -44,6 +44,9 @@ struct ShareTransfer: Decodable, Equatable {
     let error: String?
     /// A received text message, shown with Copy instead of saved as a file.
     let message: String?
+    /// Sent from the other computer's clipboard (paste, screenshot): it goes onto this
+    /// computer's clipboard too, not only into the save folder.
+    let clipboard: Bool?
 
     var isOpen: Bool { state == "active" || state == "waiting" }
 }
@@ -123,6 +126,8 @@ final class NearbySharing {
     /// The Send card's bottom bar: `label` is the "Copy last" text (empty when there is
     /// nothing to copy), `detail` the "Paste" text (nil when there is no device).
     static let actionsRowID = "action:bar"
+    /// The Send card's second bar: Snip · Screen · Window.
+    static let shotsRowID = "action:shots"
 
     /// The Send cell has something new to show.
     var onChange: (() -> Void)?
@@ -155,7 +160,7 @@ final class NearbySharing {
     private var card = Card.none
     private var cardTimer: Timer?
     private var cardHovered = false
-    private var pending: (urls: [URL], text: String?)?
+    private var pending: (urls: [URL], text: String?, clipboard: Bool)?
     private var lastChoose: DiskImagePrompt?
     /// The send the card follows: to whom, which transfer once the hub lists it,
     /// and the transfers that already existed (so it is not mistaken for one).
@@ -314,14 +319,16 @@ final class NearbySharing {
     func select(_ fingerprint: String) {
         if let waiting = pending, let device = devices.first(where: { $0.fingerprint == fingerprint }) {
             pending = nil
-            deliver(waiting.urls, waiting.text, to: device)
+            deliver(waiting.urls, waiting.text, clipboard: waiting.clipboard, to: device)
         }
         onChange?()
     }
 
     // MARK: - Sending
 
-    func send(urls: [URL], text: String? = nil) {
+    /// `clipboard` marks a send made from this computer's clipboard (paste, screenshot):
+    /// the other computer puts it on its clipboard as well as saving it.
+    func send(urls: [URL], text: String? = nil, clipboard: Bool = false) {
         let files = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !files.isEmpty || !(text ?? "").isEmpty else { return }
         guard let live = fresh(state), live.running else {
@@ -333,18 +340,19 @@ final class NearbySharing {
         guard let device = target else {
             // Several devices, or none yet: list them on the card (looking again
             // when there are none) and send when one is clicked.
-            pending = (files, text)
+            pending = (files, text, clipboard)
             showChoose(refreshing: live.devices.isEmpty)
             return
         }
-        deliver(files, text, to: device)
+        deliver(files, text, clipboard: clipboard, to: device)
     }
 
-    private func deliver(_ urls: [URL], _ text: String?, to device: ShareDevice) {
+    private func deliver(_ urls: [URL], _ text: String?, clipboard: Bool, to device: ShareDevice) {
         var body: [String: Any] = [
             "command": "send", "to": device.fingerprint, "paths": urls.map(\.path),
         ]
         if let text, !text.isEmpty { body["text"] = text }
+        if clipboard { body["clipboard"] = true }
         command(body)
         beginSending(to: device, urls: urls, text: text)
         onChange?()
@@ -355,15 +363,15 @@ final class NearbySharing {
         let board = NSPasteboard.general
         if let urls = board.readObjects(forClasses: [NSURL.self],
                                         options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
-            send(urls: urls)
+            send(urls: urls, clipboard: true)
             return
         }
         if let image = NSImage(pasteboard: board), let file = Self.saveImage(image) {
-            send(urls: [file])
+            send(urls: [file], clipboard: true)
             return
         }
         if let text = board.string(forType: .string), !text.isEmpty {
-            send(urls: [], text: text)
+            send(urls: [], text: text, clipboard: true)
             return
         }
         showNote(title: L10n.t("Nothing to send"),
@@ -477,10 +485,14 @@ final class NearbySharing {
 
     // MARK: - Screenshot
 
-    /// The Screenshot button: the system's region picker (`screencapture -i`), the image
-    /// written to a temporary file and sent like a pasted file, nothing saved to the
-    /// Desktop and nothing put on the clipboard. Escape in the picker sends nothing.
-    func screenshot() {
+    /// How a screenshot is taken: a dragged region, the whole main display, or one window
+    /// (the system picker in window mode: click the window).
+    enum ShotMode { case snip, screen, window }
+
+    /// The Snip / Screen / Window buttons: the capture goes to a temporary file and is sent
+    /// as a clipboard item, so it lands on the other computer's clipboard. Nothing is saved
+    /// to the Desktop and nothing touches this clipboard. Escape in the picker sends nothing.
+    func screenshot(_ mode: ShotMode) {
         guard !devices.isEmpty else { return }
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("Pulse Clipboard", isDirectory: true)
@@ -489,7 +501,13 @@ final class NearbySharing {
         let file = folder.appendingPathComponent("Screenshot \(stamp).png")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-i", "-x", "-t", "png", file.path]
+        var arguments = ["-x", "-t", "png"]
+        switch mode {
+        case .snip: arguments += ["-i", "-s"]
+        case .window: arguments += ["-i", "-w"]
+        case .screen: arguments += ["-D", "1"]
+        }
+        process.arguments = arguments + [file.path]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -497,7 +515,7 @@ final class NearbySharing {
             Task { @MainActor in
                 let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
                 guard size > 0 else { return }  // cancelled in the picker
-                self.send(urls: [file])
+                self.send(urls: [file], clipboard: true)
             }
         }
         do {
@@ -639,6 +657,9 @@ final class NearbySharing {
             if clipboardHasContent { live.append("clip") }
             windows.append(LimitWindow(id: Self.actionsRowID, label: copy?.label ?? "",
                                        detail: live.joined(separator: ",")))
+        }
+        if !devices.isEmpty {
+            windows.append(LimitWindow(id: Self.shotsRowID, label: "", detail: "target"))
         }
         return ProviderSnapshot(id: Self.providerID, displayName: L10n.t("Send"), glyph: .send,
                                 fidelity: .official, status: .ok, windows: windows,
@@ -888,6 +909,39 @@ final class NearbySharing {
 
     private func announce(_ transfer: ShareTransfer, folder: String?) {
         switch (transfer.direction, transfer.state) {
+        case ("receive", "done") where transfer.message != nil && transfer.clipboard == true:
+            // Pasted on the other computer: straight onto this clipboard, no Copy step.
+            let text = transfer.message ?? ""
+            remember(Last(kind: "text", text: Self.capped(text), files: nil, at: Date().timeIntervalSince1970))
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.setString(text, forType: .string)
+            showNote(title: L10n.t("Copied from \(transfer.peer)"),
+                     detail: Self.capped(text).split(whereSeparator: \.isNewline).first.map(String.init) ?? "",
+                     problem: false)
+        case ("receive", "done") where transfer.clipboard == true:
+            // A pasted file, image or screenshot: saved, and on this clipboard as the image
+            // (one image file) or as the files, so ⌘V works at once.
+            let files = transfer.savedFiles ?? []
+            if !files.isEmpty {
+                remember(Last(kind: "files", text: nil, files: files, at: Date().timeIntervalSince1970))
+                let urls = files.map { URL(fileURLWithPath: $0) }
+                let board = NSPasteboard.general
+                board.clearContents()
+                if urls.count == 1, let image = NSImage(contentsOf: urls[0]) {
+                    board.writeObjects([image, urls[0] as NSURL])
+                } else {
+                    board.writeObjects(urls.map { $0 as NSURL })
+                }
+            }
+            let detail = files.count == 1
+                ? URL(fileURLWithPath: files[0]).lastPathComponent
+                : L10n.t("\(files.count) files")
+            show(DiskImagePrompt(iconPath: iconPath(files.first ?? transfer.savedTo),
+                                 title: L10n.t("Copied from \(transfer.peer)"), detail: detail, style: .done,
+                                 primary: .init(choice: .showImage, label: L10n.t("Show"))),
+                 as: .saved(files))
+            scheduleExpiry(after: 6)
         case ("receive", "done") where transfer.message != nil:
             let text = transfer.message ?? ""
             remember(Last(kind: "text", text: Self.capped(text), files: nil, at: Date().timeIntervalSince1970))

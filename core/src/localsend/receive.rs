@@ -252,6 +252,7 @@ fn prepare_upload(
         saved_files: Vec::new(),
         error: None,
         message: None,
+        clipboard: parsed.pulse.as_ref().is_some_and(|p| p.clipboard),
         started: now_ms(),
         finished: None,
     });

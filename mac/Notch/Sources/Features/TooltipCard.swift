@@ -497,10 +497,25 @@ private struct LimitWindowRow: View {
                               help: L10n.t("Send the clipboard: files, an image or text")) {
                     NearbySharing.shared.pasteClipboard()
                 }
-                sendBarButton(icon: "camera.viewfinder", title: L10n.t("Screenshot"),
-                              enabled: hasTarget,
-                              help: L10n.t("Pick a region and send it; nothing is saved")) {
-                    NearbySharing.shared.screenshot()
+            }
+            }
+        } else if window.id == NearbySharing.shotsRowID {
+            // Pulse fork: the Send card's second bar. Each takes a screenshot and sends it
+            // to the other computer's clipboard: a dragged region, the main display, or a
+            // clicked window (⌘⇧4, ⌘⇧5's first and second options).
+            let enabled = (window.detail ?? "").contains("target")
+            HStack(spacing: 8) {
+                sendBarButton(icon: "rectangle.dashed", title: L10n.t("Snip"), enabled: enabled,
+                              help: L10n.t("Drag a region; it is sent and lands on the other clipboard")) {
+                    NearbySharing.shared.screenshot(.snip)
+                }
+                sendBarButton(icon: "rectangle.inset.filled", title: L10n.t("Screen"), enabled: enabled,
+                              help: L10n.t("The whole main display, sent to the other clipboard")) {
+                    NearbySharing.shared.screenshot(.screen)
+                }
+                sendBarButton(icon: "macwindow", title: L10n.t("Window"), enabled: enabled,
+                              help: L10n.t("Click a window; it is sent to the other clipboard")) {
+                    NearbySharing.shared.screenshot(.window)
                 }
             }
         } else if window.id == NearbySharing.copyLastRowID {

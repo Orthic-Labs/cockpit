@@ -1,7 +1,9 @@
 //! Sending: `prepare-upload` to a peer, then each accepted file as an upload.
 
 use super::net::{self, Wire};
-use super::proto::{self, DeviceInfo, FileMeta, PrepareUploadRequest, PrepareUploadResponse};
+use super::proto::{
+    self, DeviceInfo, FileMeta, PrepareUploadRequest, PrepareUploadResponse, PulseExtra,
+};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -202,6 +204,7 @@ pub fn deliver(
     me: &DeviceInfo,
     peer: &Peer,
     entries: &[Entry],
+    clipboard: bool,
     cancel: &AtomicBool,
     register: &dyn Fn(Option<TcpStream>),
     on: &mut dyn FnMut(Progress),
@@ -236,8 +239,9 @@ pub fn deliver(
     }
     let mut info = me.clone();
     info.announce = None;
-    let body =
-        serde_json::to_vec(&PrepareUploadRequest { info, files }).map_err(|e| e.to_string())?;
+    let pulse = clipboard.then_some(PulseExtra { clipboard: true });
+    let body = serde_json::to_vec(&PrepareUploadRequest { info, files, pulse })
+        .map_err(|e| e.to_string())?;
     let prepare = format!("{}/prepare-upload", proto::API);
     // The other person may take a while to say yes. A message is done once it
     // is on their screen; the request stays open until they close it there.

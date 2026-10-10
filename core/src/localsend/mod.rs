@@ -96,6 +96,9 @@ pub struct Transfer {
     /// A received text message, shown with Copy rather than saved as a file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Sent from the clipboard: the receiver puts it on its clipboard.
+    #[serde(default)]
+    pub clipboard: bool,
     pub started: u64,
     pub finished: Option<u64>,
 }
@@ -616,7 +619,12 @@ impl Service {
 
     /// Send to the device with this fingerprint (or, failing that, alias).
     /// Returns the transfer id; progress arrives as events.
-    pub fn send(&self, target: &str, items: Vec<SendItem>) -> Result<String, String> {
+    pub fn send(
+        &self,
+        target: &str,
+        items: Vec<SendItem>,
+        clipboard: bool,
+    ) -> Result<String, String> {
         let device = self
             .find_device(target)
             .ok_or_else(|| "That device is no longer nearby.".to_string())?;
@@ -647,6 +655,7 @@ impl Service {
             saved_files: Vec::new(),
             error: None,
             message: None,
+            clipboard,
             started: now_ms(),
             finished: None,
         });
@@ -658,7 +667,7 @@ impl Service {
         self.inner.emit(Event::Changed);
         let inner = self.inner.clone();
         let transfer_id = id.clone();
-        thread::spawn(move || run_send(inner, transfer_id, peer, items, handle));
+        thread::spawn(move || run_send(inner, transfer_id, peer, items, clipboard, handle));
         Ok(id)
     }
 
@@ -911,6 +920,7 @@ fn run_send(
     id: String,
     peer: Peer,
     items: Vec<SendItem>,
+    clipboard: bool,
     handle: Arc<CancelHandle>,
 ) {
     let finish = |state: &str, error: Option<String>| {
@@ -934,6 +944,7 @@ fn run_send(
         &inner.me,
         &peer,
         &entries,
+        clipboard,
         &handle.flag,
         &register,
         &mut |p| {

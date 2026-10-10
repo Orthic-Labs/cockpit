@@ -71,6 +71,17 @@ pub struct FileMeta {
 pub struct PrepareUploadRequest {
     pub info: DeviceInfo,
     pub files: BTreeMap<String, FileMeta>,
+    /// Pulse-only extras; other LocalSend implementations ignore the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pulse: Option<PulseExtra>,
+}
+
+/// Pulse's additions to a `prepare-upload` request.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PulseExtra {
+    /// The send came from the clipboard and should land on the receiver's.
+    #[serde(default)]
+    pub clipboard: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

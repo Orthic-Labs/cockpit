@@ -10,6 +10,9 @@
 //!   `dev.orthic.pulse.notch.state`;
 //! * the notch asks for things (send, accept, decline, cancel) by dropping JSON
 //!   files into `share-commands/` and posting `dev.orthic.pulse.share.command`;
+//!   A `send` command carries `to` (device fingerprint), `paths` (files), `text`
+//!   and an optional `clipboard: true`, which asks the receiving Pulse to put
+//!   what was sent on its clipboard (paste and screenshot sends);
 //! * the hub publishes `share-state.json` and posts `dev.orthic.pulse.share.state`
 //!   whenever devices, requests or progress change, and every few seconds so the
 //!   notch can tell the hub is alive.
@@ -688,7 +691,8 @@ fn apply(command: &Value) {
                 .map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
             let text = command["text"].as_str().map(str::to_string);
-            if let Err(message) = send(&service, to, paths, text) {
+            let clipboard = command["clipboard"].as_bool().unwrap_or(false);
+            if let Err(message) = send(&service, to, paths, text, clipboard) {
                 notice(message);
             }
         }
@@ -707,7 +711,13 @@ fn apply(command: &Value) {
     }
 }
 
-fn send(service: &Service, to: &str, paths: Vec<String>, text: Option<String>) -> Result<String, String> {
+fn send(
+    service: &Service,
+    to: &str,
+    paths: Vec<String>,
+    text: Option<String>,
+    clipboard: bool,
+) -> Result<String, String> {
     let mut items: Vec<SendItem> = paths.into_iter().map(|p| SendItem::Path(PathBuf::from(p))).collect();
     if let Some(text) = text.filter(|t| !t.is_empty()) {
         items.push(SendItem::Text(text));
@@ -715,7 +725,7 @@ fn send(service: &Service, to: &str, paths: Vec<String>, text: Option<String>) -
     if items.is_empty() {
         return Err("There is nothing to send.".to_string());
     }
-    service.send(to, items)
+    service.send(to, items, clipboard)
 }
 
 // ---- the loop ------------------------------------------------------------------
@@ -794,7 +804,7 @@ pub fn share_devices() -> Value {
 #[tauri::command]
 pub fn share_send(to: String, paths: Vec<String>, text: Option<String>) -> Result<String, String> {
     let service = current_service().ok_or_else(|| "Nearby sharing isn't running.".to_string())?;
-    send(&service, &to, paths, text)
+    send(&service, &to, paths, text, false)
 }
 
 #[tauri::command]
