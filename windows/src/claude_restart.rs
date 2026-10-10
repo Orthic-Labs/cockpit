@@ -147,7 +147,10 @@ fn sequence() -> Option<String> {
             Some(f) if f.code.as_deref() == Some("claude_running") => {
                 diag::info(
                     "claude_restart",
-                    &[("sync", "claude_running"), ("attempt", &(attempt + 1).to_string())],
+                    &[
+                        ("sync", "claude_running"),
+                        ("attempt", &(attempt + 1).to_string()),
+                    ],
                 );
                 std::thread::sleep(SYNC_RETRY_STEP);
             }
@@ -228,7 +231,10 @@ struct SyncFailure {
 
 impl SyncFailure {
     fn plain(reason: impl Into<String>) -> Self {
-        Self { reason: reason.into(), code: None }
+        Self {
+            reason: reason.into(),
+            code: None,
+        }
     }
 }
 

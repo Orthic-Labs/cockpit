@@ -263,11 +263,15 @@ fn names(buffer: &[u32], length: usize) -> Vec<String> {
         let name: Vec<u16> = (0..units)
             .map(|i| {
                 let word = buffer[start + i / 2];
-                if i % 2 == 0 { word as u16 } else { (word >> 16) as u16 }
+                if i % 2 == 0 {
+                    word as u16
+                } else {
+                    (word >> 16) as u16
+                }
             })
             .collect();
         out.push(String::from_utf16_lossy(&name));
-        if next == 0 || next % 4 != 0 {
+        if next == 0 || !next.is_multiple_of(4) {
             break;
         }
         at += next / 4;
