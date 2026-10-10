@@ -780,7 +780,7 @@ final class NearbySharing {
             case .sendTo(let fingerprint):
                 if let waiting = pending, let device = devices.first(where: { $0.fingerprint == fingerprint }) {
                     pending = nil
-                    deliver(waiting.urls, waiting.text, to: device)
+                    deliver(waiting.urls, waiting.text, clipboard: waiting.clipboard, to: device)
                 }
             case .refresh:
                 refreshDevices()

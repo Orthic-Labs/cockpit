@@ -79,7 +79,7 @@ final class ToolKit {
     /// tool goes live or dim), then a hint about the middle-click wheel.
     func providerSnapshot() -> ProviderSnapshot {
         var windows = tools.map {
-            LimitWindow(id: "tool:" + $0.id, label: L10n.t($0.title), detail: $0.enabled() ? "on" : "off")
+            LimitWindow(id: "tool:" + $0.id, label: $0.title, detail: $0.enabled() ? "on" : "off")
         }
         windows.append(LimitWindow(
             id: "hint-wheel", label: "",

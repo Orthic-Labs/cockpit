@@ -505,7 +505,7 @@ private struct LimitWindowRow: View {
                 let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(ToolKit.shared.tools, id: \.id) { tool in
-                        sendBarButton(icon: tool.symbol, title: L10n.t(tool.title),
+                        sendBarButton(icon: tool.symbol, title: tool.title,
                                       enabled: tool.enabled(), help: tool.help) {
                             ToolKit.shared.run(tool.id)
                         }
