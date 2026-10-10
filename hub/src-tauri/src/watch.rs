@@ -1,6 +1,6 @@
 //! Live refresh for the Storage index. While the hub runs, FSEvents reports the
 //! folders that change under the scanned root. Each changed folder that the
-//! index holds is read again (`scanner::refresh_subtree`) and the index is
+//! index holds is read again (`scanner::apply_changes`) and the index is
 //! updated in place; the page hears about it through the `storage-updated`
 //! event. FSEvents reports per folder ("something in here changed"), and macOS
 //! coalesces busy seconds into one delivery.
@@ -225,17 +225,11 @@ fn follow(app: AppHandle, root: &Path, since: u64, epoch: u64, generation: u64) 
             let _ = app.emit(UPDATED_EVENT, Updated { folders: Vec::new(), stale: true });
             break;
         }
-        // Changes wait in the scanner while the index is not in memory.
-        let applied = scanner::apply_changes(pending.changes, epoch);
-        if !applied.folders.is_empty() || applied.stale {
-            let _ = app.emit(
-                UPDATED_EVENT,
-                Updated {
-                    folders: applied.folders,
-                    stale: applied.stale,
-                },
-            );
-        }
+        // Changes wait in the scanner while the index is not in memory. The page
+        // is told as each folder is applied, not after the whole batch.
+        scanner::apply_changes(pending.changes, false, epoch, &mut |updated| {
+            let _ = app.emit(UPDATED_EVENT, updated);
+        });
         scanner::save_if_due();
     }
 }

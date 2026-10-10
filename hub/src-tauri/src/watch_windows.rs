@@ -27,15 +27,21 @@
 //!  * the hub's own state folder, and the profile's `NTUSER.DAT*` registry hive
 //!    files (written all day), are ignored.
 //! `scanner::apply_changes` maps each folder to the nearest one the index holds,
-//! drops folders inside another listed folder, and keeps its own budgets
-//! (`RETRY`, `LIVE_MAX_ENTRIES`, `WAITING_MAX`).
+//! drops folders inside another listed folder, and keeps its own budgets: it reads
+//! the folders in order of priority (a folder that keeps changing is read less and
+//! less often), stops starting reads after a time budget per pass, tells the page
+//! as soon as each folder's numbers change, and bounds every read in entries
+//! (`LIVE_MAX_ENTRIES`) and time. A folder too large to read again (the home root,
+//! for one) is never read whole: a folder created or removed directly in it is
+//! attached or detached on its own.
 //!
 //! Lost events. When the kernel buffer overflows, `ReadDirectoryChangesW` completes
 //! with zero bytes (or `ERROR_NOTIFY_ENUM_DIR`), and nothing says what changed. The
-//! root is then queued for one bounded re-read (the scanner reads at most
-//! `LIVE_MAX_ENTRIES` entries and reports a larger subtree as stale), at most once
-//! per `OVERFLOW_REWALK_GAP`; inside that gap the page is only told the index is
-//! stale. The watch keeps running, because events after the overflow are valid.
+//! scanner is then told events were lost: it re-reads the root once, bounded (at
+//! most `LIVE_MAX_ENTRIES` entries; a root that is larger is not read, and the page
+//! is told the index is stale), at most once per `OVERFLOW_REWALK_GAP`; inside that
+//! gap the page is only told the index is stale. The watch keeps running, because
+//! events after the overflow are valid.
 //! If the request itself fails (the root went away, the volume was dismounted) the
 //! watch ends and the page is told the index is stale, as on macOS.
 //!
@@ -61,9 +67,10 @@ use tauri::{AppHandle, Emitter};
 
 use crate::scanner::{self, UPDATED_EVENT, Updated};
 
-/// How often the folders the reader collected are applied. Coarser than the
-/// macOS poll: Windows reports every written file, not a coalesced folder.
-const POLL: Duration = Duration::from_millis(2_000);
+/// How often the folders the reader collected are applied. The scanner holds back
+/// folders that keep changing, so a short poll costs little, and it is most of the
+/// wait for a change in a folder that was quiet.
+const POLL: Duration = Duration::from_millis(1_000);
 /// Most folders collected between two applications; a burst beyond this (an
 /// install, a checkout) is treated like a buffer overflow.
 const MAX_DIRS: usize = 20_000;
@@ -186,27 +193,25 @@ fn follow(app: AppHandle, root: PathBuf, epoch: u64, generation: u64) {
             let _ = app.emit(UPDATED_EVENT, Updated { folders: Vec::new(), stale: true });
             break;
         }
-        let mut changes: Vec<PathBuf> = pending.dirs.into_iter().collect();
+        let changes: Vec<PathBuf> = pending.dirs.into_iter().collect();
+        let mut lost = false;
         let mut lost_events = false;
         if pending.overflow {
             if last_rewalk.is_none_or(|at| at.elapsed() >= OVERFLOW_REWALK_GAP) {
                 last_rewalk = Some(Instant::now());
                 scanner::log("live refresh: change reports were dropped, re-reading the scanned folder (bounded)");
-                changes.push(root.clone());
+                lost = true;
             } else {
                 lost_events = true;
             }
         }
-        // Changes wait in the scanner while the index is not in memory.
-        let applied = scanner::apply_changes(changes, epoch);
-        if !applied.folders.is_empty() || applied.stale || lost_events {
-            let _ = app.emit(
-                UPDATED_EVENT,
-                Updated {
-                    folders: applied.folders,
-                    stale: applied.stale || lost_events,
-                },
-            );
+        // Changes wait in the scanner while the index is not in memory. The page is
+        // told as each folder is applied, not after the whole batch.
+        scanner::apply_changes(changes, lost, epoch, &mut |updated| {
+            let _ = app.emit(UPDATED_EVENT, updated);
+        });
+        if lost_events {
+            let _ = app.emit(UPDATED_EVENT, Updated { folders: Vec::new(), stale: true });
         }
         scanner::save_if_due();
     }

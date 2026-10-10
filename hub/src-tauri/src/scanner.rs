@@ -11,7 +11,12 @@
 //! Alongside it the index keeps a `NameIndex`: every name the scan visited,
 //! so search finds files of any size. While the hub is open, `watch` reports
 //! the folders that changed; `apply_changes` reads just those again and
-//! updates both parts in place.
+//! updates both parts in place. It works through them by priority, not in
+//! path order: a folder that was not read lately goes first, one that keeps
+//! changing is read less and less often, each pass is bounded in time, and the
+//! page is told after every folder rather than after the batch. A folder too
+//! large to read again is never read whole: only its child folders that
+//! appeared or disappeared are read and attached, or removed.
 //!
 //! Memory: the root view is read from a small saved file at open. The folder
 //! index loads on the first drill-down or search, and the name rows on the
@@ -66,10 +71,44 @@ static SAVE_LOCK: Mutex<()> = Mutex::new(());
 const TOP: usize = 200;
 /// Files smaller than this are only counted in their folder's total.
 const MIN_KEPT_FILE_BYTES: u64 = 256 * 1024;
-const MAX_ENTRIES: usize = 2_000_000;
+/// Entries a scan may walk before it stops: a guard against a runaway tree, not
+/// a size a home should reach (a home on the earlier 2,000,000 limit sat on it,
+/// so growth of a few thousand entries made the scan stop early). Walked entries
+/// are not free. The walk keeps a name row for every entry (about 40 bytes), a
+/// hard-link table entry for every file (about 60), and for every folder its
+/// accounting row, its directory identity and its scan entry (about 0.7 KB), so
+/// memory grows with the entries walked, about 0.2 KB each: roughly 0.45 GB for
+/// the 2,000,000 entries of a large home, and about 0.9 GB at this limit (an
+/// estimate from reading the walk, not a measurement). The time is linear too:
+/// about 6 minutes for 2,000,000 entries on the PC this was measured on.
+const MAX_ENTRIES: usize = 4_000_000;
 /// A live refresh reads at most this many entries of a changed folder's subtree;
 /// a larger one is reported as stale instead of read.
 const LIVE_MAX_ENTRIES: usize = 200_000;
+/// A live refresh also stops after this long (a folder near `LIVE_MAX_ENTRIES`
+/// takes over half a minute at background priority, and the changes behind it
+/// would wait); one that does not finish is treated as too large.
+const LIVE_READ_LIMIT: Duration = Duration::from_secs(10);
+/// One pass of `apply_changes` starts no further folder once it has spent this
+/// long reading; what is left waits for the next pass.
+const BATCH_BUDGET: Duration = Duration::from_secs(4);
+/// A folder read again is not read again for `MIN_GAP`; the gap doubles with each
+/// further read inside `CHURN_WINDOW` (a folder that rewrites itself all day), up to `MAX_GAP`.
+const MIN_GAP: Duration = Duration::from_secs(5);
+const MAX_GAP: Duration = Duration::from_secs(60);
+const CHURN_WINDOW: Duration = Duration::from_secs(120);
+/// Read history older than this is forgotten.
+const CHURN_FORGET: Duration = Duration::from_secs(600);
+/// A change that has been due this long goes before the calmer ones.
+const STARVE: Duration = Duration::from_secs(30);
+/// An indexed folder too large to read again has its child folders compared with
+/// the disk at most this often.
+const RECONCILE_GAP: Duration = Duration::from_secs(2);
+/// New child folders read in one reconcile before it waits for the next pass.
+const NEW_PER_PASS: usize = 8;
+/// A scan root with more folders than this cannot hold fewer than
+/// `LIVE_MAX_ENTRIES` entries, so it is never read whole again.
+const BIG_ROOT_FOLDERS: usize = LIVE_MAX_ENTRIES / 8;
 /// Label of the row that holds files not itemised, in a live index.
 const SMALLER_FILES: &str = "Smaller files";
 /// While the watch runs, the index is written at most this often.
@@ -78,8 +117,6 @@ const SAVE_INTERVAL: Duration = Duration::from_secs(20);
 const IDLE_UNLOAD: Duration = Duration::from_secs(120);
 /// How often the idle check runs.
 const IDLE_CHECK: Duration = Duration::from_secs(15);
-/// A folder that changed is read again at most this often.
-const RETRY: Duration = Duration::from_secs(10);
 /// A folder found too large to read again is left alone for this long.
 const OVERSIZED_PAUSE: Duration = Duration::from_secs(600);
 /// Changes waiting for the index: more than this and they are reported as stale.
@@ -128,14 +165,26 @@ static SCANNED: AtomicBool = AtomicBool::new(false);
 static NAMES_BROKEN: AtomicBool = AtomicBool::new(false);
 /// Folders whose name rows changed while those rows were not in memory.
 static STALE: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-/// Changes not applied yet: raw paths from FSEvents, or the indexed folders that hold them.
-static WAITING: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-/// When each folder was last read again (only those within `RETRY` are kept).
-static ATTEMPTED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
-/// Folders whose subtree was too large to read again, and when. Changes that
-/// land directly in one (a dotfile in home, a hive file) are not read again for
-/// `OVERSIZED_PAUSE`; each try would read `LIVE_MAX_ENTRIES` entries for nothing.
+/// Changes not applied yet: raw paths from the watch, or the folders that hold
+/// them, each with when it was first reported.
+static WAITING: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
+/// How each folder read again lately behaved, so a folder that keeps changing is
+/// read less and less often (see `Churn`).
+static CHURN: Mutex<BTreeMap<PathBuf, Churn>> = Mutex::new(BTreeMap::new());
+/// Folders whose subtree was too large (or too slow) to read again, and when.
+/// They are never read whole while listed (`OVERSIZED_PAUSE`; each try would read
+/// `LIVE_MAX_ENTRIES` entries for nothing). Their child folders are still kept in
+/// step (`reconcile_children`), and a new folder that is itself too large is
+/// listed here under its own path.
 static OVERSIZED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
+/// Folders added to the index by a live refresh whose name rows were not added:
+/// `NameIndex` cannot take a new folder, so searching by name does not find
+/// what is below them until the next scan. Changes inside them leave the name
+/// rows alone instead of declaring them out of step.
+static UNNAMED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+/// The watch lost events (a buffer overflow): anything may have changed. Handled
+/// at the next `apply_changes` that finds the index in memory.
+static LOST: AtomicBool = AtomicBool::new(false);
 static LAST_SAVE: Mutex<Option<Instant>> = Mutex::new(None);
 /// When the Storage page last used the index.
 static LAST_USE: Mutex<Option<Instant>> = Mutex::new(None);
@@ -147,10 +196,32 @@ struct Job {
     cancel: Arc<AtomicBool>,
 }
 
+/// How one folder read again lately behaved.
+struct Churn {
+    last_read: Instant,
+    /// Not read again before this.
+    hold_until: Instant,
+    /// How often it was read again in a row inside `CHURN_WINDOW`, an unchanged
+    /// read counting double. The higher, the later it is read and the longer it is held.
+    level: u32,
+    /// How long its last read took.
+    cost: Duration,
+}
+
 /// Serializes heavy scans: the cleanup scan takes this so it never overlaps a
 /// storage scan.
 pub fn exclusive() -> MutexGuard<'static, ()> {
     RUN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `exclusive`, or `None` when a heavy scan is running: a live refresh never
+/// waits behind one (the changes behind it would wait too); it tries again.
+fn try_exclusive() -> Option<MutexGuard<'static, ()>> {
+    match RUN.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
 }
 
 fn lock<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
@@ -1031,8 +1102,10 @@ fn run_scan(root: PathBuf, id: u64, cancel: Arc<AtomicBool>, app: AppHandle) -> 
         });
         lock(&STALE).clear();
         lock(&WAITING).clear();
-        lock(&ATTEMPTED).clear();
+        lock(&CHURN).clear();
         lock(&OVERSIZED).clear();
+        lock(&UNNAMED).clear();
+        LOST.store(false, Ordering::SeqCst);
         NAMES_BROKEN.store(false, Ordering::SeqCst);
         SCANNED.store(true, Ordering::SeqCst);
         INDEX_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
@@ -1287,31 +1360,28 @@ pub async fn search(
     .map_err(|e| e.to_string())?
 }
 
-/// Payload of the `storage-updated` event: the folders that were read again,
-/// and `stale` when the index can no longer be trusted (changes were lost, or a
-/// folder is too large to read again here, so a new scan is needed).
+/// Payload of the `storage-updated` event: the folders whose numbers or rows
+/// changed after a live refresh (sent as soon as each is applied, not after the
+/// whole batch), and `stale` when the index can no longer be trusted (changes
+/// were lost, or a folder is too large to read again here, so a new scan is
+/// needed).
 #[derive(Serialize, Clone)]
 pub(crate) struct Updated {
     pub folders: Vec<String>,
     pub stale: bool,
 }
 
-/// What `apply_changes` did: the folders read again, and whether the index can
-/// no longer be trusted.
-pub(crate) struct Applied {
-    pub folders: Vec<String>,
-    pub stale: bool,
-}
-
 /// What a live refresh of one folder did.
 pub(crate) enum Refresh {
-    /// The folder's subtree was read again and the index was updated.
-    Applied,
-    /// The subtree is larger than `LIVE_MAX_ENTRIES`.
+    /// The folder was read again (or added, or removed) and the index was
+    /// updated; `changed` when any number or row differed from before.
+    Applied { changed: bool },
+    /// The subtree is larger than `LIVE_MAX_ENTRIES`, or took longer than `LIVE_READ_LIMIT`.
     TooLarge,
-    /// Nothing was done: a scan is running, or the index was replaced.
+    /// Nothing was done: a scan is running, the index was replaced, or the path is not a folder to add.
     Skipped,
-    /// Not now: the index is not in memory, or a save is writing it. Try again later.
+    /// Not now: the index is not in memory, a save is writing it, or a heavy scan
+    /// holds the scan lock. Try again later.
     Busy,
 }
 
@@ -1328,6 +1398,14 @@ fn nearest_indexed(index: &Index, path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The first component of `path` below `ancestor`, joined to it: the topmost
+/// folder of `path` that `ancestor` does not hold.
+fn first_below(ancestor: &Path, path: &Path) -> Option<PathBuf> {
+    let rest = path.strip_prefix(ancestor).ok()?;
+    let first = rest.components().next()?;
+    Some(ancestor.join(first.as_os_str()))
+}
+
 /// Whether the index is still the one a refresh started from.
 fn same_index(epoch: u64) -> bool {
     epoch == INDEX_EPOCH.load(Ordering::SeqCst)
@@ -1336,6 +1414,57 @@ fn same_index(epoch: u64) -> bool {
 /// Whether a refresh may run now: the same index, and no scan in progress.
 fn may_refresh(epoch: u64) -> bool {
     same_index(epoch) && lock(&JOB).is_none()
+}
+
+/// Whether `folder` is known to hold more than `LIVE_MAX_ENTRIES`: it was found
+/// so lately (`oversized`), or it is the scanned root of an index with so many
+/// folders that it cannot be small. Such a folder is never read whole.
+fn too_big(index: &Index, folder: &Path, oversized: &BTreeSet<PathBuf>) -> bool {
+    oversized.contains(folder) || (folder == index.root && index.nodes.len() > BIG_ROOT_FOLDERS)
+}
+
+/// Ends the read it was made for when dropped, so its timer thread stops.
+struct ReadLimit(Arc<AtomicBool>);
+
+impl Drop for ReadLimit {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Set `cancel` once `LIVE_READ_LIMIT` has passed, unless the returned guard is dropped first.
+fn read_limit(cancel: Arc<AtomicBool>) -> ReadLimit {
+    let done = Arc::new(AtomicBool::new(false));
+    let seen = done.clone();
+    let _ = std::thread::Builder::new()
+        .name("pulse-read-limit".into())
+        .spawn(move || {
+            let end = Instant::now() + LIVE_READ_LIMIT;
+            while !seen.load(Ordering::Relaxed) {
+                if Instant::now() >= end {
+                    cancel.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+    ReadLimit(done)
+}
+
+/// Read `folder`'s subtree for a live refresh: at most `LIVE_MAX_ENTRIES`
+/// entries and `LIVE_READ_LIMIT`. `None` when it is larger or slower than that.
+fn bounded_scan(folder: &Path) -> Option<(ScanReport, NameIndex)> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let _limit = read_limit(cancel.clone());
+    let options = ScanOptions {
+        max_entries: LIVE_MAX_ENTRIES,
+        ..scan_options(Some(cancel))
+    };
+    let (report, names) = pulse_core::scan::scan_with_names(&[folder.to_path_buf()], &options);
+    if limited(&report) || report.incomplete_reasons.iter().any(|r| r == "scan cancelled") {
+        return None;
+    }
+    Some((report, names))
 }
 
 /// Read `folder`'s subtree again and update the index in place. Runs after
@@ -1348,20 +1477,97 @@ fn refresh_subtree(folder: &Path, epoch: u64) -> Refresh {
     if SAVING.load(Ordering::SeqCst) > 0 {
         return Refresh::Busy;
     }
-    let _run = exclusive();
+    let Some(_run) = try_exclusive() else {
+        return Refresh::Busy;
+    };
     if !may_refresh(epoch) {
         return Refresh::Skipped;
     }
-    let options = ScanOptions {
-        max_entries: LIVE_MAX_ENTRIES,
-        ..scan_options(None)
-    };
-    let (report, names) = pulse_core::scan::scan_with_names(&[folder.to_path_buf()], &options);
-    if limited(&report) {
+    let Some((report, names)) = bounded_scan(folder) else {
         return Refresh::TooLarge;
-    }
+    };
     let fresh = fold_nodes(&report, SMALLER_FILES);
     drop(report);
+    commit(folder, fresh, Some(&names), false, epoch)
+}
+
+/// Whether `a` and `b` are on the same volume (device). Windows scans do not
+/// enter mount points at all (they are reparse points, never listed as folders).
+#[cfg(unix)]
+fn same_device(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_device(_a: &Path, _b: &Path) -> bool {
+    true
+}
+
+/// Read the folder `child`, which the index does not hold, and add it to the
+/// folder that holds it (an indexed folder too large to read again). Only
+/// `child` is read, bounded like any live refresh.
+fn attach_child(child: &Path, epoch: u64) -> Refresh {
+    if !may_refresh(epoch) {
+        return Refresh::Skipped;
+    }
+    if SAVING.load(Ordering::SeqCst) > 0 {
+        return Refresh::Busy;
+    }
+    // Only a real folder: a file, a link or a path that is gone is not added.
+    if !std::fs::symlink_metadata(child).is_ok_and(|m| m.file_type().is_dir()) {
+        return Refresh::Skipped;
+    }
+    // A folder on another volume is a boundary the scan does not cross.
+    if !child.parent().is_some_and(|parent| same_device(child, parent)) {
+        lock(&OVERSIZED).insert(child.to_path_buf(), Instant::now());
+        return Refresh::Skipped;
+    }
+    let Some(_run) = try_exclusive() else {
+        return Refresh::Busy;
+    };
+    if !may_refresh(epoch) {
+        return Refresh::Skipped;
+    }
+    let Some((report, names)) = bounded_scan(child) else {
+        return Refresh::TooLarge;
+    };
+    let fresh = fold_nodes(&report, SMALLER_FILES);
+    drop(report);
+    if !fresh.contains_key(child) {
+        // The scan did not take it (a cloud placeholder, another volume): leave it
+        // alone for a while rather than reading it at every change.
+        lock(&OVERSIZED).insert(child.to_path_buf(), Instant::now());
+        return Refresh::Skipped;
+    }
+    commit(child, fresh, Some(&names), true, epoch)
+}
+
+/// Take the folder `child` and everything below it out of the index, and its
+/// size out of the folders above it.
+fn detach_child(child: &Path, epoch: u64) -> Refresh {
+    if !may_refresh(epoch) {
+        return Refresh::Skipped;
+    }
+    if SAVING.load(Ordering::SeqCst) > 0 {
+        return Refresh::Busy;
+    }
+    commit(child, HashMap::new(), None, false, epoch)
+}
+
+/// Put the freshly read nodes and name rows of `folder` into the index. An empty
+/// `fresh` takes the folder out. `new_child`: the folder was not in the index and
+/// is added to its parent's rows (its parent must be in the index).
+fn commit(
+    folder: &Path,
+    fresh: HashMap<PathBuf, Node>,
+    names: Option<&NameIndex>,
+    new_child: bool,
+    epoch: u64,
+) -> Refresh {
     let mut slot = lock(&INDEX);
     if SAVING.load(Ordering::SeqCst) > 0 {
         return Refresh::Busy;
@@ -1372,29 +1578,152 @@ fn refresh_subtree(folder: &Path, epoch: u64) -> Refresh {
     let Some(shared) = slot.as_mut() else {
         return Refresh::Busy;
     };
+    if new_child
+        && (shared.nodes.contains_key(folder)
+            || !folder
+                .parent()
+                .is_some_and(|parent| shared.nodes.contains_key(parent)))
+    {
+        return Refresh::Skipped;
+    }
     let exists = fresh.contains_key(folder);
-    apply_nodes(Arc::make_mut(shared), folder, fresh);
-    let mut names_slot = lock(&NAMES);
-    let kept = names_slot
-        .as_mut()
-        .map(|rows| apply_names(Arc::make_mut(rows), folder, exists.then_some(&names)));
-    match kept {
-        Some(true) => {}
-        Some(false) => {
-            *names_slot = None;
-            NAMES_BROKEN.store(true, Ordering::SeqCst);
+    let changed = apply_nodes(Arc::make_mut(shared), folder, fresh, new_child);
+    if new_child {
+        // The name rows cannot take a new folder; see `UNNAMED`.
+        lock(&UNNAMED).insert(folder.to_path_buf());
+    } else {
+        let unnamed = lock(&UNNAMED).iter().any(|root| folder.starts_with(root));
+        if !exists {
+            lock(&UNNAMED).retain(|root| !root.starts_with(folder));
         }
-        None => {
-            let mut stale = lock(&STALE);
-            stale.insert(folder.to_path_buf());
-            if stale.len() > STALE_MAX {
-                stale.clear();
-                NAMES_BROKEN.store(true, Ordering::SeqCst);
+        if !unnamed {
+            let mut names_slot = lock(&NAMES);
+            let kept = names_slot
+                .as_mut()
+                .map(|rows| apply_names(Arc::make_mut(rows), folder, names.filter(|_| exists)));
+            match kept {
+                Some(true) => {}
+                Some(false) => {
+                    *names_slot = None;
+                    NAMES_BROKEN.store(true, Ordering::SeqCst);
+                }
+                None => {
+                    let mut stale = lock(&STALE);
+                    stale.insert(folder.to_path_buf());
+                    if stale.len() > STALE_MAX {
+                        stale.clear();
+                        NAMES_BROKEN.store(true, Ordering::SeqCst);
+                    }
+                }
             }
         }
     }
     DIRTY.store(true, Ordering::SeqCst);
-    Refresh::Applied
+    Refresh::Applied { changed }
+}
+
+/// What reconciling the child folders of an indexed folder (or adding one) did.
+#[derive(Default)]
+struct Outcome {
+    /// Something was added, removed or changed in the index.
+    changed: bool,
+    /// A new folder is itself too large to read: a new scan is needed to see it.
+    stale: bool,
+    /// Part of the work waits for the next pass.
+    busy: bool,
+}
+
+impl Outcome {
+    /// Add the new folder `child` to the index and note what happened.
+    fn attach(&mut self, child: &Path, epoch: u64) {
+        match attach_child(child, epoch) {
+            Refresh::Applied { changed } => self.changed |= changed,
+            Refresh::TooLarge => {
+                lock(&OVERSIZED).insert(child.to_path_buf(), Instant::now());
+                self.stale = true;
+            }
+            Refresh::Busy => self.busy = true,
+            Refresh::Skipped => {}
+        }
+    }
+}
+
+/// The child folders of `parent` that are on disk but not in the index, and those
+/// in the index that are gone from the disk. `None` when `parent` cannot be listed.
+fn child_differences(index: &Index, parent: &Path) -> Option<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let mut on_disk: BTreeSet<PathBuf> = BTreeSet::new();
+    for entry in std::fs::read_dir(parent).ok()?.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            on_disk.insert(entry.path());
+        }
+    }
+    let node = index.nodes.get(parent)?;
+    let indexed: Vec<PathBuf> = if node.children < TOP {
+        // Every child is among the rows.
+        node.items
+            .iter()
+            .filter(|item| item.is_dir && !item.summary)
+            .map(|item| parent.join(&*item.name))
+            .collect()
+    } else {
+        index
+            .nodes
+            .keys()
+            .filter(|path| path.parent() == Some(parent))
+            .cloned()
+            .collect()
+    };
+    let added = on_disk
+        .iter()
+        .filter(|path| !index.nodes.contains_key(*path))
+        .cloned()
+        .collect();
+    let gone = indexed
+        .into_iter()
+        .filter(|path| !on_disk.contains(path))
+        .collect();
+    Some((added, gone))
+}
+
+/// Keep the child folders of `parent`, an indexed folder too large to read again,
+/// in step with the disk: a folder that is gone is removed (and its size taken
+/// out of the folders above), a new one is read (just that folder) and added.
+/// Stops adding after `NEW_PER_PASS` folders or at `until`; the rest wait.
+fn reconcile_children(parent: &Path, epoch: u64, until: Instant) -> Outcome {
+    let mut out = Outcome::default();
+    if !may_refresh(epoch) {
+        return out;
+    }
+    let Some(index) = held() else {
+        out.busy = true;
+        return out;
+    };
+    let found = child_differences(&index, parent);
+    // The index must not be shared while it is changed (that would copy it).
+    drop(index);
+    let Some((added, gone)) = found else {
+        return out;
+    };
+    for child in gone {
+        match detach_child(&child, epoch) {
+            Refresh::Applied { changed } => out.changed |= changed,
+            Refresh::Busy => out.busy = true,
+            Refresh::TooLarge | Refresh::Skipped => {}
+        }
+    }
+    let mut taken = 0usize;
+    for child in added {
+        if lock(&OVERSIZED).contains_key(&child) {
+            continue;
+        }
+        if taken > 0 && (taken >= NEW_PER_PASS || Instant::now() >= until) {
+            out.busy = true;
+            break;
+        }
+        taken += 1;
+        out.attach(&child, epoch);
+    }
+    out
 }
 
 /// The folders to read, without duplicates and without any folder that lies
@@ -1414,58 +1743,307 @@ fn covering_folders(mut folders: Vec<PathBuf>) -> Vec<PathBuf> {
     kept
 }
 
-/// Take in the changed paths from the watch and read again the folders that
-/// need it. While the index is not in memory the paths only wait; they are
-/// applied once it loads. Returns the folders read again, and `stale` when the
-/// changes can no longer be applied.
-pub(crate) fn apply_changes(paths: Vec<PathBuf>, epoch: u64) -> Applied {
+/// What a waiting change asks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Read the indexed folder's subtree again.
+    Reread,
+    /// The indexed folder is too large to read: compare its child folders with the disk.
+    Reconcile,
+    /// A folder under an indexed folder that is too large to read is not in the index: read it and add it.
+    Attach,
+}
+
+/// A change waiting to be applied: the folder it is about, what to do, and when it was first reported.
+struct Todo {
+    path: PathBuf,
+    kind: Kind,
+    since: Instant,
+}
+
+/// A due `Todo` with what decides its place in the pass.
+struct Ready {
+    todo: Todo,
+    level: u32,
+    cost: Duration,
+    /// Due for `STARVE` already: goes before the calmer ones.
+    aged: bool,
+}
+
+/// Note that `path` was read again (`changed`: its numbers moved) in `took`, and
+/// hold it for a while. The hold doubles with each read inside `CHURN_WINDOW`, an
+/// unchanged read counting double, so a folder that rewrites itself all day is
+/// read about once a `MAX_GAP`, while one that changes rarely is read at once.
+fn note_read(path: &Path, changed: bool, took: Duration) {
+    let now = Instant::now();
+    let mut churn = lock(&CHURN);
+    let level = match churn.get(path) {
+        Some(before) if now.duration_since(before.last_read) < CHURN_WINDOW => {
+            before.level.saturating_add(if changed { 1 } else { 2 })
+        }
+        _ => u32::from(!changed),
+    };
+    let gap = (MIN_GAP * (1u32 << level.min(4))).min(MAX_GAP);
+    churn.insert(
+        path.to_path_buf(),
+        Churn {
+            last_read: now,
+            hold_until: now + gap,
+            level,
+            cost: took,
+        },
+    );
+}
+
+/// Note that the child folders of `path` were compared with the disk; do not again before `RECONCILE_GAP`.
+fn note_reconciled(path: &Path, took: Duration) {
+    let now = Instant::now();
+    lock(&CHURN).insert(
+        path.to_path_buf(),
+        Churn {
+            last_read: now,
+            hold_until: now + RECONCILE_GAP,
+            level: 0,
+            cost: took,
+        },
+    );
+}
+
+/// Tell the page the index can no longer be trusted.
+fn tell_stale(publish: &mut dyn FnMut(Updated)) {
+    publish(Updated {
+        folders: Vec::new(),
+        stale: true,
+    });
+}
+
+/// Take in the changed paths from the watch and apply them. While the index is
+/// not in memory the paths only wait; they are applied once it loads. `lost`:
+/// the watch dropped events, so anything may have changed (the scanned folder is
+/// read again, or, when it is too large for that, the page is told the index is stale).
+///
+/// Each path maps to the nearest indexed folder. A folder is read again, in this
+/// order: the ones due for long first, then the cheap ones, then those that were
+/// read least often lately (a folder that keeps changing is held for up to
+/// `MAX_GAP` between reads), the most recently changed first. A pass stops starting reads after
+/// `BATCH_BUDGET`; the rest wait for the next. `publish` is called as soon as
+/// a folder's numbers change, not at the end. A folder inside one read in the
+/// same pass is covered by it. An indexed folder too large to read again is
+/// never read whole: its new and removed child folders are attached or
+/// detached (`reconcile_children`), and a path inside a new, unindexed child
+/// reads just that child.
+pub(crate) fn apply_changes(
+    paths: Vec<PathBuf>,
+    lost: bool,
+    epoch: u64,
+    publish: &mut dyn FnMut(Updated),
+) {
+    let now = Instant::now();
     let mut stale = false;
     {
         let mut waiting = lock(&WAITING);
-        waiting.extend(paths);
+        for path in paths {
+            waiting.entry(path).or_insert(now);
+        }
         if waiting.len() > WAITING_MAX {
             waiting.clear();
             stale = true;
         }
     }
-    let Some(index) = held() else {
-        return Applied { folders: Vec::new(), stale };
-    };
-    let raw: Vec<PathBuf> = std::mem::take(&mut *lock(&WAITING)).into_iter().collect();
-    let mut indexed: Vec<PathBuf> = raw
-        .iter()
-        .filter_map(|path| nearest_indexed(&index, path))
-        .collect();
-    drop(index);
-    let now = Instant::now();
-    lock(&ATTEMPTED).retain(|_, at| now.duration_since(*at) < RETRY);
-    // Before the covering step: an oversized outer folder must not hide the small ones in it.
-    {
-        let mut oversized = lock(&OVERSIZED);
-        oversized.retain(|_, at| now.duration_since(*at) < OVERSIZED_PAUSE);
-        indexed.retain(|folder| !oversized.contains_key(folder));
+    if lost {
+        LOST.store(true, Ordering::SeqCst);
     }
-    let mut read: Vec<String> = Vec::new();
-    for folder in covering_folders(indexed) {
-        if lock(&ATTEMPTED).contains_key(&folder) {
-            lock(&WAITING).insert(folder);
+    let Some(index) = held() else {
+        if stale {
+            tell_stale(publish);
+        }
+        return;
+    };
+    let mut waiting = std::mem::take(&mut *lock(&WAITING));
+    let oversized: BTreeSet<PathBuf> = {
+        let mut paused = lock(&OVERSIZED);
+        paused.retain(|_, at| now.duration_since(*at) < OVERSIZED_PAUSE);
+        paused.keys().cloned().collect()
+    };
+    if LOST.swap(false, Ordering::SeqCst) {
+        stale |= too_big(&index, &index.root, &oversized);
+        waiting.entry(index.root.clone()).or_insert(now);
+    }
+    // What each path asks for, merged by folder.
+    let mut todos: BTreeMap<PathBuf, Todo> = BTreeMap::new();
+    for (path, since) in waiting {
+        let Some(near) = nearest_indexed(&index, &path) else {
+            continue;
+        };
+        let todo = if !too_big(&index, &near, &oversized) {
+            Todo {
+                path: near,
+                kind: Kind::Reread,
+                since,
+            }
+        } else if path == near {
+            Todo {
+                path: near,
+                kind: Kind::Reconcile,
+                since,
+            }
+        } else {
+            // A path inside a folder the index does not hold: that folder is new.
+            let Some(child) = first_below(&near, &path) else {
+                continue;
+            };
+            if oversized.contains(&child) {
+                continue;
+            }
+            Todo {
+                path: child,
+                kind: Kind::Attach,
+                since,
+            }
+        };
+        match todos.get_mut(&todo.path) {
+            Some(known) => known.since = known.since.min(todo.since),
+            None => {
+                todos.insert(todo.path.clone(), todo);
+            }
+        }
+    }
+    // The index must not be shared while it is changed (that would copy it).
+    drop(index);
+    // Reconciling a folder adds every new child it finds, so its own adds are redundant.
+    let reconciling: BTreeSet<PathBuf> = todos
+        .values()
+        .filter(|todo| todo.kind == Kind::Reconcile)
+        .map(|todo| todo.path.clone())
+        .collect();
+    todos.retain(|_, todo| {
+        todo.kind != Kind::Attach
+            || !todo
+                .path
+                .parent()
+                .is_some_and(|parent| reconciling.contains(parent))
+    });
+    // Held folders wait; the rest are due.
+    let mut requeue: Vec<Todo> = Vec::new();
+    let mut ready: Vec<Ready> = Vec::new();
+    {
+        let mut churn = lock(&CHURN);
+        churn.retain(|_, seen| now.duration_since(seen.last_read) < CHURN_FORGET);
+        for (_, todo) in todos {
+            let state = if todo.kind == Kind::Attach {
+                None
+            } else {
+                churn.get(&todo.path)
+            };
+            if state.is_some_and(|seen| seen.hold_until > now) {
+                requeue.push(todo);
+                continue;
+            }
+            let due = state.map_or(todo.since, |seen| todo.since.max(seen.hold_until));
+            ready.push(Ready {
+                level: state.map_or(0, |seen| seen.level),
+                cost: state.map_or(Duration::ZERO, |seen| seen.cost),
+                aged: now.duration_since(due) > STARVE,
+                todo,
+            });
+        }
+    }
+    // A folder inside another due folder is covered by reading the outer one, unless it is calmer.
+    let outer: Vec<(PathBuf, u32)> = ready
+        .iter()
+        .filter(|item| item.todo.kind == Kind::Reread)
+        .map(|item| (item.todo.path.clone(), item.level))
+        .collect();
+    ready.retain(|item| {
+        item.todo.kind != Kind::Reread
+            || !outer.iter().any(|(folder, level)| {
+                *folder != item.todo.path
+                    && item.todo.path.starts_with(folder)
+                    && *level <= item.level
+            })
+    });
+    // Due for long first; then the cheap before the ones known to take a pass to
+    // themselves; then the calm before the ones that keep changing; then the newest change.
+    ready.sort_by(|a, b| {
+        (!a.aged, a.cost >= BATCH_BUDGET, a.level)
+            .cmp(&(!b.aged, b.cost >= BATCH_BUDGET, b.level))
+            .then_with(|| b.todo.since.cmp(&a.todo.since))
+    });
+    let until = Instant::now() + BATCH_BUDGET;
+    let mut spent = Duration::ZERO;
+    let mut read_any = false;
+    let mut read_roots: Vec<PathBuf> = Vec::new();
+    for Ready { todo, cost, .. } in ready {
+        if read_roots.iter().any(|root| todo.path.starts_with(root)) {
             continue;
         }
-        lock(&ATTEMPTED).insert(folder.clone(), now);
-        match refresh_subtree(&folder, epoch) {
-            Refresh::Applied => read.push(folder.to_string_lossy().into_owned()),
-            Refresh::TooLarge => {
-                lock(&OVERSIZED).insert(folder, now);
-                stale = true;
+        // Over budget, or this one is known to take the rest of it: next pass.
+        if read_any && spent + cost >= BATCH_BUDGET {
+            requeue.push(todo);
+            continue;
+        }
+        read_any = true;
+        let began = Instant::now();
+        let mut out = Outcome::default();
+        match todo.kind {
+            Kind::Reread => match refresh_subtree(&todo.path, epoch) {
+                Refresh::Applied { changed } => {
+                    out.changed = changed;
+                    read_roots.push(todo.path.clone());
+                    note_read(&todo.path, changed, began.elapsed());
+                }
+                Refresh::TooLarge => {
+                    // From now on only its child folders are kept in step; the
+                    // change that brought us here is looked at again next pass.
+                    lock(&OVERSIZED).insert(todo.path.clone(), Instant::now());
+                    out.stale = true;
+                    out.busy = true;
+                }
+                Refresh::Skipped => {}
+                Refresh::Busy => out.busy = true,
+            },
+            Kind::Reconcile => {
+                out = reconcile_children(&todo.path, epoch, until);
+                note_reconciled(&todo.path, began.elapsed());
             }
-            Refresh::Skipped => {}
-            Refresh::Busy => {
-                lock(&ATTEMPTED).remove(&folder);
-                lock(&WAITING).insert(folder);
-            }
+            Kind::Attach => out.attach(&todo.path, epoch),
+        }
+        spent += began.elapsed();
+        stale |= out.stale;
+        if out.changed {
+            let shown = if todo.kind == Kind::Attach {
+                todo.path.parent()
+            } else {
+                Some(todo.path.as_path())
+            };
+            publish(Updated {
+                folders: shown
+                    .map(|folder| folder.to_string_lossy().into_owned())
+                    .into_iter()
+                    .collect(),
+                stale: false,
+            });
+        }
+        if out.busy {
+            requeue.push(todo);
         }
     }
-    Applied { folders: read, stale }
+    if !requeue.is_empty() {
+        let mut waiting = lock(&WAITING);
+        for todo in requeue {
+            if read_roots.iter().any(|root| todo.path.starts_with(root)) {
+                continue;
+            }
+            let since = todo.since;
+            waiting
+                .entry(todo.path)
+                .and_modify(|first| *first = (*first).min(since))
+                .or_insert(since);
+        }
+    }
+    if stale {
+        tell_stale(publish);
+    }
 }
 
 /// `bytes` moved by `delta`, never below zero.
@@ -1500,20 +2078,53 @@ fn refresh_summary(node: &mut Node) {
     node.items.truncate(TOP);
 }
 
+/// Whether two folder nodes show the same total, count and rows.
+fn same_node(a: &Node, b: &Node) -> bool {
+    a.total == b.total
+        && a.children == b.children
+        && a.items.len() == b.items.len()
+        && a.items.iter().zip(&b.items).all(|(x, y)| {
+            x.bytes == y.bytes && x.is_dir == y.is_dir && x.summary == y.summary && x.name == y.name
+        })
+}
+
 /// Put the freshly read `fresh` nodes of `folder`'s subtree into `index`, and
 /// bring the folders above it in step: their totals and folder counts move by
-/// the same change, and their rows for the folder below follow.
-fn apply_nodes(index: &mut Index, folder: &Path, mut fresh: HashMap<PathBuf, Node>) {
+/// the same change, and their rows for the folder below follow. An empty `fresh`
+/// takes the folder out. `new_child`: the folder was not in the index; its
+/// parent gets a row for it and counts it. Returns whether anything differed
+/// from before (a size, a count, a row, or the number of folders below).
+fn apply_nodes(
+    index: &mut Index,
+    folder: &Path,
+    mut fresh: HashMap<PathBuf, Node>,
+    new_child: bool,
+) -> bool {
     let exists = fresh.contains_key(folder);
     let new_total = fresh.get(folder).map_or(0, |node| node.total);
-    let old_total = index.nodes.get(folder).map_or(0, |node| node.total);
+    let before = index.nodes.get(folder).cloned();
+    if before.is_none() && !exists {
+        return false;
+    }
+    let old_total = before.as_ref().map_or(0, |node| node.total);
     let delta = i128::from(new_total) - i128::from(old_total);
 
-    index.nodes.retain(|path, _| !path.starts_with(folder));
+    let mut dropped = 0usize;
+    index.nodes.retain(|path, _| {
+        let inside = path.starts_with(folder);
+        dropped += usize::from(inside);
+        !inside
+    });
+    let changed = dropped != fresh.len()
+        || match (before.as_ref(), fresh.get(folder)) {
+            (Some(old), Some(new)) => !same_node(old, new),
+            _ => true,
+        };
     index.nodes.extend(fresh.drain());
 
     let mut child = folder.to_path_buf();
     let mut child_total = exists.then_some(new_total);
+    let mut first = true;
     loop {
         let Some(parent) = child.parent().map(Path::to_path_buf) else {
             break;
@@ -1527,6 +2138,15 @@ fn apply_nodes(index: &mut Index, folder: &Path, mut fresh: HashMap<PathBuf, Nod
         node.total = shift(node.total, delta);
         node.dirs = shift(node.dirs, delta);
         match child_total {
+            Some(bytes) if first && new_child => {
+                node.items.push(Item {
+                    name: name.as_str().into(),
+                    is_dir: true,
+                    summary: false,
+                    bytes,
+                });
+                node.children = node.children.saturating_add(1);
+            }
             Some(bytes) => set_dir_bytes(node, &name, bytes),
             None => {
                 node.items.retain(|i| i.summary || !i.is_dir || &*i.name != name.as_str());
@@ -1536,5 +2156,7 @@ fn apply_nodes(index: &mut Index, folder: &Path, mut fresh: HashMap<PathBuf, Nod
         refresh_summary(node);
         child_total = Some(node.total);
         child = parent;
+        first = false;
     }
+    changed
 }
