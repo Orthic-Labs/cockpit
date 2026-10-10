@@ -421,6 +421,12 @@ fn windows_notch_fixture() -> Value {
             {"id": "firewall", "status": "unknown", "required": false},
         ],
         "permissionErrors": {},
+        // bridge.rs system_json: only the readings this PC gives (no battery cycles or health).
+        "system": {
+            "network": {"interface": "Ethernet", "kind": "Ethernet", "down": 12000.0, "up": 3000.0},
+            "temperatures": [{"name": "GPU", "celsius": 57.0}],
+            "memoryPressure": "normal",
+        },
         "updates": {"current": "0.2.0", "autoCheck": true},
     })
 }
