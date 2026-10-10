@@ -196,13 +196,38 @@ pub fn add_codex_threads(sessions: &mut Vec<LocalSession>, threads: Vec<CodexThr
             id: thread.id,
             kind: "codex".to_string(),
             cwd: String::new(),
-            status: "idle".to_string(),
+            status: codex_status(&thread.updated_at),
             pid: None,
             messaging_socket: None,
             peer_protocol: None,
             entrypoint: None,
         });
     }
+}
+
+/// Codex keeps no registry of open chats; a thread written to in the last ten minutes is
+/// shown as active, anything else as idle (its liveness is unknown either way).
+pub fn codex_status(updated_at: &str) -> String {
+    let active = iso_epoch(updated_at)
+        .is_some_and(|t| super::envelope::now_ms() / 1000 <= t + 10 * 60);
+    if active { "active".to_string() } else { "idle".to_string() }
+}
+
+/// Seconds since the epoch of an ISO-8601 `YYYY-MM-DDTHH:MM:SS…` UTC stamp.
+fn iso_epoch(text: &str) -> Option<u64> {
+    let b = text.as_bytes();
+    if b.len() < 19 {
+        return None;
+    }
+    let num = |a: usize, z: usize| text.get(a..z)?.parse::<i64>().ok();
+    let (y, mo, d, h, mi, s) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    let yy = if mo <= 2 { y - 1 } else { y };
+    let era = yy.div_euclid(400);
+    let yoe = yy - era * 400;
+    let doy = (153 * (mo + if mo > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + h * 3600 + mi * 60 + s).ok()
 }
 
 /// `local_sessions_in` for this computer's real folders, plus the most recent

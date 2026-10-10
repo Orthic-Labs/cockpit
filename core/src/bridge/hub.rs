@@ -407,19 +407,16 @@ pub struct StatusChat {
     pub name: String,
     /// "claude" or "codex".
     pub kind: String,
-    /// Claude: busy or idle (live). Codex: "recent" (no open-chat registry exists).
+    /// Claude: busy or idle (live). Codex: active (written to in the last 10 min) or idle.
     pub status: String,
     pub device: String,
     pub local: bool,
 }
 
-/// Codex threads come from the session index, so their status is "recent", not a liveness.
-fn chat_status(kind: &str, status: &str) -> String {
-    if kind == "codex" {
-        "recent".to_string()
-    } else {
-        status.to_string()
-    }
+/// Claude: busy/idle from its registry. Codex: active when its thread was written to in the
+/// last ten minutes, else idle (the roster decides; no open-chat registry exists).
+fn chat_status(_kind: &str, status: &str) -> String {
+    status.to_string()
 }
 
 /// What the hub's page shows.

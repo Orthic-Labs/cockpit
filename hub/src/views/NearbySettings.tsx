@@ -135,7 +135,7 @@ function AgentBridge({ share }: { share: ShareState | null }) {
   );
 }
 
-/** Every chat Pulse can message, grouped by computer: Claude chats live, Codex threads recent. */
+/** Every chat Pulse can message, grouped by computer: Claude chats live; Codex threads active when written to in the last ten minutes. */
 function ChatList({ chats }: { chats: NonNullable<NonNullable<ShareState["bridge"]>["chats"]> }) {
   const devices = Array.from(new Set(chats.map((c) => c.device)));
   const ordered = [...devices.filter((d) => chats.some((c) => c.device === d && c.local)), ...devices.filter((d) => !chats.some((c) => c.device === d && c.local))];
@@ -160,7 +160,7 @@ function ChatList({ chats }: { chats: NonNullable<NonNullable<ShareState["bridge
                 <li key={`x-${c.name}`} className="ck-chats-row">
                   <span className="ck-chats-kind ck-chats-kind-codex">Codex</span>
                   <span className="ck-chats-name">{c.name}</span>
-                  <span className="ck-chats-status ck-chats-status-recent">recent</span>
+                  <span className={`ck-chats-status ck-chats-status-${c.status}`}>{c.status}</span>
                 </li>
               ))}
               {codex.length > 8 && <li className="ck-sub ck-chats-more">+{codex.length - 8} more Codex threads (`pulse bridge peers` lists all)</li>}
