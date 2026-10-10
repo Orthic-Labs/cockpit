@@ -77,7 +77,9 @@ final class PulsePermissions {
             Entry(id: "screenRecording", title: "Screen Recording",
                   why: "Lets the Snip, Screen and Window tools capture what is on your screen. Pulse keeps nothing it captures unless you save it.",
                   status: screenGranted ? .granted : screenNeeds.isEmpty ? .off : .needsApproval,
-                  required: !screenNeeds.isEmpty, needs: screenNeeds),
+                  // Never "required": macOS asks the first time a screenshot tool is used, and a
+                  // tool nobody has pressed must not raise the missing-permission prompt.
+                  required: false, needs: screenNeeds),
             Entry(id: "fullDiskAccess", title: "Full Disk Access",
                   why: "Lets the Storage scan open folders macOS protects, which would otherwise show as empty or unreadable.",
                   status: entries.first { $0.id == "fullDiskAccess" }?.status ?? .unknown,
