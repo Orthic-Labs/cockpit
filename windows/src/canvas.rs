@@ -180,7 +180,7 @@ impl Canvas {
                     }
                 }
                 crossings.sort_by(f32::total_cmp);
-                for pair in crossings.chunks_exact(2) {
+                for pair in crossings.as_chunks::<2>().0 {
                     let left = pair[0].max(0.0);
                     let right = pair[1].min(self.width as f32);
                     if right <= left {
