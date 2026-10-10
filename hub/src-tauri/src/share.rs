@@ -331,7 +331,7 @@ fn wanted() -> Option<Config> {
         .map(str::trim)
         .filter(|a| !a.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| format!("{} (Pulse)", computer_name()));
+        .unwrap_or_else(computer_name);
     let folder = settings["nearbySaveFolder"]
         .as_str()
         .map(str::trim)

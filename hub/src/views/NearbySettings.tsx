@@ -216,7 +216,7 @@ export function NearbyGroup({ s, set }: {
             <input
               className="ck-input ck-input-name"
               value={alias}
-              placeholder={share?.alias ?? (isWindows ? "PC (Pulse)" : "Mac (Pulse)")}
+              placeholder={share?.alias ?? (isWindows ? "This PC" : "This Mac")}
               onChange={(e) => setAlias(e.target.value)}
               onBlur={commitAlias}
               onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
