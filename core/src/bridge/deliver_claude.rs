@@ -51,6 +51,10 @@ use std::time::{Duration, Instant};
 pub const PEER_PROTOCOL: u64 = 1;
 /// How long to wait for the chat's accept / hold / refuse.
 const ACK_WINDOW: Duration = Duration::from_secs(3);
+/// How often the wait for a verdict looks for the chat's notice on the reply address, and
+/// how long that notice may still take once the chat has closed the connection.
+const STATUS_POLL: Duration = Duration::from_millis(50);
+const STATUS_GRACE: Duration = Duration::from_millis(750);
 /// Absolute limit on reading a chat's ACK frames, and the most bytes read.
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
 const ACK_MAX_BYTES: usize = 64 * 1024;
@@ -620,6 +624,8 @@ pub fn deliver_via(
         Ok(files) => files,
         Err(reason) => return Ok(shim::unsupported(&reason)),
     };
+    #[cfg(unix)]
+    note_chat_socket(&files.socket);
     let peer_key = shim::env_peer_key(env);
     let peer_key = peer_key.as_str();
     let route = match reply_socket {
@@ -713,7 +719,8 @@ pub fn deliver_via(
             },
         );
     });
-    let deadline = Instant::now() + ACK_WINDOW;
+    let posted = Instant::now();
+    let deadline = posted + ACK_WINDOW;
     let mut heard_anything = false;
     let finish = |receipt: Receipt| -> Receipt {
         match &reply_note {
@@ -725,8 +732,18 @@ pub fn deliver_via(
         }
     };
     loop {
+        // Claude answers on the reply address, not on this connection: nothing when it
+        // takes the message, a notice within a moment when it holds or refuses it.
+        if let Some(receipt) = status_receipt(shim::env_id(env)) {
+            return Ok(finish(receipt));
+        }
         let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
+        if left.is_zero() {
+            return Ok(finish(shim::sent(
+                "Sent; the chat gave no verdict (silence is normal), so it is unconfirmed.",
+            )));
+        }
+        match rx.recv_timeout(left.min(STATUS_POLL)) {
             Ok(frame) => {
                 heard_anything = true;
                 match classify(&frame) {
@@ -745,12 +762,15 @@ pub fn deliver_via(
                     None => {}
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                return Ok(finish(shim::sent(
-                    "Sent; the chat gave no verdict (silence is normal), so it is unconfirmed.",
-                )));
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let grace = (posted + STATUS_GRACE).min(deadline);
+                while Instant::now() < grace {
+                    if let Some(receipt) = status_receipt(shim::env_id(env)) {
+                        return Ok(finish(receipt));
+                    }
+                    std::thread::sleep(STATUS_POLL);
+                }
                 return if heard_anything || !cfg!(windows) {
                     Ok(finish(shim::sent(
                         "Sent; the chat closed the connection without a verdict.",
@@ -798,6 +818,43 @@ fn read_lines(
     if !pending.is_empty() {
         on_line(&String::from_utf8_lossy(&pending));
     }
+}
+
+// ---- the chat's own notice about a message ---------------------------------------
+
+/// What chats said about messages posted to them: (message id, status, reason), newest
+/// last. Claude sends this notice to the reply address, never on the connection the
+/// message came in on: `held` (parked for its owner's approval), `denied`, `expired`,
+/// `refused`, `dropped`, or `delivered` once a held one is let through. A message it
+/// simply takes gets no notice.
+static STATUSES: Mutex<Vec<(String, String, String)>> = Mutex::new(Vec::new());
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+const STATUSES_KEPT: usize = 256;
+
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+fn record_status(msg_id: &str, status: &str, reason: &str) {
+    let mut all = STATUSES.lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|(id, _, _)| id != msg_id);
+    if all.len() >= STATUSES_KEPT {
+        all.remove(0);
+    }
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    all.push((msg_id.to_string(), status.to_string(), reason));
+}
+
+/// The receipt a chat's notice about `msg_id` amounts to, once one has arrived. Anything
+/// but `delivered` means the chat does not have the message.
+fn status_receipt(msg_id: &str) -> Option<Receipt> {
+    let all = STATUSES.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, status, reason) = all.iter().find(|(id, _, _)| id == msg_id)?;
+    let detail = match status.as_str() {
+        "delivered" => return Some(shim::delivered("The chat took the message.")),
+        "held" => format!(
+            "Not delivered: the chat is holding it for its owner's approval. {reason}"
+        ),
+        other => format!("Not delivered: the chat reported it {other}. {reason}"),
+    };
+    Some(shim::refused(detail.trim()))
 }
 
 // ---- replies from chats ----------------------------------------------------------
@@ -943,17 +1000,51 @@ pub fn reply_route(peer_key: &str) -> ReplyRoute {
     }
 }
 
-/// Where the reply socket for one remote peer lives: a short path in a private
-/// per-user directory (Unix socket paths are limited to about 100 bytes).
+/// The folder the chats' own messaging sockets live in, learnt from the last chat a
+/// message was posted to.
+#[cfg(unix)]
+static CHAT_SOCKET_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Remember where `socket` (a chat's messaging socket) lives.
+#[cfg(unix)]
+fn note_chat_socket(socket: &str) {
+    if let Some(dir) = Path::new(socket).parent().filter(|d| d.is_dir()) {
+        *CHAT_SOCKET_DIR.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
+    }
+}
+
+/// Pulse's own private per-user folder for reply sockets.
+#[cfg(unix)]
+fn private_socket_dir() -> PathBuf {
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    PathBuf::from(format!("/tmp/pulse-bridge-{uid}"))
+}
+
+#[cfg(not(unix))]
+fn private_socket_dir() -> PathBuf {
+    std::env::temp_dir().join("pulse-bridge")
+}
+
+/// Where the reply socket for one remote peer lives (Unix socket paths are limited to
+/// about 100 bytes, so the name is short). Claude sends its notice about a message
+/// (held, refused, dropped) only to a reply address inside its own socket folder, and
+/// only to a socket named like this one, so the socket goes beside the chats' sockets
+/// when that folder exists; `ReplyHub::route_for` falls back to Pulse's private folder
+/// when it can't listen there.
 pub fn reply_socket_path(peer_key: &str) -> PathBuf {
     #[cfg(unix)]
     let base = {
-        // SAFETY: getuid has no preconditions.
-        let uid = unsafe { libc::getuid() };
-        PathBuf::from(format!("/tmp/pulse-bridge-{uid}"))
+        let learnt = CHAT_SOCKET_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let usual = PathBuf::from("/tmp/cc-socks");
+        match learnt {
+            Some(dir) => dir,
+            None if usual.is_dir() => usual,
+            None => private_socket_dir(),
+        }
     };
     #[cfg(not(unix))]
-    let base = std::env::temp_dir().join("pulse-bridge");
+    let base = private_socket_dir();
     base.join(format!("{}.sock", fnv(peer_key)))
 }
 
@@ -1003,9 +1094,14 @@ impl ReplyHub {
             if let Some(path) = paths.get(peer_key) {
                 return ReplyRoute::Listening(path.clone());
             }
-            let path = reply_socket_path(peer_key);
-            if let Err(e) = self.listen(peer_key.to_string(), &path) {
-                return ReplyRoute::Unavailable(format!("couldn't listen: {}", e.kind()));
+            let mut path = reply_socket_path(peer_key);
+            if self.listen(peer_key.to_string(), &path).is_err() {
+                // Not beside the chats' sockets (no such folder, or the path is too long):
+                // Pulse's own folder still takes replies, though not Claude's notices.
+                path = private_socket_dir().join(format!("{}.sock", fnv(peer_key)));
+                if let Err(e) = self.listen(peer_key.to_string(), &path) {
+                    return ReplyRoute::Unavailable(format!("couldn't listen: {}", e.kind()));
+                }
             }
             let text = path.to_string_lossy().into_owned();
             paths.insert(peer_key.to_string(), text.clone());
@@ -1088,7 +1184,8 @@ impl ReplyHub {
     fn listen(self: &Arc<Self>, peer_key: String, path: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixListener;
-        if let Some(dir) = path.parent() {
+        // Only Pulse's own folder is made and locked down here; the chats' folder is theirs.
+        if let Some(dir) = path.parent().filter(|d| *d == private_socket_dir()) {
             std::fs::create_dir_all(dir)?;
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
@@ -1163,6 +1260,21 @@ impl ReplyHub {
         let Ok(frame) = serde_json::from_str::<Value>(line.trim()) else {
             return;
         };
+        // A chat's notice about a message Pulse posted to it ("expired" with the detail
+        // "refused" is how Claude spells a refusal).
+        if frame["type"] == "control" && frame["action"] == "peer_message_status" {
+            if let (Some(id), Some(status)) =
+                (frame["orig_msg_id"].as_str(), frame["status"].as_str())
+            {
+                let status = if status == "expired" && frame["status_detail"] == "refused" {
+                    "refused"
+                } else {
+                    status
+                };
+                record_status(id, status, frame["reason"].as_str().unwrap_or(""));
+            }
+            return;
+        }
         // The auth frame, if any, is ignored: what counts is that the sender is a known local chat.
         if frame["type"] != "user" {
             return;
