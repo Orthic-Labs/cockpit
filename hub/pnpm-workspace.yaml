@@ -4,4 +4,5 @@ packages:
 # Exact versions only, reviewed: RightKit's own release. Drop once it is older
 # than the release-age window.
 minimumReleaseAgeExclude:
-  - '@rightkit/app-shell@0.2.1'
+  - '@rightkit/app-shell@0.4.1'
+  - '@rightkit/platform-ui@0.2.0'

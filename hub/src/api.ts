@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getPlatform } from "@rightkit/platform-ui";
 
 /** True in the Windows webview: the hub runs one page on both systems and a few strings differ. */
-export const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+export const isWindows = getPlatform() === "windows";
 
 export interface Metric<T> {
   value: T | null;
