@@ -86,6 +86,9 @@ actor ClaudeOAuthProvider: UsageProvider {
     private var lastTrackedAccount: String?
     /// Pulse fork: the last cache reading, kept through rescan waits.
     private var lastDesktopReading: ClaudeDesktopUsageCache.Reading?
+    /// Pulse fork: the last reading for a Desktop account Claude Code is not signed
+    /// into, kept so the ring does not empty between Desktop's own refreshes.
+    private var lastDesktopOnlyReading: ClaudeDesktopUsageCache.Reading?
     /// What a `.live` fetch will accept instead.
     ///
     /// Two minutes, from the same measurement that set the thirty: the session
@@ -196,6 +199,7 @@ actor ClaudeOAuthProvider: UsageProvider {
     func forgetAccountState() {
         lastTrackedAccount = nil
         lastDesktopReading = nil
+        lastDesktopOnlyReading = nil
         lastDesktopMiss = nil
         lastCLIWindows = nil
         lastCLIPlan = nil
@@ -517,12 +521,22 @@ actor ClaudeOAuthProvider: UsageProvider {
             }
         }
         let now = Date()
-        let allowance = freshness == .live ? min(liveDesktopFreshness, desktopFreshness)
-                                           : desktopFreshness
-        guard let reading, reading.isFresh(at: now, within: allowance),
-              !Self.hasExpiredWindow(reading.windows, at: now) else { return none }
-        return snapshot(windows: reading.windows, plan: nil,
-                        resetCredits: reading.resets?.credits(at: now))
+        // The newest reading seen for this account: a scan that finds nothing
+        // (Desktop rewriting its cache) falls back to the one held.
+        let held = [reading, lastDesktopOnlyReading].compactMap { $0 }
+            .max { $0.capturedAt < $1.capturedAt }
+        lastDesktopOnlyReading = held
+        // A window that has reset makes the reading wrong; nothing else empties
+        // the ring. This is the only source for this account, so an older
+        // reading is shown with its age rather than dropped: dropping it left
+        // the ring blank until Desktop next asked for its own usage.
+        guard let held, !Self.hasExpiredWindow(held.windows, at: now) else { return none }
+        var result = snapshot(windows: held.windows, plan: nil,
+                              resetCredits: held.resets?.credits(at: now))
+        if !held.isFresh(at: now, within: desktopFreshness) {
+            result.status = .stale(since: held.capturedAt)
+        }
+        return result
     }
 
     /// Whether any window in a reading names a reset time that has already

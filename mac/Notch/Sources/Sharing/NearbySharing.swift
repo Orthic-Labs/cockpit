@@ -204,6 +204,10 @@ final class NearbySharing {
     /// Ends the Send ring's pulse after a bridge message (`bridgeActivity`).
     private var pulseTimer: Timer?
     private var lastBridgeActivity: Date?
+    /// A transfer that just ended well ("Sent to …", "Copied from …"): the Send ring
+    /// shows it as complete for `flashWindow`, the same green as a delivered message.
+    private var ringFlash: (at: Date, name: String)?
+    private var noteIsProblem = false
     private var hubLaunchedAt = Date.distantPast
     private var primed = false
     private var seenFinished = Set<String>()
@@ -307,9 +311,28 @@ final class NearbySharing {
         }
     }
 
+    /// How long the Send ring stays green after a transfer ends well.
+    static let flashWindow: TimeInterval = 3
+
+    /// Marks the Send ring complete for `flashWindow`, then redraws once so it stops.
+    private func flashRing(_ name: String) {
+        ringFlash = (Date(), name)
+        pulseTimer?.invalidate()
+        pulseTimer = Timer.scheduledTimer(withTimeInterval: Self.flashWindow + 0.2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onChange?() }
+        }
+        onChange?()
+    }
+
     /// The Send ring's inner pulse: one "complete" session for `pulseWindow`
-    /// after the bridge sent or received a message, else nil (no indicator).
+    /// after the bridge sent or received a message, or for `flashWindow` after a
+    /// transfer ended well, else nil (no indicator).
     func bridgeActivity() -> ActivitySummary? {
+        if let flash = ringFlash, Date().timeIntervalSince(flash.at) < Self.flashWindow {
+            return ActivitySummary(sessions: [AgentSession(
+                id: "send-done", name: flash.name, detail: L10n.t("Send"),
+                state: .success, waitingFor: nil, since: flash.at)])
+        }
         guard let activity = fresh(state)?.bridge?.activity, let at = activity.latest,
               Date().timeIntervalSince(at) < Self.pulseWindow else { return nil }
         let name = activity.lastWasSent ? L10n.t("Message sent") : L10n.t("Message received")
@@ -857,9 +880,12 @@ final class NearbySharing {
     func handleCardHover(_ on: Bool) {
         cardHovered = on
         switch card {
+        case .note where !noteIsProblem:
+            // A confirmation has nothing to click; it closes on its own timer.
+            break
         case .saved, .note:
             cardTimer?.invalidate()
-            if !on { scheduleExpiry(after: 3) }
+            if !on { scheduleExpiry(after: 2) }
         case .choose:
             cardTimer?.invalidate()
             if !on { scheduleExpiry(after: 30) }
@@ -881,12 +907,12 @@ final class NearbySharing {
         _ = present?(nil)
     }
 
-    private func scheduleExpiry(after seconds: TimeInterval) {
+    private func scheduleExpiry(after seconds: TimeInterval, evenIfHovered: Bool = false) {
         cardTimer?.invalidate()
         let shown = card
         cardTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.card == shown, !self.cardHovered else { return }
+                guard let self, self.card == shown, evenIfHovered || !self.cardHovered else { return }
                 if shown == .choose { self.pending = nil }
                 self.clearCard()
             }
@@ -993,6 +1019,7 @@ final class NearbySharing {
             let board = NSPasteboard.general
             board.clearContents()
             board.setString(text, forType: .string)
+            flashRing(L10n.t("Copied from \(transfer.peer)"))
             showNote(title: L10n.t("Copied from \(transfer.peer)"),
                      detail: Self.capped(text).split(whereSeparator: \.isNewline).first.map(String.init) ?? "",
                      problem: false)
@@ -1021,7 +1048,8 @@ final class NearbySharing {
                                  title: L10n.t("Copied from \(transfer.peer)"), detail: detail, style: .done,
                                  primary: .init(choice: .showImage, label: L10n.t("Show"))),
                  as: .saved(files))
-            scheduleExpiry(after: 6)
+            flashRing(L10n.t("Copied from \(transfer.peer)"))
+            scheduleExpiry(after: 4)
         case ("receive", "done") where transfer.message != nil:
             let text = transfer.message ?? ""
             remember(Last(kind: "text", text: Self.capped(text), files: nil, at: Date().timeIntervalSince1970))
@@ -1044,9 +1072,11 @@ final class NearbySharing {
                                  title: L10n.t("Saved to \(place)"), detail: detail, style: .done,
                                  primary: .init(choice: .showImage, label: L10n.t("Show"))),
                  as: .saved(files))
-            scheduleExpiry(after: 8)
+            flashRing(L10n.t("Saved to \(place)"))
+            scheduleExpiry(after: 6)
         case ("send", "done"):
             let count = max(transfer.filesTotal, 1)
+            flashRing(L10n.t("Sent to \(transfer.peer)"))
             showNote(title: L10n.t("Sent to \(transfer.peer)"),
                      detail: count == 1 ? L10n.t("1 file") : L10n.t("\(count) files"), problem: false)
         case (_, "declined"):
@@ -1060,10 +1090,15 @@ final class NearbySharing {
     }
 
     func showNote(title: String, detail: String, problem: Bool) {
+        noteIsProblem = problem
         show(DiskImagePrompt(iconPath: iconPath(nil), title: title, detail: detail,
                              style: problem ? .problem : .done),
              as: .note)
-        scheduleExpiry(after: problem ? 8 : 4)
+        if problem {
+            scheduleExpiry(after: 8)
+        } else {
+            scheduleExpiry(after: 2.5, evenIfHovered: true)
+        }
     }
 
     // MARK: - The device list and the transfer, on the card
@@ -1200,8 +1235,9 @@ final class NearbySharing {
                 _ = present?(sendingPrompt(transfer, peer: peer))
                 if !cardHovered { scheduleExpiry(after: 6) }
             } else {
-                // Sent: the card has nothing more to say; it goes at once.
+                // Sent: the card goes at once and the Send ring turns green instead.
                 clearCard()
+                flashRing(L10n.t("Sent to \(peer.alias)"))
             }
         default:
             _ = present?(sendingPrompt(transfer, peer: peer))
