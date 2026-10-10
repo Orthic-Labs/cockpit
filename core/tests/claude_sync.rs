@@ -525,9 +525,10 @@ fn chat_mirror_journey() {
 
     // Signed out: no pass. Switched account: the pass copies from the new one.
     fs::write(root.join("config.json"), "{}").unwrap();
+    let signed_out = snapshot(&root);
     let none = sync::mirror(&root, &registry).unwrap();
     assert_eq!(none.aborted.as_deref(), Some("no signed-in account"));
-    assert_eq!(snapshot(&root), settled);
+    assert_eq!(snapshot(&root), signed_out);
     config(&b);
     let back = sync::mirror(&root, &registry).unwrap();
     assert_eq!(back.active.as_deref(), Some(b.as_str()));

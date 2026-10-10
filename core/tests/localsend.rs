@@ -98,7 +98,8 @@ fn accepted_files_are_saved_inside_the_save_folder_and_never_overwrite() {
         let token = session.files["f1"].clone();
         assert_eq!(upload(53941, &session, "wrong-token", b"hello"), 403);
         assert_eq!(upload(53941, &session, &token, b"hello"), 200);
-        let saved = save.join("evil").join(expected);
+        // The test sender presents no certificate, so its files are kept apart.
+        let saved = save.join("Received (unverified)").join("evil").join(expected);
         assert_eq!(std::fs::read(&saved).unwrap(), b"hello");
     }
     assert!(!save.parent().unwrap().join("evil").exists());

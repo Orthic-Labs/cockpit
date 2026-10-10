@@ -151,10 +151,7 @@ fn ask() -> TrustState {
 
 /// A claimed text cut to `max` characters with control characters removed.
 fn clean(text: &str, max: usize) -> String {
-    text.chars()
-        .filter(|c| !c.is_control())
-        .take(max)
-        .collect()
+    text.chars().filter(|c| !c.is_control()).take(max).collect()
 }
 
 fn valid_fingerprint(fingerprint: &str) -> bool {
@@ -219,8 +216,7 @@ impl TrustStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !bad.exists() => {
                 let now = now_ms();
                 let mut seen = HashSet::new();
-                for (fingerprint, label) in
-                    super::load_known(&directory.join("known-devices.json"))
+                for (fingerprint, label) in super::load_known(&directory.join("known-devices.json"))
                 {
                     let fingerprint = normalize(&fingerprint);
                     if !valid_fingerprint(&fingerprint) || !seen.insert(fingerprint.clone()) {
@@ -320,9 +316,8 @@ impl TrustStore {
                     changed |= entry.alias_claimed != alias;
                     entry.alias_claimed = alias;
                 } else {
-                    changed |= entry.alias_seen != alias
-                        || entry.model != model
-                        || entry.kind != kind;
+                    changed |=
+                        entry.alias_seen != alias || entry.model != model || entry.kind != kind;
                     entry.alias_seen = alias;
                     entry.model = model;
                     entry.kind = kind;
@@ -357,9 +352,9 @@ impl TrustStore {
     /// never accepts the weaker callback proof.
     pub fn certificate_proven(&self, fingerprint: &str) -> bool {
         let fingerprint = normalize(fingerprint);
-        self.devices.iter().any(|d| {
-            d.fingerprint == fingerprint && d.proof.as_deref() == Some(PROOF_CERTIFICATE)
-        })
+        self.devices
+            .iter()
+            .any(|d| d.fingerprint == fingerprint && d.proof.as_deref() == Some(PROOF_CERTIFICATE))
     }
 
     /// The device just answered a connect-back handshake for its fingerprint.
@@ -417,7 +412,11 @@ impl TrustStore {
         if !valid_fingerprint(&fingerprint) {
             return Err("That device has no fingerprint.".to_string());
         }
-        let index = match self.devices.iter().position(|d| d.fingerprint == fingerprint) {
+        let index = match self
+            .devices
+            .iter()
+            .position(|d| d.fingerprint == fingerprint)
+        {
             Some(index) => index,
             None => {
                 self.devices

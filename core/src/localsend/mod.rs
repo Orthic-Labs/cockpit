@@ -13,8 +13,8 @@ pub mod send;
 pub mod trust;
 
 pub use send::{Entry, Peer, SendItem};
-pub use trust::{TrustEntry, TrustState};
 use trust::normalize;
+pub use trust::{TrustEntry, TrustState};
 
 use proto::DeviceInfo;
 use serde::{Deserialize, Serialize};
