@@ -838,7 +838,8 @@ fn build(id: &str, area: &str, fixture: &Value, text: &mut TextPainter) -> Outco
             let state = str_of(fixture, "state");
             let pressed = state == Some("pressed");
             render::set_pressed(pressed);
-            let canvas = render::render_menu_hover(DPI, text, state != None && state != Some("rest"));
+            let canvas =
+                render::render_menu_hover(DPI, text, state.is_some() && state != Some("rest"));
             render::set_pressed(false);
             Ok(vec![(canvas, 0, 0)])
         }

@@ -1170,7 +1170,10 @@ fn desktop_only(id: &str, now: u64, tracker: &mut Tracker) -> Outcome {
         }
         Err(why) => {
             set_claude_source("desktop_cache");
-            CLAUDE_SOURCE.lock().unwrap_or_else(PoisonError::into_inner).1 = why;
+            CLAUDE_SOURCE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .1 = why;
             if tracker.note != why {
                 tracker.note = why;
                 diag::info("claude_desktop_cache", &[("result", why)]);

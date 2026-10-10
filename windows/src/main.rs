@@ -1071,45 +1071,46 @@ fn refresh_panels(new_machine: Option<Machine>) -> u32 {
 /// changed.
 fn redraw_panel(key: isize, usage: &[Usage; 2]) {
     let ring = send::ring();
-    let (views, slot, badges, handle, press) =
-        {
-            let app = lock_state();
-            let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
-                return;
-            };
-            // The folded pill shows no readings, so its identity is the empty list.
-            let views = if panel.slot.folded {
-                Vec::new()
-            } else {
-                layout::views(app.machine.as_ref(), usage, &ring)
-            };
-            // The settings handle part the pointer is on (the folded pill has none).
-            let handle = app
-                .ui
-                .handle
-                .filter(|h| h.0 == key && !panel.slot.folded)
-                .map(|h| h.1);
-            let press = app
-                .ui
-                .pressed
-                .filter(|p| p.0 == key && !panel.slot.folded)
-                .map(|p| p.1);
-            let drawn = (
-                &views,
-                panel.slot.edge,
-                panel.slot.folded,
-                panel.slot.dpi,
-                app.badges,
-                handle,
-                press,
-            );
-            if panel.drawn.as_ref().is_some_and(|shown| {
-                (&shown.0, shown.1, shown.2, shown.3, shown.4, shown.5, shown.6) == drawn
-            }) {
-                return;
-            }
-            (views, panel.slot, app.badges, handle, press)
+    let (views, slot, badges, handle, press) = {
+        let app = lock_state();
+        let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
+            return;
         };
+        // The folded pill shows no readings, so its identity is the empty list.
+        let views = if panel.slot.folded {
+            Vec::new()
+        } else {
+            layout::views(app.machine.as_ref(), usage, &ring)
+        };
+        // The settings handle part the pointer is on (the folded pill has none).
+        let handle = app
+            .ui
+            .handle
+            .filter(|h| h.0 == key && !panel.slot.folded)
+            .map(|h| h.1);
+        let press = app
+            .ui
+            .pressed
+            .filter(|p| p.0 == key && !panel.slot.folded)
+            .map(|p| p.1);
+        let drawn = (
+            &views,
+            panel.slot.edge,
+            panel.slot.folded,
+            panel.slot.dpi,
+            app.badges,
+            handle,
+            press,
+        );
+        if panel.drawn.as_ref().is_some_and(|shown| {
+            (
+                &shown.0, shown.1, shown.2, shown.3, shown.4, shown.5, shown.6,
+            ) == drawn
+        }) {
+            return;
+        }
+        (views, panel.slot, app.badges, handle, press)
+    };
     let Some(canvas) = with_text(|text| {
         render::render_notch(
             &views,
