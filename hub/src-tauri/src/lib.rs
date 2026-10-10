@@ -16,6 +16,9 @@ mod disk_index;
 
 mod duplicates;
 
+#[cfg(windows)]
+mod eject_windows;
+
 mod files;
 
 mod growth;
@@ -259,10 +262,10 @@ fn startup_name() -> String {
         .unwrap_or_else(|| "Macintosh HD".into())
 }
 
-/// A mounted disk image (an installer DMG), not a drive. Windows has none here.
+/// A mounted disk image (an ISO, VHD or VHDX), not a drive. See `eject_windows`.
 #[cfg(windows)]
-pub(crate) fn is_disk_image(_mount: &str) -> bool {
-    false
+pub(crate) fn is_disk_image(mount: &str) -> bool {
+    eject_windows::is_disk_image(mount)
 }
 
 /// A mounted disk image (an installer DMG), not a drive.
@@ -280,7 +283,8 @@ pub(crate) fn is_disk_image(mount: &str) -> bool {
 
 /// Every mounted volume a person would recognise: the startup disk, external
 /// drives and mounted disk images (flagged) under /Volumes, not system
-/// volumes or Time Machine snapshots. On Windows: every lettered drive.
+/// volumes or Time Machine snapshots. On Windows: every lettered drive, with mounted
+/// ISO/VHD/VHDX images flagged and USB/SD drives marked removable.
 #[tauri::command]
 async fn volumes() -> Result<Vec<Volume>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -306,14 +310,24 @@ async fn volumes() -> Result<Vec<Volume>, String> {
             }
             #[cfg(unix)]
             let disk_image = !internal && is_disk_image(&mount);
-            #[cfg(windows)]
-            let disk_image = false;
             let (Some(total), Some(available)) = (disk.total_bytes, disk.available_bytes) else {
                 continue;
             };
             if total == 0 {
                 continue;
             }
+            #[cfg(unix)]
+            let removable = disk.removable;
+            // One read-only query on the volume (no administrator needed); the startup disk is
+            // never an image or removable.
+            #[cfg(windows)]
+            let kind = if internal { eject_windows::DriveKind::Fixed } else { eject_windows::classify(&mount) };
+            #[cfg(windows)]
+            let (disk_image, removable) = match kind {
+                eject_windows::DriveKind::DiskImage => (true, false),
+                eject_windows::DriveKind::Removable => (false, true),
+                eject_windows::DriveKind::Fixed => (false, !internal && disk.removable),
+            };
             #[cfg(unix)]
             let name = if internal {
                 startup_name()
@@ -330,7 +344,7 @@ async fn volumes() -> Result<Vec<Volume>, String> {
                 mount_point: mount,
                 total_bytes: total,
                 available_bytes: available,
-                removable: disk.removable,
+                removable,
                 internal,
                 disk_image,
             });
@@ -374,12 +388,15 @@ async fn eject(mount: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Disk images are a macOS idea; drives are ejected from File Explorer.
+/// Eject a mounted disk image (ISO, VHD, VHDX) or a removable drive (USB, SD). The startup
+/// disk and fixed internal disks are refused, and a drive with open files is reported, not
+/// forced. Off the UI thread: the eject can wait for Windows to flush and release the drive.
 #[cfg(windows)]
 #[tauri::command]
 async fn eject(mount: String) -> Result<(), String> {
-    let _ = mount;
-    Err("Eject drives from File Explorer.".into())
+    tauri::async_runtime::spawn_blocking(move || eject_windows::eject(&mount))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Open System Settings at Full Disk Access. Opens a window; changes nothing.
