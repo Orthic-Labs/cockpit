@@ -514,9 +514,51 @@ fn record_status(store: &Store, device: &str, error: Option<&str>) {
 }
 
 /// Poll one link: list its chats, pin or check its device id, record how it went.
+/// Whether a remote answer means the command reached the wrong shell family: PowerShell
+/// choking on POSIX quoting, or a POSIX shell / cmd on PowerShell syntax.
+fn wrong_shell(error: &str) -> bool {
+    error.contains("ParserError")
+        || error.contains("is not recognized as")
+        || error.contains("syntax error")
+        || error.contains("command not found")
+}
+
+/// Poll `link`; when the answer says the stored shell family is wrong (a link made
+/// before families were recorded, or a computer whose login shell changed), try the
+/// other family once and keep it when it answers.
+fn list_with_shell_fallback(
+    store: &Store,
+    link: &mut Link,
+) -> Result<(RemoteListing, Option<String>), String> {
+    match list_chats_identified(link) {
+        Err(error) if wrong_shell(&error) && std::env::var_os("PULSE_BRIDGE_SSH").is_none() => {
+            let other = if link.shell == "powershell" { "posix" } else { "powershell" };
+            let mut retry = link.clone();
+            retry.shell = other.to_string();
+            match list_chats_identified(&retry) {
+                Ok(answer) => {
+                    let device = link.device.clone();
+                    let shell = other.to_string();
+                    let _ = store.update_state("links.json", move |links: &mut Vec<Link>| {
+                        for l in links.iter_mut() {
+                            if l.device.eq_ignore_ascii_case(&device) {
+                                l.shell = shell.clone();
+                            }
+                        }
+                    });
+                    link.shell = other.to_string();
+                    Ok(answer)
+                }
+                Err(_) => Err(error),
+            }
+        }
+        other => other,
+    }
+}
+
 fn poll(store: &Store, mut link: Link) -> RemoteChats {
     let pinned = link.device_id.clone();
-    let listing = list_chats_identified(&link).and_then(|(listing, seen)| match (pinned, seen) {
+    let listing = list_with_shell_fallback(store, &mut link).and_then(|(listing, seen)| match (pinned, seen) {
         (Some(pinned), Some(seen)) if pinned != seen => Err(format!(
             "{} is not the computer this link was made with (device id changed); \
              link it again if it was reinstalled",
