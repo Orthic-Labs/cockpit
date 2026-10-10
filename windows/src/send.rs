@@ -353,8 +353,12 @@ pub enum View {
     Plain,
     /// "Send to…": fingerprint, alias, model and symbol of each device.
     List {
+        /// The devices in view (at most `CHOOSE_ROWS`; the wheel moves the window).
         rows: Vec<(String, String, String, Symbol)>,
         scanning: bool,
+        /// Devices scrolled out above and below the ones in view, noted as "+N more".
+        above: usize,
+        below: usize,
     },
     Transfer {
         stage: Stage,
@@ -376,6 +380,9 @@ pub struct Prompt {
     /// The large icon of a plain card.
     pub lead: Lead,
 }
+
+/// Devices the Send-to card shows at once before it scrolls.
+const CHOOSE_ROWS: usize = 5;
 
 /// The symbol on a pill, as the Mac's `DiskImageCard.symbol(for:)` picks it.
 fn pill_symbol(action: &Action) -> Symbol {
@@ -446,6 +453,8 @@ impl Prompt {
             View::List {
                 rows: devices,
                 scanning,
+                above,
+                below,
             } => {
                 let mut panel = Panel::new(content);
                 if devices.is_empty() {
@@ -453,6 +462,9 @@ impl Prompt {
                         Row::Waiting("Waiting for a device to appear\u{2026}".into()),
                         None,
                     );
+                }
+                if *above > 0 {
+                    panel.row(Row::Note(format!("+{above} more")), None);
                 }
                 for (fingerprint, alias, model, symbol) in devices {
                     panel.row(
@@ -463,6 +475,9 @@ impl Prompt {
                         },
                         Some(Action::SendTo(fingerprint.clone())),
                     );
+                }
+                if *below > 0 {
+                    panel.row(Row::Note(format!("+{below} more")), None);
                 }
                 panel.heads(vec![
                     if *scanning {
@@ -675,8 +690,8 @@ fn ago(at: u64) -> String {
 }
 
 impl Last {
-    /// The hover card's top row as the Mac's button: "Copy last: <preview>" with the age
-    /// ("8 min ago") apart, at the right.
+    /// The hover card's "Copy last" button: "Copy last: <preview>" (the bottom bar shows the
+    /// label; the age ("8 min ago") is kept apart for tooltips).
     fn row_label(&self) -> Option<(String, String)> {
         let what = match &self.text {
             Some(t) => {
@@ -721,6 +736,8 @@ struct Model {
     card_hovered: bool,
     pending: Option<Pending>,
     last_choose: Option<Prompt>,
+    /// How many devices the Send-to card is scrolled past.
+    choose_scroll: usize,
     send_peer: Option<Device>,
     send_summary: String,
     send_baseline: HashSet<String>,
@@ -750,6 +767,7 @@ impl Model {
             card_hovered: false,
             pending: None,
             last_choose: None,
+            choose_scroll: 0,
             send_peer: None,
             send_summary: String::new(),
             send_baseline: HashSet::new(),
@@ -829,6 +847,7 @@ impl Model {
         }
         if self.card == Card::Choose {
             self.last_choose = None;
+            self.choose_scroll = 0;
         }
         if self.card == Card::Sending {
             self.send_peer = None;
@@ -1299,9 +1318,14 @@ impl Model {
             "done" | "declined" | "failed" => {
                 self.seen_finished.insert(transfer.id.clone());
                 self.send_finished = true;
-                self.prompt = Some(self.sending_prompt(Some(transfer), &peer));
-                if !self.card_hovered {
-                    self.schedule_expiry(if transfer.state == "done" { 2.0 } else { 6.0 });
+                if transfer.state == "done" {
+                    // Sent: the card has nothing more to say; it goes at once (the Mac's).
+                    self.clear_card();
+                } else {
+                    self.prompt = Some(self.sending_prompt(Some(transfer), &peer));
+                    if !self.card_hovered {
+                        self.schedule_expiry(6.0);
+                    }
                 }
             }
             _ => self.prompt = Some(self.sending_prompt(Some(transfer), &peer)),
@@ -1313,7 +1337,13 @@ impl Model {
     fn choose_prompt(&self) -> Prompt {
         let live = self.fresh();
         let list = live.map(|s| s.devices.clone()).unwrap_or_default();
-        let rows = list
+        // The card shows a window of the list, like the Mac's scroll view bounded by the
+        // screen; the wheel moves it.
+        let first = self
+            .choose_scroll
+            .min(list.len().saturating_sub(CHOOSE_ROWS));
+        let shown = list.len().min(first + CHOOSE_ROWS);
+        let rows = list[first..shown]
             .iter()
             .map(|d| {
                 (
@@ -1348,12 +1378,15 @@ impl Model {
             view: View::List {
                 rows,
                 scanning: live.is_some_and(|s| s.scanning),
+                above: first,
+                below: list.len() - shown,
             },
             lead: Lead::Tile(Tile::Folder),
         }
     }
 
     fn show_choose(&mut self) {
+        self.choose_scroll = 0;
         let prompt = self.choose_prompt();
         self.last_choose = Some(prompt.clone());
         self.show(prompt, Card::Choose);
@@ -1503,21 +1536,11 @@ impl Model {
         let live = self.fresh();
         let devices = live.map(|s| s.devices.clone()).unwrap_or_default();
         let mut rows: Vec<Row> = Vec::new();
-        let mut actions: Vec<Option<Action>> = Vec::new();
+        let mut actions: Vec<Vec<Option<Action>>> = Vec::new();
         let mut add = |row: Row, action: Option<Action>| {
             rows.push(row);
-            actions.push(action);
+            actions.push(vec![action]);
         };
-        if let Some((label, detail)) = self.last.as_ref().and_then(Last::row_label) {
-            add(
-                Row::Button {
-                    symbol: Some(Symbol::Copy),
-                    label,
-                    detail,
-                },
-                Some(Action::CopyLast),
-            );
-        }
         if let Some(transfer) = live.and_then(|s| s.transfers.iter().rev().find(|t| t.is_open())) {
             let label = if transfer.direction == "send" {
                 format!("Sending to {}", transfer.peer)
@@ -1615,23 +1638,30 @@ impl Model {
                 Some(Action::SendTo(device.fingerprint.clone())),
             );
         }
+        // The Mac's order: the hint line above the bottom bar. The network hint stands in for
+        // the paste hint.
         let blocked = live.is_some_and(|s| s.local_network.as_deref() == Some("blocked"));
-        // The Mac's order: the network hint stands in for the paste button and its hint line.
         if blocked {
             add(Row::Text(FIREWALL_HINT.into()), None);
         } else if !devices.is_empty() {
             add(
-                Row::Button {
-                    symbol: Some(Symbol::Copy),
-                    label: "Paste clipboard".into(),
-                    detail: String::new(),
-                },
-                Some(Action::Paste),
-            );
-            add(
                 Row::Text("Ctrl+V sends the clipboard \u{b7} drop files here".into()),
                 None,
             );
+        }
+        // One bottom row, two buttons: "Copy last: <preview>" at the left when there is a last
+        // item, "Paste" at the right when a device is listed.
+        let copy = self
+            .last
+            .as_ref()
+            .and_then(Last::row_label)
+            .map(|(label, _)| label);
+        let paste = !devices.is_empty();
+        if copy.is_some() || paste {
+            let copy_action = copy.is_some().then_some(Action::CopyLast);
+            let paste_action = paste.then_some(Action::Paste);
+            rows.push(Row::Bar { copy, paste });
+            actions.push(vec![copy_action, paste_action]);
         }
         Panel {
             content: CardContent {
@@ -1641,7 +1671,7 @@ impl Model {
                 mark: Mark::Send,
                 ..CardContent::default()
             },
-            actions: actions.into_iter().map(|action| vec![action]).collect(),
+            actions,
             head: Vec::new(),
         }
     }
@@ -1969,6 +1999,28 @@ pub fn perform(action: Action) {
     }
     model().perform(action);
     notify();
+}
+
+/// The wheel over the Send-to card: `steps` devices down (negative up). True when the card
+/// moved.
+pub fn scroll_choose(steps: i32) -> bool {
+    let moved = {
+        let mut model = model();
+        if model.card != Card::Choose {
+            return false;
+        }
+        let total = model.devices().len();
+        let most = total.saturating_sub(CHOOSE_ROWS);
+        let before = model.choose_scroll.min(most);
+        let after = before.saturating_add_signed(steps as isize).min(most);
+        model.choose_scroll = after;
+        model.refresh_choose_card();
+        after != before
+    };
+    if moved {
+        notify();
+    }
+    moved
 }
 
 /// Ctrl+V (the hot key) or the "Paste clipboard" row: the clipboard's files, a picture, or

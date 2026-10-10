@@ -30,6 +30,7 @@ mod json;
 mod keys;
 mod layout;
 mod lifecycle;
+mod notify;
 mod raii;
 mod render;
 mod runtime;
@@ -48,8 +49,8 @@ use layout::{Badges, Cell, CellView, Edge, Handle, SEND_CELL};
 use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate};
 use raii::{ClassGuard, OwnedWindow, TimerGuard, hwnd_from_key, hwnd_key};
 use runtime::{
-    InstanceError, InstanceLock, Placed, Placement, Retry, RetryReport, Slot, desired_hidden,
-    interval_ms, notch_bounds, plan_placements,
+    InstanceError, InstanceLock, Placed, Placement, Retry, RetryReport, Slot, UserSecurity,
+    desired_hidden, instance_mutex_name, interval_ms, notch_bounds, plan_placements,
 };
 use sensors::{Machine, Sampler};
 use settings::PillSettings;
@@ -58,6 +59,7 @@ use std::mem::size_of;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 use surface::{TextPainter, present};
 use usage::Usage;
 use visibility::{Occupancy, classify_window, is_shell_class_name, is_tool_window_ex_style};
@@ -300,7 +302,7 @@ fn run() -> Result<(), Error> {
     }));
     // Declared first, so it is released last (after windows, timer, classes and the final
     // settings write). Held for the lifetime of the process.
-    let _instance = match InstanceLock::acquire() {
+    let _instance = match acquire_newest_wins() {
         Ok(lock) => lock,
         Err(InstanceError::AlreadyRunning) => {
             diag::info(
@@ -401,6 +403,46 @@ fn persist_settings() {
     }
 }
 
+/// The controller window's title: carries the per-user instance name, so a starting notch
+/// finds the older notch of its own user (and never another user's) to retire it.
+fn controller_title() -> String {
+    match UserSecurity::current() {
+        Ok(identity) => format!(
+            "Pulse Notch Controller {}",
+            instance_mutex_name(identity.sid_string())
+        ),
+        Err(_) => "Pulse Notch Controller".to_string(),
+    }
+}
+
+/// Newest wins, as on the Mac (`retireOlderInstances`): a notch that finds an older one asks
+/// it to quit (`WM_CLOSE` to its controller window, which tears down and releases the
+/// instance mutex) and waits for the mutex to come free before taking over. If the older one
+/// has not let go within the wait, this one gives way as before (`AlreadyRunning`).
+fn acquire_newest_wins() -> Result<InstanceLock, InstanceError> {
+    match InstanceLock::acquire() {
+        Err(InstanceError::AlreadyRunning) => {}
+        other => return other,
+    }
+    let title = wide(&controller_title());
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    let older = unsafe { FindWindowW(CONTROLLER_CLASS, PCWSTR(title.as_ptr())) };
+    if let Ok(older) = older {
+        diag::info("instance_retiring_older", &[]);
+        // SAFETY: a plain post to another process's window; it may fail if that window is gone.
+        let _ = unsafe { PostMessageW(Some(older), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match InstanceLock::acquire() {
+            Err(InstanceError::AlreadyRunning) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            other => return other,
+        }
+    }
+}
+
 fn run_pill() -> Result<(), Error> {
     configure_dpi_awareness();
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }?.into();
@@ -414,7 +456,7 @@ fn run_pill() -> Result<(), Error> {
     let controller = OwnedWindow::create(
         WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
         CONTROLLER_CLASS,
-        &wide("Pulse Notch Controller"),
+        &wide(&controller_title()),
         WS_POPUP, // never shown; still a top-level window, so it receives WM_DISPLAYCHANGE
         (0, 0, 0, 0),
         instance,
@@ -426,8 +468,7 @@ fn run_pill() -> Result<(), Error> {
     }
 
     // Global keyboard layer (Mac-style Alt shortcuts, screenshot hotkeys). Declared after the
-    // timer so the hook thread stops first; `shots` is declared before `_keys` so the hook
-    // stops posting before the screenshot thread exits.
+    // timer so the hook thread stops first.
     let (mac_shortcuts, screenshot_shortcuts) = {
         let app = lock_state();
         (
@@ -436,12 +477,8 @@ fn run_pill() -> Result<(), Error> {
         )
     };
     shot::set_save_to_desktop(lock_state().settings.screenshot_to_desktop);
-    let shots = if screenshot_shortcuts {
-        shot::start()
-    } else {
-        None
-    };
-    let _keys = keys::start(mac_shortcuts, shots.is_some());
+    // The keys module owns the screenshot thread too and changes both live (`keys::apply`).
+    let _keys = keys::start(mac_shortcuts, screenshot_shortcuts);
 
     usage::start(controller.key());
     bridge::start(
@@ -666,6 +703,54 @@ fn reconcile_panels() {
     }
 }
 
+/// The part of the monitor a notch may dock in: its work area (the monitor less the taskbar
+/// and any app bar), so a notch on the bottom edge sits above the taskbar and one on a side
+/// edge beside it. The monitor's own bounds when the work area cannot be read.
+fn docking_bounds(bounds: Bounds) -> Bounds {
+    let rect: RECT = bounds.into();
+    // SAFETY: plain queries on a rectangle; `info` has its size set, as the call requires.
+    let work = unsafe {
+        let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+        let mut info = monitor_info();
+        GetMonitorInfoW(monitor, &mut info.monitorInfo)
+            .as_bool()
+            .then_some(info.monitorInfo.rcWork)
+    };
+    match work {
+        Some(work) if work.right > work.left && work.bottom > work.top => Bounds::from(work),
+        _ => bounds,
+    }
+}
+
+/// The taskbar moved, resized, hid or showed (the work area changed): every notch docks
+/// against the new work area again.
+fn redock_panels() {
+    let panels: Vec<(isize, Bounds, Slot)> = lock_state()
+        .panels
+        .iter()
+        .map(|p| (p.window.key(), p.bounds, p.slot))
+        .collect();
+    for (key, bounds, slot) in panels {
+        let target = notch_bounds(docking_bounds(bounds), slot);
+        // SAFETY: the panel window is owned by `app.panels`; a failure just keeps the old spot.
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd_from_key(key),
+                None,
+                target.left,
+                target.top,
+                target.width(),
+                target.height(),
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+        };
+    }
+    let interval = refresh_panels(None);
+    if let Some(controller) = controller_hwnd() {
+        arm_timer(controller, interval);
+    }
+}
+
 /// Effective DPI of the monitor with these bounds (96 when it cannot be read).
 fn monitor_dpi(bounds: Bounds) -> u32 {
     let rect: RECT = bounds.into();
@@ -771,7 +856,7 @@ fn apply_monitor_set(desired: &[Placed]) -> bool {
                     .find(|p| p.id == placed.spec.id)
                     .map(|p| p.window.key());
                 if let Some(key) = key {
-                    let target = notch_bounds(placed.spec.bounds, placed.slot);
+                    let target = notch_bounds(docking_bounds(placed.spec.bounds), placed.slot);
                     let moved = unsafe {
                         SetWindowPos(
                             hwnd_from_key(key),
@@ -826,7 +911,7 @@ fn apply_monitor_set(desired: &[Placed]) -> bool {
 fn create_panel(placed: &Placed) -> Result<Panel, Error> {
     let spec = &placed.spec;
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }?.into();
-    let target = notch_bounds(spec.bounds, placed.slot);
+    let target = notch_bounds(docking_bounds(spec.bounds), placed.slot);
     // Created hidden and without contents: the first refresh draws, then decides whether to
     // show it, so it never flashes over a fullscreen app. On error `window` drops and
     // destroys the half-built panel.
@@ -1420,7 +1505,7 @@ fn show_card(key: isize, cell: usize, mut panel: send::Panel, popup: bool, notic
         };
         (
             notch.slot.dpi,
-            notch.bounds,
+            docking_bounds(notch.bounds),
             notch.slot.edge,
             notch.slot.folded,
         )
@@ -1566,6 +1651,17 @@ fn card_hit_at(x: i32, y: i32) -> Option<card::Hit> {
     shown.panel.action(hit).map(|_| hit)
 }
 
+/// The primary button went down (or came up) over the card: the plate under the pointer reads
+/// pressed (lighter than hovered) until it is released.
+fn set_card_pressed(down: bool) {
+    if !render::set_pressed(down) {
+        return;
+    }
+    if let Some((panel, dpi, window)) = shown_card() {
+        redraw_card(&panel, dpi, window);
+    }
+}
+
 /// Moves the hover plate to the control under the pointer (or off every control).
 fn set_card_hit(hit: Option<card::Hit>) {
     let (changed, shown) = {
@@ -1670,7 +1766,7 @@ fn set_folded(key: isize, folded: bool) {
             folded,
             ..panel.slot
         };
-        (notch_bounds(panel.bounds, slot), slot)
+        (notch_bounds(docking_bounds(panel.bounds), slot), slot)
     };
     let moved = unsafe {
         SetWindowPos(
@@ -2098,7 +2194,7 @@ fn begin_drag(hwnd: HWND) {
             edge,
             folded: panel.slot.folded,
             dpi: panel.slot.dpi,
-            monitor: panel.bounds,
+            monitor: docking_bounds(panel.bounds),
             left: rect.left,
             top: rect.top,
             moved: false,
@@ -2227,7 +2323,11 @@ fn open_menu(hwnd: HWND) {
         let Some(panel) = app.panels.iter().find(|p| p.window.key() == key) else {
             return;
         };
-        (panel.slot.dpi, panel.bounds, panel.slot.edge)
+        (
+            panel.slot.dpi,
+            docking_bounds(panel.bounds),
+            panel.slot.edge,
+        )
     };
     let mut cursor = POINT::default();
     let mut rect = RECT::default();
@@ -2385,6 +2485,10 @@ extern "system" fn controller_proc(
             }
             WM_DISPLAYCHANGE | WM_DPICHANGED => {
                 on_display_change();
+                return LRESULT(0);
+            }
+            WM_SETTINGCHANGE if wparam.0 == SPI_SETWORKAREA.0 as usize => {
+                redock_panels();
                 return LRESULT(0);
             }
             bridge::MSG_PLACEMENT_CHANGED => {
@@ -2547,11 +2651,25 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                 return LRESULT(1);
             }
             MSG_MOUSELEAVE => {
+                set_card_pressed(false);
                 set_card_hit(None);
                 on_card_mouse_leave();
                 return LRESULT(0);
             }
+            WM_LBUTTONDOWN => {
+                set_card_pressed(true);
+                return LRESULT(0);
+            }
+            WM_MOUSEWHEEL => {
+                // The wheel scrolls the Send-to card's device list, one device a notch.
+                let notches = i32::from((wparam.0 >> 16) as u16 as i16) / 120;
+                if notches != 0 && send::scroll_choose(-notches) {
+                    sync_card();
+                }
+                return LRESULT(0);
+            }
             WM_LBUTTONUP => {
+                set_card_pressed(false);
                 let menu_open = lock_state().ui.menu.is_some();
                 if menu_open {
                     close_menu();

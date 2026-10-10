@@ -524,3 +524,16 @@ pub fn lines(drives: &[Drive]) -> Vec<String> {
     }
     out
 }
+
+/// Names of the drives whose latest good reading is a SMART warning (the notch's drive alert
+/// card reads this; a drive with no reading is never listed).
+pub fn warnings() -> Vec<String> {
+    match current() {
+        Report::Drives(drives) => drives
+            .into_iter()
+            .filter(|d| d.reachable && d.last.as_ref().is_some_and(Reading::is_warning))
+            .map(|d| d.name)
+            .collect(),
+        Report::Pending | Report::Missing => Vec::new(),
+    }
+}

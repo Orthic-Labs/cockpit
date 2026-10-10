@@ -4,7 +4,7 @@
 use crate::alerts;
 use crate::drive_health::{self, Report};
 use crate::glyphs::{Symbol, Tile};
-use crate::layout::{self, Cell, Edge};
+use crate::layout::{Cell, Edge};
 use crate::send::{self, Panel};
 use crate::sensors::{Machine, Reading, size_text};
 use crate::usage::{Extras, Status, Usage};
@@ -124,6 +124,10 @@ pub enum Row {
         label: String,
         detail: String,
     },
+    /// The Send card's bottom bar (the Mac's `action:bar`): "Copy last: <preview>" as a plate
+    /// at the left when there is a label, "Paste" as a plate at the right when `paste`. Two
+    /// buttons in one row: slot 0 is Copy last, slot 1 is Paste.
+    Bar { copy: Option<String>, paste: bool },
     /// One metered window: label and trailing text on a line, a bar (none without a share),
     /// then the summary line.
     Meter {
@@ -164,6 +168,7 @@ impl Row {
     pub fn slots(&self) -> usize {
         match self {
             Row::Buttons { buttons, close } => buttons.len() + usize::from(*close),
+            Row::Bar { .. } => 2,
             _ => 1,
         }
     }
@@ -409,10 +414,38 @@ pub fn system(machine: Option<&Machine>) -> CardContent {
                     rate.kind
                 )
             }));
-            rows.extend(pair("Fans", &m.fans, |fans| {
-                let speeds: Vec<String> = fans.iter().map(u32::to_string).collect();
-                format!("{} rpm", speeds.join(" / "))
-            }));
+            // Battery, CPU temperature and fans stay on the card whatever this PC can read:
+            // a reading it cannot give says why instead of leaving the row out.
+            rows.push(Row::Pair {
+                label: "Battery".to_string(),
+                value: match crate::sensors::battery() {
+                    Reading::Value(battery) => battery.text(),
+                    Reading::Pending => "Measuring\u{2026}".to_string(),
+                    Reading::Unavailable => "No battery".to_string(),
+                },
+            });
+            let cpu_temp = match &m.temperature {
+                Reading::Value(temps) => temps.iter().find(|t| t.source == "CPU").copied(),
+                _ => None,
+            };
+            rows.push(Row::Pair {
+                label: "CPU temperature".to_string(),
+                value: match cpu_temp {
+                    Some(t) => format!("{} \u{b0}C", t.celsius.round()),
+                    None => format!("\u{2014} \u{b7} {}", crate::sensors::CPU_TEMPERATURE_REASON),
+                },
+            });
+            rows.push(Row::Pair {
+                label: "Fans".to_string(),
+                value: match &m.fans {
+                    Reading::Value(fans) if !fans.is_empty() => {
+                        let speeds: Vec<String> = fans.iter().map(u32::to_string).collect();
+                        format!("{} rpm", speeds.join(" / "))
+                    }
+                    Reading::Pending => "Measuring\u{2026}".to_string(),
+                    _ => crate::sensors::FANS_UNAVAILABLE.to_string(),
+                },
+            });
             // The Mac shows the CPU temperature at the title's right; here it is whatever
             // Windows lets an unelevated process read, each named by its source.
             if let Reading::Value(temps) = &m.temperature {
@@ -436,16 +469,10 @@ pub fn system(machine: Option<&Machine>) -> CardContent {
 
 /// "normal", "warning" or "critical" (the Mac's words) from the memory bands the ring colours use.
 fn pressure_word(machine: &Machine) -> &'static str {
-    // Without a commit limit the bands are not computed from both inputs: unknown.
-    if machine.memory.is_none_or(|m| m.commit_limit == 0) {
-        return "unknown";
-    }
-    match layout::memory_band(Some(machine)) {
-        Some(layout::BAND_CRITICAL) => "critical",
-        Some(layout::BAND_WATCH) => "warning",
-        Some(_) => "normal",
-        None => "unknown",
-    }
+    machine
+        .memory
+        .and_then(|m| m.pressure())
+        .unwrap_or("unknown")
 }
 
 /// A label with its value on the right; nothing for a reading this PC cannot give.

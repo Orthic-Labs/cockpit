@@ -59,13 +59,41 @@ pub fn run_if_requested() -> Option<ExitCode> {
     Some(run(&dir))
 }
 
+/// Where the fixtures are: `PULSE_VIEWS_JSON`, else `qa/notch-views.json` under the working
+/// directory (CI runs from the repository root), else beside the program or in `qa/` under
+/// it or one of its parent folders (an installed build run from anywhere, next to a checkout
+/// or a copy of the file). The first that exists wins; with none, the CI default is returned
+/// so the error names it.
+fn fixtures_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("PULSE_VIEWS_JSON") {
+        return PathBuf::from(path);
+    }
+    let default = PathBuf::from("qa/notch-views.json");
+    let mut candidates = vec![default.clone()];
+    if let Some(folder) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        for dir in folder.ancestors().take(6) {
+            candidates.push(dir.join("notch-views.json"));
+            candidates.push(dir.join("qa").join("notch-views.json"));
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap_or(default)
+}
+
 fn run(dir: &Path) -> ExitCode {
-    let source = std::env::var_os("PULSE_VIEWS_JSON")
-        .map_or_else(|| PathBuf::from("qa/notch-views.json"), PathBuf::from);
+    let source = fixtures_path();
     let bytes = match std::fs::read(&source) {
         Ok(bytes) => bytes,
         Err(error) => {
-            eprintln!("view-shots: cannot read {}: {error}", source.display());
+            eprintln!(
+                "view-shots: cannot read {}: {error} (set PULSE_VIEWS_JSON to qa/notch-views.json)",
+                source.display()
+            );
             return ExitCode::from(2);
         }
     };
@@ -606,13 +634,13 @@ fn windows_cell(id: &str) -> Option<Cell> {
 #[derive(Default)]
 struct Rows {
     rows: Vec<Row>,
-    actions: Vec<Option<Action>>,
+    actions: Vec<Vec<Option<Action>>>,
 }
 
 impl Rows {
     fn add(&mut self, row: Row, action: Option<Action>) {
         self.rows.push(row);
-        self.actions.push(action);
+        self.actions.push(vec![action]);
     }
 
     /// A button plate: its symbol, label and the detail at the right.
@@ -635,11 +663,7 @@ impl Rows {
                 rows: self.rows,
                 ..CardContent::default()
             },
-            actions: self
-                .actions
-                .into_iter()
-                .map(|action| vec![action])
-                .collect(),
+            actions: self.actions,
             head: Vec::new(),
         }
     }
@@ -659,15 +683,14 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     let transfer = windows.iter().find(|w| str_of(w, "id") == Some("transfer"));
     let detail = transfer.and_then(|w| str_of(w, "detail")).unwrap_or("");
     let mut panel = Rows::default();
-    // The Mac's order: the last received item, then the headline, the devices, the paste row.
-    if let Some(last) = windows
+    // The Mac's order: the headline, the devices, the hint, then one bottom bar. The
+    // fixtures still carry the old separate Copy last and Paste rows (the Mac renderer folds
+    // them the same way); "action:bar" is read too.
+    let copy = windows
         .iter()
-        .find(|w| str_of(w, "id") == Some("action:copylast"))
-    {
-        let label = str_of(last, "label").unwrap_or("");
-        let age = str_of(last, "detail").unwrap_or("");
-        panel.button((Symbol::Copy, label, age), Some(Action::CopyLast));
-    }
+        .find(|w| matches!(str_of(w, "id"), Some("action:copylast" | "action:bar")))
+        .and_then(|w| str_of(w, "label"))
+        .filter(|label| !label.is_empty());
     match transfer.and_then(|w| num_of(w, "used").map(|f| (w, f as f32))) {
         Some((window, fraction)) => {
             panel.add(
@@ -707,11 +730,21 @@ fn send_hover(cell: Option<&Value>) -> Panel {
     if blocked {
         panel.add(Row::Text(send::FIREWALL_HINT.to_string()), None);
     } else if !devices.is_empty() {
-        panel.button((Symbol::Copy, "Paste clipboard", ""), Some(Action::Paste));
         panel.add(
             Row::Text("Ctrl+V sends the clipboard \u{b7} drop files here".to_string()),
             None,
         );
+    }
+    let paste = !devices.is_empty();
+    if copy.is_some() || paste {
+        panel.rows.push(Row::Bar {
+            copy: copy.map(str::to_string),
+            paste,
+        });
+        panel.actions.push(vec![
+            copy.map(|_| Action::CopyLast),
+            paste.then_some(Action::Paste),
+        ]);
     }
     let mut panel = panel.finish("Send");
     panel.content.mark = Mark::Send;
@@ -761,6 +794,8 @@ fn prompt_panel(fixture: &Value) -> Panel {
                         })
                         .collect(),
                     scanning: flag(send, "scanning"),
+                    above: 0,
+                    below: 0,
                 },
             };
         }

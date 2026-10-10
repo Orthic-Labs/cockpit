@@ -59,6 +59,30 @@ impl MemInfo {
     pub fn used_fraction(&self) -> f32 {
         (self.used() as f64 / self.total.max(1) as f64).clamp(0.0, 1.0) as f32
     }
+
+    /// The Mac's pressure words from Windows' own inputs: physical memory still available and
+    /// the commit charge against the commit limit (the bands of `layout::memory_band`: under
+    /// 12.5% free or 85% committed is "warning", under 5% free or 95% committed "critical").
+    /// `None` without a total. The value to publish as `memoryPressure`
+    /// (`core/src/lib.rs` reports none on Windows).
+    pub fn pressure(&self) -> Option<&'static str> {
+        if self.total == 0 {
+            return None;
+        }
+        let free = self.available as f64 / self.total as f64;
+        let commit = if self.commit_limit > 0 {
+            self.commit_used as f64 / self.commit_limit as f64
+        } else {
+            0.0
+        };
+        Some(if free < 0.05 || commit >= 0.95 {
+            "critical"
+        } else if free < 0.125 || commit >= 0.85 {
+            "warning"
+        } else {
+            "normal"
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,6 +163,7 @@ impl Machine {
 
 /// Sole sampling owner: only the controller's timer path calls `sample`.
 pub struct Sampler {
+    pressure: Option<&'static str>,
     previous_times: Option<(u64, u64, u64)>,
     cpu: FailureLatch,
     memory: FailureLatch,
@@ -154,6 +179,7 @@ impl Default for Sampler {
 impl Sampler {
     pub const fn new() -> Self {
         Self {
+            pressure: None,
             previous_times: None,
             cpu: FailureLatch::new(),
             memory: FailureLatch::new(),
@@ -189,6 +215,14 @@ impl Sampler {
                 None
             }
         };
+        let pressure = memory.and_then(|m| m.pressure());
+        if pressure != self.pressure {
+            diag::info(
+                "memory_pressure",
+                &[("level", pressure.unwrap_or("unknown"))],
+            );
+            self.pressure = pressure;
+        }
         let drives = read_drives();
         let disk_failed = !drives.iter().any(|d| d.system);
         match self.disk.observe(disk_failed) {
@@ -216,7 +250,7 @@ impl Sampler {
             drives,
             gpu: extras.gpu,
             network: extras.network,
-            temperature: extras.temperature,
+            temperature: with_cpu_temperature(extras.temperature),
             fans: Reading::Unavailable,
         }
     }
@@ -607,7 +641,7 @@ fn read_memory() -> Result<MemInfo, Error> {
 
 /// Fixed local drives that report a capacity. A drive that cannot be read (locked, offline)
 /// is left out rather than shown as empty.
-fn read_drives() -> Vec<Drive> {
+pub fn read_drives() -> Vec<Drive> {
     let system_letter = std::env::var("SystemDrive")
         .ok()
         .and_then(|d| d.chars().next())
@@ -663,4 +697,148 @@ pub fn size_text(bytes: u64) -> String {
         format!("{value:.1}").trim_end_matches(".0").to_string()
     };
     format!("{number} {unit}")
+}
+
+
+// ---- battery ----------------------------------------------------------------------------------
+
+#[repr(C)]
+#[allow(dead_code)] // mirrors the Win32 layout; not every field is read
+struct SystemPowerStatus {
+    ac_line_status: u8,
+    battery_flag: u8,
+    battery_life_percent: u8,
+    system_status_flag: u8,
+    battery_life_time: u32,
+    battery_full_life_time: u32,
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetSystemPowerStatus(status: *mut SystemPowerStatus) -> i32;
+}
+
+/// The battery as the Mac's System card words it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Battery {
+    pub percent: u8,
+    /// On mains power (charging or full).
+    pub plugged_in: bool,
+    pub charging: bool,
+    /// Seconds of charge left on battery, when Windows can tell.
+    pub seconds_left: Option<u32>,
+}
+
+impl Battery {
+    /// "82% \u{b7} charging", "64% \u{b7} 2 h 10 min left", "100% \u{b7} plugged in".
+    pub fn text(&self) -> String {
+        let state = if self.charging {
+            "charging".to_string()
+        } else if self.plugged_in {
+            "plugged in".to_string()
+        } else {
+            match self.seconds_left {
+                Some(s) => format!("{} h {:02} min left", s / 3600, s % 3600 / 60),
+                None => "on battery".to_string(),
+            }
+        };
+        format!("{}% \u{b7} {state}", self.percent)
+    }
+}
+
+/// `Unavailable` on a desktop PC (no battery) or when Windows gives no reading. Win32
+/// `GetSystemPowerStatus`; no elevation. Read by the System card's Battery row.
+pub fn battery() -> Reading<Battery> {
+    let mut raw = SystemPowerStatus {
+        ac_line_status: 255,
+        battery_flag: 255,
+        battery_life_percent: 255,
+        system_status_flag: 0,
+        battery_life_time: u32::MAX,
+        battery_full_life_time: u32::MAX,
+    };
+    // SAFETY: `raw` is a valid, correctly laid out SYSTEM_POWER_STATUS.
+    if unsafe { GetSystemPowerStatus(&mut raw) } == 0 {
+        return Reading::Unavailable;
+    }
+    // Flag 128 is "no system battery"; 255 is unknown. Percent 255 is unknown.
+    if raw.battery_flag & 128 != 0 || raw.battery_flag == 255 || raw.battery_life_percent > 100 {
+        return Reading::Unavailable;
+    }
+    Reading::Value(Battery {
+        percent: raw.battery_life_percent,
+        plugged_in: raw.ac_line_status == 1,
+        charging: raw.battery_flag & 8 != 0,
+        seconds_left: (raw.battery_life_time != u32::MAX).then_some(raw.battery_life_time),
+    })
+}
+
+// ---- CPU temperature --------------------------------------------------------------------------
+
+/// Why the row has no number: shown as its tooltip / value on the System card.
+pub const CPU_TEMPERATURE_REASON: &str = "Windows only reports it to administrators";
+/// The text for a fan row: Windows exposes no fan speed without a vendor driver.
+pub const FANS_UNAVAILABLE: &str = "Not available on this PC";
+
+static CPU_TEMPERATURE: Mutex<Option<f32>> = Mutex::new(None);
+static CPU_TEMPERATURE_START: Once = Once::new();
+
+/// Puts the CPU's ACPI thermal-zone reading (when this account may read it) ahead of the GPU's.
+fn with_cpu_temperature(gpu: Reading<Vec<Temp>>) -> Reading<Vec<Temp>> {
+    CPU_TEMPERATURE_START.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("pulse-cpu-temp".into())
+            .spawn(cpu_temperature_loop);
+    });
+    let cpu = *CPU_TEMPERATURE.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(celsius) = cpu else {
+        return gpu;
+    };
+    let mut temps = vec![Temp {
+        source: "CPU",
+        celsius,
+    }];
+    if let Reading::Value(more) = gpu {
+        temps.extend(more);
+    }
+    Reading::Value(temps)
+}
+
+/// `MSAcpi_ThermalZoneTemperature` (root\wmi) through a hidden PowerShell: first asked once;
+/// when the account may not read it (the normal case without administrator rights) the thread
+/// ends and the row stays "Windows only reports it to administrators". Otherwise every 30 s.
+fn cpu_temperature_loop() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const SCRIPT: &str = "$ErrorActionPreference='Stop'; \
+        (Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature | \
+        Measure-Object -Property CurrentTemperature -Maximum).Maximum";
+    loop {
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let tenths_kelvin = output
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|t| t.trim().parse::<f32>().ok());
+        let celsius = tenths_kelvin.map(|t| t / 10.0 - 273.15);
+        match celsius.filter(|c| (1.0..150.0).contains(c)) {
+            Some(c) => {
+                *CPU_TEMPERATURE.lock().unwrap_or_else(PoisonError::into_inner) = Some(c);
+            }
+            None => {
+                *CPU_TEMPERATURE.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                diag::info(
+                    "sampler_failed",
+                    &[("op", "MSAcpi_ThermalZoneTemperature"), ("ctx", "cpu_temperature")],
+                );
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(30));
+    }
 }

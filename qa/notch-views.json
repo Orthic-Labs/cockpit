@@ -4202,7 +4202,7 @@
     "id": "tooltip-send-devices",
     "title": "Send card, devices nearby",
     "area": "hover-card",
-    "description": "Send hover card: two nearby devices, the Paste clipboard row and the hint line.",
+    "description": "Send hover card: two nearby devices, the hint line and the bottom bar with Paste at the right.",
     "backdrop": "#2B2B2F",
     "fixture": {
       "kind": "tooltip",
@@ -4247,7 +4247,7 @@
     "id": "tooltip-send-copy-last",
     "title": "Send card, copy last",
     "area": "hover-card",
-    "description": "Send hover card with the Copy last row on top (the last message received) above two nearby devices.",
+    "description": "Send hover card with the Copy last button at the bottom left of the bar (the last message received) and Paste at the right, under two nearby devices and the hint line.",
     "backdrop": "#2B2B2F",
     "fixture": {
       "kind": "tooltip",

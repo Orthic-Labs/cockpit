@@ -9,10 +9,16 @@
 //! a window only records, so nothing rings at start-up.
 
 use crate::card::{CardContent, Head, Mark, Row, Tone};
+use crate::notify::{self, Sound};
 use crate::send::Panel;
+use crate::sensors;
 use crate::settings::PillSettings;
 use crate::usage::{LimitWindow, Usage};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, Once, PoisonError};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Seconds a reset card stays up (the Mac's `showResetAlert(duration: 5.0)`).
 pub const RESET_SECONDS: u64 = 5;
@@ -24,6 +30,14 @@ pub enum Kind {
     Reset,
     SessionLimitReached,
     WeeklyLimitReached,
+    /// An agent's turn ended (the Mac's `SessionChime` peek); the words are in the notice.
+    Finished,
+    /// A drive crossed the warning level of used space.
+    DriveFilling,
+    /// A drive crossed the critical level of used space.
+    DriveFull,
+    /// A drive's SMART reading is a warning.
+    DriveHealth,
 }
 
 /// Words that replace the kind's own (a threshold crossing; the Mac's `notice*` fields).
@@ -49,8 +63,12 @@ pub struct Alert {
 impl Alert {
     pub fn seconds(&self) -> u64 {
         match self.kind {
-            Kind::Reset => RESET_SECONDS,
-            Kind::SessionLimitReached | Kind::WeeklyLimitReached => LIMIT_SECONDS,
+            Kind::Reset | Kind::Finished => RESET_SECONDS,
+            Kind::SessionLimitReached
+            | Kind::WeeklyLimitReached
+            | Kind::DriveFilling
+            | Kind::DriveFull
+            | Kind::DriveHealth => LIMIT_SECONDS,
         }
     }
 }
@@ -64,6 +82,9 @@ pub struct Prefs {
     pub weekly_limit: bool,
     /// Claude, Codex: alerts muted for that provider.
     pub muted: [bool; 2],
+    /// The Mac's "Mac notifications" channel: a system toast and the sound, no notch card.
+    /// There is no channel setting on Windows yet, so `from_settings` leaves it off.
+    pub toast: bool,
 }
 
 impl Prefs {
@@ -73,6 +94,7 @@ impl Prefs {
             session_limit: settings.announce_session_limit,
             weekly_limit: settings.announce_weekly_limit,
             muted: [settings.mute_claude_alerts, settings.mute_codex_alerts],
+            toast: false,
         }
     }
 }
@@ -328,6 +350,14 @@ pub fn local_offset_secs() -> i64 {
 /// The card's words, as the Mac's `UsageResetCard` gives them: title, subtitle, a status
 /// line (the Mac's coloured dot is a bullet here) and the next reset time.
 pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
+    if let Some(notice) = &alert.notice
+        && matches!(
+            alert.kind,
+            Kind::Finished | Kind::DriveFilling | Kind::DriveFull | Kind::DriveHealth
+        )
+    {
+        return info_card(alert, notice);
+    }
     let (provider, window) = (&alert.provider, &alert.window);
     let (title, subtitle, status, prefix) = match alert.kind {
         Kind::Reset => (
@@ -347,6 +377,13 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
             format!("{window} limit is spent"),
             "Weekly limit reached (100% used)",
             "Resets at",
+        ),
+        // These kinds always carry a notice (`info_card`); a bare one reads as a reset.
+        Kind::Finished | Kind::DriveFilling | Kind::DriveFull | Kind::DriveHealth => (
+            format!("{provider} Reset"),
+            String::new(),
+            "",
+            "Next reset",
         ),
     };
     let (title, subtitle, status) = match &alert.notice {
@@ -387,6 +424,35 @@ pub fn card_content(alert: &Alert, utc_offset_secs: i64) -> CardContent {
     }
 }
 
+/// The card for an agent that finished or a drive that needs attention: the notice's words
+/// and one status dot (green finished, amber filling, red full or failing).
+fn info_card(alert: &Alert, notice: &Notice) -> CardContent {
+    let tone = match alert.kind {
+        Kind::DriveFilling => Tone::Warning,
+        Kind::DriveFull | Kind::DriveHealth => Tone::Critical,
+        _ => Tone::Good,
+    };
+    let rows = if notice.status.is_empty() {
+        Vec::new()
+    } else {
+        vec![Row::Status {
+            text: notice.status.clone(),
+            tone,
+        }]
+    };
+    CardContent {
+        head: vec![Head::Dismiss],
+        height: Some(ALERT_HEIGHT),
+        subtitle: (!notice.subtitle.is_empty()).then(|| notice.subtitle.clone()),
+        mark: match alert.kind {
+            Kind::Finished if alert.provider == "Codex" => Mark::Codex,
+            Kind::Finished => Mark::Claude,
+            _ => Mark::Disks,
+        },
+        ..CardContent::plain(notice.title.clone(), rows)
+    }
+}
+
 /// The Mac's `UsageResetCard.cardHeight` (210 design px).
 const ALERT_HEIGHT: f32 = 79.0;
 
@@ -395,6 +461,7 @@ const ALERT_HEIGHT: f32 = 79.0;
 #[derive(Default)]
 struct Model {
     watchers: Watchers,
+    drives: DriveWatch,
     /// The card on show and the Unix second it goes.
     current: Option<(Alert, u64)>,
 }
@@ -405,15 +472,35 @@ fn model() -> MutexGuard<'static, Option<Model>> {
     MODEL.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// A card raised off the main thread (a finished agent) waits here for the next `observe`
+/// to report it, because `main.rs` redraws the notch only when `observe` says so.
+static PENDING: AtomicBool = AtomicBool::new(false);
+static TOAST_CHANNEL: AtomicBool = AtomicBool::new(false);
+static MUTED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+static SESSIONS: Once = Once::new();
+
 /// Feeds a usage publication to the watchers; a card that is due replaces the one on show.
-/// True when a card was raised (the caller redraws).
+/// True when a card was raised (the caller redraws). Also the place the drive watcher runs and
+/// the agent-finished watcher starts, so `main.rs` needs nothing more.
 pub fn observe(usage: &[Usage; 2], now: u64, prefs: Prefs) -> bool {
+    TOAST_CHANNEL.store(prefs.toast, Ordering::Relaxed);
+    for (flag, muted) in MUTED.iter().zip(prefs.muted) {
+        flag.store(muted, Ordering::Relaxed);
+    }
+    SESSIONS.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("pulse-agent-finish".into())
+            .spawn(finish_loop);
+    });
     let mut guard = model();
     let model = guard.get_or_insert_with(Model::default);
-    // Thresholds are produced first and limits last, so the most specific card wins.
-    let raised = model.watchers.observe(usage, now, prefs);
+    // Thresholds are produced first and limits last, so the most specific card wins; a
+    // drive that needs attention comes after them.
+    let mut raised = model.watchers.observe(usage, now, prefs);
+    raised.extend(model.drives.observe(&sensors::read_drives(), &crate::drive_health::warnings()));
+    let pending = PENDING.swap(false, Ordering::Relaxed);
     let Some(alert) = raised.into_iter().next_back() else {
-        return false;
+        return pending;
     };
     crate::diag::info(
         "usage_alert",
@@ -422,8 +509,287 @@ pub fn observe(usage: &[Usage; 2], now: u64, prefs: Prefs) -> bool {
             ("kind", kind_name(alert.kind)),
         ],
     );
+    announce(&alert, prefs.toast);
+    if prefs.toast {
+        // The Mac's notification channel: the banner and the sound, the notch stays quiet.
+        return pending;
+    }
     model.current = Some((alert.clone(), now + alert.seconds()));
     true
+}
+
+/// The sound of an alert and, on the toast channel, its system toast.
+fn announce(alert: &Alert, toast: bool) {
+    let sound = match alert.kind {
+        Kind::Finished => Sound::Finished,
+        Kind::Reset | Kind::DriveFilling => Sound::Notice,
+        Kind::SessionLimitReached
+        | Kind::WeeklyLimitReached
+        | Kind::DriveFull
+        | Kind::DriveHealth => Sound::Attention,
+    };
+    notify::play(sound);
+    if toast {
+        let (title, body) = words(alert);
+        notify::toast(&title, &body);
+    }
+}
+
+/// Title and one line of body for a toast.
+fn words(alert: &Alert) -> (String, String) {
+    if let Some(notice) = &alert.notice {
+        let body = [notice.subtitle.as_str(), notice.status.as_str()]
+            .iter()
+            .filter(|t| !t.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        return (notice.title.clone(), body);
+    }
+    let provider = &alert.provider;
+    match alert.kind {
+        Kind::SessionLimitReached => (
+            format!("{provider} Limit Reached"),
+            format!("{} limit is spent", alert.window),
+        ),
+        Kind::WeeklyLimitReached => (
+            format!("{provider} Weekly Limit"),
+            format!("{} limit is spent", alert.window),
+        ),
+        _ => (
+            format!("{provider} Reset"),
+            format!("{} limit refreshed", alert.window),
+        ),
+    }
+}
+
+// ---- drives -----------------------------------------------------------------------------------
+
+/// Used share where a drive is "filling up" and "almost full": the hub's own bands
+/// (`levelFor` in `hub/src/views/Overview.tsx`), so the card and the hub banner agree.
+const DRIVE_WARN: f32 = 0.7;
+const DRIVE_CRITICAL: f32 = 0.9;
+
+/// Highest level (0 fine, 1 filling, 2 full or failing) each volume and SMART drive has
+/// reached. A level that goes up raises a card; it must fall back below to raise it again.
+/// The first sight of a drive that is already full or failing alerts once; one that is merely
+/// filling only records, so a PC that has run at 75% for a year does not announce it at
+/// every start.
+#[derive(Default)]
+struct DriveWatch {
+    levels: BTreeMap<String, u8>,
+    seeded: bool,
+}
+
+impl DriveWatch {
+    fn observe(&mut self, drives: &[sensors::Drive], failing: &[String]) -> Vec<Alert> {
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        for drive in drives {
+            let fraction = drive.used_fraction();
+            let level = if fraction >= DRIVE_CRITICAL {
+                2
+            } else if fraction >= DRIVE_WARN {
+                1
+            } else {
+                0
+            };
+            let letter = drive.root.trim_end_matches('\\').to_string();
+            let key = format!("volume|{letter}");
+            if let Some(kind) = self.rise(&key, level, &mut seen) {
+                let free = sensors::size_text(drive.free);
+                out.push(drive_alert(
+                    kind,
+                    if kind == Kind::DriveFull {
+                        format!("{letter} is almost full")
+                    } else {
+                        format!("{letter} is filling up")
+                    },
+                    format!("{free} free of {}", sensors::size_text(drive.total)),
+                    format!("{}% used", (fraction * 100.0).round() as u32),
+                ));
+            }
+        }
+        for name in failing {
+            let key = format!("smart|{name}");
+            if let Some(kind) = self.rise(&key, 2, &mut seen)
+                && kind == Kind::DriveFull
+            {
+                out.push(drive_alert(
+                    Kind::DriveHealth,
+                    format!("{name} reports a problem"),
+                    "The drive's own health check is warning".to_string(),
+                    "Back up what matters".to_string(),
+                ));
+            }
+        }
+        // A drive that went away or recovered starts again from fine.
+        self.levels.retain(|key, _| seen.contains(key));
+        self.seeded = true;
+        out
+    }
+
+    /// The kind to raise when `level` went up (`DriveFilling` or, for level 2, `DriveFull`).
+    fn rise(&mut self, key: &str, level: u8, seen: &mut Vec<String>) -> Option<Kind> {
+        seen.push(key.to_string());
+        let before = self
+            .levels
+            .get(key)
+            .copied()
+            .unwrap_or(if self.seeded { 0 } else { 1 });
+        self.levels.insert(key.to_string(), level);
+        if level <= before {
+            return None;
+        }
+        Some(if level >= 2 {
+            Kind::DriveFull
+        } else {
+            Kind::DriveFilling
+        })
+    }
+}
+
+fn drive_alert(kind: Kind, title: String, subtitle: String, status: String) -> Alert {
+    Alert {
+        kind,
+        provider: String::new(),
+        window: String::new(),
+        resets_at: None,
+        notice: Some(Notice {
+            title,
+            subtitle,
+            status,
+        }),
+    }
+}
+
+// ---- agent finished ---------------------------------------------------------------------------
+
+/// A transcript that has not been written for this long means the agent's turn is over.
+const IDLE_SECONDS: u64 = 10;
+/// A turn must have run at least this long to count: a stray write is not a finished turn.
+const MIN_TURN_SECONDS: u64 = 6;
+const POLL: Duration = Duration::from_secs(3);
+
+/// The Mac's `SessionCompletionWatcher`, from the files the agents write. Windows has no
+/// session monitor, so a provider is "working" while its newest transcript (Claude Code's
+/// `.claude/projects/*/*.jsonl`, Codex's `.codex/sessions/Y/M/D/*.jsonl`) was written in the
+/// last ten seconds, and "finished" the moment that stops after a turn of at least six. Every
+/// provider that finishes at once gets one chime and one card. There is no blocked signal
+/// without a session monitor.
+fn finish_loop() {
+    let mut busy_since: [Option<u64>; 2] = [None, None];
+    let mut last_write: [u64; 2] = [0, 0];
+    loop {
+        std::thread::sleep(POLL);
+        let now = crate::usage::now_secs();
+        let mut done = None;
+        for index in 0..2 {
+            let newest = newest_transcript(index);
+            if let Some(at) = newest {
+                last_write[index] = last_write[index].max(at);
+            }
+            let working = newest.is_some_and(|at| now.saturating_sub(at) < IDLE_SECONDS);
+            match (busy_since[index], working) {
+                (None, true) => busy_since[index] = Some(now),
+                (Some(since), false) => {
+                    busy_since[index] = None;
+                    if last_write[index].saturating_sub(since) >= MIN_TURN_SECONDS {
+                        done = Some(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(index) = done
+            && !MUTED[index].load(Ordering::Relaxed)
+        {
+            finished(index, now);
+        }
+    }
+}
+
+fn finished(index: usize, now: u64) {
+    let name = provider_name(index);
+    crate::diag::info("agent_finished", &[("provider", name)]);
+    let alert = Alert {
+        kind: Kind::Finished,
+        provider: name.to_string(),
+        window: String::new(),
+        resets_at: None,
+        notice: Some(Notice {
+            title: format!("{name} finished"),
+            subtitle: "The agent's turn is done.".to_string(),
+            status: String::new(),
+        }),
+    };
+    let toast = TOAST_CHANNEL.load(Ordering::Relaxed);
+    announce(&alert, toast);
+    if !toast {
+        let seconds = alert.seconds();
+        model().get_or_insert_with(Model::default).current = Some((alert, now + seconds));
+        PENDING.store(true, Ordering::Relaxed);
+        // Redraw now: the controller runs `observe`, which reports the pending card.
+        crate::usage::notify();
+    }
+}
+
+fn unix_seconds(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
+/// The newest `.jsonl` write under the provider's transcript folder. Directory entries carry
+/// their times, so this costs no extra stat per file.
+fn newest_transcript(index: usize) -> Option<u64> {
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from)?;
+    if index == 0 {
+        let mut newest = None;
+        for project in std::fs::read_dir(home.join(".claude").join("projects")).ok()? {
+            let Ok(project) = project else { continue };
+            newest = newest.max(newest_jsonl(&project.path()));
+        }
+        newest
+    } else {
+        newest_codex(&home.join(".codex").join("sessions"), 3)
+    }
+}
+
+fn newest_jsonl(dir: &Path) -> Option<u64> {
+    let mut newest = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        if entry.path().extension().is_some_and(|e| e == "jsonl")
+            && let Some(at) = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(unix_seconds)
+        {
+            newest = newest.max(Some(at));
+        }
+    }
+    newest
+}
+
+/// Codex keeps `sessions/YYYY/MM/DD/rollout-*.jsonl`: only the two newest names at each of
+/// the three folder levels are read.
+fn newest_codex(dir: &Path, levels: u32) -> Option<u64> {
+    if levels == 0 {
+        return newest_jsonl(dir);
+    }
+    let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .collect();
+    names.sort();
+    names
+        .iter()
+        .rev()
+        .take(2)
+        .map(|p| newest_codex(p, levels - 1))
+        .max()
+        .flatten()
 }
 
 fn kind_name(kind: Kind) -> &'static str {
@@ -431,6 +797,10 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Reset => "reset",
         Kind::SessionLimitReached => "session_limit",
         Kind::WeeklyLimitReached => "weekly_limit",
+        Kind::Finished => "agent_finished",
+        Kind::DriveFilling => "drive_filling",
+        Kind::DriveFull => "drive_full",
+        Kind::DriveHealth => "drive_health",
     }
 }
 

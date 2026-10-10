@@ -4,7 +4,7 @@
 
 use crate::send;
 use crate::sensors::Machine;
-use crate::usage::Usage;
+use crate::usage::{LimitWindow, Usage};
 
 pub const CELL_COUNT: usize = 5;
 /// Index of the nearby-sharing cell in `Cell::ALL`.
@@ -244,6 +244,20 @@ pub fn memory_band(machine: Option<&Machine>) -> Option<u32> {
     })
 }
 
+/// The window the thin inner ring means: the all-models weekly (Codex's secondary). A plan
+/// whose response carries only a model-scoped weekly window (the Dell's "Fable 34% resets
+/// Wed", no all-models one) has that one, so its ring is not left bare while the card lists a
+/// weekly reading.
+fn ring_weekly(usage: &Usage) -> Option<&LimitWindow> {
+    usage.weekly().or_else(|| {
+        usage.windows.iter().find(|w| {
+            w.group.is_none()
+                && usage.headline().is_none_or(|head| head.key != w.key)
+                && (w.key.starts_with("weekly") || w.key.contains("seven_day"))
+        })
+    })
+}
+
 /// Builds the five cell views (Claude, Codex, System, Disks, Send). Unknown readings are
 /// `None` and draw as a dimmed, empty ring.
 pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -> Vec<CellView> {
@@ -261,7 +275,7 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -
         CellView {
             glyph: cell.glyph(),
             main,
-            inner: usage.weekly().map(|w| percent(w.fraction)),
+            inner: ring_weekly(usage).map(|w| percent(w.fraction)),
             stale: usage.is_stale() || main.is_none(),
             problem: false,
             blocked: usage.block.is_some(),

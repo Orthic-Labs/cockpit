@@ -2,6 +2,8 @@
 //! using the software rasteriser and GDI text. Dark solid style, like the Mac notch's solid
 //! surface. Pure of window state: callers pass data and get pixels.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::canvas::{Canvas, Mask};
 use crate::card::{Button, CardContent, Head, Hit, Lead, Live, Mark, Row, Tone};
 use crate::fileicon;
@@ -847,6 +849,33 @@ fn button_spans(
     spans
 }
 
+/// Least gap between the bar's two buttons: the Mac's HStack spacing, spacer and spacing.
+const BAR_GAP: f32 = 20.0;
+/// Off-card span of a bar button that is not there, so no pointer ever lands on it.
+const NO_SPAN: (f32, f32) = (-10_000.0, 0.0);
+
+/// Left edge and width of the Send bar's two plates: "Copy last: ..." at `left` (cut to what
+/// "Paste" leaves), "Paste" against `right`. A missing button has `NO_SPAN`.
+fn bar_spans(
+    copy: Option<&str>,
+    paste: bool,
+    (left, right): (f32, f32),
+    text: &mut TextPainter,
+    s: f32,
+) -> Vec<(f32, f32)> {
+    let mut plate = |label: &str| {
+        let label = dip_width(text, label, BODY_SIZE, false, s);
+        2.0 * BUTTON_PAD + BUTTON_SYMBOL + BUTTON_INNER + label
+    };
+    let paste_width = paste.then(|| plate("Paste"));
+    let copy_span = copy.map_or(NO_SPAN, |label| {
+        let reserved = paste_width.map_or(0.0, |w| w + BAR_GAP);
+        (left, plate(label).min((right - left - reserved).max(0.0)))
+    });
+    let paste_span = paste_width.map_or(NO_SPAN, |w| (right - w, w));
+    vec![copy_span, paste_span]
+}
+
 /// Height of one meter: label line, bar (none without a share), summary line.
 fn meter_height(fraction: Option<f32>, m: Metrics) -> f32 {
     let bar = if fraction.is_some() {
@@ -915,6 +944,17 @@ fn flow_row(
     };
     match row {
         Row::Button { .. } => (BUTTON_HEIGHT, Vec::new(), Vec::new()),
+        Row::Bar { copy, paste } => (
+            BUTTON_HEIGHT,
+            Vec::new(),
+            bar_spans(
+                copy.as_deref(),
+                *paste,
+                (CARD_PAD, CARD_PAD + room),
+                text,
+                s,
+            ),
+        ),
         Row::Pair { .. } | Row::Status { .. } => (m.line, Vec::new(), Vec::new()),
         Row::Meter { fraction, .. } => (meter_height(*fraction, m), Vec::new(), Vec::new()),
         Row::Group { rows, .. } => {
@@ -1146,7 +1186,7 @@ pub fn hit_at(
         return Some(Hit::Head(index));
     }
     for (index, (row, placed)) in content.rows.iter().zip(&laid.rows).enumerate() {
-        if let Row::Buttons { .. } = row {
+        if let Row::Buttons { .. } | Row::Bar { .. } = row {
             let found = placed
                 .spans
                 .iter()
@@ -1859,6 +1899,21 @@ impl Pen<'_> {
                     (*symbol, label.as_str(), detail.as_str()),
                     on,
                 ),
+                Row::Bar { copy, paste } => {
+                    for (n, (x, width)) in placed.spans.iter().enumerate() {
+                        let (label, shown) = match n {
+                            0 => (copy.as_deref().unwrap_or(""), copy.is_some()),
+                            _ => ("Paste", *paste),
+                        };
+                        if shown {
+                            self.button_plate(
+                                (ox + x * s, ox + (x + width) * s, y),
+                                (Some(Symbol::Copy), label, ""),
+                                live.row(index, n),
+                            );
+                        }
+                    }
+                }
                 Row::Pair { label, value } => {
                     // Both sides are cut to fit: the value keeps what the label leaves (and
                     // at least half the line when it needs it).
@@ -2084,6 +2139,21 @@ pub fn render_card(
 
 /// Hover lift over a pressed-able control: white at 8%, as on the Mac.
 const HOVER_ALPHA: f32 = 0.16;
+/// A pressed pill or round button reads lighter than a hovered one.
+const PRESS_ALPHA: f32 = 0.26;
+/// The Send bar's plates under the Mac's `CardButtonStyle`: its +0.22 (hover) and +0.32
+/// (pressed) brightness on the 0.176 plate, as white laid over that plate.
+const BAR_HOVER_ALPHA: f32 = 0.22 / (1.0 - TRACK_ALPHA);
+const BAR_PRESS_ALPHA: f32 = 0.32 / (1.0 - TRACK_ALPHA);
+
+/// The primary button is held down over the card (set by the card window, read by every
+/// `render_card_hover` so the plate under the pointer reads pressed).
+static PRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Records whether the button is held down; true when that changed the picture.
+pub fn set_pressed(down: bool) -> bool {
+    PRESSED.swap(down, Ordering::Relaxed) != down
+}
 
 /// `render_card` with a hover plate over `hover` (a live pill, round button or device row).
 pub fn render_card_hover(
@@ -2113,6 +2183,20 @@ pub fn render_card_hover(
         pen.flow(content, &laid, live, origin);
     }
     if let Some((x, y, w, h, radius)) = hover.and_then(|hit| hover_rect(content, &laid, hit)) {
+        let pressed = PRESSED.load(Ordering::Relaxed);
+        let bar = matches!(
+            hover.and_then(|hit| match hit {
+                Hit::Row(index, _) => content.rows.get(index),
+                Hit::Head(_) => None,
+            }),
+            Some(Row::Bar { .. })
+        );
+        let alpha = match (bar, pressed) {
+            (true, true) => BAR_PRESS_ALPHA,
+            (true, false) => BAR_HOVER_ALPHA,
+            (false, true) => PRESS_ALPHA,
+            (false, false) => HOVER_ALPHA,
+        };
         canvas.fill_round_rect(
             origin.0 + x * s,
             origin.1 + y * s,
@@ -2120,7 +2204,7 @@ pub fn render_card_hover(
             h * s,
             [radius * s; 4],
             0xFFFFFF,
-            HOVER_ALPHA,
+            alpha,
         );
     }
     canvas
@@ -2140,6 +2224,10 @@ fn hover_rect(content: &CardContent, laid: &Plan, hit: Hit) -> Option<(f32, f32,
                 Row::Buttons { .. } => {
                     let (x, w) = *placed.spans.get(button)?;
                     Some((x, placed.top, w, placed.height, w.min(placed.height) / 2.0))
+                }
+                Row::Bar { .. } => {
+                    let (x, w) = *placed.spans.get(button)?;
+                    Some((x, placed.top, w, placed.height, BUTTON_RADIUS))
                 }
                 Row::Device { .. } => Some((
                     CARD_PAD,
