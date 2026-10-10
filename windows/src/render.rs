@@ -2,7 +2,7 @@
 //! using the software rasteriser and GDI text. Dark solid style, like the Mac notch's solid
 //! surface. Pure of window state: callers pass data and get pixels.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::canvas::{Canvas, Mask};
 use crate::card::{Button, CardContent, Head, Hit, Lead, Live, Mark, Row, Tone};
@@ -20,6 +20,46 @@ const BLOCKED_GLYPH: f32 = 0.35;
 /// Permission dot on the folded pill (the Mac's four-point amber dot), in DIPs.
 const PILL_DOT: f32 = 4.0;
 const BORDER: u32 = 0x2A2A2A;
+
+/// The hub's Colour settings, as the Mac's notch reads them from its preferences: the colour of
+/// the ample state (`accentColor`) and where the bands turn orange and red (`watchLimit`,
+/// `criticalLimit`, in thousandths). Set by the settings bridge at start and on every change.
+static ACCENT: AtomicU32 = AtomicU32::new(layout::BAND_AMPLE);
+static WATCH_MILLI: AtomicU32 = AtomicU32::new(700);
+static CRITICAL_MILLI: AtomicU32 = AtomicU32::new(900);
+
+/// Applies the Colour settings to everything drawn from now on.
+pub fn set_appearance(accent: u32, watch_milli: u16, critical_milli: u16) {
+    ACCENT.store(accent, Ordering::Relaxed);
+    WATCH_MILLI.store(u32::from(watch_milli), Ordering::Relaxed);
+    CRITICAL_MILLI.store(u32::from(critical_milli), Ordering::Relaxed);
+}
+
+/// The ample colour with the chosen accent standing in for it. The warning and critical colours
+/// never change (the Mac's `UsageBand.color(accent:)`).
+fn tint(color: u32) -> u32 {
+    if color == layout::BAND_AMPLE {
+        ACCENT.load(Ordering::Relaxed)
+    } else {
+        color
+    }
+}
+
+/// Ring and bar colour for a used fraction: the Mac's three bands at the chosen limits, the
+/// ample one in the accent.
+fn band_color(fraction: f32) -> u32 {
+    let watch_milli = WATCH_MILLI.load(Ordering::Relaxed);
+    let critical_milli = CRITICAL_MILLI.load(Ordering::Relaxed);
+    let watch = watch_milli as f32 / 1000.0;
+    let critical = critical_milli as f32 / 1000.0;
+    if fraction < watch {
+        tint(layout::BAND_AMPLE)
+    } else if fraction < critical {
+        layout::BAND_WATCH
+    } else {
+        layout::BAND_CRITICAL
+    }
+}
 
 const MENU_PAD: f32 = 14.0;
 const MENU_RADIUS: f32 = 12.0;
@@ -512,13 +552,13 @@ fn draw_cell(
         if view.blocked {
             layout::BAND_CRITICAL
         } else {
-            layout::band_color(fraction)
+            band_color(fraction)
         }
     };
     if let Some(main) = view.main {
         let fraction = f32::from(main) / 100.0;
         let ring = match view.band {
-            Some(band) if !view.blocked => band,
+            Some(band) if !view.blocked => tint(band),
             _ => colour(fraction),
         };
         canvas.stroke_arc(cx, cy, radius, PROGRESS_STROKE * s, fraction, ring, dim);
@@ -1522,7 +1562,7 @@ impl Pen<'_> {
                 (width * f).max(height),
                 height,
                 [radius; 4],
-                layout::band_color(f),
+                band_color(f),
                 1.0,
             );
         }
@@ -2199,7 +2239,7 @@ impl Pen<'_> {
 fn tone_color(tone: Tone) -> u32 {
     match tone {
         Tone::Warning => layout::BAND_WATCH,
-        Tone::Good => layout::BAND_AMPLE,
+        Tone::Good => tint(layout::BAND_AMPLE),
         Tone::Critical => layout::BAND_CRITICAL,
     }
 }

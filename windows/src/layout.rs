@@ -152,23 +152,10 @@ pub const BAND_CRITICAL: u32 = 0xA51D24;
 pub const INK_PRIMARY: u32 = 0xFFFFFF;
 pub const INK_SECONDARY: u32 = 0x808080;
 pub const RING_TRACK_ALPHA: f32 = 0.188;
-const WATCH_LIMIT: f32 = 0.70;
-const CRITICAL_LIMIT: f32 = 0.90;
 
 /// Device pixels per DIP for `dpi`.
 pub fn scale(dpi: u32) -> f32 {
     dpi.clamp(48, 480) as f32 / 96.0
-}
-
-/// Ring colour for a used fraction: the Mac notch's three bands.
-pub fn band_color(fraction: f32) -> u32 {
-    if fraction < WATCH_LIMIT {
-        BAND_AMPLE
-    } else if fraction < CRITICAL_LIMIT {
-        BAND_WATCH
-    } else {
-        BAND_CRITICAL
-    }
 }
 
 /// Canvas depth (across the notch) in device pixels once the bezel band is cropped away.

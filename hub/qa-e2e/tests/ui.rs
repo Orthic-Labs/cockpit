@@ -338,8 +338,9 @@ fn notch_fixture() -> Value {
 /// What the Windows notch publishes to `%LOCALAPPDATA%\Pulse\notch-state.json`
 /// (windows/src/bridge.rs `state_json`): `product` "Pulse", `platform` "windows", the settings it
 /// accepts (Mac key names where both systems have one, `pill-settings.json` names for the
-/// Windows-only ones), `notchEdge`/`notchVisibility`/`notchSize` options only (size: `notchSize`, `usesCustomNotchScale`,
-/// `customNotchScale`; `notchEdge` is the primary monitor's edge), accounts without Mac
+/// Windows-only ones), `notchEdge`/`notchVisibility`/`notchSize`/`notificationChannel`/`accentColor` options only (size: `notchSize`,
+/// `usesCustomNotchScale`, `customNotchScale`; colour: `accentColor` with the Mac's raw values, `watchLimit`, `criticalLimit`;
+/// `notchEdge` is the primary monitor's edge), accounts without Mac
 /// fields (no `claudeAccounts`, no `seconds`), three permission rows with no title, and
 /// `updates` without a status. No `conveniences`, `helper` or `system`. Nearby sharing is off
 /// here so the hub does not open its LocalSend socket (the hub reads that switch from
@@ -377,6 +378,9 @@ fn windows_notch_fixture() -> Value {
             "usesCustomNotchScale": false,
             "customNotchScale": 1.0,
             "notificationChannel": "notch",
+            "accentColor": "00ff88",
+            "watchLimit": 0.7,
+            "criticalLimit": 0.9,
             "edges": {},
         },
         "options": {
@@ -384,6 +388,9 @@ fn windows_notch_fixture() -> Value {
             "notchVisibility": ["alwaysShow", "onHover", "hidden"],
             "notchSize": ["small", "medium", "large"],
             "notificationChannel": ["notch", "mac"],
+            "accentColor": [
+                "ff33e1", "eb4236", "eb8436", "ffd400", "00ff88", "00e5cc", "36a8eb", "6c5ce7", "b026ff", "f7f6f5",
+            ],
         },
         "displays": [],
         "accounts": [
@@ -677,10 +684,12 @@ fn windows_expectations(id: &str) -> (&'static [&'static str], &'static [&'stati
             const HAVE: &[&str] = &[
                 "Placement", "Edge", "Show", "Alt-drag the notch to slide it along its edge",
                 "Fold to a pill when the pointer leaves", "Reset position", "Size and surface", "Size", "Custom size",
+                "Colour", "Accent", "Watch limit", "Critical limit",
             ];
-            // Scale appears only while Custom size is on; Surface (glass/solid) is not published.
+            // Scale appears only while Custom size is on; Surface (glass/solid) is not published, and
+            // Colour transition (hard step or ramp) is not either: Windows draws hard steps only.
             const LACK: &[&str] = &[
-                "Option-drag", "Rings", "Colour", "Language", "Accent", "Surface", "Scale", "Fold for full-screen apps",
+                "Option-drag", "Rings", "Language", "Surface", "Scale", "Colour transition", "Fold for full-screen apps",
             ];
             (HAVE, LACK)
         }
@@ -784,8 +793,12 @@ fn windows_fixture_checks(ctl: &Control, sec: &Section, problems: &mut Vec<Strin
                 r#"const group = (n) => [...document.querySelectorAll(`[role=radiogroup][aria-label="${n}"] [role=radio]`)]
                        .map((b) => ({ text: b.textContent.trim(), on: b.getAttribute('aria-checked') === 'true' }));
                    const custom = document.querySelector('[role=switch][aria-label="Custom size"]');
+                   const accent = document.querySelector('select[aria-label="Accent"]');
+                   const range = (n) => { const r = document.querySelector(`input[type=range][aria-label="${n}"]`); return r ? Number(r.value) : null; };
                    return { edge: group('Edge'), show: group('Show'), size: group('Size'), selects: document.querySelectorAll('select').length,
                             ranges: document.querySelectorAll('input[type=range]').length,
+                            accent: accent ? { value: accent.value, options: [...accent.options].map((o) => o.value) } : null,
+                            watch: range('Watch limit'), critical: range('Critical limit'),
                             custom: custom ? custom.getAttribute('aria-checked') : null,
                             groups: [...document.querySelectorAll('.ck-sgroup h2')].map((h) => h.textContent.trim()) };"#,
             );
@@ -811,11 +824,20 @@ fn windows_fixture_checks(ctl: &Control, sec: &Section, problems: &mut Vec<Strin
                 problems.push(format!("{name}: the Custom size switch should be present and off (usesCustomNotchScale false), found {}", radios["custom"]));
             }
             let groups: Vec<String> = radios["groups"].as_array().map(|a| a.iter().map(|g| s(g.clone())).collect()).unwrap_or_default();
-            if groups != ["Placement", "Size and surface"] {
-                problems.push(format!("{name}: Appearance cards are {groups:?}; the Windows snapshot should leave Placement and Size and surface (no Rings, Colour, Language)"));
+            if groups != ["Placement", "Size and surface", "Colour"] {
+                problems.push(format!("{name}: Appearance cards are {groups:?}; the Windows snapshot should leave Placement, Size and surface and Colour (no Rings, Language)"));
             }
-            if radios["selects"] != 0 || radios["ranges"] != 0 {
-                problems.push(format!("{name}: the Windows notch publishes no select lists, and no Scale slider while Custom size is off, but the page has {} select(s) and {} slider(s)", radios["selects"], radios["ranges"]));
+            // Colour is the only card with a select (Accent: the Mac's ten raw values, green on) and
+            // sliders (Watch limit 0.7, Critical limit 0.9); no Scale slider while Custom size is off.
+            let accents: Vec<String> = radios["accent"]["options"].as_array().map(|a| a.iter().map(|o| s(o.clone())).collect()).unwrap_or_default();
+            if accents != ["ff33e1", "eb4236", "eb8436", "ffd400", "00ff88", "00e5cc", "36a8eb", "6c5ce7", "b026ff", "f7f6f5"] || radios["accent"]["value"] != "00ff88" {
+                problems.push(format!("{name}: Accent should offer the Mac's ten raw values with 00ff88 (green) on; has {}", radios["accent"]));
+            }
+            if radios["watch"] != 0.7 || radios["critical"] != 0.9 {
+                problems.push(format!("{name}: Watch limit and Critical limit sliders should read 0.7 and 0.9; they read {} and {}", radios["watch"], radios["critical"]));
+            }
+            if radios["selects"] != 1 || radios["ranges"] != 2 {
+                problems.push(format!("{name}: the Windows notch publishes one select list (Accent) and two sliders (the limits; no Scale slider while Custom size is off), but the page has {} select(s) and {} slider(s)", radios["selects"], radios["ranges"]));
             }
         }
         "accounts" => {

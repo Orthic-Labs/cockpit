@@ -2641,6 +2641,10 @@ extern "system" fn controller_proc(
                 return LRESULT(0);
             }
             bridge::MSG_PLACEMENT_CHANGED => {
+                // Accent or limits may have changed with nothing else: redraw every bitmap.
+                for panel in lock_state().panels.iter_mut() {
+                    panel.drawn = None;
+                }
                 on_display_change();
                 refold_after_settings();
                 return LRESULT(0);

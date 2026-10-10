@@ -19,6 +19,11 @@
 //! `"custom_notch_scale":0.5..1.5` (out-of-range values are clamped).
 //! Notification channel (the Mac's `notificationChannel`): `"notification_channel":"mac"` sends
 //! alerts as system toasts with their sound and keeps the notch quiet; absent is `"notch"`.
+//! Colour (the Mac's `accentColor`, `watchLimit`, `criticalLimit`): `"accent_color":"<raw>"`
+//! (the Mac's raw values, e.g. `"36a8eb"`; absent is the default green) tints the ample state of
+//! rings, bars and good-news cards, and `"watch_limit":0.5`, `"critical_limit":0.8` move the
+//! orange and red bands (absent are 0.7 and 0.9; clamped like the Mac so that
+//! 0.01 <= watch <= critical - 0.01 and critical <= 1).
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -49,6 +54,12 @@ pub const POSITION_MAX: u16 = 1000;
 pub const CUSTOM_SCALE_MIN: u16 = 500;
 pub const CUSTOM_SCALE_MAX: u16 = 1500;
 pub const CUSTOM_SCALE_DEFAULT: u16 = 1000;
+/// The usage bands' limits in thousandths (the Mac's `watchLimit` 0.70 and `criticalLimit` 0.90).
+pub const WATCH_LIMIT_DEFAULT: u16 = 700;
+pub const CRITICAL_LIMIT_DEFAULT: u16 = 900;
+/// The closest two limits may sit (the Mac's 0.01) and the highest the critical limit goes.
+const LIMIT_GAP: u16 = 10;
+const LIMIT_MAX: u16 = 1000;
 const MAX_DEPTH: usize = 8;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const DIR_NAME: &str = "Pulse";
@@ -154,6 +165,71 @@ impl NotificationChannel {
     }
 }
 
+/// The colour of the ample state (the Mac's `AccentColorChoice`, same raw values, minus
+/// `system`, the device's own accent). Green is the default and the palette's ample green.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccentColor {
+    Pink,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Teal,
+    Blue,
+    Indigo,
+    Purple,
+    OffWhite,
+}
+
+impl AccentColor {
+    /// In the order the Mac's picker lists them.
+    pub const ALL: [AccentColor; 10] = [
+        AccentColor::Pink,
+        AccentColor::Red,
+        AccentColor::Orange,
+        AccentColor::Yellow,
+        AccentColor::Green,
+        AccentColor::Teal,
+        AccentColor::Blue,
+        AccentColor::Indigo,
+        AccentColor::Purple,
+        AccentColor::OffWhite,
+    ];
+    /// The Mac's raw value (a persistence key, not display copy).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccentColor::Pink => "ff33e1",
+            AccentColor::Red => "eb4236",
+            AccentColor::Orange => "eb8436",
+            AccentColor::Yellow => "ffd400",
+            AccentColor::Green => "00ff88",
+            AccentColor::Teal => "00e5cc",
+            AccentColor::Blue => "36a8eb",
+            AccentColor::Indigo => "6c5ce7",
+            AccentColor::Purple => "b026ff",
+            AccentColor::OffWhite => "f7f6f5",
+        }
+    }
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.as_str() == text)
+    }
+    /// The colour as 0xRRGGBB, the Mac's own values (green is the palette's ample green).
+    pub fn rgb(self) -> u32 {
+        match self {
+            AccentColor::Pink => 0xFF33E1,
+            AccentColor::Red => 0xEB4236,
+            AccentColor::Orange => 0xEB8436,
+            AccentColor::Yellow => 0xFFD400,
+            AccentColor::Green => crate::layout::BAND_AMPLE,
+            AccentColor::Teal => 0x00E5CC,
+            AccentColor::Blue => 0x36A8EB,
+            AccentColor::Indigo => 0x6C5CE7,
+            AccentColor::Purple => 0xB026FF,
+            AccentColor::OffWhite => 0xF7F6F5,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PillSettings {
     pub visible: bool,
@@ -202,6 +278,14 @@ pub struct PillSettings {
     pub announce_weekly_limit: bool,
     /// Where alerts appear (the Mac's `notificationChannel`). The notch by default.
     pub notification_channel: NotificationChannel,
+    /// Colour of the ample state of rings, bars and good-news cards (the Mac's `accentColor`).
+    /// Green by default.
+    pub accent_color: AccentColor,
+    /// Where the ring turns orange and red, in thousandths of the used share (the Mac's
+    /// `watchLimit` and `criticalLimit`). Kept so that `LIMIT_GAP <= watch <= critical -
+    /// LIMIT_GAP` and `critical <= 1000`.
+    pub watch_limit_milli: u16,
+    pub critical_limit_milli: u16,
     /// Providers (Claude, Codex) whose usage alerts are muted (the Mac's `mutedAlertProviders`).
     pub mute_claude_alerts: bool,
     pub mute_codex_alerts: bool,
@@ -243,6 +327,9 @@ impl PillSettings {
             announce_session_limit: true,
             announce_weekly_limit: true,
             notification_channel: NotificationChannel::Notch,
+            accent_color: AccentColor::Green,
+            watch_limit_milli: WATCH_LIMIT_DEFAULT,
+            critical_limit_milli: CRITICAL_LIMIT_DEFAULT,
             mute_claude_alerts: false,
             mute_codex_alerts: false,
             auto_update_check: true,
@@ -300,6 +387,17 @@ impl PillSettings {
             self.notch_size.scale()
         }
     }
+    /// The hub's Watch limit slider (a fraction); kept below the critical limit like the Mac's.
+    pub fn set_watch_limit(&mut self, fraction: f64) {
+        let wanted = limit_milli(fraction);
+        let highest = self.critical_limit_milli.saturating_sub(LIMIT_GAP);
+        self.watch_limit_milli = wanted.clamp(LIMIT_GAP, highest.max(LIMIT_GAP));
+    }
+    /// The hub's Critical limit slider (a fraction); kept above the watch limit like the Mac's.
+    pub fn set_critical_limit(&mut self, fraction: f64) {
+        let lowest = (self.watch_limit_milli + LIMIT_GAP).min(LIMIT_MAX);
+        self.critical_limit_milli = limit_milli(fraction).clamp(lowest, LIMIT_MAX);
+    }
     /// Setting for a monitor; unknown monitors get the defaults (enabled, top-right).
     pub fn monitor(&self, key: &str) -> MonitorSetting {
         self.monitors
@@ -344,6 +442,19 @@ impl Default for PillSettings {
 pub fn custom_scale_milli(scale: f64) -> u16 {
     let milli = (scale * 1000.0).round();
     milli.clamp(f64::from(CUSTOM_SCALE_MIN), f64::from(CUSTOM_SCALE_MAX)) as u16
+}
+
+/// A band limit (such as 0.7) in thousandths, kept to 0..=1000.
+fn limit_milli(fraction: f64) -> u16 {
+    let milli = (fraction * 1000.0).round();
+    milli.clamp(0.0, f64::from(LIMIT_MAX)) as u16
+}
+
+/// A stored pair of limits repaired the way the Mac repairs it: critical in
+/// `2 * LIMIT_GAP..=LIMIT_MAX`, then watch in `LIMIT_GAP..=critical - LIMIT_GAP`.
+fn normalize_limits(watch: u16, critical: u16) -> (u16, u16) {
+    let critical = critical.clamp(2 * LIMIT_GAP, LIMIT_MAX);
+    (watch.clamp(LIMIT_GAP, critical - LIMIT_GAP), critical)
 }
 
 pub fn clamp_cadence(seconds: i64) -> u32 {
@@ -804,6 +915,33 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         }
         Some(_) => return Err(ParseError::Malformed),
     }
+    match member(&root, "accent_color") {
+        None | Some(Json::Null) => {}
+        Some(Json::Text(text)) => {
+            settings.accent_color = AccentColor::parse(text).ok_or(ParseError::Malformed)?;
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
+    let (mut watch, mut critical) = (WATCH_LIMIT_DEFAULT, CRITICAL_LIMIT_DEFAULT);
+    for (name, slot) in [
+        ("watch_limit", &mut watch),
+        ("critical_limit", &mut critical),
+    ] {
+        match member(&root, name) {
+            None | Some(Json::Null) => {}
+            Some(Json::Number(text)) => {
+                let fraction = text.parse::<f64>().map_err(|_| ParseError::Malformed)?;
+                if !fraction.is_finite() {
+                    return Err(ParseError::Malformed);
+                }
+                *slot = limit_milli(fraction);
+            }
+            Some(_) => return Err(ParseError::Malformed),
+        }
+    }
+    let (watch, critical) = normalize_limits(watch, critical);
+    settings.watch_limit_milli = watch;
+    settings.critical_limit_milli = critical;
     Ok(settings)
 }
 
@@ -943,6 +1081,22 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
             ",\"notification_channel\":\"{}\"",
             settings.notification_channel.as_str()
         ));
+    }
+    if settings.accent_color != AccentColor::Green {
+        out.push_str(&format!(
+            ",\"accent_color\":\"{}\"",
+            settings.accent_color.as_str()
+        ));
+    }
+    let (watch, critical) =
+        normalize_limits(settings.watch_limit_milli, settings.critical_limit_milli);
+    for (name, value, default) in [
+        ("watch_limit", watch, WATCH_LIMIT_DEFAULT),
+        ("critical_limit", critical, CRITICAL_LIMIT_DEFAULT),
+    ] {
+        if value != default {
+            out.push_str(&format!(",\"{name}\":{}.{:03}", value / 1000, value % 1000));
+        }
     }
     if settings.custom_scale_on {
         out.push_str(",\"uses_custom_notch_scale\":true");

@@ -20,8 +20,8 @@
 
 use crate::settings::{self, Arg, Command, PillSettings};
 use crate::{
-    autostart, claude_accounts, desktop, diag, installer, json, keys, raii, send, shot, update,
-    usage,
+    autostart, claude_accounts, desktop, diag, installer, json, keys, raii, render, send, shot,
+    update, usage,
 };
 use std::ffi::c_void;
 use std::fs;
@@ -182,6 +182,8 @@ fn pulse_dir() -> Option<PathBuf> {
 
 /// Starts the worker thread. Failure to start only costs the hub its settings pages.
 pub fn start(controller_key: isize, hooks: Hooks) {
+    // The stored Colour settings, before the first notch is drawn.
+    apply_appearance(&(hooks.settings)().0);
     let spawned = std::thread::Builder::new()
         .name("pulse-bridge".into())
         .spawn(move || worker(controller_key, &hooks));
@@ -445,6 +447,14 @@ fn state_json(hooks: &Hooks) -> String {
     // Where alerts go (the Mac's values: `notch`, or `mac` = a Windows system toast).
     out.push_str(",\"notificationChannel\":");
     esc(&mut out, s.notification_channel.as_str());
+    // Colour (the Mac's `accentColor`, `watchLimit`, `criticalLimit`); no colour transition.
+    out.push_str(",\"accentColor\":");
+    esc(&mut out, s.accent_color.as_str());
+    out.push_str(&format!(
+        ",\"watchLimit\":{},\"criticalLimit\":{}",
+        f64::from(s.watch_limit_milli) / 1000.0,
+        f64::from(s.critical_limit_milli) / 1000.0
+    ));
     out.push_str(",\"edges\":{");
     for (index, (key, edge)) in s.edges.iter().enumerate() {
         if index > 0 {
@@ -457,7 +467,14 @@ fn state_json(hooks: &Hooks) -> String {
     out.push_str("}},\"options\":{\"notchEdge\":[\"top\",\"bottom\",\"left\",\"right\"],");
     out.push_str("\"notchVisibility\":[\"alwaysShow\",\"onHover\",\"hidden\"],");
     out.push_str("\"notchSize\":[\"small\",\"medium\",\"large\"],");
-    out.push_str("\"notificationChannel\":[\"notch\",\"mac\"]},\"displays\":[");
+    out.push_str("\"notificationChannel\":[\"notch\",\"mac\"],\"accentColor\":[");
+    for (index, accent) in settings::AccentColor::ALL.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        esc(&mut out, accent.as_str());
+    }
+    out.push_str("]},\"displays\":[");
     for (index, key) in s.monitors.keys().enumerate() {
         if index > 0 {
             out.push(',');
@@ -695,7 +712,12 @@ fn commit(
         || next.visible != before.visible
         || next.notch_size != before.notch_size
         || next.custom_scale_on != before.custom_scale_on
-        || next.custom_scale_milli != before.custom_scale_milli;
+        || next.custom_scale_milli != before.custom_scale_milli
+        // A colour change moves nothing, but the panels must draw again with the new colours.
+        || next.accent_color != before.accent_color
+        || next.watch_limit_milli != before.watch_limit_milli
+        || next.critical_limit_milli != before.critical_limit_milli;
+    apply_appearance(&next);
     (hooks.commit)(next);
     if placement_changed {
         // SAFETY: posting to a window handle that may have gone is harmless.
@@ -709,6 +731,15 @@ fn commit(
         };
     }
     repaint(controller_key);
+}
+
+/// Hands the Colour settings to the renderer: the ample accent and the watch and critical limits.
+fn apply_appearance(s: &PillSettings) {
+    render::set_appearance(
+        s.accent_color.rgb(),
+        s.watch_limit_milli,
+        s.critical_limit_milli,
+    );
 }
 
 /// Posts the usage-updated message: the controller redraws every panel from the settings.
@@ -827,6 +858,30 @@ fn apply_set(s: &mut PillSettings, key: &str, value: &Arg) -> bool {
                 }
                 None => false,
             },
+            _ => false,
+        },
+        "accentColor" | "accent_color" => match value {
+            Arg::Text(text) => match settings::AccentColor::parse(text) {
+                Some(accent) => {
+                    s.accent_color = accent;
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        },
+        "watchLimit" | "watch_limit" => match value {
+            Arg::Number(fraction) if fraction.is_finite() => {
+                s.set_watch_limit(*fraction);
+                true
+            }
+            _ => false,
+        },
+        "criticalLimit" | "critical_limit" => match value {
+            Arg::Number(fraction) if fraction.is_finite() => {
+                s.set_critical_limit(*fraction);
+                true
+            }
             _ => false,
         },
         "usesCustomNotchScale" | "uses_custom_notch_scale" => flag(value, &mut s.custom_scale_on),
