@@ -208,7 +208,10 @@ pub fn reopen(file: &Path, root: &Path, now_ms: u64, open: bool) -> ReopenResult
                 chat,
                 reason: "scheduled task",
             });
-        } else if record.get("interruptedByQuitAt").is_some_and(|v| !v.is_null()) {
+        } else if record
+            .get("interruptedByQuitAt")
+            .is_some_and(|v| !v.is_null())
+        {
             // Desktop sends such a chat "continue" when it is shown, a paid turn; it is left
             // for the owner to open.
             result.skipped.push(Skipped {
