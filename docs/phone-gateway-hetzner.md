@@ -25,6 +25,17 @@ Revocation is one click (Allow → Deny) and takes effect on the next request. T
 ## Remote laptop later (one laptop away from home)
 When the Dell is away and must reach the Mac Mini, the two are no longer on one network. The answer is the same meeting point: both laptops already link to Hetzner, so an agent message from the Dell to a Mac chat goes Dell → Hetzner → Mac through the bridge store on Hetzner, with no change to the chats. Nearby sharing over the internet (files to the other laptop) is the file leg of the relay, scheduled after text (H20). Nothing in the first slice blocks it; it is a second link in `links.json` and a retention policy on Hetzner.
 
+## Adopted from the reviews (v3 requirements, 2026-10-10)
+Both astra passes and a third read agree on the direction; these six are now requirements, not options:
+1. **Hetzner holds no authority.** The phone signs every instruction (Ed25519 over a canonical envelope: destination, session generation, body hash, expiry, reply route); each laptop verifies against the phone key it paired with directly, so a compromised server can store and forward but not forge. Replies and receipts are signed the same way. COSE (RFC 9052) is an acceptable container if a maintained Swift/Rust pair exists; otherwise a fixed canonical JSON form with a detached signature.
+2. **Retention is not permission.** A message carries a dispatch deadline (default 10 min, per-message override); past it the laptop refuses with `expired`, never executes. Permission and the phone's chat allowlist are checked at delivery time, not at store time. Owner instructions and agent replies are distinct message kinds.
+3. **Restore keeps security decisions.** Revocations and endpoint dedupe records are replicated to every laptop and survive a server restore; after a restore the server pauses dispatch until each laptop reconciles. SQLite runs WAL with `synchronous=FULL`; disk-full refuses new work with a clear state; backups are consistent snapshots.
+4. **Phone data behind FaceID too.** Chat storage (conversations, drafts, replies) uses the complete file-protection class and is unlocked with the key; app-switcher previews are hidden for Chat; Send and the share extension keep their own ungated store.
+5. **Feasibility first.** Step one is a real iPhone → pinned ssh host → real chat → reply on the phone, with the pinned swift-nio-ssh version, biometric cancellation and reconnect behaviour qualified before any mailbox or UI work. swift-nio-ssh's Secure Enclave P-256 support is the claim to verify there (unverified until that step).
+6. **Nearby repair is its own slice.** The LocalSend TLS possession check and the text-consent fix ship now with their own gate; the Allow/Ask/Deny redesign follows; neither blocks phone messaging.
+
+Order: phone feasibility journey → signed mailbox contract → durable send/reply → Mac/Dell × Claude/Codex qualification → revoke/restore/crash journeys → terminal, pushes, files.
+
 ## Topology
 - **Relay** (`pulse relay`, the Rust core built headless) runs on Adrian's Hetzner server as a systemd service behind Caddy (TLS). It is a store-and-forward message service and blob store. It never executes anything on a laptop.
 - **Nodes** are the Mac Mini hub, the Dell hub and the phone app. Every node connects *outbound* to the relay over HTTPS (long-poll or WebSocket). No inbound ports anywhere; no ssh in the message path. ssh keys stay for administration only (B10 removed from the data path).
