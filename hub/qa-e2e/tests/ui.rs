@@ -62,7 +62,8 @@ static SECTIONS: [Section; 10] = [
     Section { id: "monitor", title: "Monitor", settings: false, expect: "", also: &[], switches: false },
     Section { id: "apps", title: "Apps", settings: false, expect: "", also: &[], switches: false },
     Section { id: "permissions", title: "Permissions", settings: true, expect: "Accessibility", also: &["Needed for: Window shortcuts \u{b7} Middle-click tool wheel", "Not needed by anything you have on"], switches: false },
-    Section { id: "accounts", title: "Accounts", settings: true, expect: "codex@example.test", also: &[], switches: true },
+    // The Show toggles moved to the Gauges group on Appearance once the notch publishes `gauges`.
+    Section { id: "accounts", title: "Accounts", settings: true, expect: "codex@example.test", also: &[], switches: false },
     Section { id: "appearance", title: "Appearance", settings: true, expect: "Fold for full-screen apps", also: &["Gauges", "Memory"], switches: true },
     Section { id: "notifications", title: "Notifications", settings: true, expect: "When a session finishes", also: &[], switches: true },
     // Nearby sharing lives inside General on the hub.
