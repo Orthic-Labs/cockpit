@@ -18,7 +18,7 @@ export interface TrustDevice {
   kind: string | null;
   state: TrustChoice;
   present: boolean;
-  /** It has proved it holds the key behind its fingerprint. */
+  /** It proved its key by certificate (identity); a callback proof is not this. */
   verified: boolean;
   /** How: its client certificate, or by answering at its address; null when never. */
   proof: "certificate" | "callback" | null;
@@ -240,7 +240,7 @@ const NOT_VERIFIED_NOTE = "Not verified: this app can't prove its identity. Allo
 
 function proofText(d: TrustDevice): { text: string; note: string } {
   if (d.proof === "certificate") return { text: "verified (proved its key)", note: "This device proved it holds its key when it connected." };
-  if (d.proof === "callback") return { text: "verified (answered at its address)", note: "This device answered a check at its network address; that does not rule out a relay on the same network." };
+  if (d.proof === "callback") return { text: "answered at its address (weaker: files only, kept apart, never the clipboard)", note: "This device answered a check at its network address. Anyone on the network can relay that check while the real device is online, so it only skips the question; files are kept apart and nothing reaches the clipboard." };
   return { text: "not verified", note: NOT_VERIFIED_NOTE };
 }
 
@@ -287,7 +287,7 @@ function DeviceRow({ d, run }: { d: TrustDevice; run: (command: string, args: Re
               <Pencil size={12} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
-          <span className={`ck-status ck-status-${proof.text.startsWith("verified") ? "granted" : "unknown"}`} title={proof.note}>
+          <span className={`ck-status ck-status-${d.proof === "certificate" ? "granted" : "unknown"}`} title={proof.note}>
             {proof.text}
           </span>
         </div>

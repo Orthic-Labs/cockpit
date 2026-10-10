@@ -2,10 +2,14 @@
 //! a request has one record, and the owner sets it to Allow, Ask or Deny.
 //!
 //! * Allow: a request is accepted without a card, files and text alike, but
-//!   only from a sender that proves its key (`receive::prepare_upload`): by the
-//!   client certificate it presents (`proof = "certificate"`), or, for senders
-//!   that present none, by answering a connect-back handshake at the address it
-//!   calls from (`proof = "callback"`). Without proof the request is asked about.
+//!   only from a sender that proves a key (`receive::prepare_upload`): by the
+//!   client certificate it presents (`proof = "certificate"`, identity), or, for
+//!   senders that present none, by answering a connect-back handshake at the
+//!   address it calls from (`proof = "callback"`). A callback is relayable by
+//!   anyone on the network while the real device is online, so it is a
+//!   convenience tier only: it skips the card, but the sender stays unproven
+//!   (files kept apart, no clipboard, size caps). Without proof the request is
+//!   asked about.
 //! * Ask: every request raises a card, text included.
 //! * Deny: a request is answered 403 at once and counted in `refused`.
 //!
@@ -342,6 +346,15 @@ impl TrustStore {
         if save {
             self.autosave();
         }
+    }
+
+    /// Whether this device has ever proved its key by certificate. Such a record
+    /// never accepts the weaker callback proof.
+    pub fn certificate_proven(&self, fingerprint: &str) -> bool {
+        let fingerprint = normalize(fingerprint);
+        self.devices.iter().any(|d| {
+            d.fingerprint == fingerprint && d.proof.as_deref() == Some(PROOF_CERTIFICATE)
+        })
     }
 
     /// The device just answered a connect-back handshake for its fingerprint.

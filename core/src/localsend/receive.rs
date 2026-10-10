@@ -26,6 +26,8 @@ const SESSION_IDLE: Duration = Duration::from_secs(120);
 /// What a sender that could not prove its key may send in one request.
 const UNPROVEN_MAX_FILES: usize = 200;
 const UNPROVEN_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// No request, proven or not, may name a single file larger than this.
+const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 /// Where files from a sender that could not prove its key are saved.
 const UNVERIFIED_FOLDER: &str = "Received (unverified)";
 
@@ -146,6 +148,15 @@ fn prepare_upload(
     if parsed.files.is_empty() || parsed.files.len() > 20_000 {
         return message(400, "Invalid body");
     }
+    // Sizes are the sender's claims: no single file above the cap, and a sum that
+    // overflows is no request at all.
+    let mut total: u64 = 0;
+    for file in parsed.files.values() {
+        match total.checked_add(file.size) {
+            Some(sum) if file.size <= MAX_FILE_BYTES => total = sum,
+            _ => return message(400, "Invalid body"),
+        }
+    }
 
     // Who is asking. A device that presented a certificate has proved it holds
     // that key, and it must be the one the request names. One that presented a
@@ -154,7 +165,7 @@ fn prepare_upload(
     // its claimed fingerprint is denied.
     let claimed = normalize(&parsed.info.fingerprint);
     let certified = presented.as_deref().is_some_and(|p| p == claimed);
-    let state = {
+    let (state, had_certificate) = {
         let mut store = lock(&inner.trust);
         store.observe(
             &claimed,
@@ -167,7 +178,7 @@ fn prepare_upload(
         if state == TrustState::Deny {
             store.refuse(&claimed);
         }
-        state
+        (state, store.certificate_proven(&claimed))
     };
     if state == TrustState::Deny {
         inner.emit(Event::Changed);
@@ -198,7 +209,6 @@ fn prepare_upload(
     }
 
     let config = lock(&inner.cfg).clone();
-    let total: u64 = parsed.files.values().map(|f| f.size).sum();
     let is_message = proto::is_message(&parsed.files);
     let alias: String = parsed
         .info
@@ -209,29 +219,36 @@ fn prepare_upload(
         .collect();
     let request_id = proto::random_hex(8);
 
-    // A sender with no client certificate gets one chance to prove its key
-    // before an Allow is honoured: connect back to the address it called from,
-    // at the port it announced, and check the key there signs for its
-    // fingerprint. Failure or a timeout just means the card is raised. This
-    // proves a key holder answers at that address, not that it is the caller
-    // (a relay to the real device while it is online could pass).
-    let mut verified = certified;
-    if state == TrustState::Allow && presented.is_none() {
-        let port = inner.announced_port(&claimed).unwrap_or(proto::PORT);
-        if net::prove_key(ip, port, &claimed) {
-            lock(&inner.trust).mark_callback(&claimed);
-            verified = true;
-        }
-    }
-    let allowed = state == TrustState::Allow && verified;
-    if !verified && (parsed.files.len() > UNPROVEN_MAX_FILES || total > UNPROVEN_MAX_BYTES) {
+    // Proof comes in two tiers.
+    // * Certificate (`certified`): the sender presented the key behind its
+    //   fingerprint in the handshake. This is identity: it is saved with the
+    //   owner's files, may use the clipboard, and has no size cap.
+    // * Callback: a sender with no certificate and an Allow record gets one
+    //   check, connecting back to the address it called from at the port it
+    //   announced. Passing only lets Allow skip the card. A plain TCP forwarder
+    //   to the real device passes it while that device is online, so it is a
+    //   convenience, not identity: such a sender is still unproven for
+    //   everything else. A record that has ever proved a certificate never
+    //   accepts it (a request without the certificate asks), and it never
+    //   changes that record's proof.
+    // Anything not certified is held to the unproven limits below.
+    if !certified && (parsed.files.len() > UNPROVEN_MAX_FILES || total > UNPROVEN_MAX_BYTES) {
         return message(
             413,
             "A device that can't prove its identity may send at most 200 files and 2 GB at once.",
         );
     }
-    // Files from an unproven sender never mix with the owner's own.
-    let save_dir = if verified {
+    let mut callback_ok = false;
+    if state == TrustState::Allow && presented.is_none() && !had_certificate {
+        let port = inner.announced_port(&claimed).unwrap_or(proto::PORT);
+        if net::prove_key(ip, port, &claimed) {
+            lock(&inner.trust).mark_callback(&claimed);
+            callback_ok = true;
+        }
+    }
+    let allowed = state == TrustState::Allow && (certified || callback_ok);
+    // Files from a sender without certificate proof never mix with the owner's own.
+    let save_dir = if certified {
         config.save_dir.clone()
     } else {
         config.save_dir.join(UNVERIFIED_FOLDER)
@@ -264,7 +281,7 @@ fn prepare_upload(
                 })
                 .collect()
         },
-        verified,
+        verified: certified,
     };
 
     // Allow skips the card, for text as for files, for a sender that proved its
@@ -294,7 +311,8 @@ fn prepare_upload(
         // A device denied while its request waited stays denied.
         answer == Some(true) && inner.trust_state(&claimed) != TrustState::Deny
     };
-    if !accepted {
+    // Deny set while the callback or the card was waiting wins, before any token.
+    if !accepted || inner.trust_state(&claimed) == TrustState::Deny {
         return message(403, "Rejected");
     }
 
@@ -314,8 +332,10 @@ fn prepare_upload(
         saved_files: Vec::new(),
         error: None,
         message: None,
-        // Only a sender that is Allow and proven may put things on the clipboard.
-        clipboard: allowed && parsed.pulse.as_ref().is_some_and(|p| p.clipboard),
+        // Only an Allow sender with certificate proof may put things on the clipboard.
+        clipboard: state == TrustState::Allow
+            && certified
+            && parsed.pulse.as_ref().is_some_and(|p| p.clipboard),
         started: now_ms(),
         finished: None,
     });
@@ -365,6 +385,7 @@ fn prepare_upload(
             activity: Instant::now(),
             saved: Vec::new(),
             save_dir,
+            proven: certified,
         },
     );
     json(
@@ -391,6 +412,7 @@ struct Claimed {
     cancel: Arc<std::sync::atomic::AtomicBool>,
     transfer_id: String,
     save_dir: PathBuf,
+    proven: bool,
 }
 
 fn upload(
@@ -422,6 +444,7 @@ fn upload(
                             cancel: session.cancel.clone(),
                             transfer_id: session.transfer_id.clone(),
                             save_dir: session.save_dir.clone(),
+                            proven: session.proven,
                         }))
                     }
                 }
@@ -539,15 +562,32 @@ fn upload(
         );
         return message(500, "Unknown error by receiver");
     }
-    finish_received(&final_path);
+    if let Err(reason) = finish_received(&final_path) {
+        if claimed.proven {
+            eprintln!("pulse sharing: {reason}");
+        } else {
+            // An unproven sender's file that can't be marked as coming from
+            // outside is not kept.
+            let _ = std::fs::remove_file(&final_path);
+            inner.end_transfer(
+                &claimed.transfer_id,
+                "failed",
+                Some(format!(
+                    "{display_name} couldn't be marked as downloaded, so it was not kept."
+                )),
+            );
+            return message(500, "Unknown error by receiver");
+        }
+    }
     finish_file(inner, session_id, file_id, final_path);
     (200, None)
 }
 
 /// A finished file: readable but never executable, and marked as coming from
 /// outside the computer (macOS quarantine, Windows Mark of the Web) so the system
-/// checks it before running it. Failures are logged and never fail the transfer.
-fn finish_received(path: &Path) {
+/// checks it before running it. An error says why the mark could not be written;
+/// the caller keeps a proven sender's file anyway and deletes an unproven one's.
+fn finish_received(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -560,36 +600,33 @@ fn finish_received(path: &Path) {
         use std::os::unix::ffi::OsStrExt;
         let seconds = now_ms() / 1000;
         let value = format!("0083;{seconds:x};Pulse;");
-        match std::ffi::CString::new(path.as_os_str().as_bytes()) {
-            Ok(name) => {
-                // SAFETY: NUL-terminated path and attribute name; `value` is valid for its length.
-                let rc = unsafe {
-                    libc::setxattr(
-                        name.as_ptr(),
-                        c"com.apple.quarantine".as_ptr(),
-                        value.as_ptr().cast(),
-                        value.len(),
-                        0,
-                        0,
-                    )
-                };
-                if rc != 0 {
-                    eprintln!(
-                        "pulse sharing: couldn't quarantine a received file: {}",
-                        io::Error::last_os_error()
-                    );
-                }
-            }
-            Err(e) => eprintln!("pulse sharing: couldn't quarantine a received file: {e}"),
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|e| format!("couldn't quarantine a received file: {e}"))?;
+        // SAFETY: NUL-terminated path and attribute name; `value` is valid for its length.
+        let rc = unsafe {
+            libc::setxattr(
+                name.as_ptr(),
+                c"com.apple.quarantine".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        if rc != 0 {
+            return Err(format!(
+                "couldn't quarantine a received file: {}",
+                io::Error::last_os_error()
+            ));
         }
     }
     #[cfg(windows)]
     {
         let stream = format!("{}:Zone.Identifier", path.display());
-        if let Err(e) = std::fs::write(&stream, "[ZoneTransfer]\r\nZoneId=3\r\n") {
-            eprintln!("pulse sharing: couldn't mark a received file: {e}");
-        }
+        std::fs::write(&stream, "[ZoneTransfer]\r\nZoneId=3\r\n")
+            .map_err(|e| format!("couldn't mark a received file: {e}"))?;
     }
+    Ok(())
 }
 
 fn partial_path(final_path: &Path) -> PathBuf {

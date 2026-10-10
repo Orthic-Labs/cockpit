@@ -676,7 +676,7 @@ fn publish_trust(service: &Service, object: &mut serde_json::Map<String, Value>)
                 "kind": e.kind,
                 "state": e.state.as_str(),
                 "present": present.contains(&e.fingerprint),
-                "verified": e.proof.is_some(),
+                "verified": e.proof.as_deref() == Some("certificate"),
                 "proof": e.proof,
                 "firstSeenMs": e.first_seen_ms,
                 "lastSeenMs": e.last_seen_ms,

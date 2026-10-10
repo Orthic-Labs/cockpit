@@ -942,7 +942,10 @@ final class NearbySharing {
             detail = request.files?.first?.name ?? ""
         }
         if !request.isMessage {
-            let place = URL(fileURLWithPath: folder ?? defaultFolder).lastPathComponent
+            // A sender that did not present its certificate saves apart from the owner's files.
+            let place = request.verified == false
+                ? "Received (unverified)"
+                : URL(fileURLWithPath: folder ?? defaultFolder).lastPathComponent
             if !detail.isEmpty { detail += " · " }
             detail += L10n.t("Saves to \(place)")
         }
@@ -964,13 +967,6 @@ final class NearbySharing {
               let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return nil }
         return url
-    }
-
-    /// A send made by a Pulse that does not carry the clipboard flag yet still names a
-    /// pasted image "Clipboard <stamp>.<ext>": treat that single file as a clipboard send.
-    private static func looksPasted(_ files: [String]) -> Bool {
-        guard files.count == 1 else { return false }
-        return URL(fileURLWithPath: files[0]).lastPathComponent.hasPrefix("Clipboard ")
     }
 
     /// A received BMP or TIFF rewritten as PNG beside it (the original is removed); any
@@ -1000,11 +996,12 @@ final class NearbySharing {
             showNote(title: L10n.t("Copied from \(transfer.peer)"),
                      detail: Self.capped(text).split(whereSeparator: \.isNewline).first.map(String.init) ?? "",
                      problem: false)
-        case ("receive", "done") where transfer.clipboard == true
-            || Self.looksPasted(transfer.savedFiles ?? []):
+        case ("receive", "done") where transfer.clipboard == true:
             // A pasted file, image or screenshot: saved, and on this clipboard as the image
             // (one image file) or as the files, so ⌘V works at once. A clipboard image that
-            // arrived as BMP or TIFF (what a Windows clipboard holds) is saved as PNG.
+            // arrived as BMP or TIFF (what a Windows clipboard holds) is saved as PNG. Only
+            // here: the hub sets `clipboard` for a proven Allow sender alone, and nothing
+            // from any other transfer is decoded, converted or put on the clipboard.
             let files = (transfer.savedFiles ?? []).map(Self.asPNG)
             if !files.isEmpty {
                 remember(Last(kind: "files", text: nil, files: files, at: Date().timeIntervalSince1970))

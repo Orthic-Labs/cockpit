@@ -209,6 +209,16 @@ pub fn deliver(
     register: &dyn Fn(Option<TcpStream>),
     on: &mut dyn FnMut(Progress),
 ) -> Result<Outcome, String> {
+    // Pulse sends only over a verified TLS connection to a pinned identity.
+    if !peer.https {
+        return Err(format!(
+            "{} has encryption turned off in its app; turn it on to receive from Pulse.",
+            peer.alias
+        ));
+    }
+    if !net::valid_pin(&peer.fingerprint) {
+        return Err(format!("{} did not present a valid identity.", peer.alias));
+    }
     let mut progress = Progress {
         phase: Phase::Waiting,
         done: 0,

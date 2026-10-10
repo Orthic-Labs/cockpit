@@ -73,7 +73,8 @@ pub struct Incoming {
     pub preview: Option<String>,
     /// The first few files, for display (none for a message).
     pub files: Vec<IncomingFile>,
-    /// The sender proved it holds the key behind its fingerprint.
+    /// The sender proved it holds the key behind its fingerprint by presenting its
+    /// certificate. Anything less is unproven: saved apart, no clipboard, capped.
     pub verified: bool,
 }
 
@@ -234,6 +235,8 @@ pub(crate) struct Session {
     pub remaining: usize,
     pub saved: Vec<PathBuf>,
     pub save_dir: PathBuf,
+    /// The sender proved its key by certificate (not only by callback).
+    pub proven: bool,
 }
 
 pub(crate) struct Inner {
@@ -329,6 +332,12 @@ impl Inner {
                 .find(|s| s.device.fingerprint == device.fingerprint)
             {
                 Some(seen) => {
+                    // An announcement can move a device (ip, port) but never takes
+                    // it from https back to http.
+                    let mut device = device;
+                    if seen.device.protocol == "https" {
+                        device.protocol = "https".to_string();
+                    }
                     let changed = seen.device.alias != device.alias
                         || seen.device.ip != device.ip
                         || seen.device.port != device.port
@@ -708,6 +717,15 @@ impl Service {
         if self.inner.trust_state(&device.fingerprint) == TrustState::Deny {
             return Err("That device is blocked.".to_string());
         }
+        if device.protocol != "https" {
+            return Err(
+                "That device has encryption turned off in its app; turn it on to receive from Pulse."
+                    .to_string(),
+            );
+        }
+        if !net::valid_pin(&device.fingerprint) {
+            return Err("That device did not present a valid identity.".to_string());
+        }
         let ip: IpAddr = device
             .ip
             .parse()
@@ -806,6 +824,14 @@ impl Drop for Service {
 
 // ---- background threads ----------------------------------------------------
 
+struct ConnectionGuard(Arc<Inner>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 fn spawn_acceptor(inner: Arc<Inner>, listener: TcpListener) {
     thread::spawn(move || {
         while !inner.stop.load(Ordering::Relaxed) {
@@ -816,10 +842,11 @@ fn spawn_acceptor(inner: Arc<Inner>, listener: TcpListener) {
                         continue;
                     }
                     inner.connections.fetch_add(1, Ordering::Relaxed);
-                    let inner = inner.clone();
+                    // Counted down however the handler ends, panics included.
+                    let guard = ConnectionGuard(inner.clone());
                     thread::spawn(move || {
-                        receive::handle_connection(&inner, socket, address);
-                        inner.connections.fetch_sub(1, Ordering::Relaxed);
+                        let guard = guard;
+                        receive::handle_connection(&guard.0, socket, address);
                     });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

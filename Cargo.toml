@@ -13,7 +13,7 @@ serde_json = ">=1.0.145, <2" # root lock holds 1.0.145; the lock-less hub needs 
 thiserror = "=2.0.17"
 libc = "=0.2.177"
 sysinfo = "=0.37.2"
-# Nearby sharing (LocalSend protocol v2). Not yet in the lock: run `cargo update -w` once.
+# Nearby sharing (LocalSend protocol v2): TLS with self-signed device certificates.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = "0.13"
 sha2 = "0.10"

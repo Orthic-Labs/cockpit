@@ -21,6 +21,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Whether `fingerprint` is a SHA-256 in hex, the only thing a send is pinned to.
+pub fn valid_pin(fingerprint: &str) -> bool {
+    fingerprint.len() == 64 && fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -680,10 +685,11 @@ pub fn request_json(
 /// Residual limit: this proves a holder of the key answers at that address, not
 /// that it is the one now calling. An attacker who relays the handshake to the
 /// real device while it is online on the same network could still pass.
-/// Certificate proof (`Wire::peer_fingerprint`) has no such limit.
+/// Even a plain TCP forwarder passes it, so it is a convenience tier, never
+/// identity. Certificate proof (`Wire::peer_fingerprint`) has no such limit.
 pub fn prove_key(ip: IpAddr, port: u16, fingerprint: &str) -> bool {
     let fingerprint = fingerprint.to_ascii_lowercase();
-    if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !valid_pin(&fingerprint) {
         return false;
     }
     let timeout = Duration::from_secs(3);
