@@ -381,7 +381,7 @@ pub fn project_inventory(
     coverage: InventoryCoverage,
 ) -> AppInventoryReport {
     let mut incomplete_reasons = coverage.gap_reasons();
-    if report.accounting.incomplete {
+    if report.accounting.incomplete || !report.skipped_links.is_empty() {
         incomplete_reasons.push("scan accounting is incomplete".into());
     }
     let mut apps = Vec::with_capacity(records.len());

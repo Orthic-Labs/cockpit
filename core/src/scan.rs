@@ -656,10 +656,14 @@ fn run<P: FilesystemProvider>(
         }
     }
     report.volume_usage = usage_by_volume.into_values().collect();
-    report.accounting.incomplete = !report.incomplete_reasons.is_empty()
-        || !report.inspection_errors.is_empty()
-        || !report.skipped_links.is_empty();
-    if report.accounting.incomplete {
+    // A skipped link is a deliberate non-follow, not missing data: its target
+    // is accounted where it lives (or is out of scope). Links therefore do not
+    // make the accounting incomplete. (A scan root that is itself, or sits
+    // behind, a link records an explicit "root skipped" reason instead.) The
+    // reclaim upper bound stays conservative: it is withheld for links too.
+    report.accounting.incomplete =
+        !report.incomplete_reasons.is_empty() || !report.inspection_errors.is_empty();
+    if report.accounting.incomplete || !report.skipped_links.is_empty() {
         report.accounting.reclaim.upper_bytes = None;
         report
             .accounting
@@ -668,11 +672,13 @@ fn run<P: FilesystemProvider>(
             .push("inspection incomplete; full-selection upper bound unavailable".into());
     }
     // Folder totals were summed bottom-up during the walk (one add per file,
-    // no per-ancestor path lookups).
-    let incomplete = report.accounting.incomplete;
+    // no per-ancestor path lookups). A folder is incomplete only when a
+    // material gap (see `ScanGaps`) lies inside it; benign gaps elsewhere do
+    // not taint it.
+    let gaps = scan_gaps(&report);
     report.folders = folders;
     for folder in &mut report.folders {
-        folder.incomplete = incomplete;
+        folder.incomplete = gaps.covers(&folder.path);
     }
     report.folders.sort_by(|a, b| {
         b.attributed_allocation_bytes
@@ -1565,6 +1571,11 @@ fn walk<P: FilesystemProvider>(
                 path.display()
             ));
         } else {
+            // The requested root itself was not scanned: that is missing data,
+            // unlike a link met inside the tree.
+            report
+                .incomplete_reasons
+                .push(format!("ancestor link, root skipped: {}", path.display()));
             report.skipped_links.push(SkippedLink {
                 path: ancestor,
                 reason: "symlink or placeholder ancestor traversal disabled".into(),
@@ -1588,6 +1599,11 @@ fn walk<P: FilesystemProvider>(
         }
     };
     if metadata.kind == EntryKind::Symlink {
+        if depth == 0 {
+            report
+                .incomplete_reasons
+                .push(format!("link root, root skipped: {}", path.display()));
+        }
         report.skipped_links.push(SkippedLink {
             path,
             reason: "symlink traversal disabled".into(),
@@ -2049,6 +2065,183 @@ fn directory_unchanged<P: FilesystemProvider>(
             false
         }
     }
+}
+
+/// Scan gaps sorted by how they affect a comparison of folder totals.
+///
+/// *Material* gaps leave totals unreliable: access denied, a depth or
+/// directory budget hit, a root that was not scanned, a directory that changed
+/// identity mid-walk, an entry limit hit, a cancelled scan, an unreadable
+/// volume identity, or any cause this scanner does not recognise. A material
+/// gap with a known path only affects the folders on the way down to it
+/// (`covers`); one without taints the whole scan (`whole_scan`). *Benign* gaps
+/// are stable or tiny: a link, placeholder or other volume that was not
+/// followed on purpose, an entry that vanished while the walk ran, or a file
+/// whose metadata could not be completed (its size is known from the listing,
+/// or it is a constant across scans). Benign gaps are only counted.
+///
+/// This classifies for comparison and display only. Cleanup keeps relying on
+/// `accounting.incomplete` and the reclaim bounds, which count every gap.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScanGaps {
+    /// Material gaps that taint every folder. An incomplete flag with no
+    /// recorded cause counts as one.
+    pub whole_scan: usize,
+    /// The first of those, for a reason line.
+    pub first_whole_scan: Option<String>,
+    /// Material gaps confined to the folders on the way down to them.
+    pub in_folders: usize,
+    /// Benign gaps, which never block a comparison.
+    pub benign: usize,
+    /// The folders that hold a material gap, and every ancestor of one.
+    folders: HashSet<PathBuf>,
+}
+
+impl ScanGaps {
+    /// Whether `folder` holds a material gap or lies on the way down to one.
+    pub fn covers(&self, folder: &Path) -> bool {
+        self.whole_scan > 0 || self.folders.contains(folder)
+    }
+
+    fn whole(&mut self, describe: impl FnOnce() -> String) {
+        self.whole_scan += 1;
+        if self.first_whole_scan.is_none() {
+            self.first_whole_scan = Some(describe());
+        }
+    }
+
+    fn inside(&mut self, path: &Path) {
+        self.in_folders += 1;
+        for ancestor in path.ancestors() {
+            self.folders.insert(ancestor.to_path_buf());
+        }
+    }
+}
+
+const VANISHED: &[&str] = &[
+    "no such file",
+    "cannot find the file",
+    "cannot find the path",
+    "path not found",
+    "file not found",
+    "(os error 2)",
+    "(os error 3)",
+    "(0x80070002)",
+    "(0x80070003)",
+];
+const DENIED: &[&str] = &[
+    "denied",
+    "permission",
+    "not permitted",
+    "(os error 5)",
+    "(0x80070005)",
+];
+
+fn mentions(lowercase: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| lowercase.contains(needle))
+}
+
+/// Whether one inspection error leaves folder totals unreliable. An entry or
+/// directory that vanished after it was listed is benign, and so is the
+/// failure to read the usage of a volume whose identity was only a path-prefix
+/// fallback (the unreadable entries behind it are classified on their own). A
+/// file that could not be inspected at all has no known size, so anything else
+/// there, a lock included, stays material.
+pub fn material_inspection_error(error: &InspectionError) -> bool {
+    let message = error.message.to_lowercase();
+    match error.operation.as_str() {
+        "inspect" | "enumerate" | "recheck_directory" => {
+            mentions(&message, DENIED) || !mentions(&message, VANISHED)
+        }
+        "volume_usage" => !message.contains("path-prefix-unstable"),
+        _ => true,
+    }
+}
+
+/// Whether one incomplete-scan reason leaves folder totals unreliable (see
+/// [`ScanGaps`]). Unrecognised reasons are material.
+pub fn material_incomplete_reason(reason: &str) -> bool {
+    let reason = reason.to_lowercase();
+    // Per-entry families first: their text carries an arbitrary path.
+    if reason.starts_with("incomplete metadata:") || reason.starts_with("metadata unavailable:") {
+        // The size comes from the listing, or the entry is a constant gap
+        // (special file, no file id), and a file that vanished or is locked is
+        // the same. Only a refused open could hide real bytes.
+        return mentions(&reason, DENIED);
+    }
+    if reason.starts_with("placeholder rejected")
+        || reason.starts_with("placeholder directory not enumerated")
+        || reason.starts_with("directory identity already visited")
+    {
+        return false;
+    }
+    if reason.starts_with("cross-volume descendant rejected") {
+        // A real other volume is a deliberate boundary; an identity that could
+        // not be read is not.
+        return reason.contains("path-prefix-unstable") || reason.contains("unknown");
+    }
+    true
+}
+
+/// The path a material reason names, when it names one. Reasons without a path
+/// (entry limit, cancelled, unrecognised) taint the whole scan.
+fn material_reason_path(reason: &str) -> Option<&str> {
+    let lower = reason.to_lowercase();
+    if lower.contains("entry limit") || lower.contains("cancel") {
+        return None;
+    }
+    // Same wording as the producers in this file; a changed wording only
+    // widens the gap to the whole scan.
+    for marker in [
+        "root skipped: ",
+        " reached at ",
+        " unread below ",
+        "during enumeration: ",
+    ] {
+        if let Some(at) = reason.find(marker) {
+            return Some(&reason[at + marker.len()..]);
+        }
+    }
+    if let Some(rest) = reason.strip_prefix("cross-volume descendant rejected: ") {
+        return rest.rfind(" (").map(|end| &rest[..end]);
+    }
+    let rest = reason.strip_prefix("metadata unavailable: ")?;
+    let end = rest
+        .find(": attribute-only open failed")
+        .or_else(|| rest.find(": "))?;
+    Some(&rest[..end])
+}
+
+/// Classify every recorded gap of a report. A report flagged incomplete with no
+/// recorded cause counts as one whole-scan material gap.
+pub fn scan_gaps(report: &ScanReport) -> ScanGaps {
+    let mut gaps = ScanGaps::default();
+    for reason in &report.incomplete_reasons {
+        if !material_incomplete_reason(reason) {
+            gaps.benign += 1;
+        } else if let Some(path) = material_reason_path(reason) {
+            gaps.inside(Path::new(path));
+        } else {
+            gaps.whole(|| reason.clone());
+        }
+    }
+    for error in &report.inspection_errors {
+        if !material_inspection_error(error) {
+            gaps.benign += 1;
+        } else if error.path.to_string_lossy().starts_with("<volume:") {
+            // Volume-level errors carry a placeholder path.
+            gaps.whole(|| format!("{}: {}", error.operation, error.message));
+        } else {
+            gaps.inside(&error.path);
+        }
+    }
+    if report.accounting.incomplete
+        && report.incomplete_reasons.is_empty()
+        && report.inspection_errors.is_empty()
+    {
+        gaps.whole(|| "accounting is incomplete with no recorded cause".into());
+    }
+    gaps
 }
 
 #[cfg(all(test, unix))]

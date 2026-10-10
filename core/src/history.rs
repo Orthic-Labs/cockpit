@@ -1,9 +1,11 @@
 //! Read-only comparison between two stored scan snapshots.
 //!
 //! The result is bounded to observed scan bytes: growth figures describe the
-//! difference between two complete reports over the same roots and volumes.
+//! difference between two reports without scan-wide gaps over the same roots
+//! and volumes.
 //! They are not claims about bytes that could be reclaimed, and volume
 //! identities observed here never authorize mutations.
+use crate::scan;
 use crate::store::Snapshot;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -39,10 +41,10 @@ fn volume_ids(snapshot: &Snapshot) -> BTreeSet<String> {
 /// Compares two snapshots without touching the filesystem or network.
 ///
 /// Returns a non-comparable result when the snapshots differ in schema,
-/// completeness, selected roots, or observed volume identities, or when
-/// volume identity data is missing or empty.  A complete report in the same
-/// scope yields signed growth figures; `i128` is used so shrinking usage
-/// cannot underflow.
+/// selected roots, or observed volume identities, when either has a scan-wide
+/// gap, or when volume identity data is missing or empty.  Reports without scan-wide gaps in
+/// the same scope yield signed growth figures; `i128` is used so shrinking
+/// usage cannot underflow.
 pub fn compare(previous: &Snapshot, current: &Snapshot) -> Comparison {
     let mut reasons = Vec::new();
 
@@ -52,11 +54,23 @@ pub fn compare(previous: &Snapshot, current: &Snapshot) -> Comparison {
             previous.schema_version, current.schema_version
         ));
     }
-    if previous.report.accounting.incomplete {
-        reasons.push("previous snapshot accounting is incomplete".to_string());
-    }
-    if current.report.accounting.incomplete {
-        reasons.push("current snapshot accounting is incomplete".to_string());
+    // Only a material gap that taints the whole scan (a limit hit, a cancelled
+    // scan, an unreadable volume, an unexplained incomplete flag) makes a
+    // snapshot incomplete for comparison; see `scan::scan_gaps`. Benign gaps
+    // (an entry that vanished during the walk, links or placeholders not
+    // followed, a file whose metadata could not be completed) do not, and a
+    // gap confined to some folders (access denied, a depth limit) only makes
+    // those folders non-comparable in `folder_growth`. Cleanup eligibility
+    // keeps using the `accounting.incomplete` flag itself.
+    for (label, snapshot) in [("previous", previous), ("current", current)] {
+        let gaps = scan::scan_gaps(&snapshot.report);
+        if gaps.whole_scan > 0 {
+            reasons.push(format!(
+                "{label} snapshot accounting is incomplete ({} scan-wide gap(s), first: {})",
+                gaps.whole_scan,
+                gaps.first_whole_scan.as_deref().unwrap_or("unspecified"),
+            ));
+        }
     }
     if root_set(previous) != root_set(current) {
         reasons.push("selected roots differ".to_string());

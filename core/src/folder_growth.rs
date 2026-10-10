@@ -7,6 +7,7 @@
 use crate::{
     VolumeIdentity, history,
     model::{EntryKind, FolderAccounting},
+    scan,
     store::Snapshot,
 };
 use serde::{Serialize, Serializer};
@@ -111,7 +112,10 @@ fn inside_roots(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| path.starts_with(root))
 }
 
-fn folder_map(snapshot: &Snapshot) -> Result<BTreeMap<FolderKey, FolderAccounting>, Vec<String>> {
+/// One snapshot's folders, plus the keys of those with a material gap inside.
+type FolderMap = (BTreeMap<FolderKey, FolderAccounting>, BTreeSet<FolderKey>);
+
+fn folder_map(snapshot: &Snapshot) -> Result<FolderMap, Vec<String>> {
     let mut reasons = Vec::new();
     let roots = &snapshot.report.roots;
     let observed_volumes: BTreeSet<_> = snapshot
@@ -140,11 +144,19 @@ fn folder_map(snapshot: &Snapshot) -> Result<BTreeMap<FolderKey, FolderAccountin
         reasons.push("folder coverage is empty for a nonempty scan report".to_string());
     }
 
-    if !snapshot.report.incomplete_reasons.is_empty()
-        || !snapshot.report.inspection_errors.is_empty()
-    {
+    // Benign gaps (vanished entries, links or placeholders not followed, files
+    // with incomplete metadata) never refuse a comparison. A scan-wide material
+    // gap does. Any other material gap (access denied, a depth limit) only
+    // leaves out the folders it lies in or below; see `scan::scan_gaps`.
+    let gaps = scan::scan_gaps(&snapshot.report);
+    if gaps.whole_scan > 0 {
         reasons.push("snapshot report contains incomplete inspection evidence".to_string());
     }
+    // The stored `folder.incomplete` flag is only trusted when the report
+    // records no gap to derive it from (older snapshots flag every folder).
+    let recorded = !snapshot.report.incomplete_reasons.is_empty()
+        || !snapshot.report.inspection_errors.is_empty();
+    let mut partial = BTreeSet::new();
 
     for folder in &snapshot.report.folders {
         if folder.path.as_os_str().is_empty() {
@@ -174,14 +186,17 @@ fn folder_map(snapshot: &Snapshot) -> Result<BTreeMap<FolderKey, FolderAccountin
                 folder.path.display()
             ));
         }
-        if folder.incomplete {
+        let key = FolderKey::new(folder);
+        if recorded {
+            if gaps.covers(&folder.path) {
+                partial.insert(key.clone());
+            }
+        } else if folder.incomplete {
             reasons.push(format!(
                 "folder `{}` accounting is incomplete",
                 folder.path.display()
             ));
         }
-
-        let key = FolderKey::new(folder);
         if folders.insert(key, folder.clone()).is_some() {
             reasons.push(format!(
                 "duplicate folder row for volume `{}` and path `{}`",
@@ -192,7 +207,7 @@ fn folder_map(snapshot: &Snapshot) -> Result<BTreeMap<FolderKey, FolderAccountin
     }
 
     if reasons.is_empty() {
-        Ok(folders)
+        Ok((folders, partial))
     } else {
         Err(reasons)
     }
@@ -251,9 +266,11 @@ fn bounded(mut rows: Vec<FolderGrowth>, limit: usize) -> (Vec<FolderGrowth>, boo
 /// Compare folder totals from two stored snapshots.
 ///
 /// The general snapshot compatibility guard from [`history::compare`] runs
-/// first. Any incomplete report, changed roots, remount, missing identity,
-/// duplicate row, or out-of-scope folder makes the result non-comparable and
-/// leaves all totals empty.
+/// first. Any report with a scan-wide material gap, changed roots, remount,
+/// missing identity, duplicate row, or out-of-scope folder makes the result
+/// non-comparable and leaves all totals empty. Folders with a material gap
+/// inside are left out, and benign gaps are reported in `reasons`, while the
+/// comparison stays valid.
 pub fn compare_folders(
     previous: &Snapshot,
     current: &Snapshot,
@@ -275,7 +292,7 @@ pub fn compare_folders(
         return unavailable(effective_limit, reasons);
     }
 
-    let previous_folders = match folder_map(previous) {
+    let (mut previous_folders, previous_partial) = match folder_map(previous) {
         Ok(folders) => folders,
         Err(mut reasons) => {
             if let Some(reason) = &limit_reason {
@@ -284,7 +301,7 @@ pub fn compare_folders(
             return unavailable(effective_limit, reasons);
         }
     };
-    let current_folders = match folder_map(current) {
+    let (mut current_folders, current_partial) = match folder_map(current) {
         Ok(folders) => folders,
         Err(mut reasons) => {
             if let Some(reason) = &limit_reason {
@@ -293,6 +310,16 @@ pub fn compare_folders(
             return unavailable(effective_limit, reasons);
         }
     };
+
+    // A folder with a material gap in either snapshot is left out of both: its
+    // total is a lower bound there, so a difference would not be a change.
+    let left_out: BTreeSet<_> = previous_partial.union(&current_partial).collect();
+    let mut left_out_count = 0usize;
+    for key in &left_out {
+        let before = previous_folders.remove(*key).is_some();
+        let after = current_folders.remove(*key).is_some();
+        left_out_count += usize::from(before || after);
+    }
 
     let keys: BTreeSet<_> = previous_folders
         .keys()
@@ -344,6 +371,23 @@ pub fn compare_folders(
     let mut reasons = Vec::new();
     if let Some(reason) = limit_reason {
         reasons.push(reason);
+    }
+    if left_out_count > 0 {
+        reasons.push(format!(
+            "{left_out_count} folder(s) with unreadable or truncated parts in either snapshot were left out of the comparison"
+        ));
+    }
+    // Benign gaps do not block the comparison but stay visible.
+    let benign: usize = [previous, current]
+        .iter()
+        .map(|snapshot| {
+            scan::scan_gaps(&snapshot.report).benign + snapshot.report.skipped_links.len()
+        })
+        .sum();
+    if benign > 0 {
+        reasons.push(format!(
+            "{benign} benign scan gap(s) across both snapshots (links or placeholders not followed, entries that vanished during the walk, files with incomplete metadata) did not block the comparison"
+        ));
     }
 
     FolderGrowthComparison {

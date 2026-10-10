@@ -306,14 +306,19 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                         volume_mounted: Some(true),
                         path_state: rules::PathState::Present,
                         logical_bytes: Some(logical),
-                        attributed_bytes: if report.accounting.incomplete {
+                        // Cleanup keeps the stricter rule: a skipped link also withholds sizes.
+                        attributed_bytes: if report.accounting.incomplete
+                            || !report.skipped_links.is_empty()
+                        {
                             None
                         } else {
                             Some(allocation)
                         },
                         evidence: rules::ScanEvidence {
                             inspection_complete: Some(
-                                !report.accounting.incomplete && entry.metadata.metadata_complete,
+                                !report.accounting.incomplete
+                                    && report.skipped_links.is_empty()
+                                    && entry.metadata.metadata_complete,
                             ),
                             cloud_placeholder: Some(entry.metadata.is_placeholder),
                             chrome_family_running: if chrome_running { Some(true) } else { None },
