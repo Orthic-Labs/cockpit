@@ -504,6 +504,7 @@ fn run_pill() -> Result<(), Error> {
     let _keys = keys::start(mac_shortcuts, screenshot_shortcuts);
 
     usage::start(controller.key());
+    claude_restart::remember_in_background();
     bridge::start(
         controller.key(),
         bridge::Hooks {

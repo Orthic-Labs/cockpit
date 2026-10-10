@@ -304,7 +304,7 @@ struct RecordMeta {
     latest_user_frame_at: Option<f64>,
 }
 
-fn read_active_account(root: &Path) -> Option<String> {
+pub fn read_active_account(root: &Path) -> Option<String> {
     // Only this one non-secret key is read; the document (which also holds
     // sign-in material) is dropped immediately and never logged or copied.
     let bytes = fs::read(root.join("config.json")).ok()?;

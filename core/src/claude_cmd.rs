@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use pulse_core::claude_chats as chats;
 use pulse_core::claude_sync::{self as sync, SyncError};
 use serde_json::{Value, json};
 
@@ -52,7 +53,7 @@ fn emit(value: &Value, machine: bool) {
 pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
     if args.is_empty() {
         return Err(plain(
-            "claude requires accounts, known, auto, include, exclude, sync, backups or restore",
+            "claude requires accounts, known, auto, include, exclude, sync, backups, restore,              remember or reopen",
         ));
     }
     let sub = args.remove(0);
@@ -170,6 +171,21 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
             )
             .map_err(fail)?;
             emit(&json!({"restored": result}), machine);
+        }
+        "remember" => {
+            let file = take_option(&mut args, "--file")?.map(PathBuf::from);
+            no_more(&args)?;
+            let file = file.map(Ok).unwrap_or_else(chats::default_file).map_err(fail)?;
+            let kept = chats::remember(&file, sync::now_ms()).map_err(fail)?;
+            emit(&json!({"chats": kept}), machine);
+        }
+        "reopen" => {
+            let file = take_option(&mut args, "--file")?.map(PathBuf::from);
+            let dry = take_flag(&mut args, "--dry-run");
+            no_more(&args)?;
+            let file = file.map(Ok).unwrap_or_else(chats::default_file).map_err(fail)?;
+            let result = chats::reopen(&file, &root().map_err(fail)?, sync::now_ms(), !dry);
+            emit(&json!({"reopen": result}), machine);
         }
         other => return Err(plain(format!("unknown claude command {other}"))),
     }

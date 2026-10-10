@@ -8,6 +8,7 @@ pub mod apps;
 pub mod apps_windows;
 #[cfg(feature = "localsend")]
 pub mod bridge;
+pub mod claude_chats;
 pub mod claude_sync;
 pub mod cleanup;
 pub mod cleanup_scan;

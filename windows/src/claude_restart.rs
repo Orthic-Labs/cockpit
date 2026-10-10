@@ -7,6 +7,12 @@
 //! reason), and `usage` is told to read Desktop's account at once and every second for a
 //! minute.
 //!
+//! Chats: quitting Desktop (or switching account inside it) ends every Code chat's CLI, and
+//! Desktop starts one again only when its page is shown. `pulse claude remember` notes the
+//! running chats about once a minute while Desktop runs and once more just before the close;
+//! after the reopen, `pulse claude reopen` shows the last running set one by one with
+//! Desktop's own `claude://code/continue` link, so each resumes without being sent anything.
+//!
 //! Only Claude Desktop is ever touched. Claude Code's command line is also named `claude.exe`,
 //! so a process counts only when its image path is Desktop's (`%LOCALAPPDATA%\AnthropicClaude\`,
 //! or another known Desktop install folder), never by its name.
@@ -41,6 +47,7 @@ const DONE_SHOWN: Duration = Duration::from_secs(2);
 /// The window class of Chromium's (Electron's) top-level frames.
 const FRAME_CLASS: &str = "Chrome_WidgetWin_1";
 const ERROR_MAX_BYTES: usize = 64 * 1024;
+const REMEMBER_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -112,6 +119,7 @@ fn sequence() -> Option<String> {
                     .to_string(),
             );
         }
+        remember_chats();
         close_windows(&running);
         let mut closed = false;
         for _ in 0..CLOSE_WAIT_STEPS {
@@ -128,11 +136,53 @@ fn sequence() -> Option<String> {
     let failure = run_cli();
     // Claude comes back whatever the sync said.
     let reopened = launch.as_deref().is_some_and(reopen);
+    if reopened {
+        reopen_chats();
+    }
     usage::refetch_claude_soon();
     match failure {
         Some(reason) => Some(reason),
         None if !reopened => Some("Synced, but Claude could not be found to reopen".to_string()),
         None => None,
+    }
+}
+
+// ------------------------------------------------------------------ the chats
+
+/// Notes the running Code chats about once a minute while Desktop runs.
+pub fn remember_in_background() {
+    std::thread::spawn(|| {
+        loop {
+            if !desktop_pids().is_empty() {
+                remember_chats();
+            }
+            std::thread::sleep(REMEMBER_EVERY);
+        }
+    });
+}
+
+fn hidden_cli(args: &[&str]) -> Option<Command> {
+    let mut command = Command::new(cli_path()?);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW);
+    Some(command)
+}
+
+fn remember_chats() {
+    if let Some(mut command) = hidden_cli(&["claude", "remember", "--json"]) {
+        let _ = command.status();
+    }
+}
+
+/// Runs on its own: it waits for Desktop to come up and for each chat's CLI, which can take
+/// minutes, and the button is done once Desktop is open.
+fn reopen_chats() {
+    if let Some(mut command) = hidden_cli(&["claude", "reopen", "--json"]) {
+        let _ = command.spawn();
     }
 }
 

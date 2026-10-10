@@ -71,3 +71,18 @@ Source chain for the default Claude ring:
 2. Desktop not running, or running with the same account as Claude Code: unchanged chain: Desktop cache (Claude Code's organization), then `claude /usage`, then the keychain token against the usage endpoint. The endpoint's 429 back-off still applies (it belongs to the endpoint; the Desktop-only path makes no request).
 
 On a Desktop account switch (`lastKnownAccountUuid` change, or Desktop starting or quitting) the displayed reading and the last-good copy are dropped at once, held provider state is cleared, and usage is refetched `.fromSource`. The account book keeps each account's last reading under its own id; the old account still shows in the hub with its time. A reading is saved under the tracked account's id only; the card name is the chosen name, else the address (Claude Code's account only), else `Claude <first 8 of id>`. Nothing is written to Claude's files and no token is read.
+
+## Reopening the chats that were running
+
+Quitting Desktop, or switching account inside it, ends every Code chat's CLI. Desktop starts a chat's CLI again (`--resume <cliSessionId>`) only when that chat's page is shown. On launch it brings back only chats that were mid-turn, and it sends those a "continue" message. Idle chats stay closed, and so they drop off the Pulse bridge.
+
+- **`pulse claude remember`** records the running chats in `claude-open-chats.json`, next to `claude-sync-backups`.
+  - What it records: the Desktop-hosted chats in `~/.claude/sessions/*.json` (`entrypoint: claude-desktop`, live pid, matching start time), keyed by Desktop's record id `hostSessionId` (`local_<uuid>`).
+  - When it runs: the notch calls it about once a minute while Desktop runs, and once more just before the restart's close. An account switch inside Desktop ends the chats before the button is pressed, so the earlier records are what it uses.
+  - Chats not seen for a day are forgotten.
+- **`pulse claude reopen [--dry-run]`** runs after the restart reopens Desktop, and opens the last running set again.
+  - Which chats: those seen within 3 minutes of the newest record. Nothing is reopened if that record is more than 30 minutes old.
+  - What it skips: chats that are already running, archived, scheduled tasks, or missing from the signed-in account.
+  - How it opens them: one at a time with Desktop's own `claude://code/continue?session=local_<uuid>` link. The most recently focused chat goes last, so it is the page left showing. After each link it waits for that chat's CLI to start.
+  - If a chat does not start, it stops. Desktop is not taking links in that case: it is signed out, links are turned off, or it is not running.
+  - Nothing is sent to any chat.
