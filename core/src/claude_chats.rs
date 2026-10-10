@@ -71,7 +71,8 @@ fn save(file: &Path, remembered: &Remembered) -> Result<(), SyncError> {
 
 fn is_record_id(id: &str) -> bool {
     id.strip_prefix("local_").is_some_and(|rest| {
-        (1..=64).contains(&rest.len()) && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        (1..=64).contains(&rest.len())
+            && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     })
 }
 
@@ -90,7 +91,12 @@ fn running_now() -> Vec<OpenChat> {
             if !is_record_id(&id) {
                 return None;
             }
-            Some(OpenChat { host_session_id: id, name: s.name, cwd: s.cwd, last_seen_ms: 0 })
+            Some(OpenChat {
+                host_session_id: id,
+                name: s.name,
+                cwd: s.cwd,
+                last_seen_ms: 0,
+            })
         })
         .collect()
 }
@@ -114,7 +120,11 @@ fn record(root: &Path, id: &str) -> Option<Value> {
     let sessions = root.join("claude-code-sessions");
     let accounts: Vec<PathBuf> = match sync::read_active_account(root) {
         Some(account) => vec![sessions.join(account)],
-        None => fs::read_dir(&sessions).ok()?.flatten().map(|e| e.path()).collect(),
+        None => fs::read_dir(&sessions)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .collect(),
     };
     accounts.iter().find_map(|account| {
         fs::read_dir(account).ok()?.flatten().find_map(|org| {
@@ -150,23 +160,44 @@ pub fn reopen(file: &Path, root: &Path, now_ms: u64, open: bool) -> ReopenResult
     if now_ms.saturating_sub(newest) > RECENT_MS {
         chats.clear();
     }
-    let running: Vec<String> = running_now().into_iter().map(|c| c.host_session_id).collect();
-    let mut result = ReopenResult { reopened: Vec::new(), not_started: Vec::new(), skipped: Vec::new() };
+    let running: Vec<String> = running_now()
+        .into_iter()
+        .map(|c| c.host_session_id)
+        .collect();
+    let mut result = ReopenResult {
+        reopened: Vec::new(),
+        not_started: Vec::new(),
+        skipped: Vec::new(),
+    };
     let mut queue = Vec::new();
     for chat in chats {
-        if newest.saturating_sub(chat.last_seen_ms) > SAME_SET_MS || running.contains(&chat.host_session_id) {
+        if newest.saturating_sub(chat.last_seen_ms) > SAME_SET_MS
+            || running.contains(&chat.host_session_id)
+        {
             continue;
         }
         let Some(record) = record(root, &chat.host_session_id) else {
-            result.skipped.push(Skipped { chat, reason: "not in the signed-in account" });
+            result.skipped.push(Skipped {
+                chat,
+                reason: "not in the signed-in account",
+            });
             continue;
         };
         if record.get("isArchived").and_then(Value::as_bool) == Some(true) {
-            result.skipped.push(Skipped { chat, reason: "archived" });
+            result.skipped.push(Skipped {
+                chat,
+                reason: "archived",
+            });
         } else if record.get("scheduledTaskId").is_some_and(|v| !v.is_null()) {
-            result.skipped.push(Skipped { chat, reason: "scheduled task" });
+            result.skipped.push(Skipped {
+                chat,
+                reason: "scheduled task",
+            });
         } else {
-            let focused = record.get("lastFocusedAt").and_then(Value::as_f64).unwrap_or(0.0);
+            let focused = record
+                .get("lastFocusedAt")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
             queue.push((focused, chat));
         }
     }
@@ -175,7 +206,10 @@ pub fn reopen(file: &Path, root: &Path, now_ms: u64, open: bool) -> ReopenResult
     let mut queue = queue.into_iter().map(|(_, chat)| chat);
     for chat in queue.by_ref() {
         if !open {
-            result.skipped.push(Skipped { chat, reason: "dry run" });
+            result.skipped.push(Skipped {
+                chat,
+                reason: "dry run",
+            });
             continue;
         }
         if !open_link(&chat.host_session_id) || !wait_running(&chat.host_session_id, wait) {
@@ -188,9 +222,10 @@ pub fn reopen(file: &Path, root: &Path, now_ms: u64, open: bool) -> ReopenResult
     }
     // After a chat that did not start, Desktop is not taking links (signed out, links
     // turned off, or not running): the rest are not tried.
-    result
-        .skipped
-        .extend(queue.map(|chat| Skipped { chat, reason: "an earlier chat did not start" }));
+    result.skipped.extend(queue.map(|chat| Skipped {
+        chat,
+        reason: "an earlier chat did not start",
+    }));
     result
 }
 
@@ -219,7 +254,8 @@ fn open_link(id: &str) -> bool {
     let mut command = {
         use std::os::windows::process::CommandExt;
         let mut c = std::process::Command::new("rundll32.exe");
-        c.args(["url.dll,FileProtocolHandler", &url]).creation_flags(0x0800_0000);
+        c.args(["url.dll,FileProtocolHandler", &url])
+            .creation_flags(0x0800_0000);
         c
     };
     #[cfg(not(any(target_os = "macos", windows)))]

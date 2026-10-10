@@ -175,7 +175,10 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
         "remember" => {
             let file = take_option(&mut args, "--file")?.map(PathBuf::from);
             no_more(&args)?;
-            let file = file.map(Ok).unwrap_or_else(chats::default_file).map_err(fail)?;
+            let file = file
+                .map(Ok)
+                .unwrap_or_else(chats::default_file)
+                .map_err(fail)?;
             let kept = chats::remember(&file, sync::now_ms()).map_err(fail)?;
             emit(&json!({"chats": kept}), machine);
         }
@@ -183,7 +186,10 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
             let file = take_option(&mut args, "--file")?.map(PathBuf::from);
             let dry = take_flag(&mut args, "--dry-run");
             no_more(&args)?;
-            let file = file.map(Ok).unwrap_or_else(chats::default_file).map_err(fail)?;
+            let file = file
+                .map(Ok)
+                .unwrap_or_else(chats::default_file)
+                .map_err(fail)?;
             let result = chats::reopen(&file, &root().map_err(fail)?, sync::now_ms(), !dry);
             emit(&json!({"reopen": result}), machine);
         }
