@@ -415,7 +415,7 @@ fn scan_file(
     let mut scanned = 0u64;
     loop {
         let filled = fill(&mut file, &mut chunk);
-        for entry in chunk[..filled].chunks_exact(ENTRY_BYTES) {
+        for entry in chunk[..filled].as_chunks::<ENTRY_BYTES>().0 {
             if let Some(candidate) = candidate_of(entry, organizations) {
                 found.push(candidate);
             }
