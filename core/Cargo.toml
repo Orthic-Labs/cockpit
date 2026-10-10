@@ -23,14 +23,13 @@ rcgen = { workspace = true, optional = true }
 # Filename index for storage search; default features (rusqlite) stay off.
 rightkit-search = { version = "=0.2.0", default-features = false, features = ["filename-index"] }
 sha2 = { workspace = true, optional = true }
-# Read-only reads of the Codex state database. rightkit-db (the RightKit SQLite owner) needs
-# rustc 1.98 on every published version; Pulse pins 1.90, so rusqlite is used directly until then.
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# SQLite via the RightKit owner (rightkit-db re-exports rusqlite); read-only use on the Codex state database.
+rightkit-db = { version = "=0.3.2", optional = true }
 
 [features]
 default = ["localsend"]
 # Nearby sharing over the open LocalSend protocol (core/src/localsend).
-localsend = ["dep:rustls", "dep:rcgen", "dep:sha2", "dep:rusqlite"]
+localsend = ["dep:rustls", "dep:rcgen", "dep:sha2", "dep:rightkit-db"]
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "=0.61.3", features = [

@@ -39,6 +39,7 @@
 use super::deliver_claude::shim;
 use super::envelope::plain_label;
 use super::{BridgeError, Envelope, LocalSession, Receipt};
+use rightkit_db::rusqlite;
 use serde::Serialize;
 use serde_json::Value;
 use std::io::Read;
