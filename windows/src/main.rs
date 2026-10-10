@@ -46,7 +46,7 @@ mod viewshots;
 mod visibility;
 mod zstd;
 
-use layout::{Badges, Cell, CellView, Edge, Handle, SEND_CELL};
+use layout::{Badges, Cell, CellView, Edge, Handle};
 use lifecycle::{Bounds, HIDDEN_INTERVAL_MS, MonitorSpec, ReconcileGate};
 use raii::{ClassGuard, OwnedWindow, TimerGuard, hwnd_from_key, hwnd_key};
 use runtime::{
@@ -390,6 +390,8 @@ fn load_settings() {
     app.settings_baseline = outcome.settings.clone();
     app.settings = outcome.settings;
     app.settings_writable = outcome.writable;
+    // Before any panel exists: the notch draws only the gauges that are on.
+    bridge::apply_gauges(&app.settings);
 }
 
 /// Writes only when settings differ from what is on disk and the stored file was usable.
@@ -1667,13 +1669,13 @@ fn stop_menu_timer() {
 fn sync_send_hover() {
     let over = {
         let app = lock_state();
-        app.ui.hover.is_some_and(|h| h.1 == SEND_CELL)
+        app.ui.hover.is_some_and(|h| is_send_cell(h.1))
             || (app.ui.card_hover
                 && app
                     .ui
                     .card_shown
                     .as_ref()
-                    .is_some_and(|c| c.cell == SEND_CELL))
+                    .is_some_and(|c| is_send_cell(c.cell)))
     };
     send::set_hover(over);
 }
@@ -1687,7 +1689,7 @@ fn sync_card() {
     let popup = send::popup_panel();
     let notice = update::panel().or_else(|| alerts::panel(now));
     sync_notice_timer(notice.is_some());
-    let notice_cell = Cell::ALL
+    let notice_cell = layout::shown()
         .iter()
         .position(|c| *c == Cell::Claude)
         .unwrap_or(0);
@@ -1726,7 +1728,7 @@ fn sync_card() {
                         .find(|p| !p.visibility.applied())
                         .map(|p| p.window.key())
                 });
-            key.map(|key| (key, SEND_CELL))
+            key.zip(layout::send_cell())
         } else {
             None
         };
@@ -1756,7 +1758,10 @@ fn sync_card() {
         Some(panel) if show_notice => (panel, false),
         _ => {
             let app = lock_state();
-            card::panel_for(Cell::ALL[cell], app.machine.as_ref(), &usage, now, popup)
+            let Some(cell) = layout::cell_at(cell) else {
+                return;
+            };
+            card::panel_for(cell, app.machine.as_ref(), &usage, now, popup)
         }
     };
     // The shown card carries the tail `show_card` gave it; compare the content without it.
@@ -2333,7 +2338,7 @@ fn on_mouse_leave(hwnd: HWND) {
         redraw_panel(key, &usage::snapshot());
     }
     let over_send = lock_state().ui.hover.is_some_and(|(hovered, cell)| {
-        hovered == key && (cell == SEND_CELL || is_claude_cell(cell))
+        hovered == key && (is_send_cell(cell) || is_claude_cell(cell))
     });
     if over_send {
         arm_hover_grace();
@@ -2390,7 +2395,12 @@ fn on_card_mouse_leave() {
 /// The Claude cell's card has a button (restart and sync), so it takes the pointer like the
 /// Send card does.
 fn is_claude_cell(cell: usize) -> bool {
-    Cell::ALL.get(cell) == Some(&Cell::Claude)
+    layout::cell_at(cell) == Some(Cell::Claude)
+}
+
+/// Whether shown-cell index `cell` is the nearby-sharing cell.
+fn is_send_cell(cell: usize) -> bool {
+    layout::send_cell() == Some(cell)
 }
 
 /// A click on the Send card or the Claude card: runs the action of the control under the
@@ -2540,7 +2550,10 @@ fn on_lbutton_up(hwnd: HWND, x: i32, y: i32) {
         return;
     };
     if press_key == key && cell_under(key, x, y) == Some(press_cell) {
-        let section = Cell::ALL[press_cell].section();
+        let Some(cell) = layout::cell_at(press_cell) else {
+            return;
+        };
+        let section = cell.section();
         if !hub::open(section) {
             diag::info("hub_unavailable", &[("section", section)]);
         }
@@ -2828,7 +2841,7 @@ fn on_send_changed() {
 /// ignored. The drop is always released.
 fn on_drop(hwnd: HWND, hdrop: WPARAM) {
     let dropped = send::take_drop(hdrop.0 as isize);
-    if cell_under(hwnd_key(hwnd), dropped.x, dropped.y) == Some(SEND_CELL) {
+    if cell_under(hwnd_key(hwnd), dropped.x, dropped.y).is_some_and(is_send_cell) {
         send::drop_files(dropped.paths);
     }
 }
@@ -2898,6 +2911,15 @@ extern "system" fn controller_proc(
                 for panel in lock_state().panels.iter_mut() {
                     panel.drawn = None;
                 }
+                // Cell indices may now mean other cells (a gauge was turned on or off): drop
+                // what points at one.
+                {
+                    let mut app = lock_state();
+                    app.ui.hover = None;
+                    app.ui.press = None;
+                    app.ui.pressed = None;
+                }
+                hide_card();
                 on_display_change();
                 refold_after_settings();
                 return LRESULT(0);
@@ -3021,7 +3043,7 @@ extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: L
                     let app = lock_state();
                     app.ui.menu.is_some()
                         || app.ui.card_shown.as_ref().is_some_and(|c| {
-                            c.cell == SEND_CELL || c.notice || is_claude_cell(c.cell)
+                            is_send_cell(c.cell) || c.notice || is_claude_cell(c.cell)
                         })
                 };
                 return if takes_pointer {

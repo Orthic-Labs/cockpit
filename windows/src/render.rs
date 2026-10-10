@@ -251,7 +251,7 @@ pub fn render_notch(
 /// The part of the notch the primary button is held down on: it reads pressed until release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
-    /// A ring cell (its index in `Cell::ALL`).
+    /// A ring cell (its index in the shown cells).
     Cell(usize),
     /// The settings gear.
     Orb,
@@ -311,7 +311,7 @@ fn draw_notch(
     let (depth, length) = if folded {
         (layout::PILL_DEPTH * s, layout::PILL_LONG * s)
     } else {
-        (layout::DEPTH * s, layout::SHAPE_LENGTH * s)
+        (layout::DEPTH * s, layout::shape_length() * s)
     };
     let outline: Vec<(f32, f32)> = shape_outline(length, depth, s)
         .into_iter()
@@ -410,7 +410,7 @@ fn fill_frame_rect(
 /// own black goes over it.
 fn draw_handle_zone(canvas: &mut Canvas, frame: Frame, s: f32, grip_out: bool) {
     const PLATE: (u32, f32) = (0x000000, 1.0 / 255.0);
-    let (along, depth) = (layout::SHAPE_LENGTH * s, layout::CURL * s);
+    let (along, depth) = (layout::shape_length() * s, layout::CURL * s);
     let zone = layout::ORB_ZONE * s;
     let (first, last) = ((along - zone, depth - zone), (along + zone, depth + zone));
     fill_frame_rect(canvas, frame, first, last, zone, PLATE);
@@ -427,7 +427,7 @@ fn draw_handle_zone(canvas: &mut Canvas, frame: Frame, s: f32, grip_out: bool) {
 /// beside it on a black plate. The grip is out whenever the pointer is on either; `part` is
 /// the one it is on, drawn brighter.
 fn draw_handle(canvas: &mut Canvas, frame: Frame, s: f32, (part, press): (Handle, Option<Press>)) {
-    let (along, depth) = (layout::SHAPE_LENGTH * s, layout::CURL * s);
+    let (along, depth) = (layout::shape_length() * s, layout::CURL * s);
     let centre = frame.at(along, depth);
     let radius = layout::ORB_RADIUS * s;
     // The plate runs from the disc's middle out past the last dots; the disc covers its end.
