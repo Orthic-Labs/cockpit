@@ -4,7 +4,8 @@
 //! running Desktop-hosted chats from `~/.claude/sessions/*.json` (the notch calls it now and
 //! then, and just before a restart); `reopen` shows each of the last running set once with
 //! Desktop's own `claude://code/continue?session=local_<id>` link. Showing a chat starts its
-//! CLI with `--resume`; nothing is sent to it. Notes in docs/claude-account-switch.md.
+//! CLI with `--resume`; nothing is sent to it, so no tokens are used. A chat that was mid-reply
+//! at the quit is not shown: Desktop would send it "continue". Notes in docs/claude-account-switch.md.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -206,6 +207,13 @@ pub fn reopen(file: &Path, root: &Path, now_ms: u64, open: bool) -> ReopenResult
             result.skipped.push(Skipped {
                 chat,
                 reason: "scheduled task",
+            });
+        } else if record.get("interruptedByQuitAt").is_some_and(|v| !v.is_null()) {
+            // Desktop sends such a chat "continue" when it is shown, a paid turn; it is left
+            // for the owner to open.
+            result.skipped.push(Skipped {
+                chat,
+                reason: "was mid-reply at the quit",
             });
         } else {
             let focused = record

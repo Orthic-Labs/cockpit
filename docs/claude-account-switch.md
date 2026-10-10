@@ -85,4 +85,5 @@ Quitting Desktop, or switching account inside it, ends every Code chat's CLI. De
   - What it skips: chats that are already running, archived, scheduled tasks, or missing from the signed-in account.
   - How it opens them: one at a time with Desktop's own `claude://code/continue?session=local_<uuid>` link. The most recently focused chat goes last, so it is the page left showing. After each link it waits for that chat's CLI to start.
   - If a chat does not start, it stops. Desktop is not taking links in that case: it is signed out, links are turned off, or it is not running.
-  - Nothing is sent to any chat.
+  - Nothing is sent to any chat, so no tokens are used.
+  - A chat that was mid-reply at the quit (`interruptedByQuitAt` on its record) is skipped. Desktop would send it "continue" when shown, which is a paid turn, so that one is left for you to open.
