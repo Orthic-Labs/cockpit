@@ -71,9 +71,15 @@ pub fn play(sound: Sound) -> bool {
             return true;
         }
     }
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONASTERISK, MessageBeep};
+    // winuser's MessageBeep; declared here because the windows crate's module layout for
+    // it differs between generations.
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBeep(utype: u32) -> i32;
+    }
+    const MB_ICONASTERISK: u32 = 0x40;
     // SAFETY: MessageBeep has no preconditions.
-    let beeped = unsafe { MessageBeep(MB_ICONASTERISK) }.is_ok();
+    let beeped = unsafe { MessageBeep(MB_ICONASTERISK) } != 0;
     if !beeped {
         diag::info("alert_sound_failed", &[("sound", sound.file())]);
     }
