@@ -897,6 +897,28 @@ final class NearbySharing {
         return url
     }
 
+    /// A send made by a Pulse that does not carry the clipboard flag yet still names a
+    /// pasted image "Clipboard <stamp>.<ext>": treat that single file as a clipboard send.
+    private static func looksPasted(_ files: [String]) -> Bool {
+        guard files.count == 1 else { return false }
+        return URL(fileURLWithPath: files[0]).lastPathComponent.hasPrefix("Clipboard ")
+    }
+
+    /// A received BMP or TIFF rewritten as PNG beside it (the original is removed); any
+    /// other file, or one that cannot be converted, is returned unchanged.
+    private static func asPNG(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        guard ["bmp", "tif", "tiff"].contains(url.pathExtension.lowercased()),
+              let image = NSImage(contentsOf: url), let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return path }
+        let target = url.deletingPathExtension().appendingPathExtension("png")
+        guard !FileManager.default.fileExists(atPath: target.path),
+              (try? png.write(to: target)) != nil else { return path }
+        try? FileManager.default.removeItem(at: url)
+        return target.path
+    }
+
     private func announce(_ transfer: ShareTransfer, folder: String?) {
         switch (transfer.direction, transfer.state) {
         case ("receive", "done") where transfer.message != nil && transfer.clipboard == true:
@@ -909,10 +931,12 @@ final class NearbySharing {
             showNote(title: L10n.t("Copied from \(transfer.peer)"),
                      detail: Self.capped(text).split(whereSeparator: \.isNewline).first.map(String.init) ?? "",
                      problem: false)
-        case ("receive", "done") where transfer.clipboard == true:
+        case ("receive", "done") where transfer.clipboard == true
+            || Self.looksPasted(transfer.savedFiles ?? []):
             // A pasted file, image or screenshot: saved, and on this clipboard as the image
-            // (one image file) or as the files, so ⌘V works at once.
-            let files = transfer.savedFiles ?? []
+            // (one image file) or as the files, so ⌘V works at once. A clipboard image that
+            // arrived as BMP or TIFF (what a Windows clipboard holds) is saved as PNG.
+            let files = (transfer.savedFiles ?? []).map(Self.asPNG)
             if !files.isEmpty {
                 remember(Last(kind: "files", text: nil, files: files, at: Date().timeIntervalSince1970))
                 let urls = files.map { URL(fileURLWithPath: $0) }
