@@ -1208,10 +1208,10 @@ fn restore(ctl: &Control, sec: &Section, before_marks: &Value) {
         &[("__PREV__", before_marks.to_string())],
     );
     let _ = ctl.eval(&undo);
-    if page_state(ctl)["dialogs"].as_u64().unwrap_or(0) > 0 {
-        let _ = ctl.key("Escape");
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    // A click may have opened a menu or popover that the dialog count does not see (a
+    // row's Actions menu); Escape is harmless when nothing is open.
+    let _ = ctl.key("Escape");
+    std::thread::sleep(Duration::from_millis(if page_state(ctl)["dialogs"].as_u64().unwrap_or(0) > 0 { 250 } else { 120 }));
     reopen(ctl, sec);
 }
 
@@ -1419,10 +1419,8 @@ fn check_interaction_states(inventory: &[Value]) -> Vec<String> {
         if !e["hover"].is_null() && e["hover_style_changed"] != true {
             problems.push(format!("no hover state: {who}"));
         }
-        // Advisory until the pressed snapshot is proven to show `:active` in hidden mode
-        // (rightkit-control 0.1.10 finishes animations first; transitions are also off here).
         if harness_presses && e["clicked"] == true && e["press_pixels_changed"] != true {
-            eprintln!("interaction states (advisory): no pressed state: {who}");
+            problems.push(format!("no pressed state: {who}"));
         }
     }
     problems
