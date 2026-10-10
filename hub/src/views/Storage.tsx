@@ -588,7 +588,7 @@ export function Storage() {
           {folder.unread
             ? `${folder.unread.toLocaleString()} ${folder.unread === 1 ? "item" : "items"} couldn't be read`
             : "Some items couldn't be read"}{" "}
-          (long paths, access denied, or the 2,000,000-entry limit)
+          (long paths, access denied, or the scan's entry limit)
         </div>
       )}
       {folder && !folder.needs_access && folder.limited && !results && (
