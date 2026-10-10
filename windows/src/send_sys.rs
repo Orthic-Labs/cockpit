@@ -409,6 +409,34 @@ pub fn write_files(paths: &[PathBuf]) -> bool {
             GlobalFree(memory);
             return false;
         }
+        // One PNG (a pasted screenshot): also offered as a picture, in the registered "PNG"
+        // format browsers, Office and chat apps paste from, so it pastes as an image and
+        // not only as a file. The file drop above stays for Explorer.
+        if let [only] = paths
+            && only
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+            && let Ok(png) = std::fs::read(only)
+            && !png.is_empty()
+            && png.len() <= MAX_CLIPBOARD
+        {
+            let format = RegisterClipboardFormatW(wide("PNG").as_ptr());
+            let picture = GlobalAlloc(GMEM_MOVEABLE, png.len());
+            if format != 0 && !picture.is_null() {
+                let target = GlobalLock(picture) as *mut u8;
+                if target.is_null() {
+                    GlobalFree(picture);
+                } else {
+                    std::ptr::copy_nonoverlapping(png.as_ptr(), target, png.len());
+                    GlobalUnlock(picture);
+                    if SetClipboardData(format, picture).is_null() {
+                        GlobalFree(picture);
+                    }
+                }
+            } else if !picture.is_null() {
+                GlobalFree(picture);
+            }
+        }
     }
     true
 }
