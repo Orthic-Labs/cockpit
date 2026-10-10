@@ -558,7 +558,8 @@ fn list_with_shell_fallback(
 
 fn poll(store: &Store, mut link: Link) -> RemoteChats {
     let pinned = link.device_id.clone();
-    let listing = list_with_shell_fallback(store, &mut link).and_then(|(listing, seen)| match (pinned, seen) {
+    let polled = list_with_shell_fallback(store, &mut link);
+    let listing = polled.and_then(|(listing, seen)| match (pinned, seen) {
         (Some(pinned), Some(seen)) if pinned != seen => Err(format!(
             "{} is not the computer this link was made with (device id changed); \
              link it again if it was reinstalled",

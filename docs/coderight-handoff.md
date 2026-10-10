@@ -1,6 +1,6 @@
 # Handoff to the CodeRight chat: reach running Claude chats from the phone
 
-Written by the Pulse chat, 2026-10-10. Status: DRAFT until the Pulse bridge batch is on origin/main (this file says "FINAL" at the top when it is). Read this whole file first; it is the only context you get from the Pulse side.
+Written by the Pulse chat, 2026-10-10. Status: FINAL as of 22c6f7e6 on origin/main (2026-10-10). File names below match that commit. Read this whole file first; it is the only context you get from the Pulse side.
 
 ## The goal (Adrian's words, paraphrased)
 Leave the desk, open CodeRight on the phone, find any running Claude Code chat across both computers (Mac Mini, Dell) and every signed-in account, see its history and live responses, and continue that conversation. Codex is out of scope (its own app works). LocalSend stays the phone's sharing app. No terminal, no file transfer, no Telegram. No new Pulse phone app: CodeRight's Connected Computer mode is the phone side.
