@@ -17,6 +17,8 @@
 //! Notch size (the Mac's `notchSize`, `usesCustomNotchScale`, `customNotchScale`):
 //! `"notch_size":"small"|"large"` (medium when absent), `"uses_custom_notch_scale":true` and
 //! `"custom_notch_scale":0.5..1.5` (out-of-range values are clamped).
+//! Notification channel (the Mac's `notificationChannel`): `"notification_channel":"mac"` sends
+//! alerts as system toasts with their sound and keeps the notch quiet; absent is `"notch"`.
 //!
 //! Policy: unknown fields are ignored; an unknown version, malformed or oversized file yields
 //! defaults and the caller must not overwrite that file (`LoadOutcome::writable == false`).
@@ -128,6 +130,30 @@ impl NotchSize {
     }
 }
 
+/// Where alerts go (the Mac's `NotificationChannel`, same raw values): the notch's own cards,
+/// or system toasts. On Windows `Mac` means a Windows toast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationChannel {
+    Notch,
+    Mac,
+}
+
+impl NotificationChannel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotificationChannel::Notch => "notch",
+            NotificationChannel::Mac => "mac",
+        }
+    }
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "notch" => Some(NotificationChannel::Notch),
+            "mac" => Some(NotificationChannel::Mac),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PillSettings {
     pub visible: bool,
@@ -174,6 +200,8 @@ pub struct PillSettings {
     pub announce_usage_reset: bool,
     pub announce_session_limit: bool,
     pub announce_weekly_limit: bool,
+    /// Where alerts appear (the Mac's `notificationChannel`). The notch by default.
+    pub notification_channel: NotificationChannel,
     /// Providers (Claude, Codex) whose usage alerts are muted (the Mac's `mutedAlertProviders`).
     pub mute_claude_alerts: bool,
     pub mute_codex_alerts: bool,
@@ -214,6 +242,7 @@ impl PillSettings {
             announce_usage_reset: true,
             announce_session_limit: true,
             announce_weekly_limit: true,
+            notification_channel: NotificationChannel::Notch,
             mute_claude_alerts: false,
             mute_codex_alerts: false,
             auto_update_check: true,
@@ -756,6 +785,14 @@ pub fn parse_settings(bytes: &[u8]) -> Result<PillSettings, ParseError> {
         }
         Some(_) => return Err(ParseError::Malformed),
     }
+    match member(&root, "notification_channel") {
+        None | Some(Json::Null) => {}
+        Some(Json::Text(text)) => {
+            settings.notification_channel =
+                NotificationChannel::parse(text).ok_or(ParseError::Malformed)?;
+        }
+        Some(_) => return Err(ParseError::Malformed),
+    }
     match member(&root, "custom_notch_scale") {
         None | Some(Json::Null) => {}
         Some(Json::Number(text)) => {
@@ -899,6 +936,12 @@ pub fn encode_settings(settings: &PillSettings) -> Result<String, ParseError> {
         out.push_str(&format!(
             ",\"notch_size\":\"{}\"",
             settings.notch_size.as_str()
+        ));
+    }
+    if settings.notification_channel != NotificationChannel::Notch {
+        out.push_str(&format!(
+            ",\"notification_channel\":\"{}\"",
+            settings.notification_channel.as_str()
         ));
     }
     if settings.custom_scale_on {

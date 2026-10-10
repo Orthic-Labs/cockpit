@@ -47,7 +47,10 @@ The Claude hover card has a small round button right of its header (`claude_rest
 
 ## Settings
 
-`%LOCALAPPDATA%\Pulse\pill-settings.json`, schema version 1 (`visible`, `cadence_seconds`, `monitors`, plus optional `launch_at_login`, `positions`, `mac_shortcuts`, `screenshot_shortcuts`, `screenshot_to_desktop`, `edges`, `edge`, `folds`, `notch_size`, `uses_custom_notch_scale`, `custom_notch_scale`). Same directory convention as `pulse-core`.
+`%LOCALAPPDATA%\Pulse\pill-settings.json`, schema version 1 (`visible`, `cadence_seconds`, `monitors`, plus optional `launch_at_login`, `positions`, `mac_shortcuts`, `screenshot_shortcuts`, `screenshot_to_desktop`, `edges`, `edge`, `folds`, `notch_size`, `uses_custom_notch_scale`, `custom_notch_scale`, `notification_channel`). Same directory convention as `pulse-core`.
+
+- Notification channel: the hub's Notifications › Where › Channel (`notificationChannel`, options `notch` and `mac`, the Mac's raw values; written as `"notification_channel":"mac"` and omitted at the default `notch`). `notch` shows the alert cards with their sound; `mac` raises a Windows system toast for each alert (finished agent, usage thresholds, resets and limits, drive alerts) with the sound and keeps the notch quiet. The toast is raised by a hidden `powershell.exe` through WinRT `ToastNotificationManager` under Windows PowerShell's own application id (Pulse registers no Start-menu shortcut or AUMID yet, so the toast reads as from "Windows PowerShell"); if it cannot be shown only the sound plays.
+- Updates: `GET api.github.com/repos/Orthic-Labs/pulse/releases/latest` (as the Mac's `ReleaseFeed`). A 404 means the repository has no published release yet and a release without `Pulse-Setup-x64.exe` has no Windows build to offer; both read as `upToDate` with the message "No Windows release yet" (log `update_check result=no_release`), not as a failure.
 
 ## Hub side (not changed here)
 

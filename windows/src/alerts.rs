@@ -12,7 +12,7 @@ use crate::card::{CardContent, Head, Mark, Row, Tone};
 use crate::notify::{self, Sound};
 use crate::send::Panel;
 use crate::sensors;
-use crate::settings::PillSettings;
+use crate::settings::{NotificationChannel, PillSettings};
 use crate::usage::{LimitWindow, Usage};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -82,8 +82,8 @@ pub struct Prefs {
     pub weekly_limit: bool,
     /// Claude, Codex: alerts muted for that provider.
     pub muted: [bool; 2],
-    /// The Mac's "Mac notifications" channel: a system toast and the sound, no notch card.
-    /// There is no channel setting on Windows yet, so `from_settings` leaves it off.
+    /// The Mac's "Mac notifications" channel (`notificationChannel` = `mac`): a system toast
+    /// and the sound, no notch card.
     pub toast: bool,
 }
 
@@ -94,7 +94,7 @@ impl Prefs {
             session_limit: settings.announce_session_limit,
             weekly_limit: settings.announce_weekly_limit,
             muted: [settings.mute_claude_alerts, settings.mute_codex_alerts],
-            toast: false,
+            toast: settings.notification_channel == NotificationChannel::Mac,
         }
     }
 }

@@ -376,12 +376,14 @@ fn windows_notch_fixture() -> Value {
             "notchSize": "medium",
             "usesCustomNotchScale": false,
             "customNotchScale": 1.0,
+            "notificationChannel": "notch",
             "edges": {},
         },
         "options": {
             "notchEdge": ["top", "bottom", "left", "right"],
             "notchVisibility": ["alwaysShow", "onHover", "hidden"],
             "notchSize": ["small", "medium", "large"],
+            "notificationChannel": ["notch", "mac"],
         },
         "displays": [],
         "accounts": [
@@ -685,11 +687,11 @@ fn windows_expectations(id: &str) -> (&'static [&'static str], &'static [&'stati
         "notifications" => {
             const HAVE: &[&str] = &[
                 "When a limit resets", "When the session limit is reached", "When the weekly limit is reached",
-                "Mute alerts", "Mute Claude alerts", "Mute Codex alerts",
+                "Mute alerts", "Mute Claude alerts", "Mute Codex alerts", "Channel", "Windows notifications",
             ];
             const LACK: &[&str] = &[
                 "Send a test", "Preview reset", "Preview session limit", "Preview weekly limit", "Play a sound",
-                "When a session finishes", "Channel",
+                "When a session finishes", "Mac notifications",
             ];
             (HAVE, LACK)
         }

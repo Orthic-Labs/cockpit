@@ -66,6 +66,9 @@ enum Stage {
     Idle,
     Checking,
     UpToDate,
+    /// GitHub has no release (or none with a Windows installer) to offer yet. Not a failure:
+    /// published as `upToDate` with a message, since the hub words only `failed` as an error.
+    NoRelease,
     Available,
     /// Share of the installer received, when the size is known.
     Downloading(Option<f32>),
@@ -225,7 +228,7 @@ pub fn hub_json() -> String {
     let name = match &st.stage {
         Stage::Idle => "idle",
         Stage::Checking => "checking",
-        Stage::UpToDate => "upToDate",
+        Stage::UpToDate | Stage::NoRelease => "upToDate",
         Stage::Available => "available",
         Stage::Downloading(_) => "downloading",
         Stage::Installing => "installing",
@@ -243,6 +246,7 @@ pub fn hub_json() -> String {
             out.push_str(",\"message\":");
             json_text(&mut out, message);
         }
+        Stage::NoRelease => out.push_str(",\"message\":\"No Windows release yet\""),
         _ => {}
     }
     out.push_str(&format!(",\"autoCheck\":{}}}", st.auto));
@@ -499,6 +503,13 @@ fn check(offering: bool) {
                 st.stage = Stage::UpToDate;
                 diag::info("update_check", &[("result", "up_to_date")]);
             }
+            // The latest release (or the repository's first) carries no Windows installer yet:
+            // nothing to offer, which is not a failed check.
+            Err(reason @ ("no_release" | "no_installer")) => {
+                st.release = None;
+                st.stage = Stage::NoRelease;
+                diag::info("update_check", &[("result", "no_release"), ("reason", reason)]);
+            }
             Err(reason) => {
                 st.stage = Stage::Failed(reason_text(reason));
                 diag::info("update_check", &[("result", "failed"), ("reason", reason)]);
@@ -527,6 +538,9 @@ fn fetch_release() -> Result<Option<Release>, &'static str> {
     .map_err(|_| "unreachable")?;
     match response.status {
         200 => {}
+        // `releases/latest` answers 404 while the repository has no published (non-draft,
+        // non-prerelease) release at all.
+        404 => return Err("no_release"),
         403 | 429 => return Err("rate_limited"),
         _ => return Err("bad_status"),
     }

@@ -128,7 +128,7 @@ function updateLine(u: UpdateState): string | undefined {
   if (!u.status) return undefined;
   switch (u.status) {
     case "checking": return "Checking for updates…";
-    case "upToDate": return "Pulse is up to date.";
+    case "upToDate": return u.message ?? "Pulse is up to date.";
     case "available": return `Pulse ${u.available} is available.`;
     case "downloading":
       return u.progress === undefined ? "Downloading…" : `Downloading… ${Math.round(u.progress * 100)}%`;
@@ -176,8 +176,9 @@ export function useNotch() {
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** "darkGlass" → "Dark glass". */
+// "mac" is the notification channel that uses the system's own notifications.
 const label = (raw: string) =>
-  raw.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()).replace(/ ([A-Z])/g, (_, c) => ` ${c.toLowerCase()}`);
+  isWindows && raw === "mac" ? "Windows notifications" : raw.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()).replace(/ ([A-Z])/g, (_, c) => ` ${c.toLowerCase()}`);
 
 export function Settings({ section, notch, onNavigate }: {
   section: string;

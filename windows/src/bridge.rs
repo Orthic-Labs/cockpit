@@ -384,6 +384,9 @@ fn state_json(hooks: &Hooks) -> String {
         s.custom_scale_on,
         f64::from(s.custom_scale_milli) / 1000.0
     ));
+    // Where alerts go (the Mac's values: `notch`, or `mac` = a Windows system toast).
+    out.push_str(",\"notificationChannel\":");
+    esc(&mut out, s.notification_channel.as_str());
     out.push_str(",\"edges\":{");
     for (index, (key, edge)) in s.edges.iter().enumerate() {
         if index > 0 {
@@ -395,7 +398,8 @@ fn state_json(hooks: &Hooks) -> String {
     }
     out.push_str("}},\"options\":{\"notchEdge\":[\"top\",\"bottom\",\"left\",\"right\"],");
     out.push_str("\"notchVisibility\":[\"alwaysShow\",\"onHover\",\"hidden\"],");
-    out.push_str("\"notchSize\":[\"small\",\"medium\",\"large\"]},\"displays\":[");
+    out.push_str("\"notchSize\":[\"small\",\"medium\",\"large\"],");
+    out.push_str("\"notificationChannel\":[\"notch\",\"mac\"]},\"displays\":[");
     for (index, key) in s.monitors.keys().enumerate() {
         if index > 0 {
             out.push(',');
@@ -749,6 +753,16 @@ fn apply_set(s: &mut PillSettings, key: &str, value: &Arg) -> bool {
             Arg::Text(text) => match settings::NotchSize::parse(text) {
                 Some(size) => {
                     s.notch_size = size;
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        },
+        "notificationChannel" | "notification_channel" => match value {
+            Arg::Text(text) => match settings::NotificationChannel::parse(text) {
+                Some(channel) => {
+                    s.notification_channel = channel;
                     true
                 }
                 None => false,
