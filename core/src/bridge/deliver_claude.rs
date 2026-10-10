@@ -630,7 +630,10 @@ pub fn deliver_via(
     let peer_key = peer_key.as_str();
     let route = match reply_socket {
         Some(address) => ReplyRoute::Listening(address.to_string()),
-        None => reply_route(peer_key),
+        None => {
+            note_last_peer(&session.id, peer_key);
+            reply_route(peer_key)
+        }
     };
     let short: String = peer_key
         .chars()
@@ -828,7 +831,6 @@ fn read_lines(
 /// `refused`, `dropped`, or `delivered` once a held one is let through. A message it
 /// simply takes gets no notice.
 static STATUSES: Mutex<Vec<(String, String, String)>> = Mutex::new(Vec::new());
-#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const STATUSES_KEPT: usize = 256;
 
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
@@ -858,6 +860,25 @@ fn status_receipt(msg_id: &str) -> Option<Receipt> {
 }
 
 // ---- replies from chats ----------------------------------------------------------
+
+/// The remote peer whose message was last posted to each chat here (chat id, peer key).
+/// A reply that arrives on a pipe shared by every peer is matched to its peer with it.
+static LAST_PEER: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+fn note_last_peer(chat: &str, peer_key: &str) {
+    let mut all = LAST_PEER.lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|(id, _)| id != chat);
+    if all.len() >= STATUSES_KEPT {
+        all.remove(0);
+    }
+    all.push((chat.to_string(), peer_key.to_string()));
+}
+
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+fn last_peer(chat: &str) -> Option<String> {
+    let all = LAST_PEER.lock().unwrap_or_else(|e| e.into_inner());
+    all.iter().find(|(id, _)| id == chat).map(|(_, peer)| peer.clone())
+}
 
 /// A chat's reply, arrived on one remote peer's reply socket.
 #[derive(Clone, Debug)]
@@ -979,11 +1000,19 @@ fn fnv(text: &str) -> String {
     format!("{hash:016x}")
 }
 
-/// The reply pipe for one remote peer on Windows. `LOCAL\` is the same session-local
-/// pipe namespace Claude's own `cc-msg-<hash>` pipes use.
+/// The hub's one reply pipe on Windows, the same for every remote peer. Claude sends its
+/// notice about a message (held, refused, dropped) only to a pipe named like its own
+/// (`cc-msg-<32 hex>`, in the same session-local `LOCAL\` namespace) that a registry
+/// entry names exactly, and a process has one entry, so there cannot be a pipe per peer:
+/// a chat's answer is matched to its peer from the last message it was sent.
 #[cfg(windows)]
-pub fn reply_pipe_name(peer_key: &str) -> String {
-    format!(r"\\.\pipe\LOCAL\pulse-bridge-{}", fnv(peer_key))
+pub fn reply_pipe_name(_peer_key: &str) -> String {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    format!(
+        r"\\.\pipe\LOCAL\cc-msg-{}{}",
+        fnv(&format!("pulse-hub-reply:{user}")),
+        fnv(&format!("{user}:pulse-hub-reply"))
+    )
 }
 
 /// The address a reply from `peer_key` goes to, listening on it first; None
@@ -1115,8 +1144,12 @@ impl ReplyHub {
             if let Some(name) = paths.get(peer_key) {
                 return ReplyRoute::Listening(name.clone());
             }
+            // One pipe serves every peer, so it is opened once; a frame on it carries no
+            // peer of its own (see `handle_line`).
             let name = reply_pipe_name(peer_key);
-            if let Err(e) = self.listen_pipe(peer_key.to_string(), &name) {
+            if !paths.values().any(|open| *open == name)
+                && let Err(e) = self.listen_pipe(String::new(), &name)
+            {
                 return ReplyRoute::Unavailable(format!("couldn't listen: {}", e.kind()));
             }
             paths.insert(peer_key.to_string(), name.clone());
@@ -1296,8 +1329,14 @@ impl ReplyHub {
         if from_session_id.is_empty() || !(self.is_known)(&from_session_id) || text.is_empty() {
             return;
         }
+        // A shared pipe names no peer: the reply goes to whoever last wrote to this chat.
+        let peer_key = if peer_key.is_empty() {
+            last_peer(&from_session_id).unwrap_or_default()
+        } else {
+            peer_key.to_string()
+        };
         (self.on_reply)(ReplyMessage {
-            peer_key: peer_key.to_string(),
+            peer_key,
             from_session_id,
             from_name: pick("from-name", "from_name"),
             text,

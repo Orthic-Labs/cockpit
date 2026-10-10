@@ -480,7 +480,20 @@ pub fn on_local_reply(reply: ReplyMessage) {
         Some(route) => (route.from_device, route.from_session),
         None => match reply.peer_key.rsplit_once(':') {
             Some((device, session)) => (device.to_string(), session.to_string()),
-            None => return,
+            // A reply on a pipe shared by every peer after a hub restart: whoever last
+            // wrote to this chat in the route window.
+            None => {
+                let since = super::envelope::now_ms().saturating_sub(ROUTE_WINDOW_MS);
+                let newest = store
+                    .reply_routes_since(since)
+                    .into_iter()
+                    .filter(|r| r.to_session == from.id)
+                    .max_by_key(|r| r.created_ms);
+                match newest {
+                    Some(route) => (route.from_device, route.from_session),
+                    None => return,
+                }
+            }
         },
     };
     let alias = store

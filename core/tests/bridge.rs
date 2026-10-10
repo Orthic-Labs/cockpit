@@ -327,9 +327,18 @@ fn windows_replies(
         Arc::new(|id: &str| id == "chat-b"),
     );
     let address = hub.address_for("A:chat-a").expect("a reply pipe");
+    // One pipe for every peer, named the way Claude names its own (it sends its notice
+    // about a held or refused message only to such a pipe).
+    let hex = address
+        .strip_prefix(r"\\.\pipe\LOCAL\cc-msg-")
+        .unwrap_or_else(|| panic!("{address}"));
     assert!(
-        address.starts_with(r"\\.\pipe\LOCAL\pulse-bridge-"),
+        hex.len() == 32 && hex.chars().all(|c| c.is_ascii_hexdigit()),
         "{address}"
+    );
+    assert_eq!(
+        hub.address_for("C:chat-c").as_deref(),
+        Some(address.as_str())
     );
     assert_eq!(
         hub.address_for("A:chat-a").as_deref(),
