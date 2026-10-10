@@ -1,0 +1,96 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Pulse cards: before and after</title>
+<style>
+body{background:#2b2b2d;color:#fff;font-family:-apple-system,"SF Pro Text","Segoe UI",sans-serif;margin:24px}
+h1{font-size:16px;font-weight:600;margin:0 0 16px;color:#bbb}
+.row{display:flex;gap:28px;flex-wrap:wrap;margin-bottom:28px}
+.col{display:flex;flex-direction:column;gap:8px}
+.cap{font-size:11px;color:#8a8a8e;letter-spacing:.02em;text-transform:uppercase}
+.card{width:300px;background:#000;border-radius:22px;padding:16px 16px 14px;box-sizing:border-box;position:relative}
+.hd{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.glyph{width:22px;height:22px;border-radius:6px;background:#fff;opacity:.9}
+.t{font-size:15px;font-weight:600;line-height:18px}.st{font-size:11px;color:#9a9a9e;line-height:14px}
+.spacer{flex:1}.btn{width:26px;height:26px;border-radius:13px;background:#2a2a2c}
+.lbl{display:flex;justify-content:space-between;font-size:12px;line-height:16px}
+.lbl .r{color:#9a9a9e}.lbl .rs{font-weight:600}
+.bar{height:4px;border-radius:2px;background:#2d2d2f;margin:5px 0 3px;overflow:hidden}.bar i{display:block;height:100%;background:#3a9d5d;border-radius:2px}
+.bar i.a{background:#d7772a}
+.rd{font-size:12px;line-height:16px;font-weight:600;margin-bottom:9px}
+.mut{font-size:11px;color:#8a8a8e;line-height:14px;margin-bottom:9px}
+.kv{display:flex;justify-content:space-between;font-size:12px;line-height:20px}.kv .r{color:#9a9a9e}
+.hint{font-size:11px;color:#777;margin:6px 0 10px}
+.bb{display:flex;justify-content:space-between;gap:8px}.bb b{font-weight:500;font-size:12px;background:#2a2a2c;border-radius:9px;padding:7px 12px;line-height:14px;white-space:nowrap}
+.bb .pv{display:block;font-weight:400;color:#8a8a8e;font-size:10px;line-height:12px}
+.link{font-size:11px;color:#7fb3ff;margin-top:4px}
+</style></head><body>
+<h1>Claude card: three windows</h1>
+<div class="row">
+<div class="col"><div class="cap">Before (Mac today)</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">Claude Usage</div><div class="st">Max 5x</div></div><div class="spacer"></div><div class="btn"></div></div>
+<div class="lbl"><span>Current session</span><span class="r">Resets in 51 min</span></div><div class="bar"><i style="width:21%"></i></div><div class="rd">21% Used · 79% left</div>
+<div class="lbl"><span>All models</span><span class="r">Resets Mon 9:11 AM</span></div><div class="bar"><i style="width:12%"></i></div><div class="rd">12% Used · 88% left</div>
+<div class="lbl"><span>Sonnet</span><span class="r">Resets Mon 9:11 AM</span></div><div class="bar"><i style="width:8%"></i></div><div class="rd" style="margin-bottom:0">8% Used · 92% left</div>
+</div></div>
+<div class="col"><div class="cap">After</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">Claude</div><div class="st">Max 5x</div></div><div class="spacer"></div><div class="btn"></div></div>
+<div class="lbl"><span>Current session</span><span class="rs">79% left</span></div><div class="bar"><i style="width:21%"></i></div><div class="mut">Resets in 51 min</div>
+<div class="lbl"><span>All models</span><span class="rs">88% left</span></div><div class="bar"><i style="width:12%"></i></div><div class="mut">Resets Mon 9:11 AM</div>
+<div class="lbl"><span>Sonnet</span><span class="rs">92% left</span></div><div class="bar"><i style="width:8%"></i></div><div class="mut" style="margin-bottom:0">Resets Mon 9:11 AM</div>
+</div></div>
+</div>
+<h1>System card</h1>
+<div class="row">
+<div class="col"><div class="cap">Before (Windows today)</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">System Usage</div></div><div class="spacer"></div><div class="st">GPU 61 °C</div></div>
+<div class="lbl"><span>CPU</span></div><div class="bar"><i style="width:21%"></i></div><div class="rd">21% busy · 20 cores</div>
+<div class="lbl"><span>Memory pressure</span></div><div class="bar"><i style="width:47%"></i></div><div class="rd">Pressure normal · 30.2 GB of 63.7 GB used</div>
+<div class="kv"><span>GPU</span><span class="r">1% busy</span></div>
+<div class="kv"><span>Network</span><span class="r">↓ 2 KB/s · ↑ 9 KB/s · Wi-Fi</span></div>
+<div class="kv"><span>Battery</span><span class="r">100% · plugged in</span></div>
+<div class="kv"><span>CPU temperature</span><span class="r">— · Windows only rep…</span></div>
+<div class="kv"><span>Fans</span><span class="r">Not available on this PC</span></div>
+</div></div>
+<div class="col"><div class="cap">After</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">System</div><div class="st">20 cores · 64 GB</div></div></div>
+<div class="lbl"><span>CPU</span><span class="rs">21% busy</span></div><div class="bar"><i style="width:21%"></i></div>
+<div class="lbl" style="margin-top:6px"><span>Memory</span><span class="rs">30.2 of 63.7 GB</span></div><div class="bar"><i style="width:47%"></i></div><div class="mut">Pressure normal</div>
+<div class="kv"><span>GPU</span><span class="r">1% busy · 61 °C</span></div>
+<div class="kv"><span>Network</span><span class="r">↓ 2 KB/s · ↑ 9 KB/s · Wi-Fi</span></div>
+<div class="kv"><span>Battery</span><span class="r">100% · plugged in</span></div>
+<div class="kv"><span>CPU temperature</span><span class="r">Not reported by Windows</span></div>
+<div class="kv"><span>Fans</span><span class="r">Not available</span></div>
+</div></div>
+</div>
+<h1>Send card</h1>
+<div class="row">
+<div class="col"><div class="cap">Before (Windows today)</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">Send</div></div></div>
+<div class="kv"><span>Nearby sharing</span><span class="r">1 nearby</span></div>
+<div class="kv"><span>Adrian’s Mac Mini (Pulse)</span><span class="r">Computer</span></div>
+<div class="kv"><span>Ctrl+V sends the clipboard · drop files here</span></div>
+<div class="bb" style="margin-top:8px"><b>⧉ Copy last: gh aut…</b><b>⧉ Pas…</b></div>
+</div></div>
+<div class="col"><div class="cap">After</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">Send</div><div class="st">1 nearby</div></div></div>
+<div class="kv"><span>Adrian’s Mac Mini</span><span class="r">Computer</span></div>
+<div class="hint">Ctrl+V sends the clipboard · drop files here</div>
+<div class="bb"><b>⧉ Copy last<span class="pv">gh auth login --web</span></b><b>⧉ Paste</b></div>
+</div></div>
+</div>
+<h1>Disks card</h1>
+<div class="row">
+<div class="col"><div class="cap">Before (Windows today)</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">Disks Usage</div></div></div>
+<div class="lbl"><span>C: (system)</span></div><div class="bar"><i style="width:64%"></i></div><div class="rd">366 GB free of 1 TB</div>
+<div class="lbl"><span>D:</span></div><div class="bar"><i class="a" style="width:85%"></i></div><div class="rd">599 GB free of 4 TB</div>
+<div class="lbl"><span>G:</span></div><div class="bar"><i style="width:66%"></i></div><div class="rd">348 GB free of 1 TB</div>
+<div class="kv"><span>Drive health</span><span class="r">Install smartmontools for dri…</span></div>
+</div></div>
+<div class="col"><div class="cap">After</div>
+<div class="card"><div class="hd"><div class="glyph"></div><div><div class="t">Disks</div><div class="st">3 drives</div></div></div>
+<div class="lbl"><span>C: (system)</span><span class="rs">366 GB free</span></div><div class="bar"><i style="width:64%"></i></div><div class="mut">of 1 TB</div>
+<div class="lbl"><span>D:</span><span class="rs">599 GB free</span></div><div class="bar"><i class="a" style="width:85%"></i></div><div class="mut">of 4 TB · 85% used</div>
+<div class="lbl"><span>G:</span><span class="rs">348 GB free</span></div><div class="bar"><i style="width:66%"></i></div><div class="mut" style="margin-bottom:4px">of 1 TB</div>
+<div class="link">Install smartmontools for drive health</div>
+</div></div>
+</div>
+</body></html>
