@@ -80,7 +80,8 @@ static SECTIONS: [Section; 10] = [
     Section { id: "monitor", title: "Monitor", settings: false, expect: "", also: &[], switches: false },
     Section { id: "apps", title: "Apps", settings: false, expect: "", also: &[], switches: false },
     Section { id: "permissions", title: "Permissions", settings: true, expect: "Start with Windows", also: &[], switches: false },
-    Section { id: "accounts", title: "Accounts", settings: true, expect: "Up to date", also: &[], switches: true },
+    // The Show toggles moved to the Gauges group on Appearance once the notch publishes `gauges`.
+    Section { id: "accounts", title: "Accounts", settings: true, expect: "Up to date", also: &[], switches: false },
     Section { id: "appearance", title: "Appearance", settings: true, expect: "Fold to a pill when the pointer leaves", also: &[], switches: true },
     Section { id: "notifications", title: "Notifications", settings: true, expect: "When a limit resets", also: &[], switches: true },
     Section { id: "general", title: "General", settings: true, expect: "Open Pulse at login", also: &["Nearby sharing", "Send and receive files nearby"], switches: true },
@@ -426,6 +427,15 @@ fn windows_notch_fixture() -> Value {
             },
         ],
         "providerOrder": ["claude", "codex"],
+        // The Gauges group on Appearance: the notch's five cells in its order (CPU and Memory are one
+        // ring, "System"; there is no Tools cell; Codex is off).
+        "gauges": [
+            {"id": "claude", "name": "Claude", "glyph": "claude", "connected": true, "order": 0},
+            {"id": "codex", "name": "Codex", "glyph": "openai", "connected": false, "order": 1},
+            {"id": "system-cpu", "name": "System", "glyph": "cpu", "connected": true, "order": 2},
+            {"id": "system-disks", "name": "Disks", "glyph": "disk", "connected": true, "order": 3},
+            {"id": "system-send", "name": "Send", "glyph": "send", "connected": true, "order": 4},
+        ],
         "permissions": [
             {"id": "startup", "status": "off", "required": false},
             {"id": "notifications", "status": "unknown", "required": false},
@@ -693,12 +703,13 @@ fn windows_expectations(id: &str) -> (&'static [&'static str], &'static [&'stati
             (HAVE, LACK)
         }
         "accounts" => {
-            const HAVE: &[&str] = &["Logins Pulse reads", "Claude", "Codex", "Shown", "Up to date"];
-            const LACK: &[&str] = &["Allow access", "never seen signed in", "Hidden"];
+            const HAVE: &[&str] = &["Logins Pulse reads", "Claude", "Codex", "Up to date"];
+            const LACK: &[&str] = &["Allow access", "never seen signed in", "Shown", "Hidden"];
             (HAVE, LACK)
         }
         "appearance" => {
             const HAVE: &[&str] = &[
+                "Gauges", "At least one gauge stays on", "Show Claude", "Show Codex", "Show System", "Show Disks", "Show Send",
                 "Placement", "Edge", "Show", "Alt-drag the notch to slide it along its edge",
                 "Fold to a pill when the pointer leaves", "Reset position", "Size and surface", "Size", "Custom size",
                 "Colour", "Accent", "Watch limit", "Critical limit",
@@ -841,8 +852,8 @@ fn windows_fixture_checks(ctl: &Control, sec: &Section, problems: &mut Vec<Strin
                 problems.push(format!("{name}: the Custom size switch should be present and off (usesCustomNotchScale false), found {}", radios["custom"]));
             }
             let groups: Vec<String> = radios["groups"].as_array().map(|a| a.iter().map(|g| s(g.clone())).collect()).unwrap_or_default();
-            if groups != ["Placement", "Size and surface", "Colour"] {
-                problems.push(format!("{name}: Appearance cards are {groups:?}; the Windows snapshot should leave Placement, Size and surface and Colour (no Rings, Language)"));
+            if groups != ["Gauges", "Placement", "Size and surface", "Colour"] {
+                problems.push(format!("{name}: Appearance cards are {groups:?}; the Windows snapshot should leave Gauges, Placement, Size and surface and Colour (no Rings, Language)"));
             }
             // Colour is the only card with a select (Accent: the Mac's ten raw values, green on) and
             // sliders (Watch limit 0.7, Critical limit 0.9); no Scale slider while Custom size is off.
@@ -878,8 +889,9 @@ fn windows_fixture_checks(ctl: &Control, sec: &Section, problems: &mut Vec<Strin
             } else {
                 let (claude, codex) = (&rows[0], &rows[1]);
                 for (row, who) in [(claude, "Claude"), (codex, "Codex")] {
-                    if row["shown"] != "Shown" || row["sub"] != "Up to date" || row["on"] != "true" || row["toggle"] != format!("Show {who}") {
-                        problems.push(format!("{name}: {who} should be Shown, read \"Up to date\" and have its \"Show {who}\" switch on: {row}"));
+                    // With `gauges` published the Shown/Hidden badge and the Show switch live on Appearance.
+                    if row["shown"] != "" || row["sub"] != "Up to date" || !row["on"].is_null() || row["toggle"] != "" {
+                        problems.push(format!("{name}: {who} should read \"Up to date\" with no Shown badge and no Show switch (the Gauges group has them): {row}"));
                     }
                     // "Forget reading" is a Windows action too since the notch handles forgetReading;
                     // "Allow access" (Keychain consent) stays Mac-only.
@@ -983,13 +995,14 @@ fn windows_interactions(ctl: &Control, sec: &Section, bridge: &Path, sc: &Scenar
             press(ctl, sc, shots, problems, &commands, "Fold to a pill", &switch("Fold to a pill when the pointer leaves"), &|c| {
                 c["command"] == "set" && c["key"] == "folds" && c["value"] == false
             });
+            // Codex is off in the fixture, so its gauge switch turns it on.
+            press(ctl, sc, shots, problems, &commands, "Show Codex", &switch("Show Codex"), &|c| {
+                c["command"] == "connect" && c["provider"] == "codex" && c["value"] == true
+            });
         }
         "accounts" => {
             press(ctl, sc, shots, problems, &commands, "Move Claude down", "document.querySelector('button[aria-label=\"Move Claude down\"]')", &|c| {
                 c["command"] == "order" && c["value"] == json!(["codex", "claude"])
-            });
-            press(ctl, sc, shots, problems, &commands, "Show Codex", &switch("Show Codex"), &|c| {
-                c["command"] == "connect" && c["provider"] == "codex" && c["value"] == false
             });
         }
         "notifications" => {

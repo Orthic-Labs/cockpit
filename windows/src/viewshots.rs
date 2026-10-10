@@ -999,7 +999,7 @@ fn notch(_id: &str, fixture: &Value, text: &mut TextPainter) -> Outcome {
     let mut parts = vec![(body, 0, 0)];
     if let Some(hover) = str_of(fixture, "hover").filter(|_| !folded) {
         let cell = windows_cell(hover).ok_or("Unknown hover cell")?;
-        let index = Cell::ALL
+        let index = layout::shown()
             .iter()
             .position(|c| *c == cell)
             .ok_or("Unknown hover cell")?;

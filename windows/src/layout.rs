@@ -6,9 +6,51 @@ use crate::send;
 use crate::sensors::Machine;
 use crate::usage::{LimitWindow, Usage};
 
+use std::sync::RwLock;
+
+/// Number of cells in the full order (`Cell::ALL`).
 pub const CELL_COUNT: usize = 5;
-/// Index of the nearby-sharing cell in `Cell::ALL`.
-pub const SEND_CELL: usize = 4;
+
+/// The cells the notch draws, in order: `Cell::ALL` minus the gauges turned off. Cell indices
+/// everywhere (hit-testing, hover, cards, drops, rendering) index into this list.
+static SHOWN: RwLock<Vec<Cell>> = RwLock::new(Vec::new());
+
+/// The shown cells in notch order (all of `Cell::ALL` until `set_shown` is called).
+pub fn shown() -> Vec<Cell> {
+    let list = SHOWN.read().unwrap_or_else(|e| e.into_inner());
+    if list.is_empty() {
+        Cell::ALL.to_vec()
+    } else {
+        list.clone()
+    }
+}
+
+/// Replaces the shown cells. An empty list is ignored: the notch never has no rings.
+pub fn set_shown(cells: Vec<Cell>) {
+    if !cells.is_empty() {
+        *SHOWN.write().unwrap_or_else(|e| e.into_inner()) = cells;
+    }
+}
+
+/// How many cells the notch draws.
+pub fn count() -> usize {
+    let list = SHOWN.read().unwrap_or_else(|e| e.into_inner());
+    if list.is_empty() {
+        CELL_COUNT
+    } else {
+        list.len()
+    }
+}
+
+/// The cell at `index` among the shown cells.
+pub fn cell_at(index: usize) -> Option<Cell> {
+    shown().get(index).copied()
+}
+
+/// Index of the nearby-sharing cell among the shown cells, if it is shown.
+pub fn send_cell() -> Option<usize> {
+    shown().iter().position(|c| *c == Cell::Send)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
@@ -114,9 +156,11 @@ pub const CORNER: f32 = 70.0 * DESIGN;
 pub const DEPTH: f32 = 161.0 * DESIGN;
 /// The band the Mac shape keeps past the screen edge so no hairline of wallpaper shows.
 pub const BAND: f32 = 2.0;
-/// Length of the whole open shape along the screen edge, ears included.
-pub const SHAPE_LENGTH: f32 =
-    2.0 * CURL + 2.0 * PAD_ALONG + CELL_COUNT as f32 * RING + (CELL_COUNT - 1) as f32 * SPACING;
+/// Length of the whole open shape along the screen edge, ears included, for the shown cells.
+pub fn shape_length() -> f32 {
+    let n = count();
+    2.0 * CURL + 2.0 * PAD_ALONG + n as f32 * RING + (n - 1) as f32 * SPACING
+}
 /// Settings orb arc: gap inside the ear, and stroke width.
 pub const ORB_GAP: f32 = 27.0 * DESIGN;
 pub const ORB_STROKE: f32 = 18.0 * DESIGN;
@@ -167,7 +211,7 @@ fn open_depth(dpi: u32) -> i32 {
 /// included, plus the room past its end for the settings button and the move grip.
 pub fn body_size(dpi: u32) -> (i32, i32) {
     let s = scale(dpi);
-    let along = ((SHAPE_LENGTH + ORB_OVERHANG) * s).round() as i32;
+    let along = ((shape_length() + ORB_OVERHANG) * s).round() as i32;
     (along, open_depth(dpi))
 }
 
@@ -245,8 +289,8 @@ fn ring_weekly(usage: &Usage) -> Option<&LimitWindow> {
     })
 }
 
-/// Builds the five cell views (Claude, Codex, System, Disks, Send). Unknown readings are
-/// `None` and draw as a dimmed, empty ring.
+/// Builds one view per shown cell (of Claude, Codex, System, Disks, Send), in shown order.
+/// Unknown readings are `None` and draw as a dimmed, empty ring.
 pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -> Vec<CellView> {
     let system = |cell: Cell, main: Option<f32>, inner: Option<f32>| CellView {
         glyph: cell.glyph(),
@@ -289,22 +333,25 @@ pub fn views(machine: Option<&Machine>, usage: &[Usage; 2], ring: &send::Ring) -
         Some(_) => system(Cell::Disk, external, startup),
         None => system(Cell::Disk, startup, None),
     };
-    vec![
-        ai(Cell::Claude, &usage[0]),
-        ai(Cell::Codex, &usage[1]),
-        system_cell,
-        disks,
-        CellView {
-            glyph: Cell::Send.glyph(),
-            main: ring.fraction.filter(|_| ring.active).map(percent),
-            inner: None,
-            stale: false,
-            problem: ring.problem,
-            blocked: false,
-            // A send or received paste that just ended well: the full ring in green.
-            band: ring.complete.then_some(BAND_AMPLE),
-        },
-    ]
+    shown()
+        .into_iter()
+        .map(|cell| match cell {
+            Cell::Claude => ai(cell, &usage[0]),
+            Cell::Codex => ai(cell, &usage[1]),
+            Cell::Cpu | Cell::Memory => system_cell.clone(),
+            Cell::Disk => disks.clone(),
+            Cell::Send => CellView {
+                glyph: Cell::Send.glyph(),
+                main: ring.fraction.filter(|_| ring.active).map(percent),
+                inner: None,
+                stale: false,
+                problem: ring.problem,
+                blocked: false,
+                // A send or received paste that just ended well: the full ring in green.
+                band: ring.complete.then_some(BAND_AMPLE),
+            },
+        })
+        .collect()
 }
 
 // ---- orientation: the notch on any screen edge ----------------------------------------------
@@ -373,7 +420,7 @@ fn orb_offset(edge: Edge, x: i32, y: i32, dpi: u32) -> (f32, f32) {
         Edge::Left => (py, px),
         Edge::Right => (py, across - px),
     };
-    ((along - SHAPE_LENGTH * s) / s, (depth - CURL * s) / s)
+    ((along - shape_length() * s) / s, (depth - CURL * s) / s)
 }
 
 /// The settings handle under a point in notch-local device pixels on `edge`. The button's
@@ -398,12 +445,12 @@ pub fn cell_at_for(edge: Edge, x: i32, y: i32, dpi: u32) -> Option<usize> {
     let s = scale(dpi);
     let along = (if edge.is_vertical() { y } else { x }) as f32;
     // Past the end of the shape, and in the settings button's zone, there is no ring.
-    if along >= SHAPE_LENGTH * s || handle_at(edge, x, y, dpi, false).is_some() {
+    if along >= shape_length() * s || handle_at(edge, x, y, dpi, false).is_some() {
         return None;
     }
     let first_edge = (CURL + PAD_ALONG - SPACING / 2.0) * s;
     let index = ((along - first_edge) / ((RING + SPACING) * s)).floor();
-    Some((index.max(0.0) as usize).min(CELL_COUNT - 1))
+    Some((index.max(0.0) as usize).min(count() - 1))
 }
 
 /// Top-left of a notch of `size` docked to `edge` of `monitor` (`left, top, right, bottom`),

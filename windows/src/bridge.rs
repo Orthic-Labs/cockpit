@@ -18,6 +18,7 @@
 //! the privileged helper) and `driveAlert` (the Windows drive health card reads the disks
 //! itself).
 
+use crate::layout::{self, Cell};
 use crate::settings::{self, Arg, Command, PillSettings};
 use crate::{
     autostart, claude_accounts, desktop, diag, installer, json, keys, raii, render, send, shot,
@@ -45,6 +46,16 @@ pub const MSG_PLACEMENT_CHANGED: u32 = 0x8002;
 /// Command files handled per pass; the rest wait for the next one.
 const MAX_COMMANDS: usize = 64;
 const PROVIDERS: [(&str, &str); 2] = [("claude", "Claude"), ("codex", "Codex")];
+/// The gauges, in the notch's order (`Cell::ALL`): id, name and the cell each one turns on or
+/// off. CPU and memory are one ring here, so one gauge ("system-cpu"); the Mac's separate
+/// "system-memory" and "system-tools" have no Windows cell.
+const GAUGES: [(&str, &str, Cell); 5] = [
+    ("claude", "Claude", Cell::Claude),
+    ("codex", "Codex", Cell::Codex),
+    ("system-cpu", "System", Cell::Cpu),
+    ("system-disks", "Disks", Cell::Disk),
+    ("system-send", "Send", Cell::Send),
+];
 /// How long the permission rows are reused before the registry is read again.
 const PERMISSIONS_TTL: Duration = Duration::from_secs(10);
 const SHARE_STATE_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -554,6 +565,26 @@ fn state_json(hooks: &Hooks) -> String {
         }
         out.push('}');
     }
+    out.push_str("],\"gauges\":[");
+    for (order, (id, name, cell)) in GAUGES.iter().enumerate() {
+        if order > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"id\":");
+        esc(&mut out, id);
+        out.push_str(",\"name\":");
+        esc(&mut out, name);
+        out.push_str(",\"glyph\":");
+        // The hub names its paper-plane icon "send"; the notch's own glyph key is "Snd".
+        esc(
+            &mut out,
+            if *cell == Cell::Send { "send" } else { cell.glyph() },
+        );
+        out.push_str(&format!(
+            ",\"connected\":{},\"order\":{order}}}",
+            !gauge_hidden(&s, id)
+        ));
+    }
     out.push_str("],\"providerOrder\":[");
     for (index, id) in order.iter().enumerate() {
         if index > 0 {
@@ -711,6 +742,8 @@ fn commit(
         || next.folds != before.folds
         || next.visible != before.visible
         || next.notch_size != before.notch_size
+        // Gauges turned on or off change the rings, so the body's width.
+        || next.hidden_providers != before.hidden_providers
         || next.custom_scale_on != before.custom_scale_on
         || next.custom_scale_milli != before.custom_scale_milli
         // A colour change moves nothing, but the panels must draw again with the new colours.
@@ -718,6 +751,7 @@ fn commit(
         || next.watch_limit_milli != before.watch_limit_milli
         || next.critical_limit_milli != before.critical_limit_milli;
     apply_appearance(&next);
+    apply_gauges(&next);
     (hooks.commit)(next);
     if placement_changed {
         // SAFETY: posting to a window handle that may have gone is harmless.
@@ -901,13 +935,41 @@ fn provider_id(command: &Command) -> Option<&'static str> {
     PROVIDERS.iter().map(|(id, _)| *id).find(|id| *id == wanted)
 }
 
+fn gauge_hidden(s: &PillSettings, id: &str) -> bool {
+    s.hidden_providers.iter().any(|hidden| hidden == id)
+}
+
+/// Hands the gauges that are on to the layout: the notch draws those cells, in its order.
+/// Turning every gauge off is never honoured (`apply_connect` refuses it), and the layout keeps
+/// all cells should stored settings say so.
+pub fn apply_gauges(s: &PillSettings) {
+    layout::set_shown(
+        GAUGES
+            .iter()
+            .filter(|(id, _, _)| !gauge_hidden(s, id))
+            .map(|(_, _, cell)| *cell)
+            .collect(),
+    );
+}
+
+/// `connect`: turns a gauge on or off. The last gauge on cannot be turned off.
 fn apply_connect(s: &mut PillSettings, command: &Command) -> bool {
-    let (Some(id), Arg::Bool(on)) = (provider_id(command), &command.value) else {
+    let (Some(wanted), Arg::Bool(on)) = (command.provider.as_deref(), &command.value) else {
+        return false;
+    };
+    let Some(id) = GAUGES
+        .iter()
+        .map(|(id, _, _)| *id)
+        .find(|id| *id == wanted)
+    else {
         return false;
     };
     s.hidden_providers.retain(|hidden| hidden != id);
     if !on {
         s.hidden_providers.push(id.to_string());
+        if GAUGES.iter().all(|(known, _, _)| gauge_hidden(s, known)) {
+            return false;
+        }
     }
     true
 }
