@@ -5,6 +5,7 @@
 //!  * inside the app's install folder (`Installed::run_folder`), or
 //!  * the program the app's icon comes from (`Installed::icon_source`), or
 //!  * a program named exactly like the app (`Claude` and `claude.exe`).
+//!
 //! Processes whose image path cannot be read (other users, protected system
 //! processes) are skipped, so an app only they run shows as not running; the page
 //! never says "running" without a process to point at.
