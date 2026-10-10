@@ -144,3 +144,4 @@
 .ck-settings .ck-chats-status { font-size: 11px; color: var(--rk-ink-3); }
 .ck-settings .ck-chats-status-busy { color: var(--rk-ink); }
 .ck-settings .ck-chats-more { padding-left: 60px; }
+.ck-settings .ck-chats-inbox { grid-column: 2 / -1; font-size: 11px; }

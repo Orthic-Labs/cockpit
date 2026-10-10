@@ -22,7 +22,7 @@
 //! modified time changes. The notch (windows/src/send.rs) is the other end.
 //!
 //! The agent bridge (chats on this computer talking to chats on linked computers,
-//! `pulse_core::bridge`) runs whenever the bridge is on (`bridge-settings.json`,
+//! `pulse_core::bridge`) runs whenever the bridge is on (the core store policy,
 //! hub-owned, default on), independent of sharing, over ssh links:
 //! `agent_bridge` below starts the reply socket and the heartbeat tick.
 //!
@@ -460,30 +460,58 @@ mod agent_bridge {
         bridge_dir().join("bridge-settings.json")
     }
 
-    /// Read the hub-owned switch; absent or unreadable means on.
+    /// The persisted policy in the core bridge store (the CLI and every adapter read it).
+    fn core_policy() -> Option<bool> {
+        pulse_core::bridge::Store::open_default().ok().map(|s| s.bridge_enabled())
+    }
+
+    fn set_core_policy(on: bool) {
+        if let Ok(store) = pulse_core::bridge::Store::open_default() {
+            let _ = store.set_bridge_enabled(on);
+        }
+    }
+
+    /// Startup: the core policy is the source of truth. A legacy `bridge-settings.json` is
+    /// migrated into it once (then renamed), so an old Off survives the upgrade.
     pub fn load() {
-        let on = std::fs::read_to_string(settings_path())
+        let legacy = std::fs::read_to_string(settings_path())
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .and_then(|v| v["enabled"].as_bool())
-            .unwrap_or(true);
-        BRIDGE_ENABLED.store(on, Ordering::Relaxed);
+            .and_then(|v| v["enabled"].as_bool());
+        if let Some(on) = legacy {
+            set_core_policy(on);
+            let migrated = bridge_dir().join("bridge-settings.json.migrated");
+            let _ = std::fs::rename(settings_path(), migrated);
+        }
+        BRIDGE_ENABLED.store(core_policy().or(legacy).unwrap_or(true), Ordering::Relaxed);
     }
 
     pub fn set_enabled(on: bool) {
         BRIDGE_ENABLED.store(on, Ordering::Relaxed);
-        let dir = bridge_dir();
-        let _ = std::fs::create_dir_all(&dir);
-        let temp = dir.join("bridge-settings.json.tmp");
-        if std::fs::write(&temp, json!({"enabled": on}).to_string()).is_ok() {
-            let _ = std::fs::rename(&temp, settings_path());
-        }
+        set_core_policy(on);
         DIRTY.store(true, Ordering::Relaxed);
+    }
+
+    /// Why the hub refuses to run the bridge, when it does.
+    #[cfg(target_os = "windows")]
+    fn blocked() -> Option<String> {
+        crate::win_bridge::singleton_error()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn blocked() -> Option<String> {
+        None
     }
 
     /// Start or stop the bridge so it matches the switch.
     pub fn sync() {
-        let want = BRIDGE_ENABLED.load(Ordering::Relaxed);
+        // The CLI can flip the policy too; follow the core store.
+        if let Some(on) = core_policy() {
+            if on != BRIDGE_ENABLED.swap(on, Ordering::Relaxed) {
+                DIRTY.store(true, Ordering::Relaxed);
+            }
+        }
+        let want = BRIDGE_ENABLED.load(Ordering::Relaxed) && blocked().is_none();
         let have = BRIDGE_ACTIVE.load(Ordering::Relaxed);
         if want && !have {
             pulse_core::bridge::hub::start(&computer_name());
@@ -548,6 +576,11 @@ mod agent_bridge {
         object.insert("enabled".into(), json!(BRIDGE_ENABLED.load(Ordering::Relaxed)));
         object.insert("active".into(), json!(BRIDGE_ACTIVE.load(Ordering::Relaxed)));
         object.insert("device".into(), json!(computer_name()));
+        if let Some(error) = blocked() {
+            object.insert("lastError".into(), json!(error));
+        }
+        // Links carry `lastOkMs`/`lastErrorMs` and chats `liveness` straight from core status;
+        // `activity.lastOutcome` passes through the serialized Activity.
         value
     }
 }

@@ -153,11 +153,48 @@ enum HubLauncher {
         guard supervisor == nil else { return }
         ensureRunning()
         let timer = Timer(timeInterval: 5, repeats: true) { _ in
-            Task { @MainActor in ensureRunning() }
+            Task { @MainActor in
+                ensureRunning()
+                restartIfBridgeStalled()
+            }
         }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
         supervisor = timer
+    }
+
+    private static var lastHeartbeatRestart = Date.distantPast
+    private static let heartbeatStale: TimeInterval = 90
+
+    /// A hub that is alive but whose bridge stopped ticking (a hung thread, a wedged socket)
+    /// is restarted: SIGTERM, three seconds, relaunch. Only while the bridge is enabled,
+    /// and at most once per ten minutes so a hub that cannot recover does not loop.
+    private static func restartIfBridgeStalled() {
+        guard !quitting, hubRunning,
+              Date().timeIntervalSince(lastHeartbeatRestart) >= 600 else { return }
+        let bridge = HubBridge.directory.appendingPathComponent("bridge", isDirectory: true)
+        // The hub publishes the policy in share-state.json; absent means on.
+        if let data = try? Data(contentsOf: HubBridge.directory.appendingPathComponent("share-state.json")),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let policy = json["bridge"] as? [String: Any], policy["enabled"] as? Bool == false {
+            return
+        }
+        let hubs = hubProcesses()
+        guard let oldest = hubs.map(\.start).min(),
+              Date().timeIntervalSince(oldest) > heartbeatStale else { return }
+        var last: Date?
+        if let data = try? Data(contentsOf: bridge.appendingPathComponent("relay.json")),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let ts = json["ts"] as? Double {
+            last = Date(timeIntervalSince1970: ts / 1000)
+        }
+        if let last, Date().timeIntervalSince(last) <= heartbeatStale { return }
+        lastHeartbeatRestart = Date()
+        let age = last.map { Int(Date().timeIntervalSince($0)) }
+        Log.usage.info("hub bridge heartbeat stale (\(age ?? -1, privacy: .public)s); restarting hub")
+        stop(hubs.map(\.pid))
+        child = nil
+        launchInBackground()
     }
 
     private static func ensureRunning() {

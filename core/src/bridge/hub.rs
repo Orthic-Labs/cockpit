@@ -13,7 +13,7 @@
 //! (`pidDomain` windows, its own reply pipe as `messagingSocketPath`) so chats
 //! list it and can answer it.
 
-use super::control::Request;
+use super::control::{self, Request};
 use super::deliver_claude::ReplyMessage;
 use super::envelope::{Envelope, Sender, Target};
 use super::links::{self, Link};
@@ -22,7 +22,9 @@ use super::store::Store;
 use super::{ReceiptState, deliver_local_via};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 const SESSION_SCAN_EVERY: Duration = Duration::from_secs(5);
@@ -30,6 +32,12 @@ const SESSION_SCAN_EVERY: Duration = Duration::from_secs(5);
 pub const REGISTERED_NAME: &str = "Pulse";
 /// `entrypoint` in the registry entry; the roster hides it.
 pub const ENTRYPOINT: &str = "pulse-hub";
+/// Control requests handled at once; more are answered "busy".
+const MAX_CONTROL_WORKERS: usize = 8;
+/// Posts of one queued reply tried before it is left for the next hub start.
+const MAX_REPLY_ATTEMPTS: u32 = 3;
+/// How far back reply routes are restored on start.
+const ROUTE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
 #[derive(Default)]
 struct State {
@@ -43,6 +51,12 @@ struct State {
     /// The chats each link listed last, for the page's list.
     remote_chats: Vec<StatusChat>,
     links_asked: Option<Instant>,
+    /// Queued replies being posted right now (by message id).
+    outbound_inflight: HashSet<String>,
+    /// Post attempts per queued reply.
+    outbound_attempts: HashMap<String, u32>,
+    /// Reply listeners for stored routes were recreated since the hub started.
+    listeners_restored: bool,
 }
 
 fn state() -> MutexGuard<'static, State> {
@@ -218,33 +232,63 @@ fn unregister() {
 
 /// The bridge became active: register and write the first heartbeat.
 pub fn start(alias: &str) {
-    register(alias);
-    if let Some(store) = store()
-        && let Err(e) = store.write_relay_status(alias)
-    {
-        note(format!("Couldn't write the heartbeat: {e}"));
+    let alias = super::clean_alias(alias);
+    register(&alias);
+    state().listeners_restored = false;
+    if let Some(store) = store() {
+        if let Err(e) = store.write_relay_status(&alias) {
+            note(format!("Couldn't write the heartbeat: {e}"));
+        }
+        restore_reply_listeners(store);
     }
 }
 
 /// The bridge went inactive or the hub exits.
 pub fn stop() {
     unregister();
+    state().listeners_restored = false;
     if let Some(store) = store() {
         store.clear_relay_status();
     }
 }
 
-/// Every couple of seconds while active: heartbeat, chat rescan, a slow poll
-/// of linked computers for the page.
+/// Recreate the reply listener of every reply route from the last 24 hours, so a chat
+/// that answers after a hub restart still reaches the socket it was told. Marks itself
+/// done once a listener exists (the reply hub may not be set when `start` runs).
+fn restore_reply_listeners(store: &Store) {
+    if state().listeners_restored {
+        return;
+    }
+    let since = super::envelope::now_ms().saturating_sub(ROUTE_WINDOW_MS);
+    let routes = store.reply_routes_since(since);
+    let mut keys: Vec<String> = routes
+        .iter()
+        .map(|r| format!("{}:{}", r.from_device, r.from_session))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    let mut any = keys.is_empty();
+    for key in keys {
+        any |= super::deliver_claude::reply_address(&key).is_some();
+    }
+    if any {
+        state().listeners_restored = true;
+    }
+}
+
+/// Every couple of seconds while active: heartbeat first, then (off this thread) the chat
+/// rescan, the slow poll of linked computers for the page, and queued reply retries.
+/// Nothing here waits on ssh.
 pub fn tick(alias: &str) {
+    let alias = super::clean_alias(alias);
     let Some(store) = store() else { return };
-    if let Err(e) = store.write_relay_status(alias) {
+    if let Err(e) = store.write_relay_status(&alias) {
         note(format!("Couldn't write the heartbeat: {e}"));
     }
-    let _ = local_chats(store, SESSION_SCAN_EVERY);
+    control::recover_stale_claims(store);
     let registered = state().registered.is_some();
     if cfg!(any(unix, windows)) && !registered {
-        register(alias);
+        register(&alias);
     }
     // The registered pipe has to be listening: a chat that finds the hub in the
     // registry may post to it. (Idempotent; a no-op until the reply hub exists.)
@@ -254,6 +298,24 @@ pub fn tick(alias: &str) {
             let _ = super::deliver_claude::reply_address("hub");
         }
     }
+    static BACKGROUND: AtomicBool = AtomicBool::new(false);
+    if BACKGROUND
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    std::thread::spawn(move || {
+        background(store);
+        BACKGROUND.store(false, Ordering::Release);
+    });
+}
+
+/// The slow part of a tick: may take as long as ssh does.
+fn background(store: &Store) {
+    let _ = local_chats(store, SESSION_SCAN_EVERY);
+    restore_reply_listeners(store);
+    retry_outbound(store);
     let due = state()
         .links_asked
         .is_none_or(|at| at.elapsed() >= Duration::from_secs(60));
@@ -271,16 +333,27 @@ pub fn tick(alias: &str) {
                     local: false,
                     cwd: c.cwd.clone(),
                     updated_ms: c.updated_ms,
+                    liveness: c.liveness.clone(),
+                    unread: 0,
+                    evicted: 0,
                 }));
             }
         }
+        let recorded = links::link_status(store);
         let polled: Vec<StatusLink> = answers
             .into_iter()
-            .map(|r| StatusLink {
-                device: r.link.device,
-                ssh: r.link.ssh,
-                chats: r.listing.as_ref().ok().map(|l| l.chats.len()),
-                error: r.listing.err(),
+            .map(|r| {
+                let seen = recorded
+                    .iter()
+                    .find(|s| s.device.eq_ignore_ascii_case(&r.link.device));
+                StatusLink {
+                    last_ok_ms: seen.and_then(|s| s.last_ok_ms),
+                    last_error_ms: seen.and_then(|s| s.last_error_ms),
+                    device: r.link.device,
+                    ssh: r.link.ssh,
+                    chats: r.listing.as_ref().ok().map(|l| l.chats.len()),
+                    error: r.listing.err(),
+                }
             })
             .collect();
         let mut st = state();
@@ -291,25 +364,121 @@ pub fn tick(alias: &str) {
 
 // ---- replies -------------------------------------------------------------------------
 
-/// The link a reply to `device` goes over: the link with that name, else the
-/// only link there is.
+/// The link a reply to `device` goes over: matched by device id, else by name. There is
+/// no "only link" guess: an unmatched reply is reported, not sent to a stranger.
 fn link_for(store: &Store, device: &str) -> Option<Link> {
-    links::find(store, device).or_else(|| {
-        let all = links::all(store);
-        (all.len() == 1).then(|| all[0].clone())
-    })
+    links::find_by_device_id(store, device).or_else(|| links::find(store, device))
+}
+
+/// Serializes queue edits (the outbox is a list the store drains and refills).
+fn outbox() -> MutexGuard<'static, ()> {
+    static OUTBOX: Mutex<()> = Mutex::new(());
+    OUTBOX.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn queue_reply(store: &Store, env: &Envelope) {
+    let _lock = outbox();
+    let _ = store.queue_outbound(env);
+}
+
+fn unqueue_reply(store: &Store, id: &str) {
+    let _lock = outbox();
+    for env in store.take_outbound() {
+        if env.id != id {
+            let _ = store.queue_outbound(&env);
+        }
+    }
+}
+
+/// Post one reply over its link. Ok means a receipt came back (so it is not retried).
+fn post_reply(store: &Store, link: &Link, envelope: &Envelope) -> Result<(), String> {
+    let receipt = links::post(link, envelope)?;
+    let status = receipt["status"].as_str().unwrap_or("");
+    let parsed = ReceiptState::parse(status);
+    if parsed != Some(ReceiptState::Refused) {
+        store.note_sent(parsed.unwrap_or(ReceiptState::Unknown).as_str());
+    }
+    if parsed != Some(ReceiptState::Delivered) {
+        note(format!(
+            "{}: reply {}: {}",
+            link.device,
+            status,
+            receipt["detail"].as_str().unwrap_or("")
+        ));
+    }
+    Ok(())
+}
+
+/// Retry queued replies that were never posted (at most three attempts each, counted in
+/// memory; a hub restart starts the count again).
+fn retry_outbound(store: &Store) {
+    let pending = {
+        let _lock = outbox();
+        store.take_outbound()
+    };
+    for env in pending {
+        let skip = {
+            let mut st = state();
+            let tries = st.outbound_attempts.get(&env.id).copied().unwrap_or(0);
+            if st.outbound_inflight.contains(&env.id) || tries >= MAX_REPLY_ATTEMPTS {
+                true
+            } else {
+                st.outbound_attempts.insert(env.id.clone(), tries + 1);
+                st.outbound_inflight.insert(env.id.clone());
+                false
+            }
+        };
+        if skip {
+            queue_reply(store, &env);
+            continue;
+        }
+        let result = match link_for(store, &env.to.device) {
+            Some(link) => post_reply(store, &link, &env),
+            None => Err(format!("No link named {} to send a reply over.", env.to.device)),
+        };
+        let mut st = state();
+        st.outbound_inflight.remove(&env.id);
+        match result {
+            Ok(()) => {
+                st.outbound_attempts.remove(&env.id);
+            }
+            Err(e) => {
+                let tries = st.outbound_attempts.get(&env.id).copied().unwrap_or(0);
+                if tries >= MAX_REPLY_ATTEMPTS {
+                    st.last_error = Some(format!("Gave up sending a reply: {e}"));
+                }
+                drop(st);
+                queue_reply(store, &env);
+            }
+        }
+    }
 }
 
 /// A local chat answered a message it was pushed (`ReplyHub`): send the
-/// answer to the chat that wrote, wherever it runs.
+/// answer to the chat that wrote, wherever it runs. The chat that wrote is found
+/// from the route saved when the message was delivered (by the id the reply answers),
+/// else from the address the reply arrived on.
 pub fn on_local_reply(reply: ReplyMessage) {
     let Some(store) = store() else { return };
-    let Some((device, session)) = reply.peer_key.split_once(':') else {
-        return;
-    };
+    if let Some(off) = super::bridge_off_detail(store) {
+        return note(off);
+    }
     let sessions = local_chats(store, Duration::from_secs(10));
     let Some(from) = sessions.iter().find(|s| s.id == reply.from_session_id) else {
         return;
+    };
+    let routed = [reply.in_reply_to.as_deref(), Some(reply.msg_id.as_str())]
+        .into_iter()
+        .flatten()
+        .filter(|id| !id.is_empty())
+        .find_map(|id| store.reply_route(id))
+        .filter(|r| r.to_session == from.id);
+    let (device, session) = match routed {
+        Some(route) => (route.from_device, route.from_session),
+        None => match reply.peer_key.rsplit_once(':') {
+            Some((device, session)) => (device.to_string(), session.to_string()),
+            None => return,
+        },
     };
     let alias = store
         .relay_status()
@@ -322,8 +491,8 @@ pub fn on_local_reply(reply: ReplyMessage) {
             name: format!("{} on {}", from.name, alias),
         },
         Target {
-            device: device.to_string(),
-            session: session.to_string(),
+            device: device.clone(),
+            session: session.clone(),
         },
         reply.text,
     ) {
@@ -335,42 +504,75 @@ pub fn on_local_reply(reply: ReplyMessage) {
             Some(target) => {
                 let receipt = deliver_local_via(store, target, &envelope, None);
                 if receipt.state != ReceiptState::Refused {
-                    store.note_sent();
+                    store.note_sent(receipt.state.as_str());
                 }
             }
             None => note("A reply's chat is no longer open.".to_string()),
         }
         return;
     }
-    let Some(link) = link_for(store, device) else {
+    let Some(link) = link_for(store, &device) else {
         return note(format!("No link named {device} to send a reply over."));
     };
-    match links::post(&link, &envelope) {
-        Ok(receipt) => {
-            let status = receipt["status"].as_str().unwrap_or("");
-            if ReceiptState::parse(status) != Some(ReceiptState::Refused) {
-                store.note_sent();
-            }
-            if ReceiptState::parse(status) != Some(ReceiptState::Delivered) {
-                note(format!(
-                    "{}: reply {}: {}",
-                    link.device,
-                    status,
-                    receipt["detail"].as_str().unwrap_or("")
-                ));
-            }
-        }
-        Err(e) => note(format!("Couldn't send a reply: {e}")),
+    queue_reply(store, &envelope);
+    state().outbound_inflight.insert(envelope.id.clone());
+    let result = post_reply(store, &link, &envelope);
+    state().outbound_inflight.remove(&envelope.id);
+    match result {
+        Ok(()) => unqueue_reply(store, &envelope.id),
+        Err(e) => note(format!("Couldn't send a reply (it will be retried): {e}")),
     }
 }
 
 // ---- control -------------------------------------------------------------------------
 
+/// Counts control requests being handled; the guard frees its slot on drop.
+struct WorkerSlot;
+
+static WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+impl WorkerSlot {
+    fn take() -> Option<WorkerSlot> {
+        if WORKERS.fetch_add(1, Ordering::AcqRel) >= MAX_CONTROL_WORKERS {
+            WORKERS.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(WorkerSlot)
+    }
+}
+
+impl Drop for WorkerSlot {
+    fn drop(&mut self) {
+        WORKERS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// One lock per target chat: requests for the same chat run one at a time.
+fn session_lock(session: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut map = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if map.len() > 256 {
+        map.retain(|_, lock| Arc::strong_count(lock) > 1);
+    }
+    map.entry(session.to_string()).or_default().clone()
+}
+
 /// Answer a request from the CLI. `deliver` `{session, envelope, reply_socket?}`
-/// pushes an envelope into a chat here and returns `{ok, status, detail}`.
+/// pushes an envelope into a chat here and returns `{ok, status, detail}`. Refused
+/// while the bridge is off; at most eight requests run at once (more answer
+/// "unknown: hub busy"), and requests for one chat run one at a time.
 pub fn handle_control(request: &Request) -> Value {
     let Some(store) = store() else {
         return json!({"ok": false, "error": "The bridge store is not available."});
+    };
+    if let Some(detail) = super::bridge_off_detail(store) {
+        return json!({"ok": true, "status": "refused", "detail": detail});
+    }
+    let Some(_slot) = WorkerSlot::take() else {
+        return json!({"ok": true, "status": "unknown", "detail": "hub busy, try again"});
     };
     match request.op.as_str() {
         "deliver" => {
@@ -383,6 +585,8 @@ pub fn handle_control(request: &Request) -> Value {
                 Ok(env) => env,
                 Err(e) => return json!({"ok": false, "error": format!("Bad request: {e}")}),
             };
+            let lock = session_lock(session_id);
+            let _turn = lock.lock().unwrap_or_else(|p| p.into_inner());
             let sessions = local_chats(store, Duration::from_secs(2));
             let Some(session) = sessions.iter().find(|s| s.id == session_id) else {
                 return json!({"ok": true, "status": "refused",
@@ -406,6 +610,10 @@ pub struct StatusLink {
     /// Chats listed there at the last poll, or None when it could not be asked.
     pub chats: Option<usize>,
     pub error: Option<String>,
+    /// When the link last answered (ms), when it ever did.
+    pub last_ok_ms: Option<u64>,
+    /// When the link last failed (ms), when it ever did.
+    pub last_error_ms: Option<u64>,
 }
 
 /// One chat as the page lists it.
@@ -422,6 +630,12 @@ pub struct StatusChat {
     pub cwd: String,
     /// Milliseconds since the epoch of the last activity, when known.
     pub updated_ms: Option<u64>,
+    /// "live", "stale" or "unknown".
+    pub liveness: String,
+    /// Unread messages in this chat's bridge inbox (chats here only).
+    pub unread: usize,
+    /// Messages the inbox size cap dropped before they were read (chats here only).
+    pub evicted: u64,
 }
 
 /// Claude: busy/idle from its registry. Codex: active when its thread was written to in the
@@ -452,14 +666,20 @@ pub fn status() -> Status {
     let mut chats: Vec<StatusChat> = state
         .sessions
         .iter()
-        .map(|s| StatusChat {
-            name: s.name.clone(),
-            kind: s.kind.clone(),
-            status: chat_status(&s.kind, &s.status),
-            device: alias.clone(),
-            local: true,
-            cwd: s.cwd.clone(),
-            updated_ms: s.updated_ms,
+        .map(|s| {
+            let detail = store().map(|st| st.unread_detail(&s.id)).unwrap_or_default();
+            StatusChat {
+                name: s.name.clone(),
+                kind: s.kind.clone(),
+                status: chat_status(&s.kind, &s.status),
+                device: alias.clone(),
+                local: true,
+                cwd: s.cwd.clone(),
+                updated_ms: s.updated_ms,
+                liveness: s.liveness.clone(),
+                unread: detail.unread,
+                evicted: detail.evicted,
+            }
         })
         .collect();
     chats.extend(state.remote_chats.iter().cloned());

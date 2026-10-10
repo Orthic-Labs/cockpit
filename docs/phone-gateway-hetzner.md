@@ -1,0 +1,52 @@
+# Proposal B: Pulse relay on Hetzner, own phone app, one transport for files and agent messages
+
+Status: proposal, 2026-10-10, not approved. Supersedes the Telegram proposal (docs/phone-gateway-proposal.md) if accepted. Written against docs/bridge-astra-review.md; every finding it answers is cited as Bnn.
+
+## Goal
+From a phone anywhere, Adrian messages any Claude Code or Codex chat on the Mac Mini or the Dell, gets replies and "input needed" pushes, and sends files or the clipboard to either computer. The same transport replaces LocalSend between the two computers and the phone, so there is one path to make correct instead of three.
+
+## Topology
+- **Relay** (`pulse relay`, the Rust core built headless) runs on Adrian's Hetzner server as a systemd service behind Caddy (TLS). It is a store-and-forward message service and blob store. It never executes anything on a laptop.
+- **Nodes** are the Mac Mini hub, the Dell hub and the phone app. Every node connects *outbound* to the relay over HTTPS (long-poll or WebSocket). No inbound ports anywhere; no ssh in the message path. ssh keys stay for administration only (B10 removed from the data path).
+- **LAN fast path** for files: when two nodes are on the same network the relay hands each the other's candidate address; the sender tries a direct TLS connection first and falls back to the relay. Agent messages always go through the relay (one durable path; B04–B06).
+
+## Identity and trust (B01, B07, B09, B12)
+- Each node has a device key pair (Ed25519 for signing, X25519 for encryption) generated at install; `device_id` is derived from the public key. Enrollment: the relay shows nothing; a node is admitted by a one-time code minted on an already-enrolled node (the Mac hub's Agent page, or the phone scanning a QR). The relay stores `(device_id, pubkey, name, kind, enrolled_at, enrolled_by)`.
+- Every request is signed by the device key (timestamp + nonce, 5-minute window; relay keeps a nonce journal). The relay stamps the authenticated `from.device_id` onto every envelope; a claimed label never travels unverified.
+- Chat identity is `(device_id, harness, session_id, generation)`; titles are display only. Conversations are `(device_id, session_id)` and keep their id across renames and resumes; a fork or a new session is a new conversation.
+- Message bodies and file blobs are end-to-end encrypted to the recipient device's key (sealed box). The relay sees device ids, conversation ids, sizes and timestamps, not content. Losing a device key means re-enrolling that device; the relay cannot recover content.
+
+## Message service (B04, B05, B06, B08, B11, B13, B16, B18, B19)
+- Relay tables: devices, sessions (published by each hub: id, harness, title, liveness, last_activity, capabilities such as `codex_queue`), conversations, messages `(id, conversation, from_device, from_session, to_device, to_session, kind, body_cipher, hash, created, expires)`, receipts `(message_id, state, detail, at, by_device)`, blobs, events (input-needed), nonces, push tokens.
+- Receipt states are the reviewed set: stored (relay has it), dispatched (a hub pulled it), queued (native queue accepted), delivered (chat confirmed), held (hub inbox), refused, unsupported, unknown. A sender sees the chain, not one word.
+- Each hub keeps a local outbox (persisted before any network call) and pulls its mailbox with a cursor it only advances after local commit; duplicates are rejected by `(from_device, message_id, hash)`. Per-conversation dispatch is serialized by the hub.
+- Replies carry `in_reply_to`; the route is the conversation, never a device alias. Codex and Claude reply with `pulse bridge reply <message-id>`; the hub resolves the conversation.
+- Limits are explicit and enforced at the relay: 64 KiB message body, 2 GiB blob in 8 MiB resumable chunks, 30-day retention for messages, 7-day for blobs, 500 MB per-device blob quota. Oversize is refused before upload with the limit in the detail.
+- Hubs run the existing local adapters (Claude cross-session socket/pipe, Codex `queue`) unchanged except for the receipt states; nothing in the relay knows the harness protocols.
+
+## Waiting and notifications (B14, B22)
+- A hub publishes `input-needed` events `(session, generation, event_id, kind, expires)` when a Claude chat reports waiting or a Codex thread's status requires input; the relay pushes to the phone via APNs. Content-free by default ("Planner on Dell needs input"); a chat can be enrolled for content so the question text rides along (encrypted).
+- Liveness on the phone is what the hub last reported plus its age; never a guess.
+
+## Files and clipboard (replaces LocalSend)
+- Send from any node to any node: file(s), folder (zipped by the sender), text/clipboard. Blob upload is chunked and resumable; the recipient hub downloads and saves to the existing Downloads location, with the same accept/decline card the notches already show for LocalSend. The notch Send card keeps its shape: nearby devices become "your devices" (all enrolled nodes, with reachability from the relay), paste/drop unchanged.
+- LocalSend is removed after all three nodes run the new transport; nothing else on the LAN needs the LocalSend protocol.
+
+## Phone app
+- iOS first (Swift, SwiftUI): Devices, Chats (grouped by computer, liveness and age), Conversation (messages, receipts, reply), Send (share-sheet extension: files, text), Inbox (input-needed). Enrolls by QR from the Mac hub. Keys in the Secure Enclave-backed keychain.
+- Pushes via APNs through the relay (Apple provisioning exists per workspace rules).
+
+## Lifecycle and recovery (B20, B21, B23)
+- Relay: systemd, restart on failure, SQLite with WAL, nightly backup to R2. Hubs: already supervised by the notch; the relay client is part of the hub's bridge service with its own health ("relay: ok 12s" / "offline 3m") shown on the Send card and the hub page. A hub restart replays its outbox and resumes its cursor; no listener state needs to survive.
+
+## What this does not do
+- No remote execution: a message is text delivered into a chat; the chat's own permission mode governs what it does. The phone cannot change links, policies or permissions.
+- No multi-user relay: one owner, enrolled devices only. Sharing with other people is out of scope.
+
+## Risks
+- The relay is one server; if Hetzner is down, nothing crosses machines (the LAN fast path keeps file sends working at home). Acceptable for one person; a second relay later is a config list.
+- E2E key management adds a re-enroll step when a device is reinstalled.
+- Three codebases touched (core relay + hub client, notches, phone app). Critical path: relay service → hub client and file transport → phone app.
+
+## Comparison with the Telegram proposal
+Telegram needs no server and no app but inherits every bridge finding and adds a third-party trust boundary; the reviewer judged it acceptable only as a convenience on top of a message service that did not exist. This proposal builds that message service once, on Adrian's own server, with real device identity and end-to-end encryption, and gets files and clipboard for free. It costs an iOS app and a relay deployment.

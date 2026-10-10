@@ -57,6 +57,9 @@ struct ShareNotice: Decodable, Equatable {
 struct ShareBridgeActivity: Decodable, Equatable {
     var sentMs: Double
     var receivedMs: Double
+    /// The state of the last send ("delivered", "queued", "held", "sent", "refused", "unknown");
+    /// absent from an older hub, which counts as delivered.
+    var lastOutcome: String?
 
     /// When the last message went either way; nil before any.
     var latest: Date? {
@@ -67,8 +70,21 @@ struct ShareBridgeActivity: Decodable, Equatable {
     var lastWasSent: Bool { sentMs >= receivedMs }
 }
 
+/// One linked computer (`bridge.links[]`).
+struct ShareBridgeLink: Decodable, Equatable {
+    var device: String
+    var ssh: String?
+    var chats: Int?
+    var error: String?
+    var lastOkMs: Double?
+    var lastErrorMs: Double?
+}
+
 struct ShareBridge: Decodable, Equatable {
     var activity: ShareBridgeActivity?
+    /// The Agent bridge policy; absent from an older hub, which counts as on.
+    var enabled: Bool?
+    var links: [ShareBridgeLink]?
 }
 
 struct ShareState: Decodable, Equatable {
@@ -231,9 +247,55 @@ final class NearbySharing {
         guard let activity = fresh(state)?.bridge?.activity, let at = activity.latest,
               Date().timeIntervalSince(at) < Self.pulseWindow else { return nil }
         let name = activity.lastWasSent ? L10n.t("Message sent") : L10n.t("Message received")
+        // Success only for a send that arrived (or was queued for a chat that will read it);
+        // held or merely-sent is amber, refused or unknown is not a pulse at all.
+        var state = AgentSession.State.success
+        if activity.lastWasSent {
+            switch activity.lastOutcome ?? "delivered" {
+            case "delivered", "queued": state = .success
+            case "held", "sent": state = .waiting
+            default: return nil
+            }
+        }
         return ActivitySummary(sessions: [AgentSession(
             id: "bridge", name: name, detail: L10n.t("Agent bridge"),
-            state: .success, waitingFor: nil, since: at)])
+            state: state, waitingFor: state == .waiting ? activity.lastOutcome : nil, since: at)])
+    }
+
+    /// "12s", "3m", "2h", "1d" since `ms`.
+    private static func age(_ ms: Double) -> String {
+        let secs = max(0, Int(Date().timeIntervalSince1970 - ms / 1000))
+        if secs < 60 { return "\(secs)s" }
+        if secs < 3600 { return "\(secs / 60)m" }
+        if secs < 86400 { return "\(secs / 3600)h" }
+        return "\(secs / 86400)d"
+    }
+
+    /// The Send card's "Agents" rows: Agent bridge off, one row per linked computer, and the
+    /// last message when it was refused or its fate unknown (no ring pulse for those).
+    private func agentRows(_ bridge: ShareBridge?) -> [LimitWindow] {
+        guard let bridge else { return [] }
+        if bridge.enabled == false {
+            return [LimitWindow(id: "agents-off", label: L10n.t("Agent bridge off"), detail: "")]
+        }
+        var rows: [LimitWindow] = []
+        for link in bridge.links ?? [] {
+            let detail: String
+            if link.error != nil {
+                detail = link.lastErrorMs.map { L10n.t("offline \(Self.age($0))") } ?? L10n.t("offline")
+            } else {
+                let chats = L10n.t("\(link.chats ?? 0) chats")
+                detail = link.lastOkMs.map { chats + " · " + L10n.t("ok \(Self.age($0))") } ?? chats
+            }
+            rows.append(LimitWindow(id: "agent:" + link.device, label: link.device, detail: detail))
+        }
+        if let activity = bridge.activity, activity.sentMs > 0, activity.lastWasSent,
+           let outcome = activity.lastOutcome, outcome == "refused" || outcome == "unknown" {
+            rows.append(LimitWindow(
+                id: "agents-last", label: L10n.t("Last message: \(outcome)"),
+                detail: Self.age(activity.sentMs)))
+        }
+        return rows
     }
 
     // MARK: - Devices and the target
@@ -478,6 +540,7 @@ final class NearbySharing {
             windows.append(LimitWindow(
                 id: "nearby:" + device.fingerprint, label: device.alias, detail: kind(of: device)))
         }
+        windows.append(contentsOf: agentRows(live?.bridge))
         if live?.localNetwork == "blocked" {
             windows.append(LimitWindow(id: "hint-network", label: "",
                                        detail: L10n.t("Allow Local Network for Pulse in System Settings.")))

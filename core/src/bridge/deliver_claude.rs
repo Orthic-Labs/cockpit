@@ -14,15 +14,17 @@
 //!
 //! `{"msgV":1,"msg_id":..,"type":"user","message":{"role":"user","content":
 //! "<cross-session-message from=\"uds:<reply>\" from-session=\"..\"
-//! from-name=\"<peer> via Pulse\" from-mode=\"bypass\">\n<text>\n</cross-session-message>"},
+//! from-name=\"<peer> via Pulse\" from-mode=\"bridge\"
+//! provenance=\"agent-unverified\">\n<text>\n</cross-session-message>"},
 //! "priority":"next","from":"uds:<reply>"}`
 //!
 //! On macOS/Linux no auth line is sent. On native Windows the auth frame
 //! `{"type":"auth","token":<peerToken>}` goes first, using the key file token.
 //! The whole payload is prepared before connecting (the chat wants it within
-//! 30 s). Outcomes are Delivered / Held / Refused; a real client is normally
-//! silent, so no control frame within 3 s counts as Delivered when the write
-//! succeeded. The chat may answer with `{"type":"control","action":
+//! 30 s). Outcomes: an explicit chat verdict is Delivered, Queued (accepted or
+//! held natively, consumption unknown) or Refused; a real client is normally
+//! silent, so no control frame within 3 s, or a close without one, is only Sent
+//! (transport ok, no verdict). The chat may answer with `{"type":"control","action":
 //! "peer_message_status"|"peer_message_hold"|..}`. The key is read but never
 //! logged or put in an error.
 //!
@@ -33,14 +35,16 @@
 //! whose DACL grants the current user and SYSTEM only. All Windows pipe I/O to a
 //! chat is overlapped with deadlines (connect 3 s, write 3 s, ACK read
 //! `ACK_WINDOW`); a stage that stalls is cancelled and reported by name. The
-//! `pulse-bridge-noreply` placeholder `from` is sent only while no hub runs.
+//! `pulse-bridge-noreply` placeholder `from` is advertised only when no reply route can
+//! be made (no hub, or the bind failed); the receipt then says replies are unavailable.
+//! ACK readers stop after 10 s or 64 KiB; reply connections after 30 s, at most 64 at once.
 
 use super::{BridgeError, Envelope, LocalSession, Receipt};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -48,8 +52,18 @@ use std::time::{Duration, Instant};
 pub const PEER_PROTOCOL: u64 = 1;
 /// How long to wait for the chat's accept / hold / refuse.
 const ACK_WINDOW: Duration = Duration::from_secs(3);
+/// Absolute limit on reading a chat's ACK frames, and the most bytes read.
+const ACK_DEADLINE: Duration = Duration::from_secs(10);
+const ACK_MAX_BYTES: usize = 64 * 1024;
+/// Absolute limit on one reply connection, how many may be open at once.
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
-const MAX_REPLY_BYTES: u64 = 1024 * 1024;
+const REPLY_DEADLINE: Duration = Duration::from_secs(30);
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+const MAX_REPLY_CONNECTIONS: usize = 64;
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+const MAX_REPLY_BYTES: usize = 1024 * 1024;
+/// How long `ReplyHub::stop` waits for its listener threads.
+const STOP_JOIN: Duration = Duration::from_secs(2);
 
 /// The few places this file touches the types `bridge/mod.rs` owns. If those
 /// types differ, adapt here only.
@@ -60,17 +74,37 @@ const MAX_REPLY_BYTES: u64 = 1024 * 1024;
 pub(super) mod shim {
     use super::*;
 
-    pub fn delivered(reason: &str) -> Receipt {
-        Receipt::delivered(reason)
+    use crate::bridge::ReceiptState;
+
+    fn receipt(state: ReceiptState, reason: &str) -> Receipt {
+        Receipt {
+            msg_id: String::new(),
+            session: String::new(),
+            state,
+            detail: reason.to_string(),
+        }
     }
-    pub fn held(reason: &str) -> Receipt {
-        Receipt::held(reason)
+    /// The chat confirmed it has the message.
+    pub fn delivered(reason: &str) -> Receipt {
+        receipt(ReceiptState::Delivered, reason)
+    }
+    /// The chat's native queue accepted it; whether it was consumed is unknown.
+    pub fn queued(reason: &str) -> Receipt {
+        receipt(ReceiptState::Queued, reason)
+    }
+    /// The transport succeeded; the chat gave no verdict.
+    pub fn sent(reason: &str) -> Receipt {
+        receipt(ReceiptState::Sent, reason)
+    }
+    /// The dispatch may or may not have happened.
+    pub fn unknown(reason: &str) -> Receipt {
+        receipt(ReceiptState::Unknown, reason)
     }
     pub fn refused(reason: &str) -> Receipt {
-        Receipt::refused(reason)
+        receipt(ReceiptState::Refused, reason)
     }
     pub fn unsupported(reason: &str) -> Receipt {
-        Receipt::unsupported(reason)
+        receipt(ReceiptState::Unsupported, reason)
     }
     pub fn gone(reason: &str) -> BridgeError {
         BridgeError::SessionGone(reason.to_string())
@@ -87,7 +121,7 @@ pub(super) mod shim {
     pub fn env_text(env: &Envelope) -> &str {
         &env.body
     }
-    /// "<chat title> on <device alias>".
+    /// "<chat title> on <device alias>" (an unverified label).
     pub fn env_from_name(env: &Envelope) -> &str {
         &env.from.name
     }
@@ -132,6 +166,17 @@ fn process_matches(pid: u32, recorded_start: Option<&str>, domain: Option<&str>)
     if system.process(target).is_none() {
         return false;
     }
+    start_identity(pid, recorded_start, domain).unwrap_or(true)
+}
+
+/// Whether the running process `pid` started when the files say it did:
+/// `Some(true)` it did, `Some(false)` another process has the pid, `None` the
+/// start time was not recorded or can't be compared here.
+pub(super) fn start_identity(
+    pid: u32,
+    recorded_start: Option<&str>,
+    domain: Option<&str>,
+) -> Option<bool> {
     #[cfg(target_os = "macos")]
     {
         if domain.is_none_or(|d| d == "darwin")
@@ -142,12 +187,12 @@ fn process_matches(pid: u32, recorded_start: Option<&str>, domain: Option<&str>)
                 .env("TZ", "UTC")
                 .args(["-o", "lstart=", "-p", &pid.to_string()])
                 .output();
-            return match out {
+            return Some(match out {
                 Ok(out) if out.status.success() => {
                     squash(&String::from_utf8_lossy(&out.stdout)) == squash(recorded)
                 }
                 _ => false,
-            };
+            });
         }
     }
     #[cfg(windows)]
@@ -158,17 +203,19 @@ fn process_matches(pid: u32, recorded_start: Option<&str>, domain: Option<&str>)
         if domain.is_none_or(|d| d == "windows" || d.starts_with("win32"))
             && let Some(recorded) = recorded_start.filter(|r| !r.is_empty())
         {
-            return match (win::parse_start(recorded), win::creation_epoch_secs(pid)) {
-                (Some(want), Some(have)) => (want - have).abs() <= 2.0,
-                _ => false,
-            };
+            return Some(
+                match (win::parse_start(recorded), win::creation_epoch_secs(pid)) {
+                    (Some(want), Some(have)) => (want - have).abs() <= 2.0,
+                    _ => false,
+                },
+            );
         }
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        let _ = (recorded_start, domain);
+        let _ = (pid, recorded_start, domain);
     }
-    true
+    None
 }
 
 struct SessionFiles {
@@ -182,11 +229,56 @@ fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
 }
 
-/// Validate a session's files and read what is needed to talk to it.
-fn open_session(pid: u32) -> Result<Result<SessionFiles, String>, BridgeError> {
+/// A start time or domain as text, from a JSON string or integer.
+pub(super) fn text_of(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| value.as_u64().map(|n| n.to_string()))
+        .filter(|s| !s.is_empty())
+}
+
+/// What the roster saw of a chat: the delivery must find the same chat, started at
+/// the same time, in the same pid domain.
+struct Expected {
+    session_id: String,
+    start: Option<String>,
+    domain: Option<String>,
+}
+
+fn expectation(session: &LocalSession) -> Expected {
+    Expected {
+        session_id: session.id.clone(),
+        start: text_of(&session.raw["procStart"]),
+        domain: text_of(&session.raw["pidDomain"]),
+    }
+}
+
+/// The recorded process start in a key file (`procStart` on macOS, `procStartFt` on Windows).
+fn key_start(key: &Value) -> Option<String> {
+    text_of(&key["procStart"]).or_else(|| text_of(&key["procStartFt"]))
+}
+
+/// Validate a session's files against what the roster listed and read what is
+/// needed to talk to it. A registry or key file that now describes another session id,
+/// start time or pid domain is refused, so a reused pid never receives the message.
+fn open_session(
+    pid: u32,
+    expected: &Expected,
+) -> Result<Result<SessionFiles, String>, BridgeError> {
     let dir = sessions_dir();
     let info = read_json(&dir.join(format!("{pid}.json")))
         .ok_or_else(|| shim::gone("This chat is no longer running."))?;
+    let changed = || shim::gone("That chat's process now belongs to a different session.");
+    if info["sessionId"].as_str() != Some(expected.session_id.as_str()) {
+        return Err(changed());
+    }
+    let info_start = text_of(&info["procStart"]);
+    if let (Some(want), Some(have)) = (&expected.start, &info_start)
+        && want != have
+    {
+        return Err(changed());
+    }
     let protocol = info["peerProtocol"].as_u64().unwrap_or(0);
     if protocol != PEER_PROTOCOL {
         return Ok(Err(format!(
@@ -198,37 +290,50 @@ fn open_session(pid: u32) -> Result<Result<SessionFiles, String>, BridgeError> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| shim::gone("This chat has no messaging socket."))?
         .to_string();
-    // The key file name carries a hash Pulse can't predict: take the one for this pid.
+    // The key file name carries a hash Pulse can't predict. Several generations can coexist
+    // for one pid: take the one whose recorded start matches this session's, never just the
+    // first filename.
+    let start = expected.start.clone().or(info_start);
     let prefix = format!("{pid}.");
-    let key_file = std::fs::read_dir(&dir)
+    let mut keys: Vec<(PathBuf, Value)> = std::fs::read_dir(&dir)
         .ok()
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .find(|p| {
+        .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".key"))
         })
-        .ok_or_else(|| shim::gone("This chat's key file is missing."))?;
-    let key =
-        read_json(&key_file).ok_or_else(|| shim::gone("This chat's key file is unreadable."))?;
+        .filter_map(|p| read_json(&p).map(|k| (p, k)))
+        .collect();
+    if keys.is_empty() {
+        return Err(shim::gone("This chat's key file is missing or unreadable."));
+    }
+    let key = match &start {
+        Some(start) => {
+            keys.retain(|(_, k)| key_start(k).as_deref() == Some(start.as_str()));
+            keys.into_iter().next()
+        }
+        None if keys.len() == 1 => keys.into_iter().next(),
+        None => None,
+    }
+    .map(|(_, k)| k)
+    .ok_or_else(|| shim::gone("This chat's key file is for another generation of the process."))?;
+    let key_domain = text_of(&key["pidDomain"]);
+    if let (Some(want), Some(have)) = (&expected.domain, &key_domain)
+        && want != have
+    {
+        return Err(changed());
+    }
     let token = key["peerToken"]
         .as_str()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| shim::gone("This chat's key file has no token."))?
         .to_string();
-    // Claude's key file says `procStart` on macOS (ctime text, UTC) and `procStartFt` on
-    // Windows (a FILETIME integer); the session file carries `procStart` on both.
-    let start: Option<String> = [&key["procStart"], &key["procStartFt"], &info["procStart"]]
-        .into_iter()
-        .find_map(|v| {
-            v.as_str()
-                .map(str::to_string)
-                .or_else(|| v.as_u64().map(|n| n.to_string()))
-        });
-    if !process_matches(pid, start.as_deref(), key["pidDomain"].as_str()) {
+    let domain = expected.domain.clone().or(key_domain);
+    if !process_matches(pid, start.as_deref(), domain.as_deref()) {
         return Err(shim::gone(
             "This chat has closed (its process is gone or was replaced).",
         ));
@@ -244,6 +349,8 @@ fn connect(path: &str) -> std::io::Result<(Writer, Reader)> {
     use std::os::unix::net::UnixStream;
     let stream = UnixStream::connect(path)?;
     stream.set_write_timeout(Some(ACK_WINDOW))?;
+    // Short reads let the ACK reader check its absolute deadline.
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
     let reader = stream.try_clone()?;
     Ok((Box::new(stream), Box::new(reader)))
 }
@@ -264,7 +371,8 @@ fn connect(_path: &str) -> std::io::Result<(Writer, Reader)> {
 
 enum Verdict {
     Delivered(String),
-    Held(String),
+    /// Accepted or held by the chat's own queue; consumption is not confirmed.
+    Queued(String),
     Refused(String),
     AuthRejected(String),
     Protocol(String),
@@ -296,7 +404,14 @@ fn classify(frame: &Value) -> Option<Verdict> {
         return None;
     }
     if action == "peer_message_hold" || action.contains("hold") {
-        return Some(Verdict::Held(reason));
+        return Some(Verdict::Queued(format!(
+            "held by the chat's own queue{}",
+            if reason.is_empty() {
+                String::new()
+            } else {
+                format!(": {reason}")
+            }
+        )));
     }
     if action.contains("refus") || action.contains("reject") {
         return Some(Verdict::Refused(reason));
@@ -308,10 +423,11 @@ fn classify(frame: &Value) -> Option<Verdict> {
             .unwrap_or("")
             .to_ascii_lowercase();
         return match status.as_str() {
-            "delivered" | "accepted" | "ok" | "queued" | "injected" | "received" => {
-                Some(Verdict::Delivered(reason))
-            }
-            "held" | "hold" => Some(Verdict::Held(reason)),
+            "delivered" | "injected" | "received" => Some(Verdict::Delivered(reason)),
+            "accepted" | "ok" | "queued" => Some(Verdict::Queued(reason)),
+            "held" | "hold" => Some(Verdict::Queued(format!(
+                "held by the chat's own queue: {reason}"
+            ))),
             "refused" | "rejected" | "declined" | "denied" | "blocked" => {
                 Some(Verdict::Refused(reason))
             }
@@ -337,13 +453,15 @@ fn attr_safe(value: &str) -> String {
 }
 
 /// The content a chat sees: the text inside the wrapper tag the real client
-/// uses, with any wrapper tag inside the text neutralised.
+/// uses, with any wrapper tag inside the text neutralised. The sender attributes
+/// are labels the sending side chose; `provenance` says they are not verified.
 fn wrap_content(from: &str, session: &str, name: &str, text: &str) -> String {
     let text = text
         .replace(TAG_OPEN, "&lt;cross-session-message")
         .replace(TAG_CLOSE, "&lt;/cross-session-message>");
     format!(
-        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bypass\">\n{text}\n{TAG_CLOSE}",
+        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bridge\" \
+         provenance=\"agent-unverified\">\n{text}\n{TAG_CLOSE}",
         attr_safe(from),
         attr_safe(session),
         attr_safe(name),
@@ -406,15 +524,16 @@ pub fn deliver_via(
     reply_socket: Option<&str>,
 ) -> Result<Receipt, BridgeError> {
     let pid = shim::session_pid(session);
-    let files = match open_session(pid)? {
+    let files = match open_session(pid, &expectation(session))? {
         Ok(files) => files,
         Err(reason) => return Ok(shim::unsupported(&reason)),
     };
     let peer_key = shim::env_peer_key(env);
     let peer_key = peer_key.as_str();
-    let from = reply_socket
-        .map(str::to_string)
-        .or_else(|| current_hub().and_then(|hub| hub.address_for(peer_key)));
+    let route = match reply_socket {
+        Some(address) => ReplyRoute::Listening(address.to_string()),
+        None => reply_route(peer_key),
+    };
     let short: String = peer_key
         .chars()
         .filter(char::is_ascii_alphanumeric)
@@ -422,14 +541,22 @@ pub fn deliver_via(
         .collect();
     let sender = format!("{} via Pulse", shim::env_from_name(env));
     let session_id = format!("pulse-{short}");
-    // A frame without a reply address is dropped by the chat without a word. While
-    // no hub listens (so no reply address exists), a stable placeholder keeps the
-    // message deliverable; a chat that answers it gets no reply socket and uses
-    // `pulse bridge send` instead, as the skill says.
-    let reply_from = Some(match from {
-        Some(address) => format!("uds:{address}"),
-        None if cfg!(windows) => r"uds:\\.\pipe\pulse-bridge-noreply".to_string(),
-        None => "uds:/tmp/pulse-bridge-noreply.sock".to_string(),
+    // A frame without a reply address is dropped by the chat without a word. When no
+    // reply route exists, a stable placeholder is advertised so the message is still
+    // deliverable; the receipt says replies are unavailable, and a chat that answers
+    // the placeholder reaches nobody.
+    let mut reply_note: Option<String> = None;
+    let reply_from = Some(match route {
+        ReplyRoute::Listening(address) => format!("uds:{address}"),
+        ReplyRoute::Unavailable(why) => {
+            eprintln!("pulse bridge: reply route unavailable ({why}); advertising a placeholder");
+            reply_note = Some(format!("Replies are unavailable ({why})."));
+            if cfg!(windows) {
+                r"uds:\\.\pipe\pulse-bridge-noreply".to_string()
+            } else {
+                "uds:/tmp/pulse-bridge-noreply.sock".to_string()
+            }
+        }
     });
     let content = wrap_content(
         reply_from.as_deref().unwrap_or(""),
@@ -481,34 +608,45 @@ pub fn deliver_via(
     }
 
     let (tx, rx) = mpsc::channel::<Value>();
-    // Ends when the chat closes the connection; a stuck chat leaves one idle thread behind.
+    // Ends at the chat's close, after 10 s or after 64 KiB, whichever comes first.
     std::thread::spawn(move || {
-        for line in BufReader::new(reader).lines() {
-            let Ok(line) = line else { break };
-            if let Ok(frame) = serde_json::from_str::<Value>(&line)
-                && tx.send(frame).is_err()
-            {
-                break;
-            }
-        }
+        read_lines(
+            reader,
+            Instant::now() + ACK_DEADLINE,
+            ACK_MAX_BYTES,
+            true,
+            |line| match serde_json::from_str::<Value>(line.trim()) {
+                Ok(frame) => tx.send(frame).is_ok(),
+                Err(_) => true,
+            },
+        );
     });
     let deadline = Instant::now() + ACK_WINDOW;
     let mut heard_anything = false;
+    let finish = |receipt: Receipt| -> Receipt {
+        match &reply_note {
+            Some(note) => Receipt {
+                detail: format!("{} {note}", receipt.detail).trim().to_string(),
+                ..receipt
+            },
+            None => receipt,
+        }
+    };
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(left) {
             Ok(frame) => {
                 heard_anything = true;
                 match classify(&frame) {
-                    Some(Verdict::Delivered(r)) => return Ok(shim::delivered(&r)),
-                    Some(Verdict::Held(r)) => return Ok(shim::held(&r)),
+                    Some(Verdict::Delivered(r)) => return Ok(finish(shim::delivered(&r))),
+                    Some(Verdict::Queued(r)) => return Ok(finish(shim::queued(&r))),
                     Some(Verdict::Refused(r)) => {
                         let r = if r.is_empty() {
                             "refused by that session's settings".to_string()
                         } else {
                             r
                         };
-                        return Ok(shim::refused(&r));
+                        return Ok(finish(shim::refused(&r)));
                     }
                     Some(Verdict::Protocol(r)) => return Ok(shim::unsupported(&r)),
                     Some(Verdict::AuthRejected(r)) => return Err(shim::auth_rejected(&r)),
@@ -516,15 +654,15 @@ pub fn deliver_via(
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                return Ok(shim::delivered(
-                    "Sent; the chat sent no control frame (silence is normal).",
-                ));
+                return Ok(finish(shim::sent(
+                    "Sent; the chat gave no verdict (silence is normal), so it is unconfirmed.",
+                )));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return if heard_anything || !cfg!(windows) {
-                    Ok(shim::delivered(
+                    Ok(finish(shim::sent(
                         "Sent; the chat closed the connection without a verdict.",
-                    ))
+                    )))
                 } else {
                     Err(shim::auth_rejected(
                         "The chat closed the connection right after the handshake.",
@@ -532,6 +670,41 @@ pub fn deliver_via(
                 };
             }
         }
+    }
+}
+
+/// Lines from `reader` until `deadline`, end of input, an error, `cap` bytes, or
+/// `on_line` returning false. With `retry_idle`, a read timeout is not an end.
+fn read_lines(
+    mut reader: impl Read,
+    deadline: Instant,
+    cap: usize,
+    retry_idle: bool,
+    mut on_line: impl FnMut(&str) -> bool,
+) {
+    use std::io::ErrorKind::{Interrupted, TimedOut, WouldBlock};
+    let mut chunk = [0u8; 4096];
+    let mut pending: Vec<u8> = Vec::new();
+    let mut total = 0usize;
+    while Instant::now() < deadline && total < cap {
+        let n = match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == Interrupted => continue,
+            Err(e) if retry_idle && matches!(e.kind(), TimedOut | WouldBlock) => continue,
+            Err(_) => break,
+        };
+        total += n;
+        pending.extend_from_slice(&chunk[..n]);
+        while let Some(end) = pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if !on_line(&String::from_utf8_lossy(&line)) {
+                return;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        on_line(&String::from_utf8_lossy(&pending));
     }
 }
 
@@ -545,7 +718,11 @@ pub struct ReplyMessage {
     pub from_session_id: String,
     pub from_name: String,
     pub text: String,
+    /// The frame's own message id.
     pub msg_id: String,
+    /// The id of the message being answered, when the frame names one (`in_reply_to`,
+    /// `reply_to` or `replyTo`; Claude's peer protocol is not known to send any).
+    pub in_reply_to: Option<String>,
 }
 
 type OnReply = Arc<dyn Fn(ReplyMessage) + Send + Sync>;
@@ -559,7 +736,68 @@ pub struct ReplyHub {
     is_known: IsKnown,
     stop: Arc<AtomicBool>,
     paths: Mutex<HashMap<String, String>>,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
+
+/// Where a reply to a bridged message will arrive, or why it can't.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplyRoute {
+    /// A socket (named pipe on Windows) this process listens on.
+    Listening(String),
+    /// No reply route could be made; the reason.
+    Unavailable(String),
+}
+
+/// Open reply connections across every hub, and the guard that counts one.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+static OPEN_REPLIES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+struct ConnectionSlot;
+
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+impl ConnectionSlot {
+    /// A slot, or None (logged) when 64 connections are already open.
+    fn take() -> Option<ConnectionSlot> {
+        let taken = OPEN_REPLIES
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < MAX_REPLY_CONNECTIONS).then_some(n + 1)
+            })
+            .is_ok();
+        if taken {
+            Some(ConnectionSlot)
+        } else {
+            eprintln!("pulse bridge: too many open reply connections; refusing one");
+            None
+        }
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        OPEN_REPLIES.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Wait up to `limit` for the threads to end; one still running is left behind.
+fn join_bounded(handles: Vec<std::thread::JoinHandle<()>>, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    for handle in handles {
+        while !handle.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Which listener generation owns each Unix socket path, so a stopped listener never
+/// unlinks the socket a newer one bound at the same path.
+#[cfg(unix)]
+static LISTENERS: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
+#[cfg(unix)]
+static LISTENER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 static HUB: OnceLock<Mutex<Option<Arc<ReplyHub>>>> = OnceLock::new();
 
@@ -569,11 +807,13 @@ fn hub_slot() -> &'static Mutex<Option<Arc<ReplyHub>>> {
 
 /// The hub `deliver` takes reply addresses from. The hub sets it while sharing runs.
 pub fn set_reply_hub(hub: Option<Arc<ReplyHub>>) {
-    if let Ok(mut slot) = hub_slot().lock() {
-        if let Some(old) = slot.take() {
-            old.stop();
-        }
-        *slot = hub;
+    let old = match hub_slot().lock() {
+        Ok(mut slot) => std::mem::replace(&mut *slot, hub),
+        Err(_) => return,
+    };
+    // Stopped outside the lock: it waits for the old listeners' threads.
+    if let Some(old) = old {
+        old.stop();
     }
 }
 
@@ -603,6 +843,14 @@ pub fn reply_address(peer_key: &str) -> Option<String> {
     current_hub()?.address_for(peer_key)
 }
 
+/// `reply_address` that says why there is no route.
+pub fn reply_route(peer_key: &str) -> ReplyRoute {
+    match current_hub() {
+        Some(hub) => hub.route_for(peer_key),
+        None => ReplyRoute::Unavailable("no reply hub is running".to_string()),
+    }
+}
+
 /// Where the reply socket for one remote peer lives: a short path in a private
 /// per-user directory (Unix socket paths are limited to about 100 bytes).
 pub fn reply_socket_path(peer_key: &str) -> PathBuf {
@@ -625,43 +873,71 @@ impl ReplyHub {
             is_known,
             stop: Arc::new(AtomicBool::new(false)),
             paths: Mutex::new(HashMap::new()),
+            threads: Mutex::new(Vec::new()),
         })
     }
 
+    /// Stop listening and wait up to two seconds for the listener threads, which
+    /// remove their own sockets (only if still theirs) as they end.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        let handles = self
+            .threads
+            .lock()
+            .map(|mut t| std::mem::take(&mut *t))
+            .unwrap_or_default();
+        join_bounded(handles, STOP_JOIN);
     }
 
     /// The socket path replies from this peer's messages should go to, listening
-    /// on it first. None when this system can't listen.
+    /// on it first. None when no reply route can be made (see `route_for`).
     pub fn address_for(self: &Arc<Self>, peer_key: &str) -> Option<String> {
+        match self.route_for(peer_key) {
+            ReplyRoute::Listening(address) => Some(address),
+            ReplyRoute::Unavailable(_) => None,
+        }
+    }
+
+    /// `address_for`, saying why when the hub can't listen.
+    pub fn route_for(self: &Arc<Self>, peer_key: &str) -> ReplyRoute {
+        if self.stop.load(Ordering::Relaxed) {
+            return ReplyRoute::Unavailable("the reply hub is stopped".to_string());
+        }
         #[cfg(unix)]
         {
-            let mut paths = self.paths.lock().ok()?;
+            let Ok(mut paths) = self.paths.lock() else {
+                return ReplyRoute::Unavailable("the reply hub is unusable".to_string());
+            };
             if let Some(path) = paths.get(peer_key) {
-                return Some(path.clone());
+                return ReplyRoute::Listening(path.clone());
             }
             let path = reply_socket_path(peer_key);
-            self.listen(peer_key.to_string(), &path).ok()?;
+            if let Err(e) = self.listen(peer_key.to_string(), &path) {
+                return ReplyRoute::Unavailable(format!("couldn't listen: {}", e.kind()));
+            }
             let text = path.to_string_lossy().into_owned();
             paths.insert(peer_key.to_string(), text.clone());
-            Some(text)
+            ReplyRoute::Listening(text)
         }
         #[cfg(windows)]
         {
-            let mut paths = self.paths.lock().ok()?;
+            let Ok(mut paths) = self.paths.lock() else {
+                return ReplyRoute::Unavailable("the reply hub is unusable".to_string());
+            };
             if let Some(name) = paths.get(peer_key) {
-                return Some(name.clone());
+                return ReplyRoute::Listening(name.clone());
             }
             let name = reply_pipe_name(peer_key);
-            self.listen_pipe(peer_key.to_string(), &name).ok()?;
+            if let Err(e) = self.listen_pipe(peer_key.to_string(), &name) {
+                return ReplyRoute::Unavailable(format!("couldn't listen: {}", e.kind()));
+            }
             paths.insert(peer_key.to_string(), name.clone());
-            Some(name)
+            ReplyRoute::Listening(name)
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = peer_key;
-            None
+            ReplyRoute::Unavailable("this system can't listen".to_string())
         }
     }
 
@@ -673,7 +949,7 @@ impl ReplyHub {
         let descriptor = win::descriptor()?;
         let first = win::create_instance(&wide, &descriptor, true)?;
         let hub = Arc::clone(self);
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let mut waiting = Some(first);
             while !hub.stop.load(Ordering::Relaxed) {
                 let pipe = match waiting.take() {
@@ -688,9 +964,14 @@ impl ReplyHub {
                 };
                 match win::accept(&pipe, &hub.stop) {
                     win::Accepted::Connected => {
+                        let Some(slot) = ConnectionSlot::take() else {
+                            win::disconnect(&pipe);
+                            continue;
+                        };
                         let hub = Arc::clone(&hub);
                         let key = peer_key.clone();
                         std::thread::spawn(move || {
+                            let _slot = slot;
                             let pipe = Arc::new(pipe);
                             hub.handle_lines(win::PipeReader::server(Arc::clone(&pipe)), &key);
                             win::disconnect(&pipe);
@@ -705,6 +986,9 @@ impl ReplyHub {
                 }
             }
         });
+        if let Ok(mut threads) = self.threads.lock() {
+            threads.push(handle);
+        }
         Ok(())
     }
 
@@ -716,28 +1000,51 @@ impl ReplyHub {
             std::fs::create_dir_all(dir)?;
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
-        let _ = std::fs::remove_file(path);
-        let listener = UnixListener::bind(path)?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        listener.set_nonblocking(true)?;
+        // The registry lock is held from claiming the path to binding it, so an older
+        // listener's cleanup never sees the new socket as its own.
+        let generation = LISTENER_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let listener = {
+            let mut owners = LISTENERS.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = std::fs::remove_file(path);
+            let listener = UnixListener::bind(path)?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            listener.set_nonblocking(true)?;
+            owners.retain(|(p, _)| p != path);
+            owners.push((path.to_path_buf(), generation));
+            listener
+        };
         let hub = Arc::clone(self);
         let path = path.to_path_buf();
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             while !hub.stop.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let Some(slot) = ConnectionSlot::take() else {
+                            continue;
+                        };
                         let hub = Arc::clone(&hub);
                         let key = peer_key.clone();
-                        std::thread::spawn(move || hub.handle(stream, &key));
+                        std::thread::spawn(move || {
+                            let _slot = slot;
+                            hub.handle(stream, &key);
+                        });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(200));
+                        std::thread::sleep(Duration::from_millis(100));
                     }
                     Err(_) => std::thread::sleep(Duration::from_millis(500)),
                 }
             }
-            let _ = std::fs::remove_file(&path);
+            // Unlink only a socket this generation still owns.
+            let mut owners = LISTENERS.lock().unwrap_or_else(|e| e.into_inner());
+            if owners.iter().any(|(p, g)| *p == path && *g == generation) {
+                owners.retain(|(p, _)| *p != path);
+                let _ = std::fs::remove_file(&path);
+            }
         });
+        if let Ok(mut threads) = self.threads.lock() {
+            threads.push(handle);
+        }
         Ok(())
     }
 
@@ -751,40 +1058,52 @@ impl ReplyHub {
     /// Frames from one connection, as `ReplyMessage`s for known local chats.
     #[cfg(any(unix, windows))]
     fn handle_lines(&self, reader: impl Read, peer_key: &str) {
-        for line in BufReader::new(reader.take(MAX_REPLY_BYTES)).lines() {
-            let Ok(line) = line else { break };
-            let Ok(frame) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            // The auth frame, if any, is ignored: what counts is that the sender is a known local chat.
-            if frame["type"] != "user" {
-                continue;
-            }
-            let Some(raw) = content_text(&frame["message"]["content"]) else {
-                continue;
-            };
-            let (attrs, text) = parse_wrapper(&raw).unwrap_or_default();
-            let text = if attrs.is_empty() { raw } else { text };
-            let pick = |attr: &str, field: &str| {
-                attrs
-                    .get(attr)
-                    .filter(|v| !v.is_empty())
-                    .cloned()
-                    .or_else(|| frame[field].as_str().map(str::to_string))
-                    .unwrap_or_default()
-            };
-            let from_session_id = pick("from-session", "from_session_id");
-            if from_session_id.is_empty() || !(self.is_known)(&from_session_id) || text.is_empty() {
-                continue;
-            }
-            (self.on_reply)(ReplyMessage {
-                peer_key: peer_key.to_string(),
-                from_session_id,
-                from_name: pick("from-name", "from_name"),
-                text,
-                msg_id: frame["msg_id"].as_str().unwrap_or("").to_string(),
-            });
+        let deadline = Instant::now() + REPLY_DEADLINE;
+        read_lines(reader, deadline, MAX_REPLY_BYTES, false, |line| {
+            self.handle_line(line, peer_key);
+            !self.stop.load(Ordering::Relaxed)
+        });
+    }
+
+    /// One frame, as a `ReplyMessage` when it is from a known local chat.
+    #[cfg(any(unix, windows))]
+    fn handle_line(&self, line: &str, peer_key: &str) {
+        let Ok(frame) = serde_json::from_str::<Value>(line.trim()) else {
+            return;
+        };
+        // The auth frame, if any, is ignored: what counts is that the sender is a known local chat.
+        if frame["type"] != "user" {
+            return;
         }
+        let Some(raw) = content_text(&frame["message"]["content"]) else {
+            return;
+        };
+        let (attrs, text) = parse_wrapper(&raw).unwrap_or_default();
+        let text = if attrs.is_empty() { raw } else { text };
+        let pick = |attr: &str, field: &str| {
+            attrs
+                .get(attr)
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .or_else(|| frame[field].as_str().map(str::to_string))
+                .unwrap_or_default()
+        };
+        let from_session_id = pick("from-session", "from_session_id");
+        if from_session_id.is_empty() || !(self.is_known)(&from_session_id) || text.is_empty() {
+            return;
+        }
+        (self.on_reply)(ReplyMessage {
+            peer_key: peer_key.to_string(),
+            from_session_id,
+            from_name: pick("from-name", "from_name"),
+            text,
+            msg_id: frame["msg_id"].as_str().unwrap_or("").to_string(),
+            in_reply_to: ["in_reply_to", "reply_to", "replyTo"]
+                .iter()
+                .find_map(|k| frame[*k].as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_string),
+        });
     }
 }
 

@@ -9,6 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const VERSION: u32 = 2;
 /// Largest `body`, in bytes.
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
+/// Largest encoded envelope: a body of control characters grows sixfold as JSON.
+pub const MAX_ENCODED_BYTES: usize = MAX_BODY_BYTES * 6 + 2048;
+/// Largest `device`, `session`, `name` or `id`, in bytes.
+pub const MAX_META_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnvelopeError {
@@ -16,6 +20,8 @@ pub enum EnvelopeError {
     Version,
     #[error("message body is larger than 64 KiB")]
     Oversize,
+    #[error("an envelope field is longer than 256 bytes")]
+    MetaOversize,
     #[error("malformed envelope: {0}")]
     Malformed(String),
 }
@@ -55,6 +61,36 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// `text` cut to at most `max` bytes at a character boundary.
+fn truncate_bytes(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// A label made safe to print in guidance for a chat: letters, digits, spaces and
+/// `. , _ -` only (anything else becomes a space), whitespace squashed, at most `max`
+/// characters. It cannot hold quotes, shell syntax or markup.
+pub fn plain_label(text: &str, max: usize) -> String {
+    let mapped: String = text
+        .chars()
+        .map(|c| match c {
+            c if c.is_alphanumeric() => c,
+            '.' | ',' | '_' | '-' => c,
+            _ => ' ',
+        })
+        .collect();
+    mapped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
+}
+
 /// A random version 4 UUID.
 pub fn new_uuid() -> String {
     let hex = proto::random_hex(16);
@@ -87,14 +123,38 @@ impl Envelope {
         if body.len() > MAX_BODY_BYTES {
             return Err(EnvelopeError::Oversize);
         }
-        Ok(Envelope {
+        // The sender's own labels are cut to size; the receiver rejects anything longer.
+        let from = Sender {
+            device: truncate_bytes(&from.device, MAX_META_BYTES),
+            session: truncate_bytes(&from.session, MAX_META_BYTES),
+            name: truncate_bytes(&from.name, MAX_META_BYTES),
+        };
+        let envelope = Envelope {
             v: VERSION,
             id: new_uuid(),
             ts: now_ms(),
             from,
             to,
             body,
-        })
+        };
+        envelope.check_meta()?;
+        Ok(envelope)
+    }
+
+    /// Every metadata field is at most 256 bytes.
+    pub fn check_meta(&self) -> Result<(), EnvelopeError> {
+        let fields = [
+            &self.id,
+            &self.from.device,
+            &self.from.session,
+            &self.from.name,
+            &self.to.device,
+            &self.to.session,
+        ];
+        if fields.iter().any(|f| f.len() > MAX_META_BYTES) {
+            return Err(EnvelopeError::MetaOversize);
+        }
+        Ok(())
     }
 
     pub fn to_json(&self) -> String {
@@ -103,7 +163,7 @@ impl Envelope {
 
     /// Parse and check version and size.
     pub fn from_json(text: &str) -> Result<Envelope, EnvelopeError> {
-        if text.len() > MAX_BODY_BYTES * 2 {
+        if text.len() > MAX_ENCODED_BYTES {
             return Err(EnvelopeError::Oversize);
         }
         let env: Envelope =
@@ -114,6 +174,7 @@ impl Envelope {
         if env.body.len() > MAX_BODY_BYTES {
             return Err(EnvelopeError::Oversize);
         }
+        env.check_meta()?;
         if env.id.is_empty() || env.to.session.is_empty() {
             return Err(EnvelopeError::Malformed("missing id or target".to_string()));
         }

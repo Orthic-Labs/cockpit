@@ -22,6 +22,7 @@ fn entry(session: &str, name: &str) -> RosterEntry {
         cwd: String::new(),
         status: "idle".into(),
         updated_ms: None,
+        liveness: "unknown".into(),
     }
 }
 
@@ -31,6 +32,7 @@ fn remote(device: &str, chats: Vec<RosterEntry>) -> RemoteChats {
             device: device.into(),
             ssh: "fake".into(),
             pulse: "pulse".into(),
+            ..Default::default()
         },
         listing: Ok(RemoteListing {
             device: device.into(),
@@ -261,6 +263,7 @@ fn windows_replies(
         cwd: String::new(),
         status: "idle".into(),
         updated_ms: None,
+        liveness: "unknown".into(),
         pid: Some(pid),
         messaging_socket: None,
         peer_protocol: Some(1),
@@ -417,6 +420,7 @@ fn journey() {
             device: "B".into(),
             ssh: "fake".into(),
             pulse: pulse.into(),
+            ..Default::default()
         },
     )
     .expect("link B");

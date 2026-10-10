@@ -19,8 +19,9 @@ export interface ShareState {
     enabled: boolean;
     active?: boolean;
     localChats?: number;
-    links?: { device: string; ssh: string; chats: number | null; error: string | null }[];
-    chats?: { name: string; kind: "claude" | "codex"; status: string; device: string; local: boolean; cwd?: string; updatedMs?: number | null }[];
+    links?: { device: string; ssh: string; chats: number | null; error: string | null; lastOkMs?: number | null; lastErrorMs?: number | null }[];
+    activity?: { sentMs?: number; receivedMs?: number; sent?: number; received?: number; lastOutcome?: string | null };
+    chats?: { name: string; kind: "claude" | "codex"; status: string; device: string; local: boolean; cwd?: string; updatedMs?: number | null; liveness?: string; unread?: number; evicted?: number }[];
     lastError?: string | null;
     device?: string;
   };
@@ -98,10 +99,21 @@ function AgentBridge({ share }: { share: ShareState | null }) {
   if (!enabled) status = "Off.";
   else {
     const local = bridge?.localChats ?? 0;
-    const links = (bridge?.links ?? []).map((l) =>
-      l.error ? `${l.device}: ${l.error}` : `${l.chats ?? 0} on ${l.device}`);
+    const links = (bridge?.links ?? []).map((l) => {
+      if (l.error) {
+        const since = l.lastErrorMs ? `offline ${ageText(l.lastErrorMs)}` : "offline";
+        return `${l.device}: ${since}: ${l.error}`;
+      }
+      const ok = l.lastOkMs ? `, ok ${ageText(l.lastOkMs)}` : "";
+      return `${l.chats ?? 0} on ${l.device}${ok}`;
+    });
     status = [`${local} ${local === 1 ? "chat" : "chats"} here.`, ...links.map((t) => `${t}.`)].join(" ");
   }
+
+  const activity = bridge?.activity;
+  const outcome = activity?.sentMs
+    ? `Last message: ${activity.lastOutcome ?? "delivered"} · ${ageText(activity.sentMs)} ago`
+    : null;
 
   return (
     <>
@@ -130,6 +142,7 @@ function AgentBridge({ share }: { share: ShareState | null }) {
       <div className={bridge?.lastError ? "error" : "ck-sub ck-foot"} role="status">
         {bridge?.lastError ?? status}
       </div>
+      {enabled && outcome && <div className="ck-sub ck-foot" role="status">{outcome}</div>}
       {enabled && (bridge?.chats?.length ?? 0) > 0 && <ChatList chats={bridge!.chats!} />}
     </>
   );
@@ -156,8 +169,15 @@ function ChatRow({ c, kind }: { c: Chat; kind: "claude" | "codex" }) {
       <span className="ck-chats-folder" title={cwd || undefined}>{folder}</span>
       <span className="ck-chats-when">
         {c.updatedMs ? <span className="ck-chats-age">{ageText(c.updatedMs)} ago</span> : null}
-        <span className={`ck-chats-status ck-chats-status-${c.status}`}>{c.status}</span>
+        <span className={`ck-chats-status ck-chats-status-${c.status}`}>
+          {c.status}{c.liveness ? ` · ${c.liveness}` : ""}
+        </span>
       </span>
+      {c.local && ((c.unread ?? 0) > 0 || (c.evicted ?? 0) > 0) && (
+        <span className="ck-sub ck-chats-inbox">
+          Inbox: {c.unread ?? 0} unread{(c.evicted ?? 0) > 0 ? `, ${c.evicted} evicted` : ""}
+        </span>
+      )}
     </li>
   );
 }
