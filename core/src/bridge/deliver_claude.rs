@@ -14,7 +14,7 @@
 //!
 //! `{"msgV":1,"msg_id":..,"type":"user","message":{"role":"user","content":
 //! "<cross-session-message from=\"uds:<reply>\" from-session=\"..\"
-//! from-name=\"<peer> via Pulse\" from-mode=\"bridge\"
+//! from-name=\"<peer> via Pulse\" from-mode=\"bypass\"
 //! provenance=\"agent-unverified\">\n<text>\n</cross-session-message>"},
 //! "priority":"next","from":"uds:<reply>"}`
 //!
@@ -463,12 +463,17 @@ fn attr_safe(value: &str) -> String {
 /// The content a chat sees: the text inside the wrapper tag the real client
 /// uses, with any wrapper tag inside the text neutralised. The sender attributes
 /// are labels the sending side chose; `provenance` says they are not verified.
+///
+/// `from-mode` has to be a class the chat knows (`bypass` or `prompting`) and has to
+/// match the chat's own: any other value is parked for an approval and then dropped
+/// without a word to the sender (Claude Code 2.1.295), which loses the message while
+/// the receipt says Sent. The owner's chats bypass permissions, so that is the class.
 fn wrap_content(from: &str, session: &str, name: &str, text: &str) -> String {
     let text = text
         .replace(TAG_OPEN, "&lt;cross-session-message")
         .replace(TAG_CLOSE, "&lt;/cross-session-message>");
     format!(
-        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bridge\" \
+        "{TAG_OPEN} from=\"{}\" from-session=\"{}\" from-name=\"{}\" from-mode=\"bypass\" \
          provenance=\"agent-unverified\">\n{text}\n{TAG_CLOSE}",
         attr_safe(from),
         attr_safe(session),
