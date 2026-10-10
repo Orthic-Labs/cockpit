@@ -1276,7 +1276,18 @@ fn crawl_section(ctl: &Control, sec: &Section, surface: &str, shots: &Path, comm
         let rest_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
         let _ = ctl.move_to(x, y);
         std::thread::sleep(Duration::from_millis(120));
-        let hover_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
+        let mut hover_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
+        if hover_sig == rest_sig {
+            // Live lists (Monitor's processes) re-render between the two reads and can move
+            // the control under the pointer; one more settle and read before calling it unchanged.
+            std::thread::sleep(Duration::from_millis(200));
+            let again = ctl.eval(&probe_js).unwrap_or(Value::Null);
+            if let (Some(x2), Some(y2)) = (again["x"].as_f64(), again["y"].as_f64()) {
+                let _ = ctl.move_to(x2, y2);
+                std::thread::sleep(Duration::from_millis(120));
+            }
+            hover_sig = ctl.eval(&sig_js).unwrap_or(Value::Null);
+        }
         let hover_png = shots.join(name("hover"));
         if ctl.screenshot_to(&hover_png).is_ok() {
             entry["hover"] = json!(name("hover"));
