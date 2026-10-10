@@ -267,9 +267,11 @@ fn peers(local: bool, machine: bool) -> Result<(), String> {
         let now = bridge::envelope::now_ms();
         for state in link_states(&store) {
             if !state.online() && state.last_error.is_some() {
-                let since = state.age_ms(now).map_or("never reached".to_string(), |age| {
-                    format!("offline {}", since_text(age))
-                });
+                let since = state
+                    .age_ms(now)
+                    .map_or("never reached".to_string(), |age| {
+                        format!("offline {}", since_text(age))
+                    });
                 println!("{}\t{since}", state.device);
             }
         }
@@ -437,9 +439,11 @@ fn status(machine: bool) -> Result<(), String> {
     let now = bridge::envelope::now_ms();
     for state in link_states(&store) {
         if let Some(error) = &state.last_error {
-            let seen = state.age_ms(now).map_or("never reached".to_string(), |age| {
-                format!("last reached {} ago", since_text(age))
-            });
+            let seen = state
+                .age_ms(now)
+                .map_or("never reached".to_string(), |age| {
+                    format!("last reached {} ago", since_text(age))
+                });
             println!("{}: {seen}; last error: {error}", state.device);
         }
     }

@@ -246,6 +246,7 @@ fn secure_chain(dir: &Path) -> io::Result<()> {
 }
 
 fn file_opts() -> fs::OpenOptions {
+    #[allow(unused_mut)] // only unix adds options
     let mut opts = fs::OpenOptions::new();
     #[cfg(unix)]
     {

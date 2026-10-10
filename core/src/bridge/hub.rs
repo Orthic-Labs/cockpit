@@ -434,7 +434,10 @@ fn retry_outbound(store: &Store) {
         }
         let result = match link_for(store, &env.to.device) {
             Some(link) => post_reply(store, &link, &env),
-            None => Err(format!("No link named {} to send a reply over.", env.to.device)),
+            None => Err(format!(
+                "No link named {} to send a reply over.",
+                env.to.device
+            )),
         };
         let mut st = state();
         st.outbound_inflight.remove(&env.id);
@@ -667,7 +670,9 @@ pub fn status() -> Status {
         .sessions
         .iter()
         .map(|s| {
-            let detail = store().map(|st| st.unread_detail(&s.id)).unwrap_or_default();
+            let detail = store()
+                .map(|st| st.unread_detail(&s.id))
+                .unwrap_or_default();
             StatusChat {
                 name: s.name.clone(),
                 kind: s.kind.clone(),

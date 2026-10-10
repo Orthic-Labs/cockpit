@@ -662,8 +662,10 @@ pub fn plan_for(root: &Path, only: Option<&BTreeSet<String>>) -> Result<Plan, Sy
         let best_rank = holders.iter().map(|(_, r)| r.rank).max();
         let best_ts = holders.iter().map(|(_, r)| r.ts).max();
         if let Some(best_rank) = best_rank {
-            let newest: Vec<&(usize, &Rec)> =
-                holders.iter().filter(|(_, r)| r.rank == best_rank).collect();
+            let newest: Vec<&(usize, &Rec)> = holders
+                .iter()
+                .filter(|(_, r)| r.rank == best_rank)
+                .collect();
             let distinct: BTreeSet<(u64, u64)> = newest
                 .iter()
                 .map(|(_, r)| (r.sig.size, r.sig.hash))

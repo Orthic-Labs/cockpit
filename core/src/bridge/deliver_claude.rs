@@ -327,6 +327,14 @@ fn open_session(
     {
         return Err(changed());
     }
+    // With no start recorded in the registry, the key's own recorded start is the only
+    // generation evidence: it must still match the live process (a reused pid does not).
+    if start.is_none()
+        && let Some(recorded) = key_start(&key)
+        && start_identity(pid, Some(&recorded), key_domain.as_deref()) == Some(false)
+    {
+        return Err(changed());
+    }
     let token = key["peerToken"]
         .as_str()
         .filter(|t| !t.is_empty())
