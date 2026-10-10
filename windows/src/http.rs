@@ -11,6 +11,10 @@ const FLAG_SECURE: u32 = 0x0080_0000;
 const QUERY_STATUS_CODE: u32 = 19;
 const QUERY_CONTENT_LENGTH: u32 = 5;
 const QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
+/// `WINHTTP_QUERY_CUSTOM`: the header named by the `name` argument.
+const QUERY_CUSTOM: u32 = 65_535;
+/// A server-directed delay longer than this is not believed (a day).
+const RETRY_AFTER_MAX_SECONDS: u64 = 24 * 3600;
 /// `dwHeadersLength` value meaning "the header string is NUL-terminated".
 const HEADERS_NUL_TERMINATED: u32 = u32::MAX;
 const MAX_BODY_BYTES: usize = 512 * 1024;
@@ -79,6 +83,8 @@ unsafe extern "system" {
 pub struct Response {
     pub status: u32,
     pub body: Vec<u8>,
+    /// The server's `Retry-After` in seconds (the numeric form), when it sent one.
+    pub retry_after: Option<u64>,
 }
 
 /// Failure stage only: nothing request-specific (URL, headers) is carried.
@@ -229,6 +235,53 @@ fn read_chunk(request: &Handle, buffer: &mut [u8]) -> Result<usize, HttpError> {
     }
 }
 
+/// The text of one response header, or `None` when the response has none.
+fn header_text(request: &Handle, name: &str) -> Option<String> {
+    let name_w = wide(name);
+    let mut len = 0u32;
+    // SAFETY: size probe with a null buffer; the call reports the needed byte count in `len`
+    // (and fails with "insufficient buffer", which is expected and ignored).
+    let _ = unsafe {
+        WinHttpQueryHeaders(
+            request.0,
+            QUERY_CUSTOM,
+            PCWSTR(name_w.as_ptr()),
+            std::ptr::null_mut(),
+            &mut len,
+            std::ptr::null_mut(),
+        )
+    };
+    if len == 0 || len > 512 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (len as usize).div_ceil(2) + 1];
+    let mut capacity = (buffer.len() * 2) as u32;
+    // SAFETY: `buffer` is valid for `capacity` bytes; the name outlives the call.
+    let found = unsafe {
+        WinHttpQueryHeaders(
+            request.0,
+            QUERY_CUSTOM,
+            PCWSTR(name_w.as_ptr()),
+            buffer.as_mut_ptr().cast(),
+            &mut capacity,
+            std::ptr::null_mut(),
+        )
+        .as_bool()
+    };
+    if !found {
+        return None;
+    }
+    let units = (capacity as usize / 2).min(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..units]))
+}
+
+/// `Retry-After` as whole seconds. The HTTP-date form is not read (a missing delay is
+/// handled like no header at all).
+fn retry_after(request: &Handle) -> Option<u64> {
+    let seconds: u64 = header_text(request, "Retry-After")?.trim().parse().ok()?;
+    Some(seconds.min(RETRY_AFTER_MAX_SECONDS))
+}
+
 /// HTTPS GET `https://{host}{path}` with the given request headers. Blocking; bounded by
 /// `timeout_ms` per network stage and by a body size cap.
 pub fn get(
@@ -250,9 +303,11 @@ pub fn get(
         }
         body.extend_from_slice(&chunk[..read]);
     }
+    let retry_after = retry_after(&exchange.request);
     Ok(Response {
         status: exchange.status,
         body,
+        retry_after,
     })
 }
 

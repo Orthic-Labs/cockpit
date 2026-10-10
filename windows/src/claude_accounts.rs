@@ -317,6 +317,69 @@ pub fn record(
     });
 }
 
+/// What the book holds for an account, shaped for the ring: the windows still in force, the
+/// plan and when the reading was taken.
+pub struct Saved {
+    pub plan: Option<String>,
+    pub windows: Vec<LimitWindow>,
+    pub captured_at: u64,
+}
+
+/// The account's last saved reading, restored when the notch starts so the ring is not empty
+/// until the first fetch. A window whose reset time has passed is dropped (its percentage is
+/// no longer true); `None` when nothing is left.
+pub fn last_reading(id: &str, now: u64) -> Option<Saved> {
+    with_book(|book| {
+        let entry = book.entries.iter().find(|e| e.id == id)?;
+        let windows: Vec<LimitWindow> = entry
+            .windows
+            .iter()
+            .filter(|w| w.resets_at > now)
+            .map(|w| {
+                let key = match w.seconds {
+                    Some(SESSION_SECONDS) => "session".to_string(),
+                    Some(WEEK_SECONDS) if w.label == "All models" => "weekly_all".to_string(),
+                    Some(WEEK_SECONDS) => {
+                        format!("weekly_{}", w.label.to_lowercase().replace(' ', "_"))
+                    }
+                    _ => w.label.to_lowercase().replace(' ', "_"),
+                };
+                LimitWindow {
+                    key,
+                    group: None,
+                    label: w.label.clone(),
+                    fraction: w.used.clamp(0.0, 1.0) as f32,
+                    resets_at: Some(w.resets_at),
+                }
+            })
+            .collect();
+        (!windows.is_empty()).then(|| Saved {
+            plan: entry.plan.clone(),
+            windows,
+            captured_at: entry.captured_at,
+        })
+    })
+}
+
+/// "Forget reading": drops what was read for the account. A named account keeps its name;
+/// an unnamed one leaves the book (an account folder on disk lists again as unread).
+pub fn clear_reading(id: &str) {
+    with_book(|book| {
+        let Some(index) = book.entries.iter().position(|e| e.id == id) else {
+            return;
+        };
+        if book.entries[index].custom_name.is_some() {
+            let entry = &mut book.entries[index];
+            entry.windows.clear();
+            entry.plan = None;
+            entry.captured_at = 0;
+        } else {
+            book.entries.remove(index);
+        }
+        save(&book.entries);
+    });
+}
+
 /// An empty name returns the account to its default name. An account with no entry yet (a
 /// folder on disk, never read) gets one so the name sticks; an id that is neither saved nor
 /// on disk is ignored.

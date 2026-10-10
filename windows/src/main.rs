@@ -497,6 +497,9 @@ fn run_pill() -> Result<(), Error> {
         },
     );
     update::start(controller.key(), lock_state().settings.auto_update_check);
+    // The hub is the daemon: running from the notch's launch to its Quit, with or without
+    // Nearby sharing, started again if it exits.
+    hub::supervise();
     drive_health::start();
     let nearby = lock_state().settings.nearby_enabled;
     send::set_enabled(nearby);
@@ -958,7 +961,21 @@ fn monitor_id(info: &MONITORINFOEXW) -> String {
 
 /// Re-evaluate occupancy for every panel, show/hide on transitions, redraw when what is
 /// shown changed. Returns the cadence the timer should use.
+/// The notch's two dots from live state: red while a newer release is known, amber while a
+/// permission needs the user. True when either changed.
+fn refresh_badges() -> bool {
+    let next = Badges {
+        update: update::available(),
+        permissions: bridge::permissions_attention(),
+    };
+    let mut app = lock_state();
+    let changed = app.badges != next;
+    app.badges = next;
+    changed
+}
+
 fn refresh_panels(new_machine: Option<Machine>) -> u32 {
+    refresh_badges();
     let usage = usage::snapshot();
     let (targets, own, settings_visible, cadence) = {
         let mut app = lock_state();
@@ -2464,7 +2481,13 @@ extern "system" fn controller_proc(
                 return LRESULT(0);
             }
             update::MSG_UPDATE => {
+                // The red dot follows whether a newer release is known.
+                let badges_changed = refresh_badges();
                 sync_card();
+                if badges_changed {
+                    let interval = refresh_panels(None);
+                    arm_timer(hwnd, interval);
+                }
                 return LRESULT(0);
             }
             WM_TIMER if wparam.0 == FOLD_TIMER_ID => {

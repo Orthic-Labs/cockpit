@@ -812,7 +812,7 @@ function Accounts({ state, send }: { state: NotchState; send: Send }) {
               {a.usesKeychain && a.refusedAccess && (
                 <Button size="sm" variant="secondary" onClick={() => send({ command: "allowAccess", provider: a.id })}>Allow access…</Button>
               )}
-              {a.summary && !isWindows && (
+              {a.summary && (
                 <Button size="sm" variant="ghost" onClick={() => send({ command: "signOut", provider: a.id })}
                   title={`Clears what Pulse read. You stay signed in to ${a.name.split(" ")[0]} itself.`}>Forget reading</Button>
               )}

@@ -9,18 +9,26 @@
 //! deletes it, and publishes again.
 //!
 //! Commands with a Windows meaning: `set` (see `apply_set`), `connect`, `order`,
-//! `resetPosition`, `refresh` (repaint), `checkUpdates` and `quit`. Mac-only commands are
-//! ignored on purpose: `signIn`, `signOut`, `allowAccess` (Keychain sign-in), the three
-//! `preview*Alert` and `sendTestNotification` previews, `openAccessibilitySettings`,
+//! `resetPosition`, `refresh` (reads Claude and Codex now), `checkUpdates`, `installUpdate`,
+//! `forgetReading` (and the Mac's `signOut`, the same thing: clears what Pulse read for a
+//! provider), the account book's `renameClaudeAccount` / `forgetClaudeAccount`, and `quit`.
+//! Mac-only commands are ignored on purpose: `signIn`, `allowAccess` (Keychain sign-in), the
+//! three `preview*Alert` and `sendTestNotification` previews, `openAccessibilitySettings`,
 //! `permissionRequest`, `helperEnable`, `helperDisable`, `openLoginItems` (macOS permissions and
-//! the privileged helper), `installUpdate` (the update card installs) and `driveAlert` (the
-//! Windows drive health card reads the disks itself).
+//! the privileged helper) and `driveAlert` (the Windows drive health card reads the disks
+//! itself).
 
 use crate::settings::{self, Arg, Command, PillSettings};
-use crate::{autostart, claude_accounts, diag, installer, raii, send, shot, update, usage};
+use crate::{
+    autostart, claude_accounts, desktop, diag, installer, json, keys, raii, send, shot, update,
+    usage,
+};
 use std::ffi::c_void;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
 
@@ -37,6 +45,22 @@ pub const MSG_PLACEMENT_CHANGED: u32 = 0x8002;
 /// Command files handled per pass; the rest wait for the next one.
 const MAX_COMMANDS: usize = 64;
 const PROVIDERS: [(&str, &str); 2] = [("claude", "Claude"), ("codex", "Codex")];
+/// How long the permission rows are reused before the registry is read again.
+const PERMISSIONS_TTL: Duration = Duration::from_secs(10);
+const SHARE_STATE_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The Permissions rows the notch reports: what the hub's own Windows checks answer
+/// (`granted`, `needsApproval`, `off`, `unknown`).
+#[derive(Clone, Copy, PartialEq)]
+struct Permissions {
+    startup: &'static str,
+    notifications: &'static str,
+    firewall: &'static str,
+}
+
+static PERMISSIONS: Mutex<Option<(Instant, bool, Permissions)>> = Mutex::new(None);
+/// A permission needs the user: the notch's amber dot.
+static ATTENTION: AtomicBool = AtomicBool::new(false);
 
 #[allow(non_snake_case, clashing_extern_declarations)]
 #[link(name = "kernel32")]
@@ -63,6 +87,54 @@ pub struct Hooks {
     /// Device name of the primary monitor: the edge published for the hub's Edge control is
     /// that monitor's.
     pub primary_monitor: fn() -> Option<String>,
+}
+
+/// Windows Firewall for Nearby sharing, as the hub's share service reports it
+/// (`share-state.json` `localNetwork`); "off" while sharing is off.
+fn firewall_status(nearby: bool) -> &'static str {
+    if !nearby {
+        return "off";
+    }
+    let state = pulse_dir()
+        .and_then(|dir| desktop::read_bounded(&dir.join("share-state.json"), SHARE_STATE_MAX_BYTES))
+        .and_then(|bytes| json::parse(&bytes, SHARE_STATE_MAX_BYTES as usize));
+    match state
+        .as_ref()
+        .and_then(|root| root.get("localNetwork"))
+        .and_then(json::Value::as_str)
+    {
+        Some("granted") => "granted",
+        Some("blocked") => "needsApproval",
+        _ => "unknown",
+    }
+}
+
+/// The permission rows, read from the system at most every ten seconds (and again at once
+/// when sharing is switched on or off).
+fn permissions(nearby: bool) -> Permissions {
+    let mut cached = PERMISSIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((at, was_nearby, rows)) = *cached
+        && was_nearby == nearby
+        && at.elapsed() < PERMISSIONS_TTL
+    {
+        return rows;
+    }
+    let rows = Permissions {
+        startup: autostart::startup_status(),
+        notifications: autostart::notifications_status(),
+        firewall: firewall_status(nearby),
+    };
+    *cached = Some((Instant::now(), nearby, rows));
+    ATTENTION.store(
+        rows.notifications == "needsApproval" || rows.firewall == "needsApproval",
+        Ordering::Relaxed,
+    );
+    rows
+}
+
+/// A permission is denied or unknown to the system: the notch shows its amber dot.
+pub fn permissions_attention() -> bool {
+    ATTENTION.load(Ordering::Relaxed)
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -128,9 +200,15 @@ fn worker(controller_key: isize, hooks: &Hooks) {
     let _ = fs::create_dir_all(&commands);
     let event = open_event(COMMAND_EVENT);
     let mut last = String::new();
+    let mut attention = false;
     loop {
         let applied = drain(&commands, controller_key, hooks);
         publish(&dir, hooks, &mut last, applied);
+        // The permission rows were just read: the notch's amber dot follows them.
+        if permissions_attention() != attention {
+            attention = permissions_attention();
+            repaint(controller_key);
+        }
         // SAFETY: a live event handle owned by this thread for the process lifetime; a zero
         // handle just makes the wait fail at once, so sleep instead to keep the polling pace.
         if event == 0 {
@@ -229,6 +307,31 @@ fn visibility(settings: &PillSettings) -> &'static str {
     }
 }
 
+/// What the hub's account row says when there is no reading: the way to sign in (Pulse never
+/// signs in itself; it reads the login the tool keeps), or where the reading stands.
+fn sign_in_guidance(id: &str, reading: &usage::Usage) -> String {
+    let (tool, how) = if id == "claude" {
+        (
+            "Claude",
+            "Sign in to Claude Code (run claude, then /login) or open Claude Desktop and sign in.",
+        )
+    } else {
+        ("Codex", "Sign in with codex login in a terminal.")
+    };
+    match reading.status {
+        usage::Status::SignIn => {
+            format!("{how} Pulse reads that login; it never signs in itself.")
+        }
+        usage::Status::Expired => {
+            format!("The {tool} sign-in expired. Open {tool} once to refresh it; Pulse then reads it again.")
+        }
+        usage::Status::AccessDenied => format!(
+            "Windows refused Pulse access to the saved {tool} login. Fix the file's permissions."
+        ),
+        _ => reading.summary(),
+    }
+}
+
 /// The snapshot in the Mac's shape (`product`, `settings`, `accounts`, `providerOrder`,
 /// `permissions`, `updates`, ...). Mac key names carry the settings that exist on both; the
 /// Windows-only ones keep their `pill-settings.json` names.
@@ -318,14 +421,20 @@ fn state_json(hooks: &Hooks) -> String {
         esc(&mut out, id);
         out.push_str(",\"name\":");
         esc(&mut out, name);
+        // A reading exists: its line is the summary (and "Forget reading" applies). With none,
+        // the hub shows the sign-in guidance instead, as for an account the Mac has no
+        // reading for.
+        let has_reading = !reading.windows.is_empty() || reading.status == usage::Status::Ok;
         out.push_str(&format!(
             ",\"connected\":{connected},\"usesKeychain\":false,\"refusedAccess\":{},\"needsRenewal\":{},\"signInExplanation\":",
             reading.status == usage::Status::AccessDenied,
             reading.status == usage::Status::Expired,
         ));
-        esc(&mut out, &reading.summary());
-        out.push_str(",\"summary\":");
-        esc(&mut out, &reading.summary());
+        esc(&mut out, &sign_in_guidance(id, reading));
+        if has_reading {
+            out.push_str(",\"summary\":");
+            esc(&mut out, &reading.summary());
+        }
         out.push_str(",\"label\":null,\"plan\":");
         opt_text(&mut out, reading.plan.as_deref());
         out.push_str(",\"limits\":[");
@@ -342,13 +451,19 @@ fn state_json(hooks: &Hooks) -> String {
             };
             esc(&mut out, &label);
             out.push_str(&format!(
-                ",\"usedFraction\":{}}}",
+                ",\"usedFraction\":{}",
                 if window.fraction.is_finite() {
                     window.fraction
                 } else {
                     0.0
                 }
             ));
+            // The window's length, as on the Mac, so the hub and the CLI can tell a
+            // 5-hour window from a weekly one.
+            if let Some(seconds) = window.seconds() {
+                out.push_str(&format!(",\"seconds\":{seconds}"));
+            }
+            out.push('}');
         }
         out.push(']');
         // The hub's Accounts list of every Claude account on this PC.
@@ -365,14 +480,14 @@ fn state_json(hooks: &Hooks) -> String {
         }
         esc(&mut out, id);
     }
-    // The hub reads the system itself for notifications and the firewall (its own Windows
-    // rows); the notch only knows what it set up.
+    // The same checks the hub's own Permissions page makes (hub `permissions.rs` and the
+    // share service's `localNetwork`): startup entry, toasts, Windows Firewall for sharing.
     out.push_str("],\"permissions\":[");
-    let startup = if s.launch_at_login { "granted" } else { "off" };
+    let rows = permissions(s.nearby_enabled);
     let rows = [
-        ("startup", startup),
-        ("notifications", "unknown"),
-        ("firewall", "unknown"),
+        ("startup", rows.startup),
+        ("notifications", rows.notifications),
+        ("firewall", rows.firewall),
     ];
     for (index, (id, status)) in rows.iter().enumerate() {
         if index > 0 {
@@ -382,9 +497,9 @@ fn state_json(hooks: &Hooks) -> String {
             "{{\"id\":\"{id}\",\"status\":\"{status}\",\"required\":false}}"
         ));
     }
-    out.push_str("],\"permissionErrors\":{},\"updates\":{\"current\":");
-    esc(&mut out, update::current_version());
-    out.push_str(&format!(",\"autoCheck\":{}}}}}\n", s.auto_update_check));
+    out.push_str("],\"permissionErrors\":{},\"updates\":");
+    out.push_str(&update::hub_json());
+    out.push_str("}\n");
     out
 }
 
@@ -443,9 +558,24 @@ fn apply(command: &Command, controller_key: isize, hooks: &Hooks) {
                 commit(before, next, writable, controller_key, hooks);
             }
         }
-        // Repaint from the current readings.
-        "refresh" => repaint(controller_key),
+        // Read both providers now (the Mac's `.fromSource` refresh), then repaint as they land.
+        "refresh" => {
+            usage::refresh_now();
+            repaint(controller_key);
+        }
         "checkUpdates" => (hooks.check_updates)(),
+        "installUpdate" => update::install_now(),
+        // Clears what Pulse read for the provider; the next poll reads it again.
+        "forgetReading" | "signOut" => {
+            if let Some(provider) = provider_id(command).and_then(|id| {
+                usage::Provider::ALL
+                    .into_iter()
+                    .find(|p| p.name().eq_ignore_ascii_case(id))
+            }) {
+                usage::forget(provider);
+                repaint(controller_key);
+            }
+        }
         "quit" => {
             // SAFETY: posting to a window handle that may have gone is harmless.
             let _ = unsafe {
@@ -481,8 +611,16 @@ fn commit(
     }
     // Set before the commit: saving reads the live value back from `shot`.
     shot::set_save_to_desktop(next.screenshot_to_desktop);
-    // `mac_shortcuts`, `screenshot_shortcuts` and `auto_update_check` are saved here and read
-    // when the notch next starts (their workers take them as start arguments).
+    // Both keyboard features and the update schedule change at once, without a restart: the
+    // hook is installed or removed, the screenshot thread started or stopped.
+    if next.mac_shortcuts != before.mac_shortcuts
+        || next.screenshot_shortcuts != before.screenshot_shortcuts
+    {
+        keys::apply(next.mac_shortcuts, next.screenshot_shortcuts);
+    }
+    if next.auto_update_check != before.auto_update_check {
+        update::set_auto(next.auto_update_check);
+    }
     let placement_changed = next.edges != before.edges
         || next.edge_default != before.edge_default
         || next.positions != before.positions

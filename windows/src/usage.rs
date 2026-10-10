@@ -17,11 +17,15 @@ use crate::diag;
 use crate::http;
 use crate::json::{self, Value};
 use crate::raii::hwnd_from_key;
+use std::ffi::c_void;
+use std::io::Read;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{LPARAM, SYSTEMTIME, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 /// Posted to the controller window when a poll changed a reading (WM_APP + 1).
@@ -33,6 +37,8 @@ const CREDENTIAL_MAX_BYTES: usize = 64 * 1024;
 const RESPONSE_MAX_BYTES: usize = 512 * 1024;
 const BACKOFF_FLOOR_SECONDS: u64 = 60;
 const BACKOFF_CEILING_SECONDS: u64 = 15 * 60;
+/// The longest delay a server's `Retry-After` may impose.
+const SERVER_BACKOFF_CEILING_SECONDS: u64 = 6 * 3600;
 /// `~/.claude.json` carries project history and can be large; only its `oauthAccount` is read.
 const CLAUDE_CONFIG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -161,6 +167,32 @@ fn block_of(windows: &[LimitWindow]) -> Option<Block> {
     })
 }
 
+impl LimitWindow {
+    /// The window's length in seconds, from what names it: Claude's keys, or Codex's label
+    /// ("5h limit", "Weekly limit", "45m limit", "3d limit"). `None` when it says nothing.
+    pub fn seconds(&self) -> Option<u64> {
+        match self.key.as_str() {
+            "session" => return Some(5 * 3600),
+            key if key.starts_with("weekly") => return Some(7 * 24 * 3600),
+            _ => {}
+        }
+        match self.label.as_str() {
+            "Weekly limit" => return Some(7 * 24 * 3600),
+            "Monthly limit" => return Some(30 * 24 * 3600),
+            _ => {}
+        }
+        let body = self.label.strip_suffix(" limit")?;
+        let (count, unit) = body.split_at(body.find(|c: char| !c.is_ascii_digit())?);
+        let count: u64 = count.parse().ok()?;
+        match unit {
+            "m" => Some(count * 60),
+            "h" => Some(count * 3600),
+            "d" => Some(count * 24 * 3600),
+            _ => None,
+        }
+    }
+}
+
 impl Usage {
     pub const fn waiting() -> Self {
         Self {
@@ -180,9 +212,21 @@ impl Usage {
 
     /// One line saying where the reading stands, for the hub's account row.
     pub fn summary(&self) -> String {
-        match (&self.account, self.status) {
+        let text = match (&self.account, self.status) {
             (Some(name), Status::NoReading) => format!("No reading for {name} yet"),
             (_, status) => status.text().to_string(),
+        };
+        // A remembered or cached reading says how old it is, so it never passes for live.
+        match self.updated {
+            Some(updated) if !self.windows.is_empty() => {
+                let age = now_secs().saturating_sub(updated);
+                if self.status == Status::Ok && age < 120 {
+                    text
+                } else {
+                    format!("{text} (reading from {})", age_text(age))
+                }
+            }
+            _ => text,
         }
     }
 
@@ -214,6 +258,11 @@ static CONTROLLER: AtomicIsize = AtomicIsize::new(0);
 static FAST_UNTIL: AtomicU64 = AtomicU64::new(0);
 /// A Claude reading is wanted now rather than at the next poll.
 static REFETCH: AtomicBool = AtomicBool::new(false);
+/// "Refresh now": every provider is to be read at once.
+static REFRESH_ALL: AtomicBool = AtomicBool::new(false);
+/// The `Retry-After` seconds of the last 429 seen by `classify` (0: the server gave none).
+/// Written and read by the one polling thread, one provider at a time.
+static SERVER_RETRY: AtomicU64 = AtomicU64::new(0);
 /// How often Desktop's account is looked at between polls, and for how long after a restart
 /// the quicker pace applies.
 const WATCH_SECONDS: u64 = 3;
@@ -260,9 +309,48 @@ pub fn notify() {
 
 /// After Claude was reopened: read the Claude usage at once, and look at Desktop's account
 /// every second for a minute (the owner may be signing in to another account).
+/// "Refresh now" from the hub (the Mac's `refresh`): reads Claude and Codex at once. A
+/// provider inside its rate-limit back-off still waits it out, as on the Mac.
+pub fn refresh_now() {
+    REFRESH_ALL.store(true, Ordering::Relaxed);
+    // Taking the lock first means the polling thread is either before its check (and sees
+    // the flag) or already waiting (and is woken).
+    drop(STOP.0.lock().unwrap_or_else(PoisonError::into_inner));
+    STOP.1.notify_all();
+}
+
+/// "Forget reading": drops what Pulse read for a provider (the ring, the saved copy, the
+/// account book's entry for Claude). The next poll reads it again if the login is still there.
+pub fn forget(provider: Provider) {
+    USAGE.lock().unwrap_or_else(PoisonError::into_inner)[provider.index()] = Usage::waiting();
+    match provider {
+        Provider::Claude => {
+            if let Some(id) = claude_ids().active {
+                claude_accounts::clear_reading(&id);
+            }
+        }
+        Provider::Codex => {
+            if let Some(path) = last_codex_path() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    notify();
+}
+
 pub fn refetch_claude_soon() {
     FAST_UNTIL.store(now_secs() + FAST_WINDOW_SECONDS, Ordering::Relaxed);
     REFETCH.store(true, Ordering::Relaxed);
+}
+
+/// "3 min ago" style age for the hub's account line.
+fn age_text(seconds: u64) -> String {
+    match seconds {
+        0..=119 => "moments ago".to_string(),
+        120..=7199 => format!("{} min ago", seconds / 60),
+        7200..=172_799 => format!("{} h ago", seconds / 3600),
+        _ => format!("{} d ago", seconds / 86_400),
+    }
 }
 
 pub fn snapshot() -> [Usage; 2] {
@@ -302,7 +390,9 @@ fn wait(seconds: u64) -> bool {
     let guard = STOP.0.lock().unwrap_or_else(PoisonError::into_inner);
     let (guard, _) = STOP
         .1
-        .wait_timeout_while(guard, Duration::from_secs(seconds), |stopped| !*stopped)
+        .wait_timeout_while(guard, Duration::from_secs(seconds), |stopped| {
+            !*stopped && !REFRESH_ALL.load(Ordering::Relaxed)
+        })
         .unwrap_or_else(PoisonError::into_inner);
     !*guard
 }
@@ -346,6 +436,9 @@ fn pause() -> Pause {
         }) {
             return Pause::Stopped;
         }
+        if REFRESH_ALL.swap(false, Ordering::Relaxed) {
+            return Pause::Due;
+        }
         if REFETCH.swap(false, Ordering::Relaxed) {
             return Pause::Claude;
         }
@@ -362,6 +455,7 @@ fn pause() -> Pause {
 
 fn worker(controller_key: isize) {
     let mut trackers = [Tracker::default(), Tracker::default()];
+    let mut saved_backoff = restore(&mut trackers);
     let mut only_claude = false;
     loop {
         let now = now_secs();
@@ -376,6 +470,7 @@ fn worker(controller_key: isize) {
             if now < tracker.backoff_until && provider != Provider::Claude {
                 continue;
             }
+            SERVER_RETRY.store(0, Ordering::Relaxed);
             let outcome = match provider {
                 Provider::Claude => poll_claude(now, tracker),
                 Provider::Codex => Some(poll_codex(now)),
@@ -384,6 +479,14 @@ fn worker(controller_key: isize) {
                 continue;
             };
             let next = apply_outcome(provider, tracker, outcome, now);
+            // A back-off that began or ended is kept across a restart.
+            if saved_backoff[provider.index()] != tracker.backoff_until {
+                saved_backoff[provider.index()] = tracker.backoff_until;
+                save_backoff(saved_backoff);
+            }
+            if provider == Provider::Codex && next.status == Status::Ok {
+                save_last_codex(&next);
+            }
             let mut all = USAGE.lock().unwrap_or_else(PoisonError::into_inner);
             if all[provider.index()] != next {
                 diag::info(
@@ -414,6 +517,190 @@ fn worker(controller_key: isize) {
             Pause::Claude => only_claude = true,
         }
     }
+}
+
+// ------------------------------------------------------------------ across restarts
+
+fn data_dir() -> Option<PathBuf> {
+    let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    base.is_absolute().then(|| base.join("Pulse"))
+}
+
+fn last_codex_path() -> Option<PathBuf> {
+    Some(data_dir()?.join("codex-last-usage.json"))
+}
+
+fn backoff_path() -> Option<PathBuf> {
+    Some(data_dir()?.join("usage-backoff.txt"))
+}
+
+fn write_file(path: &Path, text: &str) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let temp = path.with_extension("tmp");
+    if std::fs::write(&temp, text.as_bytes()).is_ok() && std::fs::rename(&temp, path).is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+}
+
+fn json_str(out: &mut String, text: &str) {
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// The unix time each provider's rate-limit back-off ends (0: none), as saved last. The
+/// server's `Retry-After` is honoured across a restart this way, not only within a run.
+fn save_backoff(until: [u64; 2]) {
+    if let Some(path) = backoff_path() {
+        write_file(&path, &format!("claude={}\ncodex={}\n", until[0], until[1]));
+    }
+}
+
+fn load_backoff(now: u64) -> [u64; 2] {
+    let mut until = [0u64; 2];
+    let Some(text) = backoff_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return until;
+    };
+    for line in text.lines().take(4) {
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<u64>() else {
+            continue;
+        };
+        // A saved time further ahead than any back-off allows is not believed.
+        let value = if value > now + SERVER_BACKOFF_CEILING_SECONDS {
+            0
+        } else {
+            value
+        };
+        match name.trim() {
+            "claude" => until[0] = value,
+            "codex" => until[1] = value,
+            _ => {}
+        }
+    }
+    until
+}
+
+/// Codex's last good reading (Claude's lives in the account book, per account).
+fn save_last_codex(reading: &Usage) {
+    let (Some(path), Some(updated)) = (last_codex_path(), reading.updated) else {
+        return;
+    };
+    let mut out = format!("{{\"schema\":1,\"updated\":{updated},\"plan\":");
+    match &reading.plan {
+        Some(plan) => json_str(&mut out, plan),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\"windows\":[");
+    for (index, w) in reading.windows.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"key\":");
+        json_str(&mut out, &w.key);
+        out.push_str(",\"group\":");
+        match &w.group {
+            Some(group) => json_str(&mut out, group),
+            None => out.push_str("null"),
+        }
+        out.push_str(",\"label\":");
+        json_str(&mut out, &w.label);
+        out.push_str(&format!(",\"fraction\":{}", f64::from(w.fraction)));
+        if let Some(at) = w.resets_at {
+            out.push_str(&format!(",\"resetsAt\":{at}"));
+        }
+        out.push('}');
+    }
+    out.push_str("]}\n");
+    write_file(&path, &out);
+}
+
+fn load_last_codex(now: u64) -> Option<Usage> {
+    let bytes = desktop::read_bounded(&last_codex_path()?, 256 * 1024)?;
+    let root = json::parse(&bytes, 256 * 1024)?;
+    let updated = root.get("updated").and_then(Value::as_f64)? as u64;
+    let windows: Vec<LimitWindow> = root
+        .get("windows")?
+        .as_array()?
+        .iter()
+        .filter_map(|w| {
+            let resets_at = w.get("resetsAt").and_then(Value::as_f64).map(|at| at as u64);
+            // A window that has since reset says nothing true any more.
+            if resets_at.is_some_and(|at| at <= now) {
+                return None;
+            }
+            Some(LimitWindow {
+                key: w.get("key")?.as_str()?.to_string(),
+                group: w.get("group").and_then(Value::as_str).map(str::to_string),
+                label: w.get("label")?.as_str()?.to_string(),
+                fraction: (w.get("fraction")?.as_f64()? as f32).clamp(0.0, 1.0),
+                resets_at,
+            })
+        })
+        .collect();
+    if windows.is_empty() {
+        return None;
+    }
+    Some(Usage {
+        status: Status::Waiting,
+        plan: root.get("plan").and_then(Value::as_str).map(str::to_string),
+        windows,
+        updated: Some(updated),
+        ..Usage::waiting()
+    })
+}
+
+/// Start-up: open on what was known last time rather than on empty rings (the first poll
+/// confirms or replaces it, and a failed one keeps it, dimmed and dated), and carry the
+/// saved rate-limit back-off over. Returns the back-off times as saved.
+fn restore(trackers: &mut [Tracker; 2]) -> [u64; 2] {
+    let now = now_secs();
+    let until = load_backoff(now);
+    for (tracker, saved) in trackers.iter_mut().zip(until) {
+        if saved > now {
+            tracker.backoff_until = saved;
+            tracker.consecutive_rate_limits = 1;
+        }
+    }
+    let cli = claude_cli_account();
+    let desktop_account = desktop::signed_in_account();
+    let tracked = desktop_account.clone().or_else(|| cli.id.clone());
+    let claude = tracked
+        .as_deref()
+        .and_then(|id| claude_accounts::last_reading(id, now).map(|saved| (id, saved)));
+    let codex = load_last_codex(now);
+    let mut all = USAGE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((id, saved)) = claude {
+        all[0] = Usage {
+            status: Status::Waiting,
+            plan: saved.plan,
+            windows: saved.windows,
+            updated: Some(saved.captured_at),
+            // Claude Desktop's own account is named on the card, as for a live reading.
+            account: (cli.id.as_deref() != Some(id)).then(|| account_label(id)),
+            ..Usage::waiting()
+        };
+        // The first poll is for this same account, so it must not drop the reading.
+        trackers[0].account = Some(id.to_string());
+        trackers[0].account_seen = true;
+    }
+    if let Some(reading) = codex {
+        all[1] = reading;
+    }
+    drop(all);
+    notify();
+    until
 }
 
 enum Outcome {
@@ -488,8 +775,7 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
             // A 429 starts or extends the back-off. The same status passed on from inside a
             // back-off (to drop an old account's reading) is not a new 429.
             if status == Status::RateLimited && now >= tracker.backoff_until {
-                tracker.consecutive_rate_limits = tracker.consecutive_rate_limits.saturating_add(1);
-                tracker.backoff_until = now + backoff_seconds(tracker.consecutive_rate_limits);
+                start_backoff(tracker, now);
             }
             Usage {
                 status,
@@ -506,6 +792,19 @@ fn apply_outcome(provider: Provider, tracker: &mut Tracker, outcome: Outcome, no
             }
         }
     }
+}
+
+/// A 429 starts or extends the back-off: the server's own `Retry-After` when it sent one,
+/// else 60 s doubling per consecutive 429.
+fn start_backoff(tracker: &mut Tracker, now: u64) {
+    tracker.consecutive_rate_limits = tracker.consecutive_rate_limits.saturating_add(1);
+    let server = SERVER_RETRY.swap(0, Ordering::Relaxed);
+    let delay = if server > 0 {
+        server.clamp(BACKOFF_FLOOR_SECONDS, SERVER_BACKOFF_CEILING_SECONDS)
+    } else {
+        backoff_seconds(tracker.consecutive_rate_limits)
+    };
+    tracker.backoff_until = now + delay;
 }
 
 /// 60 s doubling per consecutive 429, capped at 15 min.
@@ -717,32 +1016,67 @@ fn poll_claude_for(now: u64, tracker: &mut Tracker, cli: &CliAccount) -> Option<
         return Some(desktop_only(id, now, tracker));
     }
     if now < tracker.backoff_until {
+        // Cache first (the Mac reads Desktop's cache ahead of the back-off check): the usage
+        // endpoint is resting, but Desktop's own file for this account may still answer.
+        if let Some(id) = desktop_account.as_deref()
+            && let Some(cached) = desktop_cache_outcome(id, now, tracker)
+        {
+            return Some(cached);
+        }
         return tracker
             .account_changed
             .then_some(Outcome::Failed(Status::RateLimited));
     }
     let mut outcome = poll_claude_endpoint(now);
+    if matches!(outcome, Outcome::Failed(Status::RateLimited)) {
+        // Begun here, not only when the failure is published: a cached or CLI reading below
+        // replaces this outcome, and the endpoint must still rest.
+        start_backoff(tracker, now);
+    }
     // Desktop runs as the same account Claude Code is signed into but the login cannot answer
-    // (typically an expired token): Desktop's cache for that account still can.
+    // (an expired token, or a 429 on this account): Desktop's cache for that account still
+    // can, and is shown (dated) instead of an error.
     if let Some(id) = desktop_account.as_deref()
         && matches!(
             outcome,
-            Outcome::Failed(Status::Expired | Status::SignIn | Status::Unavailable)
+            Outcome::Failed(
+                Status::Expired | Status::SignIn | Status::Unavailable | Status::RateLimited
+            )
         )
+        && let Some(cached) = desktop_cache_outcome(id, now, tracker)
     {
-        let organizations = desktop::organizations(id);
-        if let Ok(reading) = desktop::cached_usage(&organizations, now, tracker.account_since) {
-            outcome = Outcome::Fresh {
-                windows: reading.windows,
-                plan: None,
-                updated: reading.captured.min(now),
-                account: None,
-                endpoint: false,
-                extras: Extras::default(),
-            };
-        }
+        outcome = cached;
+    }
+    // Still nothing: ask `claude /usage` (the Mac's ClaudeUsageCLI), which answers off the
+    // credential Claude Code itself holds.
+    if matches!(
+        outcome,
+        Outcome::Failed(
+            Status::Expired
+                | Status::SignIn
+                | Status::Unavailable
+                | Status::AccessDenied
+                | Status::RateLimited
+        )
+    ) && let Some(reading) = claude_usage_cli(now)
+    {
+        outcome = reading;
     }
     Some(outcome)
+}
+
+/// Desktop's cached reading for `id` as a fresh outcome, when it has a usable one.
+fn desktop_cache_outcome(id: &str, now: u64, tracker: &Tracker) -> Option<Outcome> {
+    let organizations = desktop::organizations(id);
+    let reading = desktop::cached_usage(&organizations, now, tracker.account_since).ok()?;
+    Some(Outcome::Fresh {
+        windows: reading.windows,
+        plan: None,
+        updated: reading.captured.min(now),
+        account: None,
+        endpoint: false,
+        extras: Extras::default(),
+    })
 }
 
 /// The reading for a Desktop account Claude Code is not signed into: Desktop's cache or
@@ -799,6 +1133,244 @@ fn poll_claude_endpoint(now: u64) -> Outcome {
         },
         Err(status) => Outcome::Failed(status),
     }
+}
+
+// ------------------------------------------------------------------ claude /usage
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(20);
+const CLI_OUTPUT_MAX: u64 = 256 * 1024;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[allow(non_snake_case)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn TzSpecificLocalTimeToSystemTime(
+        zone: *const c_void,
+        local: *const SYSTEMTIME,
+        universal: *mut SYSTEMTIME,
+    ) -> i32;
+}
+
+/// Where Claude Code is installed: every absolute `PATH` entry, then its own install
+/// directories (the native installer, the npm global directory).
+fn claude_binary() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    if let Some(home) = home() {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join(".claude").join("local"));
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+        dirs.push(appdata.join("npm"));
+    }
+    dirs.into_iter()
+        .filter(|dir| dir.is_absolute())
+        .flat_map(|dir| [dir.join("claude.exe"), dir.join("claude.cmd")])
+        .find(|path| path.is_file())
+}
+
+/// Runs `claude --print /usage` from a scratch folder of its own and returns what it printed.
+/// No terminal, no MCP servers, no transcript; a timeout ends it.
+fn claude_usage_text() -> Option<String> {
+    let binary = claude_binary()?;
+    let scratch = data_dir()?.join("usage-scratch");
+    std::fs::create_dir_all(&scratch).ok()?;
+    let mut child = Command::new(binary)
+        .args([
+            "--print",
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "/usage",
+        ])
+        .current_dir(&scratch)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = (&mut stdout).take(CLI_OUTPUT_MAX).read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = std::time::Instant::now() + CLI_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            _ => {
+                // The reader is left to finish by itself: a child of the killed process may
+                // still hold the pipe.
+                let _ = child.kill();
+                let _ = child.wait();
+                diag::info("claude_usage_cli", &[("result", "timeout")]);
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        diag::info("claude_usage_cli", &[("result", "declined")]);
+        return None;
+    }
+    String::from_utf8(reader.join().ok()?).ok()
+}
+
+fn claude_usage_cli(now: u64) -> Option<Outcome> {
+    let text = claude_usage_text()?;
+    let windows = parse_cli_usage(&text, now);
+    if !windows.iter().any(|w| w.key == "session") {
+        diag::info("claude_usage_cli", &[("result", "unreadable")]);
+        return None;
+    }
+    Some(Outcome::Fresh {
+        windows,
+        plan: cli_plan(&text),
+        updated: now,
+        account: None,
+        endpoint: false,
+        extras: Extras::default(),
+    })
+}
+
+/// The named tier printed in the first lines, as printed.
+fn cli_plan(text: &str) -> Option<String> {
+    let head: String = text.lines().take(4).collect::<Vec<_>>().join("\n");
+    let lower = head.to_ascii_lowercase();
+    ["Max 20x", "Max 5x", "extra usage", "Max", "Pro", "Team"]
+        .iter()
+        .find(|phrase| lower.contains(&phrase.to_ascii_lowercase()))
+        .map(|phrase| (*phrase).to_string())
+}
+
+/// The lines `/usage` leads with:
+/// `Current session: 38% used · resets Sep 7 at 2:59pm (Asia/Jakarta)` and
+/// `Current week (all models): 4% used · resets ...`. The prose below them is ignored.
+fn parse_cli_usage(text: &str, now: u64) -> Vec<LimitWindow> {
+    let mut windows: Vec<LimitWindow> = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("Current ") else {
+            continue;
+        };
+        let (kind, body) = if let Some(body) = rest.strip_prefix("session:") {
+            ("session".to_string(), body)
+        } else if let Some((name, body)) = rest
+            .strip_prefix("week (")
+            .and_then(|week| week.split_once("):"))
+        {
+            let name = name.trim().to_lowercase();
+            let name = if name == "all models" {
+                "all".to_string()
+            } else {
+                name.replace(' ', "_")
+            };
+            (format!("weekly_{name}"), body)
+        } else {
+            continue;
+        };
+        if windows.iter().any(|w| w.key == kind) {
+            continue;
+        }
+        let body = body.trim_start();
+        let digits: String = body.chars().take_while(char::is_ascii_digit).collect();
+        let Ok(percent) = digits.parse::<f64>() else {
+            continue;
+        };
+        let Some(after) = body[digits.len()..]
+            .trim_start()
+            .strip_prefix('%')
+            .and_then(|a| a.trim_start().strip_prefix("used"))
+        else {
+            continue;
+        };
+        let resets_at = after
+            .split_once('\u{b7}')
+            .and_then(|(_, reset)| reset.trim().strip_prefix("resets"))
+            .and_then(|date| cli_reset_date(date.trim(), now));
+        windows.push(LimitWindow {
+            label: claude_label(&kind),
+            key: kind,
+            group: None,
+            fraction: percent_to_fraction(percent),
+            resets_at,
+        });
+    }
+    windows.sort_by_key(|w| claude_order(&w.key));
+    windows
+}
+
+/// `Sep 7 at 2:59pm (Asia/Jakarta)` or `Sep 7 at 3pm` as unix seconds. No year is printed:
+/// the candidate nearest `now` among last, this and next year is taken. The time is read as
+/// this PC's local time (the zone in brackets is the one `claude` itself ran in).
+fn cli_reset_date(text: &str, now: u64) -> Option<u64> {
+    let text = match text.rfind('(') {
+        Some(open) if text.ends_with(')') => text[..open].trim(),
+        _ => text.trim(),
+    };
+    let mut parts = text.split_whitespace();
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let name = parts.next()?;
+    let month = u16::try_from(
+        MONTHS
+            .iter()
+            .position(|month| month.eq_ignore_ascii_case(name))?,
+    )
+    .ok()?
+        + 1;
+    let day: u16 = parts.next()?.parse().ok()?;
+    if parts.next()? != "at" {
+        return None;
+    }
+    let clock = parts.next()?.to_ascii_lowercase();
+    let (clock, pm) = match (clock.strip_suffix("pm"), clock.strip_suffix("am")) {
+        (Some(c), _) => (c.to_string(), true),
+        (_, Some(c)) => (c.to_string(), false),
+        _ => return None,
+    };
+    let (hour, minute) = match clock.split_once(':') {
+        Some((h, m)) => (h.parse::<u16>().ok()?, m.parse::<u16>().ok()?),
+        None => (clock.parse::<u16>().ok()?, 0),
+    };
+    if !(1..=12).contains(&hour) || minute > 59 || !(1..=31).contains(&day) {
+        return None;
+    }
+    let hour = hour % 12 + if pm { 12 } else { 0 };
+    let this_year = civil_from_days(i64::try_from(now / 86_400).ok()?).0;
+    (this_year - 1..=this_year + 1)
+        .filter_map(|year| {
+            let local = SYSTEMTIME {
+                wYear: u16::try_from(year).ok()?,
+                wMonth: month,
+                wDay: day,
+                wHour: hour,
+                wMinute: minute,
+                ..SYSTEMTIME::default()
+            };
+            let mut utc = SYSTEMTIME::default();
+            // SAFETY: both pointers are to live SYSTEMTIMEs; a null zone means the current one.
+            let converted =
+                unsafe { TzSpecificLocalTimeToSystemTime(std::ptr::null(), &local, &mut utc) };
+            if converted == 0 {
+                return None;
+            }
+            let days = days_from_civil(
+                i64::from(utc.wYear),
+                i64::from(utc.wMonth),
+                i64::from(utc.wDay),
+            );
+            let seconds = days * 86_400
+                + i64::from(utc.wHour) * 3600
+                + i64::from(utc.wMinute) * 60
+                + i64::from(utc.wSecond);
+            u64::try_from(seconds).ok()
+        })
+        .min_by_key(|at| at.abs_diff(now))
 }
 
 fn poll_codex(now: u64) -> Outcome {
@@ -878,7 +1450,10 @@ fn classify(
     let response = response.map_err(|_| Status::Unavailable)?;
     match response.status {
         401 | 403 => Err(Status::SignIn),
-        429 => Err(Status::RateLimited),
+        429 => {
+            SERVER_RETRY.store(response.retry_after.unwrap_or(0), Ordering::Relaxed);
+            Err(Status::RateLimited)
+        }
         200..=299 => {
             let root =
                 json::parse(&response.body, RESPONSE_MAX_BYTES).ok_or(Status::Unavailable)?;

@@ -24,7 +24,7 @@
 
 use crate::{diag, shot};
 use std::mem::size_of;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
@@ -100,12 +100,13 @@ pub fn set_extra_handler(handler: ExtraHandler) -> bool {
     EXTRA.set(handler).is_ok()
 }
 
-pub struct Keys {
+/// The hook thread, stopped (WM_QUIT, join) when dropped.
+struct HookThread {
     thread_id: u32,
     join: Option<JoinHandle<()>>,
 }
 
-impl Drop for Keys {
+impl Drop for HookThread {
     fn drop(&mut self) {
         // The loop ends on WM_QUIT and then removes the hook.
         let _ = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
@@ -115,21 +116,69 @@ impl Drop for Keys {
     }
 }
 
-/// Starts the hook thread when at least one feature is on. None when nothing is enabled or
-/// the hook could not be installed (reported).
-pub fn start(mac_shortcuts: bool, screenshot_keys: bool) -> Option<Keys> {
-    if !mac_shortcuts && !screenshot_keys {
-        return None;
+/// What is running now: the hook (only while a feature needs it) and the screenshot thread.
+struct Running {
+    hook: Option<HookThread>,
+    shots: Option<shot::ShotThread>,
+}
+
+static RUNNING: Mutex<Running> = Mutex::new(Running {
+    hook: None,
+    shots: None,
+});
+
+/// Held by the notch for its lifetime; dropping it stops the hook, then the screenshot thread.
+pub struct Keys;
+
+impl Drop for Keys {
+    fn drop(&mut self) {
+        let mut running = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
+        // The hook stops first so it no longer posts to the screenshot thread.
+        running.hook = None;
+        running.shots = None;
     }
+}
+
+/// Starts the layer for the stored settings; `apply` changes it later, live.
+pub fn start(mac_shortcuts: bool, screenshot_keys: bool) -> Option<Keys> {
+    apply(mac_shortcuts, screenshot_keys);
+    Some(Keys)
+}
+
+/// Makes the layer match the two settings now, without a restart: the hook is installed when
+/// either feature is on and removed when both are off, and the screenshot thread runs only
+/// while screenshot shortcuts are on.
+pub fn apply(mac_shortcuts: bool, screenshot_keys: bool) {
+    let mut running = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
+    if screenshot_keys && running.shots.is_none() {
+        running.shots = shot::start();
+    }
+    let shots_on = screenshot_keys && running.shots.is_some();
     MAC_SHORTCUTS.store(mac_shortcuts, Ordering::Relaxed);
-    SCREENSHOT_KEYS.store(screenshot_keys, Ordering::Relaxed);
+    SCREENSHOT_KEYS.store(shots_on, Ordering::Relaxed);
+    if !shots_on && running.shots.is_some() {
+        // Hook flag is already off; no new request can arrive. Ends any open session too.
+        running.shots = None;
+    }
+    let want_hook = mac_shortcuts || shots_on;
+    if want_hook && running.hook.is_none() {
+        running.hook = start_hook();
+        if running.hook.is_none() {
+            diag::info("keys_hook_unavailable", &[]);
+        }
+    } else if !want_hook {
+        running.hook = None;
+    }
+}
+
+fn start_hook() -> Option<HookThread> {
     let (tx, rx) = mpsc::channel::<Option<u32>>();
     let join = thread::Builder::new()
         .name("pulse-keys".to_string())
         .spawn(move || hook_thread(&tx))
         .ok()?;
     match rx.recv() {
-        Ok(Some(thread_id)) => Some(Keys {
+        Ok(Some(thread_id)) => Some(HookThread {
             thread_id,
             join: Some(join),
         }),

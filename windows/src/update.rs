@@ -59,6 +59,20 @@ pub enum Phase {
     Installing,
 }
 
+/// What the hub's Updates group shows (`notch-state.json` `updates.status`). Unlike the card's
+/// `Phase`, it outlives the card: a failure stays until the next check or install.
+#[derive(Clone, Debug, PartialEq)]
+enum Stage {
+    Idle,
+    Checking,
+    UpToDate,
+    Available,
+    /// Share of the installer received, when the size is known.
+    Downloading(Option<f32>),
+    Installing,
+    Failed(String),
+}
+
 #[derive(Clone, Debug)]
 struct Release {
     version: String,
@@ -79,6 +93,9 @@ struct State {
     offered: Option<String>,
     last_attempt: u64,
     started: bool,
+    stage: Stage,
+    /// Unix seconds the last check finished (0: none since launch).
+    last_checked: u64,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -90,6 +107,8 @@ static STATE: Mutex<State> = Mutex::new(State {
     offered: None,
     last_attempt: 0,
     started: false,
+    stage: Stage::Idle,
+    last_checked: 0,
 });
 static STOP: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
@@ -110,6 +129,121 @@ fn notify() {
             )
         };
     }
+}
+
+/// The hub's view of the updater changed: republish `notch-state.json` now, and redraw the
+/// notch (the update dot follows `available`).
+fn changed() {
+    notify();
+    crate::bridge::wake();
+}
+
+/// A newer release is known (offered, postponed with Later, or failed to install): the
+/// notch's red update dot.
+pub fn available() -> bool {
+    state().release.is_some()
+}
+
+/// Turns the scheduled check on or off live (the hub's "Automatically check").
+pub fn set_auto(auto: bool) {
+    state().auto = auto;
+}
+
+/// The sentence a failure code stands for, shown by the hub.
+fn reason_text(code: &str) -> String {
+    match code {
+        "unreachable" => "GitHub could not be reached. Check the connection and try again.",
+        "rate_limited" => "GitHub is limiting update checks right now. Try again later.",
+        "bad_status" | "unreadable" | "no_tag" | "bad_version" => {
+            "GitHub's answer could not be read."
+        }
+        "no_installer" => "The latest release has no Windows installer.",
+        "foreign_host" => "The release points at an unexpected download host, so it was refused.",
+        "download_failed" => "The download failed. Try again.",
+        "size_mismatch" | "hash_mismatch" => {
+            "The download did not match the release, so it was discarded and nothing was installed."
+        }
+        "signature_invalid" => {
+            "The installer's signature is not valid, so nothing was installed."
+        }
+        "signer_mismatch" => {
+            "The installer is signed by a different publisher than this Pulse, so nothing was installed."
+        }
+        "cannot_run" => "The installer could not be started.",
+        "cannot_write" | "no_data_dir" | "no_updates_dir" | "cannot_read" | "cannot_rename" => {
+            "The installer could not be saved to disk."
+        }
+        _ => "Update failed.",
+    }
+    .to_string()
+}
+
+fn json_text(out: &mut String, text: &str) {
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` for unix seconds.
+fn iso8601(seconds: u64) -> String {
+    let (year, month, day) = crate::usage::civil_from_days((seconds / 86_400) as i64);
+    let rest = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// The `updates` object of `notch-state.json`, in the Mac's shape: `current`, `available`,
+/// `lastChecked`, `status` (idle, checking, upToDate, available, downloading, installing,
+/// failed), `message` (the reason, when failed), `progress` (0..1 while downloading) and
+/// `autoCheck`.
+pub fn hub_json() -> String {
+    let st = state();
+    let mut out = String::from("{\"current\":");
+    json_text(&mut out, current_version());
+    out.push_str(",\"available\":");
+    match &st.release {
+        Some(release) => json_text(&mut out, &release.version),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\"lastChecked\":");
+    if st.last_checked > 0 {
+        json_text(&mut out, &iso8601(st.last_checked));
+    } else {
+        out.push_str("null");
+    }
+    let name = match &st.stage {
+        Stage::Idle => "idle",
+        Stage::Checking => "checking",
+        Stage::UpToDate => "upToDate",
+        Stage::Available => "available",
+        Stage::Downloading(_) => "downloading",
+        Stage::Installing => "installing",
+        Stage::Failed(_) => "failed",
+    };
+    out.push_str(&format!(",\"status\":\"{name}\""));
+    match &st.stage {
+        Stage::Downloading(Some(share)) => {
+            out.push_str(&format!(",\"progress\":{}", f64::from(share.clamp(0.0, 1.0))));
+        }
+        Stage::Failed(message) => {
+            out.push_str(",\"message\":");
+            json_text(&mut out, message);
+        }
+        _ => {}
+    }
+    out.push_str(&format!(",\"autoCheck\":{}}}", st.auto));
+    out
 }
 
 pub fn current_version() -> &'static str {
@@ -299,7 +433,6 @@ pub fn stop() {
 }
 
 /// "Check now": asks GitHub regardless of the schedule and always offers a newer release.
-#[allow(dead_code)] // the hub's General "Check now" has no Windows command channel yet
 pub fn check_now() {
     let _ = std::thread::Builder::new()
         .name("pulse-update-check".into())
@@ -336,17 +469,21 @@ fn check(offering: bool) {
         }
         st.busy = true;
         st.last_attempt = now_secs();
+        st.stage = Stage::Checking;
         persist(&st);
     }
+    changed();
     let found = fetch_release();
     let mut offer = false;
     {
         let mut st = state();
         st.busy = false;
+        st.last_checked = now_secs();
         match found {
             Ok(Some(release)) => {
                 let version = release.version.clone();
                 st.release = Some(release);
+                st.stage = Stage::Available;
                 if st.prompt.is_none() && (offering || st.offered.as_deref() != Some(&version)) {
                     st.prompt = Some(Phase::Available);
                     st.offered = Some(version);
@@ -354,13 +491,21 @@ fn check(offering: bool) {
                     offer = true;
                 }
             }
-            Ok(None) => diag::info("update_check", &[("result", "up_to_date")]),
-            Err(reason) => diag::info("update_check", &[("result", "failed"), ("reason", reason)]),
+            Ok(None) => {
+                st.release = None;
+                st.stage = Stage::UpToDate;
+                diag::info("update_check", &[("result", "up_to_date")]);
+            }
+            Err(reason) => {
+                st.stage = Stage::Failed(reason_text(reason));
+                diag::info("update_check", &[("result", "failed"), ("reason", reason)]);
+            }
         }
     }
     if offer {
         notify();
     }
+    changed();
 }
 
 /// `Ok(Some)` for a newer release with an installer; `Ok(None)` when up to date.
@@ -454,9 +599,10 @@ fn install() {
         };
         st.busy = true;
         st.prompt = Some(Phase::Downloading(None));
+        st.stage = Stage::Downloading(None);
         release
     };
-    notify();
+    changed();
     let _ = std::thread::Builder::new()
         .name("pulse-update-install".into())
         .spawn(move || {
@@ -465,11 +611,14 @@ fn install() {
                     "update_install",
                     &[("result", "failed"), ("reason", reason)],
                 );
+                // The card closes, but the failure stays in the hub's Updates group with its
+                // reason, and the release stays so Update can be tried again.
                 let mut st = state();
                 st.busy = false;
                 st.prompt = None;
+                st.stage = Stage::Failed(reason_text(reason));
                 drop(st);
-                notify();
+                changed();
             }
         });
 }
@@ -479,8 +628,29 @@ fn set_phase(phase: Phase) {
     if st.prompt.is_some() {
         st.prompt = Some(phase);
     }
+    st.stage = match phase {
+        Phase::Available => Stage::Available,
+        Phase::Downloading(share) => Stage::Downloading(share),
+        Phase::Preparing => Stage::Downloading(Some(1.0)),
+        Phase::Installing => Stage::Installing,
+    };
     drop(st);
-    notify();
+    changed();
+}
+
+/// The hub's "Update" (`installUpdate`): installs the release a check found, with the same
+/// steps and checks as the card's Update.
+pub fn install_now() {
+    {
+        let mut st = state();
+        if st.busy || st.release.is_none() {
+            return;
+        }
+        if st.prompt.is_none() {
+            st.prompt = Some(Phase::Available);
+        }
+    }
+    install();
 }
 
 fn run_install(release: &Release) -> Result<(), &'static str> {
