@@ -86,6 +86,9 @@ struct Transfer {
     saved_files: Vec<String>,
     error: Option<String>,
     message: Option<String>,
+    /// The sender pasted it: on arrival it goes onto this PC's clipboard. The hub only
+    /// publishes true for a sender it has proven.
+    clipboard: bool,
 }
 
 impl Transfer {
@@ -184,6 +187,7 @@ fn parse_state(bytes: &[u8]) -> Option<State> {
                     .collect(),
                 error: text(t, "error"),
                 message: text(t, "message"),
+                clipboard: t.get("clipboard").and_then(Value::as_bool).unwrap_or(false),
             })
         })
         .collect();
@@ -1038,6 +1042,42 @@ impl Model {
 
     fn announce(&mut self, transfer: &Transfer, folder: Option<&str>) {
         match (transfer.direction.as_str(), transfer.state.as_str()) {
+            ("receive", "done") if transfer.clipboard => {
+                // A paste from the other computer: straight onto the clipboard, no card to
+                // act on. Text as text; files (a screenshot is one PNG) as a file drop.
+                let files = transfer.saved_files.clone();
+                let (copied, detail) = match transfer.message.as_deref() {
+                    Some(message) => {
+                        self.remember(Last {
+                            text: Some(capped(message)),
+                            files: Vec::new(),
+                            at: now_secs(),
+                        });
+                        (sys::write_text(message), capped(message))
+                    }
+                    None => {
+                        self.remember(Last {
+                            text: None,
+                            files: files.clone(),
+                            at: now_secs(),
+                        });
+                        let paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+                        (
+                            !paths.is_empty() && sys::write_files(&paths),
+                            files_text(paths.len().max(1)),
+                        )
+                    }
+                };
+                if copied {
+                    self.show_note(&format!("Copied from {}", transfer.peer), &detail, false);
+                } else {
+                    self.show_note(
+                        &format!("Received from {}", transfer.peer),
+                        "It could not be put on the clipboard.",
+                        true,
+                    );
+                }
+            }
             ("receive", "done") if transfer.message.is_some() => {
                 let message = transfer.message.clone().unwrap_or_default();
                 self.remember(Last {
