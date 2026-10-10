@@ -400,9 +400,27 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
                     .iter()
                     .rev()
                     .flat_map(|s| &s.findings)
-                    .find(|f| f.id == arguments[0])
-                    .ok_or("finding not present in local history")?;
-                let rule = pack.rules.iter().find(|r| r.id == finding.rule_id);
+                    .find(|f| f.id == arguments[0]);
+                let (finding, rule_id) = match finding {
+                    Some(f) => (
+                        serde_json::to_value(f).map_err(|e| e.to_string())?,
+                        f.rule_id.clone(),
+                    ),
+                    None => {
+                        // Windows `findings` also lists the Cleanup rule pack's findings
+                        // (`cleanup_findings`); they are not in history, so look there too.
+                        #[cfg(windows)]
+                        let found = cleanup_findings(None)?
+                            .into_iter()
+                            .find(|f| f["id"].as_str() == Some(arguments[0].as_str()));
+                        #[cfg(not(windows))]
+                        let found: Option<serde_json::Value> = None;
+                        let f = found.ok_or("finding not present in local history")?;
+                        let rule_id = f["rule_id"].as_str().unwrap_or("").to_string();
+                        (f, rule_id)
+                    }
+                };
+                let rule = pack.rules.iter().find(|r| r.id == rule_id);
                 emit(
                     json!({"finding":finding,"rule":rule,"history_diagnostics":diagnostics,"capability_notes":notes}),
                     machine,
