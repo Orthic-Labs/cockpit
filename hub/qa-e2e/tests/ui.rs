@@ -1209,9 +1209,26 @@ fn restore(ctl: &Control, sec: &Section, before_marks: &Value) {
     );
     let _ = ctl.eval(&undo);
     // A click may have opened a menu or popover that the dialog count does not see (a
-    // row's Actions menu); Escape is harmless when nothing is open.
+    // row's Actions menu). Escape first; if a menu is still open, a click on the empty
+    // top-left corner of the page closes it. The next control must start with none open.
     let _ = ctl.key("Escape");
-    std::thread::sleep(Duration::from_millis(if page_state(ctl)["dialogs"].as_u64().unwrap_or(0) > 0 { 250 } else { 120 }));
+    std::thread::sleep(Duration::from_millis(120));
+    let menus = |ctl: &Control| {
+        ctl.eval("return document.querySelectorAll('[role=menu], [role=dialog], .rk-menu, .rk-popover').length")
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+    };
+    if menus(ctl) > 0 {
+        let _ = ctl.move_to(2.0, 2.0);
+        let _ = ctl.pointer("down", 2.0, 2.0, "left", &[]);
+        let _ = ctl.pointer("up", 2.0, 2.0, "left", &[]);
+        std::thread::sleep(Duration::from_millis(200));
+        if menus(ctl) > 0 {
+            let _ = ctl.key("Escape");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
     reopen(ctl, sec);
 }
 
@@ -1281,7 +1298,7 @@ fn crawl_section(ctl: &Control, sec: &Section, surface: &str, shots: &Path, comm
 
         // Page health at this point (RightKit asked for these alongside every control).
         entry["page"] = ctl
-            .eval("return new Promise((r) => { let n = 0; const t0 = performance.now(); const tick = () => { n++; if (performance.now() - t0 < 100) requestAnimationFrame(tick); else r({ visibility: document.visibilityState, focus: document.hasFocus(), raf100: n }); }; requestAnimationFrame(tick); setTimeout(() => r({ visibility: document.visibilityState, focus: document.hasFocus(), raf100: n, timedOut: true }), 400); })")
+            .eval("return { visibility: document.visibilityState, focus: document.hasFocus(), menus: document.querySelectorAll('[role=menu], [role=dialog]').length }")
             .unwrap_or(Value::Null);
 
         // Pressed: mouse down and look; mouse up completes the click.
