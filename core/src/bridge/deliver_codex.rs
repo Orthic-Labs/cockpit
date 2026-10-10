@@ -132,8 +132,11 @@ fn display_name(name: &str, title: &str, first: &str, preview: &str) -> String {
     String::new()
 }
 
-fn read_state(path: &Path, limit: usize) -> Result<Vec<CodexThread>, rusqlite::Error> {
-    use rusqlite::{Connection, OpenFlags};
+fn read_state(
+    path: &Path,
+    limit: usize,
+) -> Result<Vec<CodexThread>, rightkit_db::rusqlite::Error> {
+    use rightkit_db::rusqlite::{self, Connection, OpenFlags};
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

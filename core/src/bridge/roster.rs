@@ -221,7 +221,11 @@ pub fn add_codex_threads(sessions: &mut Vec<LocalSession>, threads: Vec<CodexThr
 /// shown as active, anything else as idle (its liveness is unknown either way).
 pub fn codex_status(updated_ms: u64) -> String {
     let active = updated_ms > 0 && super::envelope::now_ms() <= updated_ms + 10 * 60 * 1000;
-    if active { "active".to_string() } else { "idle".to_string() }
+    if active {
+        "active".to_string()
+    } else {
+        "idle".to_string()
+    }
 }
 
 /// Seconds since the epoch of an ISO-8601 `YYYY-MM-DDTHH:MM:SS…` UTC stamp.
@@ -231,7 +235,14 @@ pub(super) fn iso_epoch(text: &str) -> Option<u64> {
         return None;
     }
     let num = |a: usize, z: usize| text.get(a..z)?.parse::<i64>().ok();
-    let (y, mo, d, h, mi, s) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    let (y, mo, d, h, mi, s) = (
+        num(0, 4)?,
+        num(5, 7)?,
+        num(8, 10)?,
+        num(11, 13)?,
+        num(14, 16)?,
+        num(17, 19)?,
+    );
     let yy = if mo <= 2 { y - 1 } else { y };
     let era = yy.div_euclid(400);
     let yoe = yy - era * 400;
