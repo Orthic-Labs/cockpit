@@ -81,7 +81,7 @@ Quitting Desktop, or switching account inside it, ends every Code chat's CLI. De
   - When it runs: the notch calls it about once a minute while Desktop runs, and once more just before the restart's close. An account switch inside Desktop ends the chats before the button is pressed, so the earlier records are what it uses.
   - Chats not seen for a day are forgotten.
 - **`pulse claude reopen [--dry-run]`** runs after the restart reopens Desktop, and opens the last running set again.
-  - Which chats: those seen within 3 minutes of the newest record. Nothing is reopened if that record is more than 30 minutes old.
+  - Which chats: those seen within 3 minutes of the newest record. Each chat is recorded with the account Desktop was signed in to. If the newest record is under a different account than the one signed in now, the chats were ended by an account switch, and they are reopened for up to a day. Otherwise nothing is reopened if the newest record is more than 30 minutes old, because those chats were closed on purpose. No step is needed before signing out.
   - What it skips: chats that are already running, archived, scheduled tasks, or missing from the signed-in account.
   - How it opens them: one at a time with Desktop's own `claude://code/continue?session=local_<uuid>` link. The most recently focused chat goes last, so it is the page left showing. After each link it waits for that chat's CLI to start.
   - If a chat does not start, it stops. Desktop is not taking links in that case: it is signed out, links are turned off, or it is not running.

@@ -179,7 +179,8 @@ pub fn run(mut args: Vec<String>, machine: bool) -> Result<(), Failure> {
                 .map(Ok)
                 .unwrap_or_else(chats::default_file)
                 .map_err(fail)?;
-            let kept = chats::remember(&file, sync::now_ms()).map_err(fail)?;
+            let root = root().ok();
+            let kept = chats::remember(&file, root.as_deref(), sync::now_ms()).map_err(fail)?;
             emit(&json!({"chats": kept}), machine);
         }
         "reopen" => {

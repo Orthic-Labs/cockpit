@@ -23,7 +23,9 @@ const FORGET_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
 /// Chats seen within this long of the newest sighting were running together.
 const SAME_SET_MS: u64 = 3 * 60 * 1000;
 /// A set last seen longer ago than this is not reopened: those chats were closed on purpose,
-/// not by a restart or an account switch.
+/// not by a restart. When the account has changed since, the set was ended by the switch
+/// (sign out, sign in, then the restart button, however long that took) and is reopened
+/// for up to a day.
 const RECENT_MS: u64 = 30 * 60 * 1000;
 /// The first chat waits for Desktop to start and sign in; the rest only for their CLI.
 const FIRST_WAIT: Duration = Duration::from_secs(60);
@@ -39,6 +41,9 @@ pub struct OpenChat {
     pub name: String,
     pub cwd: String,
     pub last_seen_ms: u64,
+    /// The account Desktop was signed in to when the chat was last seen running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -96,16 +101,23 @@ fn running_now() -> Vec<OpenChat> {
                 name: s.name,
                 cwd: s.cwd,
                 last_seen_ms: 0,
+                account: None,
             })
         })
         .collect()
 }
 
 /// Notes the chats running now and forgets ones not seen for a day. Returns what is kept.
-pub fn remember(file: &Path, now_ms: u64) -> Result<Vec<OpenChat>, SyncError> {
+pub fn remember(
+    file: &Path,
+    root: Option<&Path>,
+    now_ms: u64,
+) -> Result<Vec<OpenChat>, SyncError> {
     let mut remembered = load(file);
+    let account = root.and_then(sync::read_active_account);
     for mut chat in running_now() {
         chat.last_seen_ms = now_ms;
+        chat.account = account.clone();
         remembered.chats.insert(chat.host_session_id.clone(), chat);
     }
     remembered
@@ -156,8 +168,14 @@ pub struct Skipped {
 /// last (it is the page left showing). With `open`, shows each and waits for its CLI.
 pub fn reopen(file: &Path, root: &Path, now_ms: u64, open: bool) -> ReopenResult {
     let mut chats: Vec<OpenChat> = load(file).chats.into_values().collect();
-    let newest = chats.iter().map(|c| c.last_seen_ms).max().unwrap_or(0);
-    if now_ms.saturating_sub(newest) > RECENT_MS {
+    let last = chats.iter().max_by_key(|c| c.last_seen_ms);
+    let newest = last.map_or(0, |c| c.last_seen_ms);
+    let switched = last
+        .and_then(|c| c.account.as_deref())
+        .zip(sync::read_active_account(root))
+        .is_some_and(|(then, now)| then != now);
+    let window = if switched { FORGET_AFTER_MS } else { RECENT_MS };
+    if now_ms.saturating_sub(newest) > window {
         chats.clear();
     }
     let running: Vec<String> = running_now()
