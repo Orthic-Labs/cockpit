@@ -6,7 +6,7 @@ use crate::drive_health::{self, Report};
 use crate::glyphs::{Symbol, Tile};
 use crate::layout::{Cell, Edge};
 use crate::send::{self, Panel};
-use crate::sensors::{Machine, Reading, size_text};
+use crate::sensors::{Machine, Reading, drive_size_text, size_text};
 use crate::usage::{Extras, Status, Usage};
 
 /// The icon beside a card's title (the Mac's provider glyph); drawn by `render.rs`.
@@ -522,8 +522,8 @@ pub fn disks(machine: Option<&Machine>, health: &Report) -> CardContent {
                     Some(drive.used_fraction()),
                     format!(
                         "{} free of {}",
-                        size_text(drive.free),
-                        size_text(drive.total)
+                        drive_size_text(drive.free),
+                        drive_size_text(drive.total)
                     ),
                 ));
             }

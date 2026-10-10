@@ -699,6 +699,18 @@ pub fn size_text(bytes: u64) -> String {
     format!("{number} {unit}")
 }
 
+/// Drive sizes in the hub's decimal units (1 GB = 10^9 bytes), so the notch's Disks card and the
+/// hub's Overview agree. Same formatting as `size_text`.
+pub fn drive_size_text(bytes: u64) -> String {
+    let gb = bytes as f64 / 1e9;
+    let (value, unit) = if gb >= 1000.0 { (gb / 1000.0, "TB") } else { (gb, "GB") };
+    let number = if value >= 100.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}").trim_end_matches(".0").to_string()
+    };
+    format!("{number} {unit}")
+}
 
 // ---- battery ----------------------------------------------------------------------------------
 

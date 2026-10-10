@@ -627,7 +627,12 @@ fn history(out: &mut String, v: &Value, o: &RenderOptions) {
 
 fn procs(out: &mut String, v: &Value, o: &RenderOptions) {
     let list = items(&v["processes"]);
-    let _ = writeln!(out, "Processes ({}, individual, not grouped)", list.len());
+    let layout = if v["process_groups"].is_object() {
+        "individual, grouped below"
+    } else {
+        "individual, not grouped"
+    };
+    let _ = writeln!(out, "Processes ({}, {layout})", list.len());
     let _ = writeln!(out, "  GPU: {}", unavailable(&reason_of(&v["gpu"])));
     if v["actions_enabled"].as_bool() != Some(true) {
         out.push_str("  Actions: disabled (read-only)\n");

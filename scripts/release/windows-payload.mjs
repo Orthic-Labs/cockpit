@@ -10,7 +10,7 @@
 //   pulse-hub.exe        Tauri hub (beside Pulse.exe, the first place hub.rs looks)
 //   Helpers\pulse.exe    CLI (a separate folder: Windows paths are case-insensitive, so it cannot sit
 //                        beside Pulse.exe)
-//   Helpers\smartctl.exe TODO: when RightKit publishes a Windows smartctl (see smartctl below)
+//   Helpers\smartctl.exe optional: smartmontools 7.5 Windows x64 build from the RightKit R2 bucket (see smartctl below)
 //   ThirdParty\          third_party licences;  NOTICE.txt, LICENSE.txt
 // Release update asset: dist/releases/windows/Pulse-Setup-x64.exe
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -19,6 +19,7 @@ import os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const version = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version;
@@ -27,7 +28,7 @@ const stagingRoot = join(repoRoot, 'dist', 'staging', 'windows');
 const stage = join(stagingRoot, 'Pulse');
 const installerName = 'Pulse-Setup-x64.exe';
 const output = join(repoRoot, 'dist', 'releases', 'windows', installerName);
-const payloadFiles = ['Pulse.exe', 'pulse-hub.exe', join('Helpers', 'pulse.exe'), 'NOTICE.txt', 'LICENSE.txt'];
+const payloadFiles = ['Pulse.exe', 'pulse-hub.exe', join('Helpers', 'pulse.exe'), 'notch-views.json', 'NOTICE.txt', 'LICENSE.txt'];
 
 function fail(message) { throw new Error(`[pulse windows payload] ${message}`); }
 async function requireFile(path, label) {
@@ -45,13 +46,39 @@ async function copyFile(source, target, label) {
   await cp(source, target, { force: true });
 }
 
-// smartctl for Windows: TODO. RightKit publishes a signed smartmontools 7.5 macOS arm64 build
-// (see mac-payload.mjs); no Windows build is published yet. When it is, set url + sha256 here
-// (fetch and SHA-256 verify exactly as mac-payload.mjs fetchSmartctl does), copy it to
-// Helpers\smartctl.exe in candidate(), and add that path to sign.prePackageFiles in
-// right-release.config.mjs unless RightKit ships it already Authenticode-signed (then verify
-// the signer instead of re-signing). Until then the payload carries no smartctl.
-const smartctl = null;
+// smartctl for Windows: fetched from the same RightKit R2 bucket and folder as the macOS build
+// (mac-payload.mjs), SHA-256 verified exactly, never committed. Both the file and its pin are
+// still to be provided (see third_party/smartmontools/README.md, Windows section):
+//   1. upload smartctl-7.5-windows-x64.exe (smartmontools 7.5, unmodified, x64) to
+//      native-tools/smartmontools-7.5-1/ in the bucket;
+//   2. put its SHA-256 in `sha256` below.
+// Until both exist this step logs a warning and the payload carries no smartctl.exe (the build
+// does not fail: the hub reads NVMe health without it, the notch says "Install smartmontools").
+// smartctl.exe must also be Authenticode-signed: add Helpers/smartctl.exe to sign.prePackageFiles
+// in right-release.config.mjs unless RightKit already ships it signed (then verify the signer).
+const smartctl = {
+  url: 'https://pub-6c73208d46c245a9b4881d5e02f6b618.r2.dev/native-tools/smartmontools-7.5-1/smartctl-7.5-windows-x64.exe',
+  sha256: null
+};
+
+// The verified smartctl.exe path, or null (with a warning) when it is not published or not pinned.
+async function fetchSmartctl() {
+  if (!smartctl.sha256) { console.warn('[pulse windows payload] smartctl.exe skipped: no SHA-256 is pinned (see windows-payload.mjs)'); return null; }
+  const cacheDir = join(process.env.RUNNER_TEMP || os.tmpdir(), 'pulse-smartctl');
+  const cached = join(cacheDir, `${smartctl.sha256}.exe`);
+  try {
+    if (createHash('sha256').update(await readFile(cached)).digest('hex') === smartctl.sha256) return cached;
+  } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  let response;
+  try { response = await fetch(smartctl.url, { redirect: 'follow' }); } catch (error) { console.warn(`[pulse windows payload] smartctl.exe skipped: download failed (${error?.message ?? error})`); return null; }
+  if (!response.ok) { console.warn(`[pulse windows payload] smartctl.exe skipped: HTTP ${response.status} from ${smartctl.url}`); return null; }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const actual = createHash('sha256').update(bytes).digest('hex');
+  if (actual !== smartctl.sha256) fail(`smartctl SHA-256 mismatch: expected ${smartctl.sha256}, got ${actual}`);
+  await mkdir(cacheDir, { recursive: true });
+  await writeFile(cached, bytes);
+  return cached;
+}
 
 function sources() {
   // A CARGO_TARGET_DIR (RightKit-managed or CI) is shared by all three builds; otherwise each crate/workspace uses its own target.
@@ -78,7 +105,11 @@ async function stagePayload(payload, source) {
   await copyFile(source.notch, join(payload, 'Pulse.exe'), 'notch exe');
   await copyFile(source.hub, join(payload, 'pulse-hub.exe'), 'hub exe');
   await copyFile(source.cli, join(payload, 'Helpers', 'pulse.exe'), 'Pulse CLI');
+  const tool = await fetchSmartctl();
+  if (tool) await copyFile(tool, join(payload, 'Helpers', 'smartctl.exe'), 'smartctl');
   await cp(join(repoRoot, 'third_party'), join(payload, 'ThirdParty'), { recursive: true, force: true });
+  // The notch's view fixtures, so `Pulse.exe --render-views` works on an installed build (K8).
+  await copyFile(join(repoRoot, 'qa', 'notch-views.json'), join(payload, 'notch-views.json'), 'view fixtures');
   await copyFile(join(repoRoot, 'NOTICE'), join(payload, 'NOTICE.txt'), 'NOTICE');
   await copyFile(join(repoRoot, 'LICENSE'), join(payload, 'LICENSE.txt'), 'LICENSE');
   for (const file of [...payloadFiles, join('ThirdParty', 'smartmontools', 'GPL-2.0.txt')]) await requireFile(join(payload, file), `staged ${file}`);

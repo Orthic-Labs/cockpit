@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, ConfirmDialog } from "@rightkit/app-shell/react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { api, bytes, type ProcessRow, type Status } from "../api";
+import { api, bytes, isWindows, type ProcessRow, type Status } from "../api";
 import { useNotch, type NotchState } from "./Settings";
 import { AreaChart, levelColor, type Series } from "../components/Chart";
 import { memPercent, useMetrics, type Sample } from "../metrics";
@@ -168,7 +168,7 @@ export function Monitor() {
         notchDown={notch.error != null}
       />
 
-      {sensorCount > 0 && system && (
+      {(sensorCount > 0 || isWindows) && (
         <div className="mon-sensors">
           <button
             type="button"
@@ -180,24 +180,30 @@ export function Monitor() {
             {sensorsOpen ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
             <span className="mon-label">Sensors</span>
             <span className="muted small">
-              {[
-                system.fans?.length ? `${system.fans.length} fan${system.fans.length === 1 ? "" : "s"}` : null,
-                system.temperatures?.length ? `${system.temperatures.length} temperatures` : null,
-                system.battery ? "battery" : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
+              {sensorCount === 0
+                ? "not available on this PC"
+                : [
+                    system?.fans?.length ? `${system.fans.length} fan${system.fans.length === 1 ? "" : "s"}` : null,
+                    system?.temperatures?.length ? `${system.temperatures.length} temperatures` : null,
+                    system?.battery ? "battery" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
             </span>
           </button>
           {sensorsOpen && (
             <div id="mon-sensors-list" className="mon-sensors-list">
-              {system.battery && (
+              {sensorCount === 0 && <SensorRow label="Sensors" value="Not available on this PC" />}
+              {system?.battery && (
                 <SensorRow label="Battery" value={batteryText(system.battery)} />
               )}
-              {system.fans?.map((f, i) => (
+              {isWindows && sensorCount > 0 && !(system?.temperatures ?? []).some((t) => /cpu|core|package/i.test(t.name)) && (
+                <SensorRow label="CPU temperature" value="Not available on this PC" />
+              )}
+              {system?.fans?.map((f, i) => (
                 <SensorRow key={`fan-${i}`} label={f.name} value={`${Math.round(f.rpm).toLocaleString()} rpm`} />
               ))}
-              {[...(system.temperatures ?? [])]
+              {[...(system?.temperatures ?? [])]
                 .sort((a, b) => a.name.localeCompare(b.name))
                 .map((t, i) => (
                   <SensorRow key={`temp-${i}`} label={t.name} value={`${t.celsius.toFixed(1)} °C`} />

@@ -16,8 +16,12 @@
 //! Updates: `apps_windows_updates.rs` (winget). Last used: `apps_windows_usage.rs`
 //! (UserAssist; unknown stays unknown).
 //!
-//! Not available yet, and reported plainly rather than faked: app icons and the
-//! running state of an app.
+//! Running state: an app is running when a process's program file is inside its
+//! install folder or is its icon's program (`pulse_core::apps_windows::running`).
+//! Icons: the shell's icon for the app's program (DisplayIcon, else the install
+//! folder's program), or a Store package's logo, as PNG cached under the hub cache
+//! (`pulse_core::apps_windows::icons`). Store (MSIX/AppX) apps are listed through
+//! `Get-AppxPackage` (`pulse_core::apps_windows::appx`).
 
 use std::collections::{HashMap, HashSet};
 use std::os::windows::process::CommandExt;
@@ -105,11 +109,14 @@ fn read_installed() -> Vec<Installed> {
                 has_parent: read_value(&key, "ParentKeyName").is_some()
                     || read_value(&key, "ParentDisplayName").is_some(),
                 release_type: read_value(&key, "ReleaseType"),
+                display_icon: read_value(&key, "DisplayIcon"),
             });
         }
     }
     let mut out = pulse_core::apps_windows::assemble(raws);
+    pulse_core::apps_windows::add_store_apps(&mut out);
     usage::apply(&mut out);
+    pulse_core::apps_windows::running::apply(&mut out);
     out
 }
 
@@ -338,7 +345,7 @@ pub fn app_leftovers(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Icons (not available yet) and updates (winget)
+// Icons and updates (winget)
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Clone)]
@@ -347,14 +354,61 @@ struct IconEvent {
     data_url: Option<String>,
 }
 
-/// No icons are read on Windows. Each path is answered with "no usable icon" so
-/// the page settles on its neutral one.
+const ICON_FOLDER: &str = "app-icons-windows";
+
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn png_data_url(bytes: &[u8]) -> String {
+    format!("data:image/png;base64,{}", base64(bytes))
+}
+
+/// Cached icons come back at once. The rest are extracted in the background and
+/// arrive as `apps-icon` events (null when the app has no usable icon), so the
+/// list never waits for PowerShell.
 #[tauri::command]
 pub async fn app_icons(app: AppHandle, paths: Vec<String>) -> Result<HashMap<String, String>, String> {
-    for path in paths.into_iter().take(500) {
-        let _ = app.emit("apps-icon", IconEvent { path, data_url: None });
-    }
-    Ok(HashMap::new())
+    let paths: Vec<String> = paths.into_iter().take(500).collect();
+    let dir = cache::dir().join(ICON_FOLDER);
+    let events = app.clone();
+    let known = blocking(move || {
+        let sources: Vec<(String, String)> = read_installed()
+            .into_iter()
+            .filter(|installed| paths.contains(&installed.entry.path))
+            .filter_map(|installed| installed.icon_source.map(|source| (installed.entry.path, source)))
+            .collect();
+        let cached = pulse_core::apps_windows::icons::load(&sources, &dir, false);
+        let known: HashMap<String, String> = cached.iter().map(|(path, png)| (path.clone(), png_data_url(png))).collect();
+        let missing: Vec<(String, String)> = sources.iter().filter(|(path, _)| !cached.contains_key(path)).cloned().collect();
+        // Apps with no icon source settle on the neutral icon at once.
+        let with_source: HashSet<&String> = sources.iter().map(|(path, _)| path).collect();
+        for path in paths.iter().filter(|p| !with_source.contains(p)) {
+            let _ = events.emit("apps-icon", IconEvent { path: path.clone(), data_url: None });
+        }
+        if !missing.is_empty() {
+            let handle = events.clone();
+            std::thread::spawn(move || {
+                let extracted = pulse_core::apps_windows::icons::load(&missing, &dir, true);
+                for (path, _) in missing {
+                    let data_url = extracted.get(&path).map(|png| png_data_url(png));
+                    let _ = handle.emit("apps-icon", IconEvent { path, data_url });
+                }
+            });
+        }
+        Ok(known)
+    })
+    .await?;
+    Ok(known)
 }
 
 #[tauri::command]

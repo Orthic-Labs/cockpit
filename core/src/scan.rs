@@ -395,6 +395,34 @@ impl CachingStdProvider {
     }
 }
 
+/// Volume comparison that does not mistake a weaker identity encoding of the
+/// same volume for a different volume. Windows reports `serial:<64-bit>` when
+/// `FILE_ID_INFO` works, but `serial32-unstable:<32-bit>` or
+/// `path-prefix-unstable:<drive>` when a handle cannot supply it (placeholders,
+/// locked or cloud-backed files). Those fallbacks are not evidence of a
+/// different volume: a 32-bit serial is compared with the low 32 bits of the
+/// 64-bit one, and a path-prefix fallback proves nothing (such an entry is
+/// already reported as incomplete metadata). Two stable ids that differ remain
+/// a true cross-volume entry.
+fn same_volume(child: &VolumeIdentity, parent: &VolumeIdentity) -> bool {
+    if child == parent {
+        return true;
+    }
+    let (Some((ck, cv)), Some((pk, pv))) = (child.id.split_once(':'), parent.id.split_once(':'))
+    else {
+        return false;
+    };
+    let low32 = |hex: &str| u64::from_str_radix(hex, 16).ok().map(|v| v & 0xffff_ffff);
+    match (ck, pk) {
+        ("path-prefix-unstable", _) | (_, "path-prefix-unstable") => true,
+        ("serial32-unstable", "serial") | ("serial", "serial32-unstable") => {
+            low32(cv).is_some() && low32(cv) == low32(pv)
+        }
+        ("serial32-unstable", "serial32-unstable") => cv == pv,
+        _ => false,
+    }
+}
+
 /// Same facts as the unix adapter, with a cached (validated) volume.
 #[cfg(target_os = "macos")]
 fn cached_native_info(
@@ -1573,11 +1601,13 @@ fn walk<P: FilesystemProvider>(
         return Sub::empty();
     }
     if let Some(parent_volume) = expected_volume
-        && &metadata.volume != parent_volume
+        && !same_volume(&metadata.volume, parent_volume)
     {
         report.incomplete_reasons.push(format!(
-            "cross-volume descendant rejected: {}",
-            path.display()
+            "cross-volume descendant rejected: {} ({} vs parent {})",
+            path.display(),
+            metadata.volume.id,
+            parent_volume.id
         ));
         return Sub::empty();
     }

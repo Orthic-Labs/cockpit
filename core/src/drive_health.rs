@@ -403,8 +403,69 @@ pub fn disk_of_mount(mount: &str) -> Option<String> {
     whole_disk(&identifier)
 }
 
-/// SMART health is read on macOS only for now; other platforms show no drives.
-#[cfg(not(target_os = "macos"))]
+/// The physical drive under a drive-letter mount (`C:\`), in smartmontools'
+/// `pdN` form (`\\.\PhysicalDriveN`). The volume is opened with no access rights
+/// (no administrator needed) and asked `IOCTL_STORAGE_GET_DEVICE_NUMBER`; a
+/// volume that is not a plain basic-disk partition (network, optical, spanned
+/// dynamic volume) answers `None` and is never sampled.
+#[cfg(target_os = "windows")]
+pub fn disk_of_mount(mount: &str) -> Option<String> {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::IO::DeviceIoControl;
+    use windows::Win32::System::Ioctl::{IOCTL_STORAGE_GET_DEVICE_NUMBER, STORAGE_DEVICE_NUMBER};
+    use windows::core::PCWSTR;
+
+    let mut chars = mount.chars();
+    let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+    if chars.next() != Some(':') {
+        return None;
+    }
+    let name: Vec<u16> = format!(r"\\.\{}:", letter.to_ascii_uppercase())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: NUL-terminated name; access 0 asks only for the handle, closed below.
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(name.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )
+    }
+    .ok()?;
+    let mut number = STORAGE_DEVICE_NUMBER::default();
+    let mut returned = 0u32;
+    // SAFETY: `number` is a writable STORAGE_DEVICE_NUMBER of the size passed.
+    let result = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_GET_DEVICE_NUMBER,
+            None,
+            0,
+            Some((&mut number as *mut STORAGE_DEVICE_NUMBER).cast::<c_void>()),
+            std::mem::size_of::<STORAGE_DEVICE_NUMBER>() as u32,
+            Some(std::ptr::addr_of_mut!(returned)),
+            None,
+        )
+    };
+    // SAFETY: the handle came from CreateFileW above and is closed once.
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    result.ok()?;
+    Some(format!("pd{}", number.DeviceNumber))
+}
+
+/// Other platforms show no drives.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn disk_of_mount(_mount: &str) -> Option<String> {
     None
 }

@@ -55,7 +55,8 @@ const isOld = (secs: number) => Date.now() / 1000 - secs > SNAPSHOT_SECS;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const plural = (n: number, word: string) =>
+  `${n} ${n === 1 ? word : /(ch|sh|s|x|z)$/.test(word) ? `${word}es` : `${word}s`}`;
 
 /** Menu and keyboard actions apply to real items, never the "smaller files" total. */
 const actionable = (r: Row) => !r.summary;

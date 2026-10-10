@@ -127,6 +127,14 @@ pub fn apply(apps: &mut [Installed], launches: &[(String, i64)]) {
                 }
             }
         }
+        // A Store app's UserAssist name is `<package family>!<app id>`; `key_name`
+        // holds the family for those (`appx::read`).
+        let aumid = format!("{}!", app.key_name.to_lowercase());
+        for (path, at) in launches {
+            if path.starts_with(&aumid) {
+                best = Some(best.map_or(*at, |old| old.max(*at)));
+            }
+        }
         let name = norm(&app.entry.name);
         if name.len() >= 3
             && let Some(at) = by_stem.get(&name)

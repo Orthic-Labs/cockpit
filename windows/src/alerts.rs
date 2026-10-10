@@ -597,7 +597,7 @@ impl DriveWatch {
             let letter = drive.root.trim_end_matches('\\').to_string();
             let key = format!("volume|{letter}");
             if let Some(kind) = self.rise(&key, level, &mut seen) {
-                let free = sensors::size_text(drive.free);
+                let free = sensors::drive_size_text(drive.free);
                 out.push(drive_alert(
                     kind,
                     if kind == Kind::DriveFull {
@@ -605,7 +605,7 @@ impl DriveWatch {
                     } else {
                         format!("{letter} is filling up")
                     },
-                    format!("{free} free of {}", sensors::size_text(drive.total)),
+                    format!("{free} free of {}", sensors::drive_size_text(drive.total)),
                     format!("{}% used", (fraction * 100.0).round() as u32),
                 ));
             }

@@ -258,7 +258,64 @@ fn read_memory_pressure() -> Option<String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows has no pressure level, so it is derived from `GlobalMemoryStatusEx`:
+/// commit charge against the commit limit (RAM plus page files), and available
+/// physical memory. Critical at 95% commit or under 5% of RAM available;
+/// Elevated at 85% commit or under 10% of RAM available; otherwise Normal.
+#[cfg(target_os = "windows")]
+fn read_memory_pressure() -> Option<String> {
+    #[repr(C)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page_file: u64,
+        avail_page_file: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended_virtual: u64,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalMemoryStatusEx(status: *mut MemoryStatusEx) -> i32;
+    }
+    let mut status = MemoryStatusEx {
+        length: std::mem::size_of::<MemoryStatusEx>() as u32,
+        memory_load: 0,
+        total_phys: 0,
+        avail_phys: 0,
+        total_page_file: 0,
+        avail_page_file: 0,
+        total_virtual: 0,
+        avail_virtual: 0,
+        avail_extended_virtual: 0,
+    };
+    // SAFETY: `status` is a live, correctly sized MEMORYSTATUSEX with `length` set.
+    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 || status.total_phys == 0 {
+        return None;
+    }
+    let commit_limit = status.total_page_file;
+    let committed = commit_limit.saturating_sub(status.avail_page_file);
+    let commit_ratio = if commit_limit == 0 {
+        0.0
+    } else {
+        committed as f64 / commit_limit as f64
+    };
+    let available_ratio = status.avail_phys as f64 / status.total_phys as f64;
+    Some(
+        if commit_ratio >= 0.95 || available_ratio < 0.05 {
+            "Critical"
+        } else if commit_ratio >= 0.85 || available_ratio < 0.10 {
+            "Elevated"
+        } else {
+            "Normal"
+        }
+        .into(),
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn read_memory_pressure() -> Option<String> {
     None
 }

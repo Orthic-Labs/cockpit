@@ -4,6 +4,35 @@ use pulse_core::{
     store,
 };
 use serde_json::{Value, json};
+/// stdout writers that treat a closed pipe (`pulse monitor | head`) as a clean
+/// exit 0 instead of the std panic "failed printing to stdout". Defined before
+/// the `mod` lines so every module in this binary uses them too. BrokenPipe is
+/// the Unix/Windows kind; 232 (ERROR_NO_DATA) and 109 (ERROR_BROKEN_PIPE) are
+/// what a Windows pipe reports when the reader has gone.
+fn stdout_write(args: std::fmt::Arguments<'_>, newline: bool) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let result = out
+        .write_fmt(args)
+        .and_then(|()| if newline { out.write_all(b"\n") } else { Ok(()) })
+        .and_then(|()| out.flush());
+    if let Err(error) = result {
+        let closed = error.kind() == std::io::ErrorKind::BrokenPipe
+            || matches!(error.raw_os_error(), Some(232 | 109));
+        if closed {
+            std::process::exit(0);
+        }
+        eprintln!("pulse: cannot write to stdout: {error}");
+        std::process::exit(1);
+    }
+}
+macro_rules! println {
+    () => { $crate::stdout_write(format_args!(""), true) };
+    ($($arg:tt)*) => { $crate::stdout_write(format_args!($($arg)*), true) };
+}
+macro_rules! print {
+    ($($arg:tt)*) => { $crate::stdout_write(format_args!($($arg)*), false) };
+}
 #[cfg(feature = "localsend")]
 mod bridge_cmd;
 mod claude_cmd;
@@ -87,7 +116,7 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
     arguments.retain(|a| a != "--json");
     if arguments.is_empty() || ["help", "--help", "-h"].contains(&arguments[0].as_str()) {
         println!(
-            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]  (the notch's last published Claude/Codex limits, read from notch-state.json; no credentials)\nsend <file|folder…> --to <alias> [--json]  (nearby device, LocalSend protocol; it must accept)\nsend --list [--json]\nbridge peers [--local] [--json]|send \"<chat> on <device>\" \"<text>\" [--from CHAT] [--json]|link <device> <ssh-host> [--pulse PATH]|unlink <device>|status [--json]|install [--claude] [--codex] [--dry-run]|uninstall|inbox [--from CHAT] [--json]  (message AI chats on linked computers over ssh through Pulse)\nclaude accounts|known|backups [--json]\nclaude auto [--json]  (sync every account on disk, minus excluded ones, when Claude is closed)\nclaude include|exclude <account-id> [--json]\nclaude sync --dry-run|--apply [--json]  (merges Code-session metadata across Claude Desktop accounts; Claude must be closed)\nclaude restore <backup-id> [--force] [--json]\napps list [--json]\napps updates [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. On Windows apps list, apps updates (winget; checked live, can take a few minutes) and apps detail (registry path or exact app name; no leftover list) work, and apps uninstall is done in the hub's Apps page. Cleanup & process actions await feasibility & safety gates."
+            "Pulse — system inspection; `apps uninstall` moves to Trash\n\nstatus [--json]\nscan <path…> [--max-depth N] [--max-entries N] [--save] [--state-dir PATH] [--exclude-state PATH] [--json]\nfindings [--rule ID] [--state-dir PATH] [--json]\nexplain <finding-id|rule-id> [--state-dir PATH] [--json]\nhistory [--state-dir PATH] [--json]\nprocs [--sort cpu|ram|gpu] [--groups] [--json]\nmonitor [--json]\nfind <query> [--ext EXT] [--kind file|directory] [--min-size N] [--max-size N] [--offset N] [--limit N] [--state-dir PATH] [--json]\nbrowse [--folder PATH|--inspect PATH|--largest files|folders] [--offset N] [--limit N] [--state-dir PATH] [--json]\nexport [SNAPSHOT-ID] [--state-dir PATH] [--json]\nduplicates <path…> [--min-size N] [--max-files N] [--max-read-bytes N] [--seconds N] [--json]\nworker serve [--endpoint E] [--idle-seconds 1-600]\nworker request status|procs [--groups]|scan <path…> [--max-depth N] [--max-entries N] [--endpoint E] [--json]\nusage [--json]  (the notch's last published Claude/Codex limits, read from notch-state.json; no credentials)\nsend <file|folder…> --to <alias> [--json]  (nearby device, LocalSend protocol; it must accept)\nsend --list [--json]\nbridge peers [--local] [--json]|send \"<chat> on <device>\" \"<text>\" [--from CHAT] [--json]|link <device> <ssh-host> [--pulse PATH]|unlink <device>|status [--json]|install [--claude] [--codex] [--dry-run]|uninstall|inbox [--from CHAT] [--json]  (message AI chats on linked computers over ssh through Pulse)\nclaude accounts|known|backups [--json]\nclaude auto [--json]  (sync every account on disk, minus excluded ones, when Claude is closed)\nclaude include|exclude <account-id> [--json]\nclaude sync --dry-run|--apply [--json]  (merges Code-session metadata across Claude Desktop accounts; Claude must be closed)\nclaude restore <backup-id> [--force] [--json]\napps list [--json]\napps updates [--json]\napps detail <app-path|bundle-id> [--json]\napps uninstall <app-path|bundle-id> [--include <item-path>]... [--only-preselected] [--json]\n\nScans never read file contents. duplicates explicitly reads local file contents under bounded limits. --save opts into local metadata history.\napps uninstall quits the app, moves the preselected items (plus any --include) to the Trash with re-validation, and prints the result as JSON; exit 1 if the app itself was not moved. On Windows apps list (with running state, last used from UserAssist, Store apps), apps updates (winget; checked live, can take a few minutes), apps detail (registry path, app name or a unique part of it; no leftover list) and apps uninstall (starts the app's own uninstaller; leftover folders are chosen in the hub's Apps page) work. Cleanup & process actions await feasibility & safety gates."
         );
         return Ok(());
     }
@@ -165,10 +194,19 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
             let paths: Vec<_> = arguments
                 .iter()
                 .map(|p| {
+                    #[cfg(windows)]
+                    let p = p.replace('/', "\\");
                     let p = PathBuf::from(p);
                     if p.is_absolute() { p } else { cwd.join(p) }
                 })
                 .collect();
+            for path in &paths {
+                if let Err(error) = fs::symlink_metadata(path)
+                    && error.kind() == std::io::ErrorKind::NotFound
+                {
+                    return Err(format!("scan path not found: {} ({error})", path.display()).into());
+                }
+            }
             let state_directory = if save { Some(directory()?) } else { None };
             let excluded_state = if let Some(excluded) = exclude_state {
                 let state_directory = state_directory
@@ -392,15 +430,17 @@ fn run(mut arguments: Vec<String>) -> Result<(), CliError> {
         "monitor" => {
             require_empty(&arguments)?;
             let extended = pulse_core::monitor::sample_extended();
-            emit_inspection(
-                json!({
-                    "schema_version": 1,
-                    "extended": extended,
-                    "modules": {"monitor": extended},
-                    "actions_enabled": false,
-                }),
-                machine,
-            );
+            let value = json!({
+                "schema_version": 1,
+                "extended": extended,
+                "modules": {"monitor": extended},
+                "actions_enabled": false,
+            });
+            if machine {
+                println!("{value}");
+            } else {
+                print!("{}", monitor_text(&value["extended"]));
+            }
         }
         "find" | "browse" | "export" => {
             let offset = take_number(&mut arguments, "--offset", 0)?;
@@ -644,6 +684,49 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, Str
     } else {
         Ok(None)
     }
+}
+/// Human text for `monitor` (JSON only with `--json`).
+fn monitor_text(extended: &Value) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let observed = |o: &Value| -> String {
+        match o.get("value") {
+            Some(v) if !v.is_null() => v.to_string(),
+            _ => format!("unavailable ({})", o["label"].as_str().unwrap_or("no reason reported")),
+        }
+    };
+    let net = &extended["network"];
+    let counters = &net["counters"];
+    if let Some(c) = counters.get("value").filter(|v| !v.is_null()) {
+        let _ = writeln!(
+            out,
+            "Network: received {} bytes, sent {} bytes (totals since boot)",
+            c["received_bytes"], c["transmitted_bytes"]
+        );
+    } else {
+        let _ = writeln!(out, "Network: {}", observed(counters));
+    }
+    let _ = writeln!(out, "Network rate: {}", observed(&net["rates"]));
+    let battery = &extended["battery"];
+    let _ = writeln!(
+        out,
+        "Battery: charge {}%  charging {}  remaining {}",
+        battery["charge_percent"]["value"],
+        battery["charging"]["value"],
+        battery["seconds_remaining"]["value"]
+    );
+    let ports = &extended["listening_ports"];
+    match ports["value"].as_array() {
+        Some(list) => {
+            let _ = writeln!(out, "Listening ports: {}", list.len());
+        }
+        None => {
+            let _ = writeln!(out, "Listening ports: {}", observed(ports));
+        }
+    }
+    let count = extended["processes"].as_array().map_or(0, Vec::len);
+    let _ = writeln!(out, "Processes: {count} (use `pulse procs`; add --json for the full sample)");
+    out
 }
 fn emit_inspection(value: Value, machine: bool) {
     if machine {
@@ -1127,6 +1210,33 @@ fn apps(_arguments: Vec<String>, _machine: bool) -> Result<(), CliError> {
 }
 
 #[cfg(windows)]
+fn find_installed_app<'a>(
+    installed: &'a [pulse_core::apps_windows::Installed],
+    target: &str,
+) -> Result<&'a pulse_core::apps_windows::Installed, String> {
+    let pick = |matches: Vec<&'a pulse_core::apps_windows::Installed>| match matches.as_slice() {
+        [one] => Some(Ok(*one)),
+        [] => None,
+        many => Some(Err(format!(
+            "ambiguous name {target}; pass one of these paths: {}",
+            many.iter().map(|a| a.entry.path.as_str()).collect::<Vec<_>>().join(", ")
+        ))),
+    };
+    let lower = target.to_lowercase();
+    let tests: [&dyn Fn(&pulse_core::apps_windows::Installed) -> bool; 3] = [
+        &|a| a.entry.path.eq_ignore_ascii_case(target),
+        &|a| a.entry.name.eq_ignore_ascii_case(target),
+        &|a| lower.len() >= 3 && a.entry.name.to_lowercase().contains(&lower),
+    ];
+    for test in tests {
+        if let Some(result) = pick(installed.iter().filter(|a| test(a)).collect()) {
+            return result;
+        }
+    }
+    Err(format!("no installed app has the path or name {target}"))
+}
+
+#[cfg(windows)]
 fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
     use pulse_core::apps_windows::{self, Installed, updates};
     if arguments.is_empty() {
@@ -1172,34 +1282,8 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
             if arguments.len() != 1 {
                 return Err("apps detail requires exactly one <app-path|name>".into());
             }
-            let target = arguments[0].as_str();
             let installed = apps_windows::read_installed()?;
-            let by_path: Vec<&Installed> = installed
-                .iter()
-                .filter(|a| a.entry.path.eq_ignore_ascii_case(target))
-                .collect();
-            let matches: Vec<&Installed> = if by_path.is_empty() {
-                installed
-                    .iter()
-                    .filter(|a| a.entry.name.eq_ignore_ascii_case(target))
-                    .collect()
-            } else {
-                by_path
-            };
-            let app = match matches.as_slice() {
-                [one] => *one,
-                [] => return Err(format!("no installed app has the path or name {target}").into()),
-                many => {
-                    return Err(format!(
-                        "ambiguous name {target}; pass one of these paths: {}",
-                        many.iter()
-                            .map(|a| a.entry.path.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                    .into());
-                }
-            };
+            let app = find_installed_app(&installed, &arguments[0])?;
             emit_inspection(
                 json!({
                     "app": app.entry,
@@ -1214,7 +1298,45 @@ fn apps(mut arguments: Vec<String>, machine: bool) -> Result<(), CliError> {
             );
         }
         "uninstall" => {
-            return Err("apps uninstall is not available from the command line on Windows; use the Pulse hub's Apps page, which runs the app's own uninstaller and moves chosen leftovers to the Recycle Bin after re-checking them".into());
+            use std::os::windows::process::CommandExt;
+            if arguments.iter().any(|a| a == "--include" || a == "--only-preselected") {
+                return Err("leftover selection is only in the Pulse hub's Apps page; this command starts the app's own uninstaller".into());
+            }
+            if arguments.len() != 1 {
+                return Err("apps uninstall requires exactly one <app-path|name>".into());
+            }
+            let installed = apps_windows::read_installed()?;
+            let app = find_installed_app(&installed, &arguments[0])?;
+            if let Some(reason) = &app.entry.protected {
+                return Err(reason.clone().into());
+            }
+            let command = app
+                .uninstall
+                .clone()
+                .ok_or("This app registered no uninstaller.")?;
+            let path = app.entry.path.clone();
+            // The registered string is a full command line; cmd runs it as the app's installer wrote it
+            // (the same call the hub's Apps page makes). The uninstaller shows its own prompts.
+            let status = std::process::Command::new("cmd.exe")
+                .raw_arg(format!("/S /C \"{command}\""))
+                .creation_flags(apps_windows::CREATE_NO_WINDOW)
+                .status()
+                .map_err(|e| format!("Could not start the uninstaller: {e}"))?;
+            let still_installed = apps_windows::read_installed()?
+                .iter()
+                .any(|a| a.entry.path.eq_ignore_ascii_case(&path));
+            emit_inspection(
+                json!({
+                    "app": path,
+                    "uninstaller_exit_code": status.code(),
+                    "still_installed": still_installed,
+                    "leftovers": "not touched; choose them in the Pulse hub's Apps page",
+                }),
+                machine,
+            );
+            if still_installed {
+                return Err(CliError { body: None, exit: 1 });
+            }
         }
         other => return Err(format!("unknown apps command: {other}").into()),
     }
