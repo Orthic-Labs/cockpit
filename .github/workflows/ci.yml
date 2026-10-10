@@ -89,6 +89,7 @@ jobs:
             . -> target
             windows -> target
             hub/src-tauri -> target
+            hub/qa-e2e -> target
           shared-key: pulse-rust
           add-job-id-key: false
           cache-workspace-crates: true
