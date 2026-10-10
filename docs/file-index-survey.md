@@ -59,4 +59,32 @@ A fourth choice sits beside these: whether Pulse needs a whole-disk index at all
 
 ## Windows
 
-To be added from the Dell chat's survey.
+From the Dell chat's survey of 2026-10-11 (the tools' own pages and Microsoft Learn, plus read-only measurements on the Dell; nothing was installed).
+
+**Its recommendation:** build on the drive's file table and change journal (NTFS MFT plus USN), served by a small elevated helper, with a bulk folder walk that needs no elevation underneath. Do not adopt Everything; do not rely on Windows Search.
+
+| Option | Finding |
+|---|---|
+| Windows Search | Runs as a system service, but the user controls its scope and the default leaves out most of the disk. On the Dell 0 of 210 `.rs` files in the Pulse repo are indexed and no `Cargo.toml` anywhere ([overview](https://learn.microsoft.com/en-us/windows/win32/search/-search-3x-wds-overview)). PowerToys Run uses it and warns when drives are not covered ([docs](https://learn.microsoft.com/en-us/windows/powertoys/run)). |
+| Everything | Reads the file table and journal; needs its service or admin for NTFS; other volumes by a folder walk with rescans. Its licence allows redistribution ([licence](https://www.voidtools.com/License.txt), [developer](https://www.voidtools.com/forum/viewtopic.php?p=21270)), but its SDK only talks to a running Everything ([SDK](https://www.voidtools.com/support/everything/sdk/)), so it means a second resident process and the same admin install. The Rust wrapper crate is GPL. |
+| WizFile, UltraSearch, SwiftSearch | Read the file table, need admin, are freeware or abandoned, and cannot be embedded. |
+| MFT plus USN ourselves | The only route with a fast first scan and exact change tracking. Its cost is the admin-installed service that Everything also needs. Crates to read first: [usn-journal-rs](https://crates.io/crates/usn-journal-rs) (MIT), [ntfs-reader](https://crates.io/crates/ntfs-reader) (MIT or Apache-2.0). |
+
+The fallback ladder it proposes, best rung available per volume:
+
+1. Elevated service: enumerate the file table (`FSCTL_ENUM_USN_DATA`) and read the journal (`FSCTL_READ_USN_JOURNAL`). Store the journal id and next position per volume; rescan fully when the id changes or a range is lost.
+2. No elevation: bulk folder walk, then the unprivileged journal read for change ids. Microsoft does not document that call; names are stripped, so each changed id needs a lookup. Must be tested on a real computer.
+3. Bulk walk plus `ReadDirectoryChangesW`, which is what Pulse's hub does today. It needs no admin and works on FAT, exFAT, network and removable volumes, but it loses changes by design: on overflow the buffer is discarded and the subtree must be rescanned ([docs](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw)).
+4. Periodic rescan.
+
+Facts that decide it:
+
+- Microsoft documents every change-journal operation as administrators-only ([journal id](https://learn.microsoft.com/en-us/windows/win32/fileio/using-the-change-journal-identifier)). On the Dell a journal query answered without elevation; reading is untested.
+- The journal is bounded and loses history: on the Dell C: is 32 MB at most, so a build can wrap it.
+- Both Dell drives are NTFS; there is no ReFS, FAT or network volume there to test the lower rungs.
+- Memory target for our own layout (its estimate, not sourced): 40 to 60 bytes per entry, about 0.8 to 1.2 GB for 20.7 million entries against the 5.4 GB measured on the Mac.
+- No tool documents how it batches changes under heavy churn.
+
+To test on the Dell before committing (needs a script or local builds allowed there): whether the unprivileged journal read works for a normal user; whether a normal user can open a non-system volume for enumeration; and bulk enumeration speed.
+
+Not sourced: how Everything scans internally and what it does when the journal wraps; the Everything SDK licence; the rights each Rust crate needs; stability of the unprivileged journal call across Windows versions; and the details of WizFile and UltraSearch beyond their listings.
